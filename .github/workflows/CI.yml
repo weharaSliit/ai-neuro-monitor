@@ -1,5 +1,5 @@
 name: Physio Stress Emotion - CI Pipeline
- 
+
 on:
   push:
     branches:
@@ -12,136 +12,114 @@ on:
       - 'tests/**'
       - 'scripts/**'
       - 'requirements.txt'
- 
+
 jobs:
+
   # ─────────────────────────────────────────
-  # JOB 1: Code Quality (flake8 lint check)
+  # JOB 1: Setup + Install (shared base)
   # ─────────────────────────────────────────
-  code-quality:
-    name: Code Quality Check
+  setup:
+    name: Setup Environment
     runs-on: ubuntu-latest
+    outputs:
+      cache-hit: ${{ steps.cache.outputs.cache-hit }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
- 
+      - uses: actions/checkout@v4
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
- 
-      - name: Cache pip packages
+
+      - name: Cache pip
+        id: cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
- 
-      - name: Install dependencies
+
+      - name: Install dependencies (safe)
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
- 
-      - name: Run flake8 lint
+
+          # ⚠️ Skip Windows-only packages
+          grep -v "pywinpty" requirements.txt > requirements-ci.txt
+
+          pip install -r requirements-ci.txt
+          pip install flake8 pytest pytest-cov
+
+  # ─────────────────────────────────────────
+  # JOB 2: Code Quality
+  # ─────────────────────────────────────────
+  code-quality:
+    name: Code Quality Check
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run flake8
         run: |
           flake8 src/ tests/ scripts/ \
             --max-line-length=120 \
             --ignore=E203,W503 \
             --exclude=__pycache__,.git
-        continue-on-error: false
- 
+
   # ─────────────────────────────────────────
-  # JOB 2: Unit Tests with coverage
+  # JOB 3: Unit Tests
   # ─────────────────────────────────────────
   unit-tests:
     name: Unit Tests (pytest)
     runs-on: ubuntu-latest
-    needs: code-quality
+    needs: setup
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
- 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
- 
-      - name: Cache pip packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
- 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
- 
-      - name: Run tests with coverage
+      - uses: actions/checkout@v4
+
+      - name: Run tests
         run: |
           pytest tests/ -v \
             --cov=src \
             --cov-report=term-missing \
             --cov-fail-under=60 \
             --tb=short
- 
-      - name: Upload coverage report
+
+      - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
           path: .coverage
- 
+
   # ─────────────────────────────────────────
-  # JOB 3: Dataset Validation
+  # JOB 4: Dataset Validation
   # ─────────────────────────────────────────
   dataset-validation:
     name: Dataset Validation
     runs-on: ubuntu-latest
-    needs: code-quality
+    needs: setup
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
- 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
- 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pandas numpy
- 
+      - uses: actions/checkout@v4
+
       - name: Run dataset validation
         run: python scripts/validate_datasets.py
         env:
           DATA_DIR: data/
- 
+
   # ─────────────────────────────────────────
-  # JOB 4: Preprocessing Check
+  # JOB 5: Preprocessing Check
   # ─────────────────────────────────────────
   preprocessing-check:
     name: Preprocessing Module Check
     runs-on: ubuntu-latest
     needs: unit-tests
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
- 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
- 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
- 
-      - name: Check preprocessing modules load and run
+      - uses: actions/checkout@v4
+
+      - name: Run preprocessing check
         run: python scripts/check_preprocessing.py
- 
+
   # ─────────────────────────────────────────
-  # JOB 5: Model Smoke Test (PR to main only)
+  # JOB 6: Model Smoke Test
   # ─────────────────────────────────────────
   model-smoke-test:
     name: Model Smoke Test
@@ -149,23 +127,12 @@ jobs:
     needs: [unit-tests, preprocessing-check]
     if: github.event_name == 'pull_request'
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
- 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
- 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
- 
+      - uses: actions/checkout@v4
+
       - name: Run model smoke test
         run: python scripts/smoke_test_model.py
- 
-      - name: Comment on PR if smoke test fails
+
+      - name: Comment on PR if failed
         if: failure()
         uses: actions/github-script@v7
         with:
@@ -174,6 +141,5 @@ jobs:
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: '❌ **Model smoke test failed** on `feature/physio-stress-emotion`.\n\nPlease check the Actions log and fix before this PR can be merged.\n\nRun `python scripts/smoke_test_model.py` locally to debug.'
+              body: '❌ Model smoke test failed. Check logs and fix before merging.'
             })
- 
