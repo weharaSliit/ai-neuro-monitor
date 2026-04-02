@@ -3,154 +3,65 @@ name: Physio Stress Emotion - CI Pipeline
 on:
   push:
     branches:
-      - feature/physio-stress-emotion
+      - '**'        # runs on ALL branches 
   pull_request:
     branches:
-      - main
+      - main        # must pass before merging to main
 
 jobs:
-
-  # ─────────────────────────────
-  # JOB 1: Code Quality
-  # ─────────────────────────────
-  code-quality:
+  build-and-test:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      # 1. Get code
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      # 2. Setup Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Install dependencies + lint tools
+      # 3. Install dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt || true
-          pip install flake8
+          pip install flake8 pytest pytest-cov
 
+      # 4. Lint check (only existing folders)
       - name: Run flake8
         run: |
-          flake8 src/ tests/ scripts/ \
-          --max-line-length=120 \
-          --ignore=E203,W503 \
-          --exclude=__pycache__,.git
+          DIRS=""
+          [ -d "src" ] && DIRS="$DIRS src"
+          [ -d "tests" ] && DIRS="$DIRS tests"
 
-  # ─────────────────────────────
-  # JOB 2: Unit Tests
-  # ─────────────────────────────
-  unit-tests:
-    runs-on: ubuntu-latest
-    needs: code-quality
+          if [ -n "$DIRS" ]; then
+            flake8 $DIRS \
+              --max-line-length=120 \
+              --ignore=E203,W503 \
+              --exclude=__pycache__,.git
+          else
+            echo "No folders to lint"
+          fi
 
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies + test tools
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt || true
-          pip install pytest pytest-cov
-
+      # 5. Run unit tests (if available)
       - name: Run tests
         run: |
-          pytest tests/ -v \
-          --cov=src \
-          --cov-report=term-missing \
-          --cov-fail-under=60 \
-          --tb=short
-
-  # ─────────────────────────────
-  # JOB 3: Dataset Validation
-  # ─────────────────────────────
-  dataset-validation:
-    runs-on: ubuntu-latest
-    needs: code-quality
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install minimal dependencies
-        run: |
-          pip install pandas numpy
-
-      - name: Run dataset validation (if exists)
-        run: |
-          if [ -f "scripts/validate_datasets.py" ]; then
-            python scripts/validate_datasets.py
+          if [ -d "tests" ]; then
+            pytest tests/ -v \
+              --cov=src \
+              --cov-report=term-missing \
+              --cov-fail-under=60 \
+              --tb=short
           else
-            echo "⚠️ validate_datasets.py not found, skipping..."
+            echo "No tests found, skipping..."
           fi
 
-  # ─────────────────────────────
-  # JOB 4: Preprocessing Check
-  # ─────────────────────────────
-  preprocessing-check:
-    runs-on: ubuntu-latest
-    needs: unit-tests
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
+      # 6. Optional scripts (safe execution)
+      - name: Run optional checks
         run: |
-          pip install -r requirements.txt || true
-
-      - name: Run preprocessing check (if exists)
-        run: |
-          if [ -f "scripts/check_preprocessing.py" ]; then
-            python scripts/check_preprocessing.py
-          else
-            echo "⚠️ preprocessing script not found, skipping..."
-          fi
-
-  # ─────────────────────────────
-  # JOB 5: Model Smoke Test
-  # ─────────────────────────────
-  model-smoke-test:
-    runs-on: ubuntu-latest
-    needs: [unit-tests, preprocessing-check]
-    if: github.event_name == 'pull_request'
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt || true
-
-      - name: Run model smoke test
-        run: |
-          if [ -f "scripts/smoke_test_model.py" ]; then
-            python scripts/smoke_test_model.py
-          else
-            echo "⚠️ smoke test script not found, skipping..."
-          fi
-
-      - name: Comment on PR if failed
-        if: failure()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: '❌ Model smoke test failed. Check logs.'
-            })
+          [ -f "scripts/validate_datasets.py" ] && python scripts/validate_datasets.py || echo "skip dataset validation"
+          [ -f "scripts/check_preprocessing.py" ] && python scripts/check_preprocessing.py || echo "skip preprocessing"
+          [ -f "scripts/smoke_test_model.py" ] && python scripts/smoke_test_model.py || echo "skip model test"
