@@ -1,0 +1,46 @@
+
+# Datasets — too large, never commit
+datasets/
+*.pkl
+*.mat
+*.h5
+*.hdf5
+
+# Virtual environments — each member has their own
+**/stress_env/
+**/venv/
+**/env/
+**/.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# Large result files
+*.csv
+*.npy
+
+# Saved models
+**/saved_models/*.h5
+**/saved_models/*.pb
+**/saved_models/*.pkl
+
+# OS generated files
+.DS_Store
+.DS_Store?
+Thumbs.db
+desktop.ini
+
+# IDE files
+.vscode/settings.json
+.idea/
+
+# Logs
+*.log
