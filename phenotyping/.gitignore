@@ -1,0 +1,28 @@
+# ── RAW DATASETS — never commit ───────────────────────────────
+data/raw/
+data/raw/**
+data/raw/*.csv
+data/raw/*.xlsx
+data/raw/*.tab
+data/raw/*.json
+data/raw/**/*.json
+data/raw/**/*.csv
+data/raw/**/*.xlsx
+
+# ── PROCESSED DATA — never commit ─────────────────────────────
+data/processed/
+data/processed/**
+data/processed/*.csv
+
+# ── OUTPUTS — never commit ────────────────────────────────────
+outputs/
+outputs/**
+outputs/*.csv
+outputs/*.json
+
+# ── PYTHON CACHE ──────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+Thumbs.db
