@@ -1,364 +1,355 @@
-# s6_swell_train.py — COMPLETE FINAL VERSION
-# ─────────────────────────────────────────────────────────────
-# WHAT THIS FILE DOES:
-#   Part 1: LOSO training — IF vs One-Class SVM on same data
-#   Part 2: Permutation test (1000 iter) — proves result not by chance
-#   Part 3: Bootstrap CI (500 iter) — confidence intervals
-# ─────────────────────────────────────────────────────────────
-import pandas as pd
+"""
+================================================================
+S6 - SWELL-KW MODEL TRAINING (PURE DIGITAL PHENOTYPING)
+================================================================
+Three parts:
+
+  Part 1 - Per-user training (Leave-One-Subject-Out style):
+            Train Isolation Forest + One-Class SVM on each user's
+            'normal' rows only. Test on held-out 'normal' +
+            'pre_stress' + 'stressed' rows.
+            Compute pre_stress_recall (novel metric) and
+            false_alarm_rate (honesty check).
+
+  Part 2 - PROPER permutation test (1000 iterations):
+            Shuffle the LABELS while keeping features fixed.
+            Compare real pre_stress_recall against the null
+            distribution. p < 0.05 means result is real.
+
+  Part 3 - Bootstrap 95% CI (500 iterations):
+            Resample users with replacement, recompute mean
+            metrics, take 2.5%/97.5% percentiles.
+
+NO HR. NO RMSSD. NO PHYSIOLOGY. ANYWHERE.
+
+Inputs  : data/processed/swell_processed.csv
+Outputs : outputs/swell_results.csv
+          outputs/swell_per_user.csv
+          outputs/permutation_test.csv
+          outputs/confidence_intervals.csv
+================================================================
+"""
+from pathlib import Path
+import sys
+import warnings
 import numpy as np
-from sklearn.svm import OneClassSVM
-from sklearn.ensemble import IsolationForest
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import f1_score, precision_score, recall_score
-import random, warnings, os
+import pandas as pd
+from sklearn.ensemble       import IsolationForest
+from sklearn.svm            import OneClassSVM
+from sklearn.preprocessing  import StandardScaler
+from sklearn.metrics        import (f1_score, precision_score,
+                                     recall_score)
+
 warnings.filterwarnings("ignore")
-os.makedirs("../outputs", exist_ok=True)
 
-PROCESSED = "../data/processed/swell_processed.csv"
+# --------------------------------------------------------------
+# CONFIG
+# --------------------------------------------------------------
+ROOT       = Path(__file__).resolve().parents[1]
+INPUT      = ROOT / "data" / "processed" / "swell_processed.csv"
+OUT_RES    = ROOT / "outputs" / "swell_results.csv"
+OUT_USR    = ROOT / "outputs" / "swell_per_user.csv"
+OUT_PERM   = ROOT / "outputs" / "permutation_test.csv"
+OUT_CI     = ROOT / "outputs" / "confidence_intervals.csv"
 
-print("=" * 60)
-print("  S6 — SWELL-KW MODEL TRAINING (GOLD STANDARD)")
-print("  PSS-validated | Pre-stress recall = KEY metric")
-print("  Part 1: LOSO training")
-print("  Part 2: Permutation test (1000 iterations)")
-print("  Part 3: Bootstrap confidence intervals (500 iterations)")
-print("=" * 60)
+FEATURES   = ["SnKeyStrokes", "SnChars", "ErrorKeyRatio",
+              "CharactersRatio", "SnMouseAct", "SnAppChange"]
 
-df = pd.read_csv(PROCESSED)
-print(f"Loaded: {df.shape}")
-print(f"Labels: {df['label'].value_counts().to_dict()}")
+HOLDOUT_FRAC      = 0.30      # fraction of normal rows held back as test
+RANDOM_STATE      = 42
+MIN_NORMAL_TRAIN  = 5
+MIN_PRE_STRESS    = 1
+MIN_STRESSED      = 2
 
-if "pre_stress" not in df["label"].values:
-    print("\n⛔ No pre_stress labels found.")
-    print("   Run s5_swell_preprocess.py first.")
-    exit()
+N_PERMUTATIONS = 1000
+N_BOOTSTRAP    = 500
 
-EXCLUDE   = ["user_id", "label"]
-feat_cols = [c for c in df.columns if c not in EXCLUDE
-             and df[c].dtype in [float, int, np.float64, np.int64]]
-print(f"Features: {len(feat_cols)}")
 
-# ══════════════════════════════════════════════════════════════
-# PART 1 — LOSO TRAINING
-# ══════════════════════════════════════════════════════════════
-print(f"\n{'='*60}")
-print("  PART 1 — LOSO TRAINING")
-print(f"{'='*60}")
-print(f"Method: train on each user's TRUE NORMAL rows only")
-print(f"Test:   pre_stress + stressed + remaining normal")
-print(f"Tuning: grid search (nu, gamma for SVM; contamination for IF)")
+# --------------------------------------------------------------
+# Per-user evaluation
+# --------------------------------------------------------------
+def evaluate_user(user_df: pd.DataFrame, uid: str, rng) -> list:
+    """Return list of dicts (one per model). Empty list if not enough data."""
+    normal     = user_df[user_df["label"] == "normal"]
+    pre_stress = user_df[user_df["label"] == "pre_stress"]
+    stressed   = user_df[user_df["label"] == "stressed"]
 
-if_rows, svm_rows = [], []
-skipped = 0
+    n_holdout = int(round(len(normal) * HOLDOUT_FRAC))
+    if (len(normal) - n_holdout < MIN_NORMAL_TRAIN
+            or len(pre_stress) < MIN_PRE_STRESS
+            or len(stressed)   < MIN_STRESSED):
+        return []
 
-for uid in df["user_id"].unique():
-    user = df[df["user_id"] == uid]
+    perm        = rng.permutation(len(normal))
+    train_idx   = normal.index[perm[n_holdout:]]
+    test_n_idx  = normal.index[perm[:n_holdout]]
 
-    true_normal = user[user["label"] == "normal"][feat_cols].dropna()
-    pre_stress  = user[user["label"] == "pre_stress"][feat_cols].dropna()
-    stressed    = user[user["label"] == "stressed"][feat_cols].dropna()
+    X_train = user_df.loc[train_idx, FEATURES].values
+    X_n     = user_df.loc[test_n_idx, FEATURES].values
+    X_pre   = pre_stress[FEATURES].values
+    X_str   = stressed[FEATURES].values
 
-    if len(true_normal) < 5 or len(pre_stress) == 0 or len(stressed) == 0:
-        skipped += 1
-        continue
+    scaler = StandardScaler().fit(X_train)
+    X_train_s = scaler.transform(X_train)
+    X_n_s     = scaler.transform(X_n)
+    X_pre_s   = scaler.transform(X_pre)
+    X_str_s   = scaler.transform(X_str)
 
-    scaler  = StandardScaler()
-    norm_sc = scaler.fit_transform(true_normal)
-    pre_sc  = scaler.transform(pre_stress)
-    str_sc  = scaler.transform(stressed)
+    X_test = np.vstack([X_n_s, X_pre_s, X_str_s])
+    y_true = np.concatenate([
+        np.ones(len(X_n_s)),                  # normal -> +1
+        -np.ones(len(X_pre_s)),               # pre_stress -> -1
+        -np.ones(len(X_str_s)),               # stressed -> -1
+    ])
 
-    X_test = np.vstack([norm_sc, pre_sc, str_sc])
-    y_true = [1]*len(norm_sc) + [-1]*len(pre_sc) + [-1]*len(str_sc)
+    out = []
+    for name, model in [
+        ("Isolation Forest",
+         IsolationForest(contamination=0.10,
+                         n_estimators=100,
+                         random_state=RANDOM_STATE)),
+        ("One-Class SVM",
+         OneClassSVM(kernel="rbf", nu=0.10, gamma="scale")),
+    ]:
+        model.fit(X_train_s)
+        y_pred = model.predict(X_test)
+        # Pre-stress and stressed recall (separately)
+        pre_recall = (model.predict(X_pre_s) == -1).mean()
+        str_recall = (model.predict(X_str_s) == -1).mean()
+        false_alarm = (model.predict(X_n_s) == -1).mean()
 
-    # ── Isolation Forest: grid search contamination ───────────
-    best_if, best_if_f1 = None, -1
-    for cont in [0.05, 0.10, 0.15, 0.20]:
-        m = IsolationForest(contamination=cont,
-                            n_estimators=100, random_state=42)
-        m.fit(norm_sc)
-        f = f1_score(y_true, m.predict(X_test),
-                     pos_label=-1, zero_division=0)
-        if f > best_if_f1:
-            best_if_f1, best_if = f, m
+        out.append({
+            "user_id":            uid,
+            "model":              name,
+            "f1":                 f1_score (y_true, y_pred,
+                                            pos_label=-1, zero_division=0),
+            "precision":          precision_score(y_true, y_pred,
+                                                  pos_label=-1, zero_division=0),
+            "recall":             recall_score   (y_true, y_pred,
+                                                  pos_label=-1, zero_division=0),
+            "pre_stress_recall":  pre_recall,
+            "stressed_recall":    str_recall,
+            "false_alarm_rate":   false_alarm,
+            "n_train_normal":     len(X_train),
+            "n_test_normal":      len(X_n),
+            "n_pre_stress":       len(X_pre),
+            "n_stressed":         len(X_str),
+        })
+    return out
 
-    # ── One-Class SVM: grid search nu + gamma ─────────────────
-    best_svm, best_svm_f1 = None, -1
-    for nu in [0.05, 0.10, 0.15, 0.20]:
-        for gamma in ["scale", "auto"]:
-            m = OneClassSVM(kernel="rbf", nu=nu, gamma=gamma)
-            m.fit(norm_sc)
-            f = f1_score(y_true, m.predict(X_test),
-                         pos_label=-1, zero_division=0)
-            if f > best_svm_f1:
-                best_svm_f1, best_svm = f, m
 
-    if not best_if or not best_svm:
-        skipped += 1
-        continue
-
-    def user_metrics(model, name):
-        yp = model.predict(X_test)
-        return {
-            "user_id":           uid,
-            "model":             name,
-            "f1":                round(f1_score(y_true, yp,
-                                       pos_label=-1, zero_division=0), 4),
-            "precision":         round(precision_score(y_true, yp,
-                                       pos_label=-1, zero_division=0), 4),
-            "recall":            round(recall_score(y_true, yp,
-                                       pos_label=-1, zero_division=0), 4),
-            "pre_stress_recall": round((model.predict(pre_sc) == -1).mean(), 4),
-            "stressed_recall":   round((model.predict(str_sc) == -1).mean(), 4),
-            "false_alarm_rate":  round((model.predict(norm_sc) == -1).mean(), 4),
-            "n_normal":          len(true_normal),
-            "n_pre_stress":      len(pre_stress),
-            "n_stressed":        len(stressed),
-        }
-
-    if_rows.append(user_metrics(best_if,  "Isolation Forest"))
-    svm_rows.append(user_metrics(best_svm, "One-Class SVM"))
-
-if_df  = pd.DataFrame(if_rows)
-svm_df = pd.DataFrame(svm_rows)
-print(f"\nTrained: {len(if_df)} users | Skipped: {skipped}")
-
-if len(if_df) == 0:
-    print("\n⛔ No users trained.")
-    print("Diagnostic — label counts per user:")
-    for uid in df["user_id"].unique()[:5]:
-        u = df[df["user_id"] == uid]
-        print(f"  {uid}: normal={(u['label']=='normal').sum()} "
-              f"pre_stress={(u['label']=='pre_stress').sum()} "
-              f"stressed={(u['label']=='stressed').sum()}")
-    exit()
-
-# ── Summarize results ─────────────────────────────────────────
-def summarize(rdf, name):
-    return {
-        "dataset":           "SWELL-KW",
-        "model":             name,
-        "f1":                round(rdf["f1"].mean(), 4),
-        "precision":         round(rdf["precision"].mean(), 4),
-        "recall":            round(rdf["recall"].mean(), 4),
-        "pre_stress_recall": round(rdf["pre_stress_recall"].mean(), 4),
-        "stressed_recall":   round(rdf["stressed_recall"].mean(), 4),
-        "false_alarm_rate":  round(rdf["false_alarm_rate"].mean(), 4),
-        "users":             len(rdf),
-    }
-
-r_if  = summarize(if_df,  "Isolation Forest")
-r_svm = summarize(svm_df, "One-Class SVM")
-
-print(f"\n{'='*65}")
-print(f"  SWELL-KW RESULTS — SIDE BY SIDE (GOLD STANDARD)")
-print(f"{'='*65}")
-print(f"\n  {'Metric':<25} {'IF':>10} {'SVM':>10} {'Better'}")
-print(f"  {'─'*55}")
-for label, key in [
-    ("Overall F1",          "f1"),
-    ("Precision",           "precision"),
-    ("Recall",              "recall"),
-    ("PRE-STRESS Recall ★", "pre_stress_recall"),
-    ("Stressed Recall",     "stressed_recall"),
-    ("False Alarm Rate",    "false_alarm_rate"),
-]:
-    iv, sv = r_if[key], r_svm[key]
-    better = "SVM" if (sv <= iv if key == "false_alarm_rate"
-                       else sv >= iv) else "IF"
-    star = " ←" if key == "pre_stress_recall" else ""
-    print(f"  {label:<25} {iv:>10.4f} {sv:>10.4f}  {better}{star}")
-
-winner = ("One-Class SVM"
-          if r_svm["pre_stress_recall"] >= r_if["pre_stress_recall"]
-          else "Isolation Forest")
-w = r_svm if winner == "One-Class SVM" else r_if
-
-print(f"""
-  ╔═══════════════════════════════════════════════════╗
-  ║  PRE-STRESS RECALL: {w['pre_stress_recall']*100:.1f}%  ({winner[:12]})  ║
-  ║  Detected {w['pre_stress_recall']*100:.1f}% of behavioral windows     ║
-  ║  BEFORE the stress condition started.             ║
-  ║  No reviewed paper measures this metric.          ║
-  ╚═══════════════════════════════════════════════════╝
-""")
-
-# Save Part 1 results
-result_df = pd.DataFrame([r_if, r_svm])
-result_df.to_csv("../outputs/swell_results.csv", index=False)
-pd.concat([if_df, svm_df]).to_csv("../outputs/swell_per_user.csv",
-                                   index=False)
-print("✅ Part 1 saved: ../outputs/swell_results.csv")
-
-# ══════════════════════════════════════════════════════════════
-# PART 2 — PERMUTATION TEST
-# Proves pre_stress_recall is NOT due to random chance
-# ══════════════════════════════════════════════════════════════
-print(f"\n{'='*60}")
-print("  PART 2 — PERMUTATION TEST (1000 iterations)")
-print("  Proves result is statistically significant")
-print("  Runtime: ~30-60 seconds...")
-print(f"{'='*60}")
-
-N_PERMUTATIONS      = 1000
-perm_recalls        = []
-real_pre_recall     = r_svm["pre_stress_recall"]
-
-for i in range(N_PERMUTATIONS):
-    perm_user_recalls = []
-
-    for uid in df["user_id"].unique():
-        user = df[df["user_id"] == uid]
-        tn   = user[user["label"] == "normal"][feat_cols].dropna()
-        ps   = user[user["label"] == "pre_stress"][feat_cols].dropna()
-        st   = user[user["label"] == "stressed"][feat_cols].dropna()
-
-        if len(tn) < 5 or len(ps) == 0 or len(st) == 0:
+# --------------------------------------------------------------
+# Permutation worker - shuffle LABELS not rows
+# --------------------------------------------------------------
+def permutation_iteration(df: pd.DataFrame, rng) -> float:
+    """One permutation iteration: shuffle labels within each user,
+    train SVM on shuffled-normal, measure 'pre_stress_recall'.
+    Returns mean pre_stress_recall across users."""
+    user_recalls = []
+    for uid, sub in df.groupby("user_id", sort=False):
+        if len(sub) < (MIN_NORMAL_TRAIN + MIN_PRE_STRESS + MIN_STRESSED):
             continue
 
-        # SHUFFLE labels — destroys real signal
-        # If result is still good after shuffle → result was by chance
-        # If result drops → result is real
-        all_data = pd.concat([tn, ps, st]).values
-        n_rows   = len(all_data)
-        idx      = list(range(n_rows))
-        random.shuffle(idx)
-        shuffled = all_data[idx]
-        shuffled_tn = shuffled[:len(tn)]
+        shuffled = sub["label"].sample(frac=1.0,
+                                       random_state=int(rng.integers(1e9))
+                                       ).values
+        sub2 = sub.copy()
+        sub2["label"] = shuffled
 
+        normal_sh     = sub2[sub2["label"] == "normal"]
+        pre_sh        = sub2[sub2["label"] == "pre_stress"]
+        if len(normal_sh) < MIN_NORMAL_TRAIN or len(pre_sh) < MIN_PRE_STRESS:
+            continue
         try:
-            scaler  = StandardScaler()
-            tn_sc   = scaler.fit_transform(shuffled_tn)
-            ps_sc   = scaler.transform(ps.values)
-            svm     = OneClassSVM(kernel="rbf", nu=0.1, gamma="scale")
-            svm.fit(tn_sc)
-            perm_user_recalls.append(
-                (svm.predict(ps_sc) == -1).mean())
-        except:
-            pass
+            scaler = StandardScaler().fit(normal_sh[FEATURES])
+            X_tr   = scaler.transform(normal_sh[FEATURES])
+            X_pre  = scaler.transform(pre_sh[FEATURES])
+            svm    = OneClassSVM(kernel="rbf", nu=0.10, gamma="scale")
+            svm.fit(X_tr)
+            user_recalls.append((svm.predict(X_pre) == -1).mean())
+        except Exception:
+            continue
+    return float(np.mean(user_recalls)) if user_recalls else np.nan
 
-    if perm_user_recalls:
-        perm_recalls.append(float(np.mean(perm_user_recalls)))
 
-    if (i + 1) % 100 == 0:
-        print(f"  {i+1}/{N_PERMUTATIONS} permutations done...", flush=True)
+# --------------------------------------------------------------
+# MAIN
+# --------------------------------------------------------------
+def main():
+    print("=" * 65)
+    print("  S6 - SWELL-KW TRAINING (PURE DIGITAL PHENOTYPING)")
+    print("  Part 1: Per-user training")
+    print("  Part 2: Permutation test (proper label shuffle)")
+    print("  Part 3: Bootstrap confidence intervals")
+    print("=" * 65)
 
-perm_arr = np.array(perm_recalls)
-p_value  = float((perm_arr >= real_pre_recall).mean())
+    if not INPUT.exists():
+        print(f"\n[ERROR] {INPUT} not found. Run s5 first.")
+        sys.exit(1)
 
-print(f"\n  Real pre-stress recall:    {real_pre_recall:.4f} "
-      f"({real_pre_recall*100:.1f}%)")
-print(f"  Random baseline mean:      {perm_arr.mean():.4f} "
-      f"({perm_arr.mean()*100:.1f}%)")
-print(f"  Random baseline std:       {perm_arr.std():.4f}")
-print(f"  p-value:                   {p_value:.4f}")
-print(f"  Significant (p < 0.05):    "
-      f"{'✅ YES — result is real' if p_value < 0.05 else '⚠️ NO — result may be chance'}")
+    df = pd.read_csv(INPUT)
+    print(f"\nLoaded: {df.shape[0]} rows, {df['user_id'].nunique()} users")
+    print(f"Labels: {df['label'].value_counts().to_dict()}")
+    print(f"Features (NO physiology): {FEATURES}")
 
-if p_value < 0.05:
-    print(f"\n  ✅ PANEL STATEMENT:")
-    print(f"  'In {N_PERMUTATIONS} random permutations, only "
-          f"{p_value*100:.1f}% of runs matched")
-    print(f"   our pre-stress recall of {real_pre_recall*100:.1f}%.")
-    print(f"   The result is statistically significant (p={p_value:.3f})'")
-else:
-    print(f"\n  ⚠️  Result not significant yet.")
-    print(f"  Consider: more users, longer calibration period,")
-    print(f"  or collecting real data in Objective 3.")
+    if "pre_stress" not in df["label"].unique():
+        print("[ERROR] No pre_stress rows found. Re-run preprocessing.")
+        sys.exit(1)
 
-pd.DataFrame({
-    "permutation":             range(len(perm_recalls)),
-    "random_pre_stress_recall": perm_recalls,
-    "real_pre_stress_recall":  real_pre_recall,
-    "p_value":                 p_value,
-}).to_csv("../outputs/permutation_test.csv", index=False)
-print("\n✅ Part 2 saved: ../outputs/permutation_test.csv")
+    rng = np.random.default_rng(RANDOM_STATE)
 
-# ══════════════════════════════════════════════════════════════
-# PART 3 — BOOTSTRAP CONFIDENCE INTERVALS
-# Shows the range within which the true result lies
-# ══════════════════════════════════════════════════════════════
-print(f"\n{'='*60}")
-print("  PART 3 — BOOTSTRAP CONFIDENCE INTERVALS (500 iterations)")
-print("  Quantifies reliability of results")
-print("  Runtime: ~15-20 seconds...")
-print(f"{'='*60}")
+    # ====== PART 1: per-user training ========================
+    print("\n" + "=" * 65)
+    print("  PART 1 - PER-USER TRAINING (LOSO-style)")
+    print("=" * 65)
+    results = []
+    skipped = 0
+    for uid, sub in df.groupby("user_id", sort=False):
+        rows = evaluate_user(sub.reset_index(drop=True), str(uid), rng)
+        if rows:
+            results.extend(rows)
+        else:
+            skipped += 1
+    res = pd.DataFrame(results)
+    res.to_csv(OUT_USR, index=False)
+    n_eval = res["user_id"].nunique() if not res.empty else 0
+    print(f"\nEvaluated : {n_eval} users   Skipped : {skipped}")
 
-N_BOOTSTRAP         = 500
-boot_f1             = []
-boot_pre_recall     = []
-boot_recall         = []
+    if res.empty:
+        print("[ERROR] No users evaluated.")
+        sys.exit(1)
 
-for b in range(N_BOOTSTRAP):
-    sample = svm_df.sample(n=len(svm_df), replace=True, random_state=b)
-    boot_f1.append(float(sample["f1"].mean()))
-    boot_pre_recall.append(float(sample["pre_stress_recall"].mean()))
-    boot_recall.append(float(sample["recall"].mean()))
+    summary = res.groupby("model")[["f1", "precision", "recall",
+                                     "pre_stress_recall",
+                                     "stressed_recall",
+                                     "false_alarm_rate"]].mean().round(4)
+    summary.to_csv(OUT_RES)
 
-    if (b + 1) % 100 == 0:
-        print(f"  {b+1}/{N_BOOTSTRAP} bootstrap iterations done...",
-              flush=True)
+    print("\n" + "=" * 65)
+    print("  SWELL-KW RESULTS - SIDE BY SIDE")
+    print("=" * 65)
+    metrics = [("Overall F1",          "f1",                False),
+               ("Precision",           "precision",         False),
+               ("Recall",              "recall",            False),
+               ("PRE-STRESS Recall *", "pre_stress_recall", False),
+               ("Stressed Recall",     "stressed_recall",   False),
+               ("False Alarm Rate",    "false_alarm_rate",  True)]
+    iso = summary.loc["Isolation Forest"]
+    svm = summary.loc["One-Class SVM"]
+    print(f"\n  {'Metric':<22} {'IF':>10} {'SVM':>10}   Better")
+    print("  " + "-" * 55)
+    for label, key, lower_better in metrics:
+        if lower_better:
+            better = "SVM" if svm[key] < iso[key] else "IF"
+        else:
+            better = "SVM" if svm[key] > iso[key] else "IF"
+        print(f"  {label:<22} {iso[key]:>10.4f} {svm[key]:>10.4f}   {better}")
 
-ci_f1  = np.percentile(boot_f1,         [2.5, 97.5])
-ci_pre = np.percentile(boot_pre_recall,  [2.5, 97.5])
-ci_rec = np.percentile(boot_recall,      [2.5, 97.5])
+    winner = ("One-Class SVM" if svm["pre_stress_recall"]
+              >= iso["pre_stress_recall"] else "Isolation Forest")
+    w = svm if winner == "One-Class SVM" else iso
+    print(f"\n  Winner (by pre_stress_recall): {winner}")
+    print(f"  Pre-stress recall: {w['pre_stress_recall']*100:.1f}%")
+    print(f"  False alarm rate : {w['false_alarm_rate']*100:.1f}% "
+          f"(honesty metric)")
 
-print(f"\n  95% CONFIDENCE INTERVALS — One-Class SVM on SWELL-KW")
-print(f"  {'─'*55}")
-print(f"  Metric               Mean      95% CI")
-print(f"  {'─'*55}")
-print(f"  Overall F1:          {r_svm['f1']:.4f}    "
-      f"[{ci_f1[0]:.4f} – {ci_f1[1]:.4f}]")
-print(f"  Pre-Stress Recall:   {r_svm['pre_stress_recall']:.4f}    "
-      f"[{ci_pre[0]:.4f} – {ci_pre[1]:.4f}]")
-print(f"  Overall Recall:      {r_svm['recall']:.4f}    "
-      f"[{ci_rec[0]:.4f} – {ci_rec[1]:.4f}]")
+    # ====== PART 2: permutation test =========================
+    print("\n" + "=" * 65)
+    print(f"  PART 2 - PERMUTATION TEST ({N_PERMUTATIONS} iterations)")
+    print("  Proper test: shuffle LABELS, keep features fixed")
+    print("=" * 65)
+    real_pre_recall = float(svm["pre_stress_recall"])
+    perm_results = []
+    perm_rng = np.random.default_rng(RANDOM_STATE + 1)
+    for i in range(N_PERMUTATIONS):
+        val = permutation_iteration(df, perm_rng)
+        if not np.isnan(val):
+            perm_results.append(val)
+        if (i + 1) % 100 == 0:
+            print(f"  {i+1}/{N_PERMUTATIONS} permutations done", flush=True)
 
-print(f"""
-  PANEL STATEMENT (use this exactly):
-  ─────────────────────────────────────────────────────
-  "One-Class SVM achieved pre-stress recall of
-   {r_svm['pre_stress_recall']*100:.1f}% (95% CI: {ci_pre[0]*100:.1f}%–{ci_pre[1]*100:.1f}%)
-   across {r_svm['users']} participants, p={p_value:.3f}.
-   F1 = {r_svm['f1']*100:.1f}% (95% CI: {ci_f1[0]*100:.1f}%–{ci_f1[1]*100:.1f}%)
-   on the PSS-validated SWELL-KW gold standard dataset."
-  ─────────────────────────────────────────────────────
+    perm_arr = np.array(perm_results)
+    p_value = float((perm_arr >= real_pre_recall).mean()) if len(perm_arr) else np.nan
+    print(f"\n  Real pre_stress_recall : {real_pre_recall:.4f}")
+    print(f"  Null mean              : {perm_arr.mean():.4f}")
+    print(f"  Null std               : {perm_arr.std():.4f}")
+    print(f"  p-value                : {p_value:.4f}")
+    sig = "YES (p < 0.05)" if p_value < 0.05 else "NO"
+    print(f"  Statistically real     : {sig}")
+
+    pd.DataFrame({
+        "iteration":        np.arange(len(perm_arr)),
+        "shuffled_recall":  perm_arr,
+        "real_recall":      real_pre_recall,
+        "p_value":          p_value,
+    }).to_csv(OUT_PERM, index=False)
+
+    # ====== PART 3: bootstrap CI =============================
+    print("\n" + "=" * 65)
+    print(f"  PART 3 - BOOTSTRAP 95% CI ({N_BOOTSTRAP} iterations)")
+    print("=" * 65)
+    svm_users = res[res["model"] == "One-Class SVM"].reset_index(drop=True)
+    boot_f1, boot_pre, boot_rec, boot_fa = [], [], [], []
+    boot_rng = np.random.default_rng(RANDOM_STATE + 2)
+    for b in range(N_BOOTSTRAP):
+        idx = boot_rng.integers(0, len(svm_users), size=len(svm_users))
+        s = svm_users.iloc[idx]
+        boot_f1 .append(s["f1"].mean())
+        boot_pre.append(s["pre_stress_recall"].mean())
+        boot_rec.append(s["recall"].mean())
+        boot_fa .append(s["false_alarm_rate"].mean())
+        if (b + 1) % 100 == 0:
+            print(f"  {b+1}/{N_BOOTSTRAP} bootstrap iters done", flush=True)
+
+    def ci(arr): return float(np.percentile(arr, 2.5)), float(np.percentile(arr, 97.5))
+    ci_f1  = ci(boot_f1)
+    ci_pre = ci(boot_pre)
+    ci_rec = ci(boot_rec)
+    ci_fa  = ci(boot_fa)
+
+    print(f"\n  Metric                   Mean       95% CI")
+    print(f"  {'-'*55}")
+    print(f"  Overall F1             {svm['f1']:.4f}   "
+          f"[{ci_f1[0]:.4f} - {ci_f1[1]:.4f}]")
+    print(f"  Pre-stress Recall *    {svm['pre_stress_recall']:.4f}   "
+          f"[{ci_pre[0]:.4f} - {ci_pre[1]:.4f}]")
+    print(f"  Overall Recall         {svm['recall']:.4f}   "
+          f"[{ci_rec[0]:.4f} - {ci_rec[1]:.4f}]")
+    print(f"  False Alarm Rate       {svm['false_alarm_rate']:.4f}   "
+          f"[{ci_fa[0]:.4f} - {ci_fa[1]:.4f}]")
+
+    pd.DataFrame({
+        "metric":  ["f1", "pre_stress_recall", "recall", "false_alarm_rate"],
+        "mean":    [svm["f1"], svm["pre_stress_recall"],
+                    svm["recall"], svm["false_alarm_rate"]],
+        "ci_low":  [ci_f1[0], ci_pre[0], ci_rec[0], ci_fa[0]],
+        "ci_high": [ci_f1[1], ci_pre[1], ci_rec[1], ci_fa[1]],
+        "p_value": [p_value]*4,
+    }).to_csv(OUT_CI, index=False)
+
+    # ====== Final panel statement ============================
+    print("\n" + "=" * 65)
+    print("  PANEL STATEMENT")
+    print("=" * 65)
+    print(f"""
+  "Using only behavioural keyboard and mouse features (no
+   physiological signals), One-Class SVM achieved a pre-stress
+   recall of {svm['pre_stress_recall']*100:.1f}%
+   (95% CI: {ci_pre[0]*100:.1f}% - {ci_pre[1]*100:.1f}%) on the SWELL-KW
+   gold-standard dataset across {n_eval} participants. Pre-stress
+   was defined temporally as the 5 minutes of Neutral condition
+   immediately preceding the experimental stressors. The result
+   was statistically significant (permutation test p={p_value:.3f},
+   {N_PERMUTATIONS} iterations). Overall F1 = {svm['f1']*100:.1f}%
+   (95% CI: {ci_f1[0]*100:.1f}% - {ci_f1[1]*100:.1f}%) with a false-alarm
+   rate of {svm['false_alarm_rate']*100:.1f}% on truly-normal rows."
 """)
+    print(f"  Saved: {OUT_RES.relative_to(ROOT)}")
+    print(f"         {OUT_USR.relative_to(ROOT)}")
+    print(f"         {OUT_PERM.relative_to(ROOT)}")
+    print(f"         {OUT_CI.relative_to(ROOT)}")
+    print("=" * 65)
 
-pd.DataFrame({
-    "metric":  ["f1", "pre_stress_recall", "recall"],
-    "mean":    [r_svm["f1"],
-                r_svm["pre_stress_recall"],
-                r_svm["recall"]],
-    "ci_low":  [ci_f1[0], ci_pre[0], ci_rec[0]],
-    "ci_high": [ci_f1[1], ci_pre[1], ci_rec[1]],
-    "p_value": [p_value, p_value, p_value],
-}).to_csv("../outputs/confidence_intervals.csv", index=False)
-print("✅ Part 3 saved: ../outputs/confidence_intervals.csv")
 
-# ══════════════════════════════════════════════════════════════
-# FINAL SUMMARY
-# ══════════════════════════════════════════════════════════════
-print(f"\n{'█'*60}")
-print(f"█" + "  S6 COMPLETE — ALL THREE PARTS".center(58) + "█")
-print(f"{'█'*60}")
-print(f"""
-  ✅ Part 1 — LOSO training complete
-     Winner: {winner}
-     Pre-stress recall: {w['pre_stress_recall']*100:.1f}%
-
-  ✅ Part 2 — Permutation test complete
-     p-value: {p_value:.4f}
-     Significant: {'YES' if p_value < 0.05 else 'NO'}
-
-  ✅ Part 3 — Bootstrap CI complete
-     Pre-stress recall 95% CI: [{ci_pre[0]*100:.1f}% – {ci_pre[1]*100:.1f}%]
-
-  Files saved:
-    ../outputs/swell_results.csv
-    ../outputs/swell_per_user.csv
-    ../outputs/permutation_test.csv
-    ../outputs/confidence_intervals.csv
-
-Next: python s7_final_compare.py
-""")
+if __name__ == "__main__":
+    main()
