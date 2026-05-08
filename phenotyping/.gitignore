@@ -1,18 +1,5 @@
-# ── RAW DATASETS — never commit ───────────────────────────────
-data/raw/
-data/raw/**
-data/raw/*.csv
-data/raw/*.xlsx
-data/raw/*.tab
-data/raw/*.json
-data/raw/**/*.json
-data/raw/**/*.csv
-data/raw/**/*.xlsx
-
-# ── PROCESSED DATA — never commit ─────────────────────────────
-data/processed/
-data/processed/**
-data/processed/*.csv
+# ── ALL DATA — never commit (raw, processed, everything) ──────
+data/
 
 # ── OUTPUTS — never commit ────────────────────────────────────
 outputs/
