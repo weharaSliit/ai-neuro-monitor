@@ -74,6 +74,24 @@ for col in timing_cols[:4]:  # filter on timing cols
     df = df[(df[col] > -5000) & (df[col] < 5000)]
 print(f"  Kept {len(df)} rows from {before}")
 
+# ── IQR OUTLIER REMOVAL ──────────────────────────────────────
+# IQR outlier removal per user ← MISSING from current s3
+# Literature: Stress Classification 2024
+print("\n[Step IQR] Outlier removal per user...")
+for uid in df[USER_COL].unique():
+    umask = df[USER_COL] == uid
+    for col in timing_cols[:6]:
+        vals = df.loc[umask, col].dropna()
+        if len(vals) < 4:
+            continue
+        Q1, Q3 = vals.quantile(0.25), vals.quantile(0.75)
+        IQR    = Q3 - Q1
+        lo, hi = Q1 - 1.5*IQR, Q3 + 1.5*IQR
+        bad    = umask & ((df[col] < lo) | (df[col] > hi))
+        df.loc[bad, col] = np.nan
+df = df.dropna(subset=timing_cols[:4])
+print(f"  After IQR filter: {len(df)} rows")
+
 # ── PER-SESSION AGGREGATION ───────────────────────────────────
 # IJCA 2023: aggregate raw keystrokes into per-session features
 # One session = one (user, emotion) combination
