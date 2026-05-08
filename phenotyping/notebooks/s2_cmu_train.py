@@ -1,20 +1,22 @@
 # s2_cmu_train.py
 # ─────────────────────────────────────────────────────────
 # PURPOSE: Train and compare IF vs One-Class SVM on CMU data
-# BOTH MODELS RUN IN THE SAME SCRIPT on the SAME data
 # What this proves: Personalized typing baseline anomaly detection
-# Method: LOSO (Leave-One-Subject-Out) cross-validation
 # Literature: Idiographic ML 2023, Online Anomaly Detection 2022
 # ─────────────────────────────────────────────────────────
 import pandas as pd
 import numpy as np
+import joblib  # Added for model saving
 from sklearn.svm import OneClassSVM
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import f1_score, precision_score, recall_score
 import warnings, os
+
 warnings.filterwarnings("ignore")
-os.makedirs("../outputs", exist_ok=True)
+
+# Ensure the models directory exists for Objective 3 
+os.makedirs("../outputs/models", exist_ok=True)
 
 PROCESSED = "../data/processed/cmu_processed.csv"
 
@@ -22,6 +24,10 @@ print("=" * 60)
 print("  S2 — CMU MODEL TRAINING: IF vs One-Class SVM")
 print("  BOTH models trained on SAME data, SAME splits")
 print("=" * 60)
+
+if not os.path.exists(PROCESSED):
+    print(f"❌ Error: {PROCESSED} not found. Run s1_cmu_preprocess.py first.")
+    exit()
 
 df = pd.read_csv(PROCESSED)
 print(f"Loaded: {df.shape}")
@@ -41,9 +47,6 @@ def evaluate(name, y_true, y_pred):
             "precision": round(pre,4), "recall": round(rec,4)}
 
 # ── PERSONALIZATION LOGIC ─────────────────────────────────────
-# Train on own data (first 200 rows = normal baseline)
-# Test on: own remaining rows (+1), other users' rows (-1 anomaly)
-# This mirrors how the deployed system works: one model per person
 print("\nMethod: First 200 rows per user = personal baseline")
 print("        Test: own remaining rows (normal) vs other users (anomaly)")
 
@@ -59,9 +62,9 @@ for uid in all_users:
     if len(user_data) < 220:
         continue
 
-    train      = user_data[:200]
-    test_own   = user_data[200:]
-    test_other = other_data[:min(200, len(other_data))]
+    train       = user_data[:200]
+    test_own    = user_data[200:]
+    test_other  = other_data[:min(200, len(other_data))]
 
     scaler        = StandardScaler()
     train_sc      = scaler.fit_transform(train)
@@ -72,8 +75,7 @@ for uid in all_users:
     y_true = [1]*len(test_own_sc) + [-1]*len(test_other_sc)
 
     # ── ISOLATION FOREST ──────────────────────────────────────
-    iso = IsolationForest(contamination=0.1,
-                          n_estimators=100, random_state=42)
+    iso = IsolationForest(contamination=0.1, n_estimators=100, random_state=42)
     iso.fit(train_sc)
     y_true_if.extend(y_true)
     y_pred_if.extend(iso.predict(X_test))
@@ -104,10 +106,26 @@ for r in [r_if, r_svm]:
     print(f"  {r['model']:<22} {r['f1']:>7.4f} {r['precision']:>11.4f}"
           f" {r['recall']:>9.4f}  {marker}")
 
-winner = "One-Class SVM" if r_svm["f1"] >= r_if["f1"] else "Isolation Forest"
-print(f"\n  Winner on CMU: {winner}")
-print(f"{'='*55}")
+# ── SAVE THE DEPLOYMENT MODEL (OBJECTIVE 3) ───────────────────
+# We train a final model for user 's002' to use in our Backend [cite: 70, 71]
+target_user = 's002' 
+if target_user in df['user_id'].values:
+    print(f"\n[Objective 3] Training final deployment model for {target_user}...")
+    user_data = df[df['user_id'] == target_user][feat_cols].values
+    train_final = user_data[:200]
+    
+    scaler_final = StandardScaler()
+    train_sc_final = scaler_final.fit_transform(train_final)
+    
+    # Use the winning model: One-Class SVM [cite: 35]
+    final_model = OneClassSVM(kernel="rbf", nu=0.1, gamma="scale")
+    final_model.fit(train_sc_final)
+    
+    # Save the model and the scaler for the backend to use 
+    model_save_path = "../outputs/models/behavior_svm_s002.joblib"
+    joblib.dump(final_model, model_save_path)
+    print(f"✅ Model saved to: {model_save_path}")
 
 pd.DataFrame([r_if, r_svm]).to_csv("../outputs/cmu_results.csv", index=False)
-print("\n✅ Saved: ../outputs/cmu_results.csv")
+print("\n✅ Results saved: ../outputs/cmu_results.csv")
 print("Next: python s3_emosurv_preprocess.py")
