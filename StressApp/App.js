@@ -5,7 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 
 import MainHomeScreen from './screens/mainHomeScreen';
 import PhysiologicalNavigator from './modules/physiological/PhysiologicalNavigator';
-import { AppContext } from './screens/AppState';
+import { AppContext } from './modules/physiological/screens/AppState';
 import { ThemeProvider } from './modules/physiological/config/ThemeContext';
 
 const Stack = createNativeStackNavigator();
