@@ -5,14 +5,15 @@ import { StatusBar } from 'expo-status-bar';
 
 import MainHomeScreen from './screens/mainHomeScreen';
 import PhysiologicalNavigator from './modules/physiological/PhysiologicalNavigator';
-import { AppContext } from './modules/physiological/screens/AppState';
+import { AppContext } from './screens/AppState';
+import { ThemeProvider } from './modules/physiological/config/ThemeContext';
 
 const Stack = createNativeStackNavigator();
 
 export default function App() {
   const [selectedSubject, setSelectedSubject] = useState(2);
-  const [lastSessionId, setLastSessionId]     = useState(null);
-  const [lastEmaResult, setLastEmaResult]     = useState(null);
+  const [lastSessionId,   setLastSessionId]   = useState(null);
+  const [lastEmaResult,   setLastEmaResult]   = useState(null);
 
   const sharedState = {
     selectedSubject, setSelectedSubject,
@@ -21,14 +22,16 @@ export default function App() {
   };
 
   return (
-    <AppContext.Provider value={sharedState}>
-      <NavigationContainer>
-        <StatusBar style="light" />
-        <Stack.Navigator screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="Home" component={MainHomeScreen} />
-          <Stack.Screen name="Physiological" component={PhysiologicalNavigator} />
-        </Stack.Navigator>
-      </NavigationContainer>
-    </AppContext.Provider>
+    <ThemeProvider>
+      <AppContext.Provider value={sharedState}>
+        <NavigationContainer>
+          <StatusBar style="light" />
+          <Stack.Navigator screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="Home"          component={MainHomeScreen} />
+            <Stack.Screen name="Physiological" component={PhysiologicalNavigator} />
+          </Stack.Navigator>
+        </NavigationContainer>
+      </AppContext.Provider>
+    </ThemeProvider>
   );
 }

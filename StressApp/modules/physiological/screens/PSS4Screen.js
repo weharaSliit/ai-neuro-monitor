@@ -1,125 +1,126 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity,
-  ScrollView, Alert
+  ScrollView, Alert, Animated
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import axios from 'axios';
+import { useTheme } from '../config/ThemeContext';
 import { API_BASE, USER_ID } from '../config/config';
 import { useAppState } from './AppState';
 
 const QUESTIONS = [
-  'In the last month, how often have you felt nervous and stressed?',
-  'In the last month, how often have you felt unable to control important things in your life?',
-  'In the last month, how often have you felt difficulties piling up so high you could not overcome them?',
-  'In the last month, how often have you felt confident about your ability to handle personal problems?',
+  { q: 'In the last month, how often have you felt nervous and stressed?', reverse: false },
+  { q: 'In the last month, how often have you felt unable to control important things in your life?', reverse: false },
+  { q: 'In the last month, how often have you felt difficulties piling up so high you could not overcome them?', reverse: false },
+  { q: 'In the last month, how often have you felt confident about your ability to handle personal problems?', reverse: true },
 ];
 
-const OPTIONS = ['Never', 'Almost\nNever', 'Sometimes', 'Fairly\nOften', 'Very\nOften'];
+const OPTIONS = [
+  { label: 'Never',        value: 0, emoji: '😌' },
+  { label: 'Almost Never', value: 1, emoji: '🙂' },
+  { label: 'Sometimes',    value: 2, emoji: '😐' },
+  { label: 'Fairly Often', value: 3, emoji: '😟' },
+  { label: 'Very Often',   value: 4, emoji: '😨' },
+];
 
 export default function PSS4Screen() {
-  const { lastSessionId } = useAppState();
+  const { isDark, theme }        = useTheme();
+  const { lastSessionId }        = useAppState();
+  const [answers,   setAnswers]  = useState([null, null, null, null]);
+  const [submitted, setSubmitted]= useState(false);
+  const [result,    setResult]   = useState(null);
+  const [activeQ,   setActiveQ]  = useState(0);
 
-  const [answers,   setAnswers]   = useState([null, null, null, null]);
-  const [submitted, setSubmitted] = useState(false);
-  const [result,    setResult]    = useState(null);
+  const progressAnim = useRef(new Animated.Value(0)).current;
+
+  const bg     = isDark ? '#060d1a' : '#f0f9ff';
+  const card   = isDark ? '#0f1f35' : '#ffffff';
+  const border = isDark ? '#1e3a5f' : '#e2e8f0';
+  const text   = theme.text;
+  const muted  = theme.textMuted;
+
+  const answered = answers.filter(a => a !== null).length;
 
   const setAnswer = (qIdx, val) => {
     const newAnswers  = [...answers];
     newAnswers[qIdx]  = val;
     setAnswers(newAnswers);
+    Animated.timing(progressAnim, {
+      toValue: (newAnswers.filter(a => a !== null).length) / 4,
+      duration: 300, useNativeDriver: false,
+    }).start();
+    if (qIdx < 3) setActiveQ(qIdx + 1);
   };
 
   const submit = async () => {
-    if (answers.some(a => a === null)) {
-      Alert.alert('Incomplete', 'Please answer all 4 questions.');
-      return;
-    }
-
+    if (answers.some(a => a === null)) { Alert.alert('Incomplete', 'Please answer all 4 questions.'); return; }
     const sessionToUse = lastSessionId || 'no_session';
-
     try {
       const res = await axios.post(`${API_BASE}/pss4`, {
-        user_id:    USER_ID,
-        session_id: sessionToUse,
-        q1:         answers[0],
-        q2:         answers[1],
-        q3:         answers[2],
-        q4:         answers[3],
+        user_id: USER_ID, session_id: sessionToUse,
+        q1: answers[0], q2: answers[1], q3: answers[2], q4: answers[3],
       });
-      setResult(res.data);
-      setSubmitted(true);
-    } catch (e) {
-      // Offline fallback — calculate locally
+      setResult(res.data); setSubmitted(true);
+    } catch {
       const score = answers.reduce((a, b) => a + b, 0);
-      const level = score <= 6 ? 'Normal'
-                  : score <= 12 ? 'Pre-stress'
-                  : 'Stress';
-      setResult({ score, level, max_score: 16 });
+      setResult({ score, level: score <= 6 ? 'Normal' : score <= 12 ? 'Pre-stress' : 'Stress', max_score: 16 });
       setSubmitted(true);
     }
   };
 
-  const reset = () => {
-    setAnswers([null, null, null, null]);
-    setSubmitted(false);
-    setResult(null);
-  };
+  const reset = () => { setAnswers([null,null,null,null]); setSubmitted(false); setResult(null); setActiveQ(0); progressAnim.setValue(0); };
 
   if (submitted && result) {
-    const color =
-      result.level === 'Normal'     ? '#22c55e'
-    : result.level === 'Pre-stress' ? '#f59e0b'
-    : '#ef4444';
-
-    const emoji =
-      result.level === 'Normal'     ? '😌'
-    : result.level === 'Pre-stress' ? '😰'
-    : '😨';
+    const color = result.level === 'Normal' ? '#10b981' : result.level === 'Pre-stress' ? '#f59e0b' : '#ef4444';
+    const emoji = result.level === 'Normal' ? '😌' : result.level === 'Pre-stress' ? '😰' : '😨';
+    const pct   = (result.score / (result.max_score || 16)) * 100;
 
     return (
-      <SafeAreaView style={styles.safe}>
-        <View style={styles.resultContainer}>
-          <View style={[styles.resultCard,
-            { borderColor: color, borderWidth: 2 }]}>
-            <Text style={styles.resultEmoji}>{emoji}</Text>
-            <Text style={styles.resultTitle}>PSS-4 Result</Text>
-            <Text style={[styles.resultScore, { color }]}>
-              {result.score} / {result.max_score || 16}
-            </Text>
-            <Text style={[styles.resultLevel, { color }]}>
-              {result.level}
-            </Text>
+      <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
+        <View style={[styles.resultScreen, { backgroundColor: bg }]}>
+          <View style={[styles.resultCard, { backgroundColor: card, borderColor: color + '60', borderWidth: 2 }]}>
 
-            <View style={styles.scaleBar}>
-              <View style={[styles.scaleFill, {
-                width: `${(result.score / 16) * 100}%`,
-                backgroundColor: color
-              }]} />
-            </View>
-            <View style={styles.scaleLabels}>
-              <Text style={styles.scaleLabel}>Normal</Text>
-              <Text style={styles.scaleLabel}>Pre-stress</Text>
-              <Text style={styles.scaleLabel}>Stress</Text>
+            <View style={[styles.resultIconRing, { borderColor: color + '60' }]}>
+              <View style={[styles.resultIconInner, { backgroundColor: color + '20' }]}>
+                <Text style={styles.resultEmoji}>{emoji}</Text>
+              </View>
             </View>
 
-            <Text style={styles.resultDesc}>
-              {result.level === 'Normal' &&
-                'Your perceived stress is within normal range. Continue monitoring.'}
-              {result.level === 'Pre-stress' &&
-                'You are experiencing moderate stress. Consider taking short breaks.'}
-              {result.level === 'Stress' &&
-                'High perceived stress detected. Consider stress management techniques.'}
+            <Text style={[styles.resultTitle, { color: muted }]}>PSS-4 Result</Text>
+            <Text style={[styles.resultScore, { color }]}>{result.score}</Text>
+            <Text style={[styles.resultMax, { color: muted }]}>/ {result.max_score || 16}</Text>
+            <Text style={[styles.resultLevel, { color }]}>{result.level}</Text>
+
+            {/* Score bar */}
+            <View style={[styles.scoreBar, { backgroundColor: isDark ? '#1e3a5f' : '#e2e8f0' }]}>
+              <View style={[styles.scoreBarNormal,    { width: '37.5%' }]} />
+              <View style={[styles.scoreBarPrestress, { width: '37.5%' }]} />
+              <View style={[styles.scoreBarStress,    { width: '25%'   }]} />
+              <View style={[styles.scoreMarker, { left: `${pct}%`, backgroundColor: color }]} />
+            </View>
+            <View style={styles.scoreLabels}>
+              <Text style={[styles.scoreLabel, { color: '#10b981' }]}>Normal</Text>
+              <Text style={[styles.scoreLabel, { color: '#f59e0b' }]}>Pre-stress</Text>
+              <Text style={[styles.scoreLabel, { color: '#ef4444' }]}>Stress</Text>
+            </View>
+
+            <Text style={[styles.resultDesc, { color: muted }]}>
+              {result.level === 'Normal' && 'Your perceived stress is within normal range. Continue monitoring daily.'}
+              {result.level === 'Pre-stress' && 'Moderate stress detected. Consider short breaks and relaxation techniques.'}
+              {result.level === 'Stress' && 'High perceived stress. This validates physiological detection — consider stress management.'}
             </Text>
 
             {lastSessionId && (
-              <Text style={styles.sessionNote}>
-                Linked to session: {lastSessionId.slice(0, 8)}...
-              </Text>
+              <View style={[styles.sessionNote, { backgroundColor: '#6366f115', borderColor: '#6366f130' }]}>
+                <Text style={styles.sessionNoteText}>
+                  Linked to session: {lastSessionId.slice(0,10)}...
+                </Text>
+              </View>
             )}
 
-            <TouchableOpacity style={styles.resetBtn} onPress={reset}>
-              <Text style={styles.resetBtnText}>Take Again</Text>
+            <TouchableOpacity style={[styles.resetBtn, { backgroundColor: isDark ? '#162033' : '#f8fafc', borderColor: border }]} onPress={reset}>
+              <Text style={[styles.resetBtnText, { color: muted }]}>↺  Take Again</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -127,107 +128,170 @@ export default function PSS4Screen() {
     );
   }
 
-  return (
-    <SafeAreaView style={styles.safe}>
-      <ScrollView style={styles.container}>
-        <Text style={styles.title}>PSS-4 Questionnaire</Text>
-        <Text style={styles.subtitle}>
-          Perceived Stress Scale — Cohen et al. 1983
-        </Text>
-        <Text style={styles.sessionInfo}>
-          {lastSessionId
-            ? `Linked to current session`
-            : `Run a simulation first for best results`}
-        </Text>
+  const progressWidth = progressAnim.interpolate({ inputRange: [0,1], outputRange: ['0%','100%'] });
 
+  return (
+    <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
+      <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+
+        {/* Header */}
+        <View style={styles.header}>
+          <Text style={[styles.title, { color: text }]}>PSS-4 Questionnaire</Text>
+          <Text style={[styles.subtitle, { color: muted }]}>Cohen et al. 1983 · Perceived Stress Scale</Text>
+        </View>
+
+        {/* Progress */}
+        <View style={[styles.progressCard, { backgroundColor: card, borderColor: border }]}>
+          <View style={styles.progressHeader}>
+            <Text style={[styles.progressLabel, { color: muted }]}>{answered} of 4 answered</Text>
+            <Text style={[styles.progressPct, { color: '#6366f1' }]}>{Math.round((answered / 4) * 100)}%</Text>
+          </View>
+          <View style={[styles.progressBg, { backgroundColor: isDark ? '#1e3a5f' : '#e2e8f0' }]}>
+            <Animated.View style={[styles.progressFill, { width: progressWidth }]} />
+          </View>
+          <View style={styles.dotRow}>
+            {[0,1,2,3].map(i => (
+              <TouchableOpacity key={i} onPress={() => setActiveQ(i)}>
+                <View style={[styles.progressDot,
+                  answers[i] !== null
+                    ? { backgroundColor: '#6366f1', width: 12, height: 12 }
+                    : i === activeQ
+                    ? { borderColor: '#6366f1', borderWidth: 2, backgroundColor: 'transparent' }
+                    : { backgroundColor: isDark ? '#1e3a5f' : '#e2e8f0' }
+                ]} />
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
+        {/* Questions */}
         {QUESTIONS.map((q, qIdx) => (
-          <View key={qIdx} style={styles.questionCard}>
-            <Text style={styles.questionNum}>Q{qIdx + 1}</Text>
-            <Text style={styles.questionText}>{q}</Text>
-            <View style={styles.optionsRow}>
+          <View key={qIdx} style={[
+            styles.questionCard,
+            { backgroundColor: card, borderColor: qIdx === activeQ ? '#6366f1' : border },
+            qIdx === activeQ && styles.questionCardActive,
+          ]}>
+            <View style={styles.questionHeader}>
+              <View style={[styles.qNumber, { backgroundColor: qIdx === activeQ ? '#6366f1' : isDark ? '#162033' : '#f8fafc' }]}>
+                <Text style={[styles.qNumberText, { color: qIdx === activeQ ? '#fff' : muted }]}>Q{qIdx + 1}</Text>
+              </View>
+              {q.reverse && (
+                <View style={[styles.reverseBadge, { backgroundColor: '#10b98120', borderColor: '#10b98140' }]}>
+                  <Text style={styles.reverseText}>Reverse scored</Text>
+                </View>
+              )}
+            </View>
+            <Text style={[styles.questionText, { color: text }]}>{q.q}</Text>
+
+            <View style={styles.optionsGrid}>
               {OPTIONS.map((opt, val) => (
                 <TouchableOpacity
                   key={val}
                   style={[
                     styles.optionBtn,
-                    answers[qIdx] === val && styles.optionBtnActive
+                    { backgroundColor: isDark ? '#162033' : '#f8fafc', borderColor: border },
+                    answers[qIdx] === val && {
+                      backgroundColor: '#6366f1',
+                      borderColor:     '#6366f1',
+                      transform:       [{ scale: 1.05 }],
+                    },
                   ]}
                   onPress={() => setAnswer(qIdx, val)}
+                  activeOpacity={0.8}
                 >
-                  <Text style={[
-                    styles.optionVal,
-                    answers[qIdx] === val && { color: '#fff' }
-                  ]}>{val}</Text>
-                  <Text style={[
-                    styles.optionLabel,
-                    answers[qIdx] === val && { color: '#c7d2fe' }
-                  ]}>{opt}</Text>
+                  <Text style={styles.optionEmoji}>{opt.emoji}</Text>
+                  <Text style={[styles.optionVal, { color: answers[qIdx] === val ? '#fff' : '#6366f1' }]}>
+                    {opt.value}
+                  </Text>
+                  <Text style={[styles.optionLabel, { color: answers[qIdx] === val ? '#c7d2fe' : muted }]}>
+                    {opt.label}
+                  </Text>
                 </TouchableOpacity>
               ))}
             </View>
           </View>
         ))}
 
-        <View style={styles.progressIndicator}>
-          <Text style={styles.progressText}>
-            {answers.filter(a => a !== null).length} / 4 answered
-          </Text>
-          <View style={styles.progressBg}>
-            <View style={[styles.progressFill, {
-              width: `${(answers.filter(a => a !== null).length / 4) * 100}%`
-            }]} />
+        {/* Score preview */}
+        {answered > 0 && (
+          <View style={[styles.previewCard, { backgroundColor: '#6366f110', borderColor: '#6366f130' }]}>
+            <Text style={[styles.previewLabel, { color: muted }]}>Current score</Text>
+            <Text style={[styles.previewScore, { color: '#818cf8' }]}>
+              {answers.filter(a => a !== null).reduce((s, a) => s + a, 0)}
+            </Text>
+            <Text style={[styles.previewMax, { color: muted }]}>/ 16</Text>
           </View>
-        </View>
+        )}
 
         <TouchableOpacity
-          style={[
-            styles.submitBtn,
-            answers.some(a => a === null) && styles.submitBtnDisabled
-          ]}
+          style={[styles.submitBtn, answered < 4 && { backgroundColor: '#334155' }]}
           onPress={submit}
+          disabled={answered < 4}
+          activeOpacity={0.85}
         >
-          <Text style={styles.submitBtnText}>Submit PSS-4</Text>
+          <Text style={styles.submitBtnText}>
+            {answered < 4 ? `Answer ${4 - answered} more question${4 - answered !== 1 ? 's' : ''}` : 'Submit PSS-4 →'}
+          </Text>
         </TouchableOpacity>
 
-        <View style={{ height: 60 }} />
+        <View style={{ height: 80 }} />
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safe:               { flex: 1, backgroundColor: '#0f172a' },
-  container:          { flex: 1, backgroundColor: '#0f172a', padding: 16 },
-  title:              { fontSize: 24, fontWeight: 'bold', color: '#f1f5f9', marginTop: 20, marginBottom: 4 },
-  subtitle:           { fontSize: 13, color: '#64748b', marginBottom: 6 },
-  sessionInfo:        { fontSize: 12, color: '#6366f1', marginBottom: 16, fontStyle: 'italic' },
-  questionCard:       { backgroundColor: '#1e293b', borderRadius: 16, padding: 18, marginBottom: 14 },
-  questionNum:        { color: '#6366f1', fontWeight: '700', fontSize: 12, marginBottom: 6 },
-  questionText:       { color: '#f1f5f9', fontSize: 14, lineHeight: 22, marginBottom: 14 },
-  optionsRow:         { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  optionBtn:          { backgroundColor: '#0f172a', borderRadius: 10, padding: 10, alignItems: 'center', width: '18%', borderWidth: 1, borderColor: '#334155' },
-  optionBtnActive:    { backgroundColor: '#6366f1', borderColor: '#6366f1' },
-  optionVal:          { color: '#f1f5f9', fontWeight: 'bold', fontSize: 16 },
-  optionLabel:        { color: '#64748b', fontSize: 9, marginTop: 3, textAlign: 'center' },
-  progressIndicator:  { paddingHorizontal: 8, marginBottom: 16 },
-  progressText:       { color: '#64748b', fontSize: 13, marginBottom: 8, textAlign: 'center' },
-  progressBg:         { height: 6, backgroundColor: '#1e293b', borderRadius: 3 },
-  progressFill:       { height: 6, backgroundColor: '#6366f1', borderRadius: 3 },
-  submitBtn:          { backgroundColor: '#6366f1', padding: 18, borderRadius: 14, alignItems: 'center', margin: 8 },
-  submitBtnDisabled:  { backgroundColor: '#334155' },
-  submitBtnText:      { color: '#fff', fontSize: 18, fontWeight: '700' },
-  resultContainer:    { flex: 1, backgroundColor: '#0f172a', alignItems: 'center', justifyContent: 'center', padding: 24 },
-  resultCard:         { backgroundColor: '#1e293b', borderRadius: 20, padding: 32, alignItems: 'center', width: '100%' },
-  resultEmoji:        { fontSize: 80, marginBottom: 16 },
-  resultTitle:        { color: '#94a3b8', fontSize: 16, marginBottom: 8 },
-  resultScore:        { fontSize: 56, fontWeight: 'bold' },
-  resultLevel:        { fontSize: 24, fontWeight: '700', marginTop: 8 },
-  scaleBar:           { height: 8, backgroundColor: '#0f172a', borderRadius: 4, width: '100%', marginTop: 20, overflow: 'hidden' },
-  scaleFill:          { height: 8, borderRadius: 4 },
-  scaleLabels:        { flexDirection: 'row', justifyContent: 'space-between', width: '100%', marginTop: 4 },
-  scaleLabel:         { color: '#475569', fontSize: 10 },
-  resultDesc:         { color: '#64748b', fontSize: 14, textAlign: 'center', marginTop: 16, lineHeight: 22 },
-  sessionNote:        { color: '#475569', fontSize: 11, marginTop: 12, fontStyle: 'italic' },
-  resetBtn:           { backgroundColor: '#0f172a', padding: 16, borderRadius: 12, marginTop: 20, width: '100%', alignItems: 'center' },
-  resetBtnText:       { color: '#f1f5f9', fontSize: 16, fontWeight: '600' },
+  safe:              { flex: 1 },
+  container:         { flex: 1, padding: 20 },
+  header:            { marginBottom: 16 },
+  title:             { fontSize: 24, fontWeight: '900' },
+  subtitle:          { fontSize: 13, marginTop: 4 },
+  progressCard:      { borderRadius: 16, borderWidth: 1, padding: 14, marginBottom: 16 },
+  progressHeader:    { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
+  progressLabel:     { fontSize: 13, fontWeight: '600' },
+  progressPct:       { fontSize: 13, fontWeight: '800' },
+  progressBg:        { height: 6, borderRadius: 3, overflow: 'hidden', marginBottom: 12 },
+  progressFill:      { height: 6, borderRadius: 3, backgroundColor: '#6366f1' },
+  dotRow:            { flexDirection: 'row', gap: 10 },
+  progressDot:       { width: 10, height: 10, borderRadius: 5 },
+  questionCard:      { borderRadius: 18, borderWidth: 1, padding: 18, marginBottom: 14 },
+  questionCardActive:{ shadowColor: '#6366f1', shadowOpacity: 0.2, shadowRadius: 12, elevation: 4 },
+  questionHeader:    { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
+  qNumber:           { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  qNumberText:       { fontSize: 12, fontWeight: '800' },
+  reverseBadge:      { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1 },
+  reverseText:       { color: '#10b981', fontSize: 10, fontWeight: '700' },
+  questionText:      { fontSize: 14, lineHeight: 22, marginBottom: 14 },
+  optionsGrid:       { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  optionBtn:         { width: '18.5%', borderRadius: 12, borderWidth: 1, padding: 8, alignItems: 'center' },
+  optionEmoji:       { fontSize: 16, marginBottom: 3 },
+  optionVal:         { fontSize: 16, fontWeight: '900' },
+  optionLabel:       { fontSize: 8, marginTop: 2, textAlign: 'center' },
+  previewCard:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 14, borderWidth: 1, padding: 14, marginBottom: 16 },
+  previewLabel:      { fontSize: 13 },
+  previewScore:      { fontSize: 32, fontWeight: '900' },
+  previewMax:        { fontSize: 16 },
+  submitBtn:         { backgroundColor: '#6366f1', padding: 18, borderRadius: 16, alignItems: 'center', marginBottom: 16 },
+  submitBtnText:     { color: '#fff', fontSize: 16, fontWeight: '800' },
+  resultScreen:      { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20 },
+  resultCard:        { width: '100%', borderRadius: 24, padding: 28, alignItems: 'center' },
+  resultIconRing:    { width: 110, height: 110, borderRadius: 55, borderWidth: 2, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
+  resultIconInner:   { width: 90, height: 90, borderRadius: 45, alignItems: 'center', justifyContent: 'center' },
+  resultEmoji:       { fontSize: 48 },
+  resultTitle:       { fontSize: 14, marginBottom: 8 },
+  resultScore:       { fontSize: 64, fontWeight: '900' },
+  resultMax:         { fontSize: 18, marginTop: -8, marginBottom: 6 },
+  resultLevel:       { fontSize: 26, fontWeight: '900', marginBottom: 16 },
+  scoreBar:          { width: '100%', height: 8, borderRadius: 4, overflow: 'hidden', flexDirection: 'row', position: 'relative', marginBottom: 4 },
+  scoreBarNormal:    { height: 8, backgroundColor: '#10b981' },
+  scoreBarPrestress: { height: 8, backgroundColor: '#f59e0b' },
+  scoreBarStress:    { height: 8, backgroundColor: '#ef4444' },
+  scoreMarker:       { position: 'absolute', top: -3, width: 4, height: 14, borderRadius: 2 },
+  scoreLabels:       { flexDirection: 'row', justifyContent: 'space-between', width: '100%', marginBottom: 16 },
+  scoreLabel:        { fontSize: 10, fontWeight: '700' },
+  resultDesc:        { fontSize: 14, textAlign: 'center', lineHeight: 22, marginBottom: 16 },
+  sessionNote:       { borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8, borderWidth: 1, marginBottom: 14 },
+  sessionNoteText:   { color: '#818cf8', fontSize: 11 },
+  resetBtn:          { borderRadius: 12, borderWidth: 1, padding: 14, width: '100%', alignItems: 'center' },
+  resetBtnText:      { fontSize: 15, fontWeight: '600' },
 });
