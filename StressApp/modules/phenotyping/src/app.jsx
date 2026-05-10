@@ -1,31 +1,43 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { ThemeProvider } from './context/ThemeContext';
 import { Welcome } from './pages/welcome';
 import { Permissions } from './pages/permissions';
 import PhenotypingDashboard from './pages/PhenotypingDashboard';
 import { BaselineSurvey } from './pages/BaselineSurvey';
 import { SetupComplete } from './pages/SetupComplete';
 import { DigitalSignals } from './pages/DigitalSignals';
-
-
+import { AlertDetail } from './pages/AlertDetail';
+import { SignalDetail } from './pages/SignalDetail';
+import { SignalHistory } from './pages/SignalHistory';
+import { Analysis } from './pages/Analysis';
+import { Toolkit } from './pages/Toolkit';
+import { Profile } from './pages/Profile';
 
 function App() {
     return (
-        <Router>
-            <div className="h-screen w-full bg-black flex justify-center items-center">
-                <div className="w-full h-screen max-w-md bg-[#0f0f14] relative overflow-hidden shadow-2xl">
-                    <Routes>
-                        <Route path="/" element={<Welcome />} />
-                        <Route path="/permissions" element={<Permissions />} />
-                        <Route path="/baseline" element={<BaselineSurvey />} />
-                        <Route path="/setup-complete" element={<SetupComplete />} />
-                        <Route path="/dashboard" element={<PhenotypingDashboard />} />
-                        <Route path="/signals" element={<DigitalSignals />} />
-                        {/* Add other routes as you build them */}
-                    </Routes>
+        <ThemeProvider>
+            <Router>
+                <div className="h-screen w-full bg-black flex justify-center items-center">
+                    <div className="w-full h-screen max-w-md relative overflow-hidden shadow-2xl">
+                        <Routes>
+                            <Route path="/" element={<Welcome />} />
+                            <Route path="/permissions" element={<Permissions />} />
+                            <Route path="/baseline" element={<BaselineSurvey />} />
+                            <Route path="/setup-complete" element={<SetupComplete />} />
+                            <Route path="/dashboard" element={<PhenotypingDashboard />} />
+                            <Route path="/signals" element={<DigitalSignals />} />
+                            <Route path="/alert-detail" element={<AlertDetail />} />
+                            <Route path="/signal-detail/:signalId" element={<SignalDetail />} />
+                            <Route path="/signal-history/:signalId" element={<SignalHistory />} />
+                            <Route path="/analysis" element={<Analysis />} />
+                            <Route path="/toolkit" element={<Toolkit />} />
+                            <Route path="/profile" element={<Profile />} />
+                        </Routes>
+                    </div>
                 </div>
-            </div>
-        </Router>
+            </Router>
+        </ThemeProvider>
     );
 }
 

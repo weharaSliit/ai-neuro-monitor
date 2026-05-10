@@ -1,153 +1,192 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Info } from 'lucide-react';
+import { 
+    ChevronLeft, Moon, Zap, Activity, 
+    Calendar, Heart, CheckCircle2
+} from 'lucide-react';
+import { useTheme } from '../context/ThemeContext';
 
 const SURVEY_DATA = [
     {
-        id: 1,
-        category: "Sleep",
-        badgeColor: "border-[#7c6bf7]/40 bg-[#7c6bf7]/10 text-[#7c6bf7]",
+        id: 'sleep',
         question: "On most nights, how many hours do you sleep?",
-        options: ["Less than 5 hours", "5 to 6 hours", "6 to 7 hours", "7 to 8 hours", "More than 8 hours"]
+        options: ["Less than 5 hours", "5-6 hours", "7-8 hours", "9+ hours"],
+        icon: Moon,
+        color: 'text-indigo-400',
+        bgColor: 'bg-indigo-500/10',
+        animation: 'animate-float'
     },
     {
-        id: 2,
-        category: "Stress history",
-        badgeColor: "border-orange-500/40 bg-orange-500/10 text-orange-500",
+        id: 'stress_freq',
         question: "On a typical week, how many days do you feel stressed?",
-        options: ["Rarely — 1 day or less", "Sometimes — 2 to 3 days", "Often — 4 to 5 days", "Almost every day"]
+        options: ["0-1 day", "2-3 days", "4-5 days", "Every day"],
+        icon: Zap,
+        color: 'text-orange-400',
+        bgColor: 'bg-orange-500/10',
+        animation: 'animate-pulse'
     },
     {
-        id: 3,
-        category: "Right now",
-        badgeColor: "border-emerald-500/40 bg-emerald-500/10 text-emerald-500",
-        question: "Right now, your mood feels closer to...",
-        options: ["Calm and relaxed", "Mostly fine, slight tension", "A bit stressed or anxious", "Quite stressed or overwhelmed"]
-    },
-    {
-        id: 4,
-        category: "Daily activity",
-        badgeColor: "border-emerald-500/40 bg-emerald-500/10 text-emerald-500",
+        id: 'activity',
         question: "How physically active are you on a typical day?",
-        options: ["Sedentary — mostly sitting", "Lightly active — occasional walks", "Moderately active — regular movement", "Very active — daily exercise"]
+        options: ["Not at all", "Lightly active", "Moderately active", "Very active"],
+        icon: Activity,
+        color: 'text-emerald-400',
+        bgColor: 'bg-emerald-500/10',
+        animation: 'animate-bounce'
     },
     {
-        id: 5,
-        category: "Work & study",
-        badgeColor: "border-[#7c6bf7]/40 bg-[#7c6bf7]/10 text-[#7c6bf7]",
+        id: 'schedule',
         question: "What does your typical daily schedule look like?",
-        options: ["Fixed hours — same time every day", "Flexible hours — varies each day", "Shift work — rotating schedule", "Student — lecture-based schedule"],
-        footerNote: "This helps us understand when your behavior patterns are expected to change naturally."
+        options: ["Fixed (9-5)", "Flexible/Remote", "Irregular/Shift", "Student/Study"],
+        icon: Calendar,
+        color: 'text-purple-400',
+        bgColor: 'bg-purple-500/10',
+        animation: 'animate-spin-slow'
     },
     {
-        id: 6,
-        category: "Your goal",
-        badgeColor: "border-[#7c6bf7]/40 bg-[#7c6bf7]/10 text-[#7c6bf7]",
+        id: 'reason',
         question: "What is your main reason for using PhenoCare?",
-        options: ["Understand my stress patterns", "Get early warning before I burn out", "Support my therapy or counselling", "Participating in a research study"],
-        finalAction: "Save my baseline"
+        options: ["Stress awareness", "Research study", "Improve focus", "Health tracking"],
+        icon: Heart,
+        color: 'text-rose-400',
+        bgColor: 'bg-rose-500/10',
+        animation: 'animate-float'
     }
 ];
 
 export function BaselineSurvey() {
     const navigate = useNavigate();
-    const [currentStep, setCurrentStep] = useState(0);
-    const [selections, setSelections] = useState({});
+    const { t, isDark } = useTheme();
+    const [step, setStep] = useState(0);
+    const [answers, setAnswers] = useState({});
+    const [isTransitioning, setIsTransitioning] = useState(false);
 
-    const currentQ = SURVEY_DATA[currentStep];
+    const currentQ = SURVEY_DATA[step];
+    const progress = ((step + 1) / SURVEY_DATA.length) * 100;
 
-    const handleContinue = () => {
-        if (currentStep < SURVEY_DATA.length - 1) {
-            setCurrentStep(currentStep + 1);
-        } else {
-            navigate('/setup-complete');
-        }
+    const handleOptionSelect = (option) => {
+        setAnswers({ ...answers, [currentQ.id]: option });
+        
+        // Advance after feedback
+        setTimeout(() => {
+            if (step < SURVEY_DATA.length - 1) {
+                setIsTransitioning(true);
+                setTimeout(() => {
+                    setStep(step + 1);
+                    setIsTransitioning(false);
+                }, 300);
+            } else {
+                navigate('/setup-complete');
+            }
+        }, 400);
     };
 
     const handleBack = () => {
-        if (currentStep > 0) {
-            setCurrentStep(currentStep - 1);
+        if (step > 0) {
+            setIsTransitioning(true);
+            setTimeout(() => {
+                setStep(step - 1);
+                setIsTransitioning(false);
+            }, 300);
         } else {
-            navigate(-1);
+            navigate('/permissions');
         }
     };
 
-    return (
-        <div className="h-screen bg-[#0f0f14] flex flex-col font-sans">
-            {/* Top Header */}
-            <div className="p-6">
-                <div className="flex justify-between items-center mb-6">
-                    <button onClick={handleBack} className="text-white/60">
-                        <ArrowLeft size={24} />
-                    </button>
-                    <span className="text-[10px] text-[#c0c0d8] font-bold">9:41</span>
-                </div>
+    const isSelected = (option) => answers[currentQ.id] === option;
 
-                <div className="flex items-center gap-4">
-                    <p className="text-[11px] text-gray-400 whitespace-nowrap">Step 2 of 3 — About you</p>
-                    <div className="w-full h-[3px] bg-zinc-800 rounded-full overflow-hidden">
-                        <div
-                            className="h-full bg-[#7c6bf7] rounded-full transition-all duration-500"
-                            style={{ width: `${((currentStep + 1) / 6) * 100}%` }}
-                        ></div>
-                    </div>
+    return (
+        <div className={`h-screen ${t.bg} flex flex-col font-sans overflow-hidden relative max-w-md mx-auto shadow-2xl`}>
+            {/* Header / Progress */}
+            <div className="px-6 pt-12 pb-6">
+                <div className="flex items-center justify-between mb-6">
+                    <button 
+                        onClick={handleBack}
+                        className={`p-2 -ml-2 rounded-xl ${t.textMuted} hover:${t.text} active:scale-90 transition-all`}
+                    >
+                        <ChevronLeft size={24} />
+                    </button>
+                    <span className={`text-[10px] font-bold uppercase tracking-widest ${t.textMuted}`}>
+                        Step 2 of 3 — Baseline
+                    </span>
+                    <div className="w-10" /> 
+                </div>
+                
+                <div className={`w-full h-1.5 ${t.progressBg} rounded-full overflow-hidden`}>
+                    <div 
+                        className="h-full bg-[#7c6bf7] transition-all duration-500 ease-out"
+                        style={{ width: `${progress}%` }}
+                    />
                 </div>
             </div>
 
-            <div className="flex-1 px-6 pt-4">
-                <div className={`inline-block px-4 py-1.5 rounded-full border ${currentQ.badgeColor} text-[11px] font-bold mb-6 transition-colors`}>
-                    {currentQ.category}
-                </div>
-
-                <h1 className="text-2xl font-bold text-white mb-10 leading-tight">
-                    {currentQ.question}
-                </h1>
-
-                <div className="space-y-3">
-                    {currentQ.options.map((option) => (
-                        <button
-                            key={option}
-                            onClick={() => setSelections({ ...selections, [currentQ.id]: option })}
-                            className={`w-full p-5 rounded-2xl border text-left transition-all duration-200 ${selections[currentQ.id] === option
-                                    ? 'bg-[#1a1228] border-[#7c6bf7] text-white'
-                                    : 'bg-[#14141f] border-[#2a2a38] text-gray-300'
-                                }`}
-                        >
-                            <span className="text-sm font-medium">{option}</span>
-                        </button>
-                    ))}
-                </div>
-
-                {/* Info Box for Question 5 */}
-                {currentQ.footerNote && (
-                    <div className="mt-6 flex gap-3 items-start text-[#3b82f6]">
-                        <Info size={16} className="mt-0.5" />
-                        <p className="text-[11px] leading-relaxed opacity-80">{currentQ.footerNote}</p>
+            {/* Question Content */}
+            <div className={`flex-1 flex flex-col px-8 transition-all duration-300 ${isTransitioning ? 'opacity-0 translate-x-4' : 'opacity-100 translate-x-0'}`}>
+                
+                {/* Animation Area */}
+                <div className="flex flex-col items-center justify-center py-6">
+                    <div className={`relative w-28 h-28 rounded-3xl ${currentQ.bgColor} flex items-center justify-center mb-8 transition-all duration-500 ${answers[currentQ.id] ? 'scale-110 shadow-2xl shadow-[#7c6bf7]/20' : ''}`}>
+                        <currentQ.icon 
+                            size={56} 
+                            className={`${currentQ.color} ${answers[currentQ.id] ? 'animate-none' : currentQ.animation}`} 
+                        />
+                        {answers[currentQ.id] && (
+                            <div className="absolute -top-2 -right-2 bg-emerald-500 text-white p-1.5 rounded-full shadow-lg animate-fade-in-scale">
+                                <CheckCircle2 size={18} strokeWidth={3} />
+                            </div>
+                        )}
+                        
+                        <div className={`absolute -top-3 -left-3 w-3 h-3 rounded-full ${currentQ.color} opacity-40 animate-float`} />
+                        <div className={`absolute bottom-3 -right-5 w-2 h-2 rounded-full ${currentQ.color} opacity-30 animate-pulse`} />
                     </div>
-                )}
+                    
+                    <h2 className={`text-2xl font-bold ${t.text} text-center leading-tight mb-2 px-2`}>
+                        {currentQ.question}
+                    </h2>
+                    <p className={`text-[11px] ${t.textDim} text-center uppercase tracking-widest font-bold`}>
+                        Question {step + 1} of {SURVEY_DATA.length}
+                    </p>
+                </div>
+
+                {/* Options List */}
+                <div className="flex-1 flex flex-col justify-end pb-12 stagger-children">
+                    <div className="space-y-3">
+                        {currentQ.options.map((option, i) => {
+                            const selected = isSelected(option);
+                            return (
+                                <button
+                                    key={i}
+                                    onClick={() => handleOptionSelect(option)}
+                                    className={`w-full p-4 rounded-2xl border-2 text-left transition-all duration-300 flex items-center justify-between group
+                                        ${selected 
+                                            ? 'border-[#7c6bf7] bg-[#7c6bf7]/5 shadow-md translate-y-[-1px]' 
+                                            : `${t.card} ${t.cardBorder} hover:${t.cardHover}`
+                                        }
+                                    `}
+                                >
+                                    <span className={`text-sm font-semibold transition-colors ${selected ? t.accent : t.text}`}>
+                                        {option}
+                                    </span>
+                                    <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all
+                                        ${selected 
+                                            ? 'bg-[#7c6bf7] border-[#7c6bf7]' 
+                                            : `border-zinc-700 group-hover:border-zinc-500`
+                                        }
+                                    `}>
+                                        {selected && <CheckCircle2 size={12} className="text-white" strokeWidth={3} />}
+                                    </div>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
             </div>
 
             {/* Footer */}
-            <div className="p-6 flex flex-col items-center gap-4">
-                <button
-                    onClick={handleContinue}
-                    disabled={!selections[currentQ.id]}
-                    className={`w-full py-4 rounded-2xl font-bold text-sm transition-all ${selections[currentQ.id]
-                            ? 'bg-transparent text-white border border-white/20 hover:bg-white/5'
-                            : 'bg-transparent text-gray-600 cursor-not-allowed'
-                        }`}
-                >
-                    {currentQ.finalAction || "Continue"}
-                </button>
-
-                <div className="text-center">
-                    <p className="text-[10px] text-gray-600 uppercase tracking-widest font-bold mb-2">
-                        {currentStep + 1} of 6 questions
-                    </p>
-                    {currentStep === 5 && (
-                        <p className="text-[10px] text-gray-700">You can update these answers anytime in Settings.</p>
-                    )}
-                </div>
+            <div className="text-center pb-6">
+                <p className={`text-[9px] ${t.textDim} uppercase tracking-widest`}>
+                    Study ID: PHN-2024-08 · SLIIT Research
+                </p>
             </div>
         </div>
     );

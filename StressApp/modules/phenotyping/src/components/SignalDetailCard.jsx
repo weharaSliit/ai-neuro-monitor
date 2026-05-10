@@ -1,31 +1,55 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useTheme } from '../context/ThemeContext';
+import { SparkChart } from './SparkChart';
+import { StatusBadge } from './StatusBadge';
+import { ChevronRight, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 
-export function SignalDetailCard({ title, value, subtext, bars, colorClass, borderClass }) {
+export function SignalDetailCard({ title, value, subtext, bars, colorClass, signalId, trend, status }) {
+  const navigate = useNavigate();
+  const { t, isDark } = useTheme();
+
+  const color = colorClass?.includes('emerald') ? '#10b981' :
+                colorClass?.includes('orange') ? '#f59e0b' :
+                colorClass?.includes('red') ? '#ef4444' : '#7c6bf7';
+
+  const TrendIcon = trend === 'up' ? TrendingUp : trend === 'down' ? TrendingDown : Minus;
+  const trendColor = trend === 'up' ? t.warningText : trend === 'down' ? t.successText : t.textMuted;
+
   return (
-    <div className={`bg-[#14141f] border ${borderClass || 'border-[#2a2a38]'} p-5 rounded-[24px] mb-4`}>
-      <div className="flex justify-between items-start mb-4">
-        <span className="text-sm font-semibold text-gray-200">{title}</span>
-        <span className={`text-sm font-bold ${colorClass.replace('bg-', 'text-')}`}>{value}</span>
+    <button
+      onClick={() => signalId && navigate(`/signal-detail/${signalId}`)}
+      className={`w-full text-left ${t.card} border ${t.cardBorder} p-5 rounded-[20px] mb-3 transition-all duration-200 active:scale-[0.98] ${t.cardHover} animate-fade-in`}
+    >
+      {/* Header */}
+      <div className="flex justify-between items-start mb-1">
+        <div className="flex items-center gap-2">
+          <span className={`text-sm font-semibold ${t.text}`}>{title}</span>
+          {status && <StatusBadge status={status} />}
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className={`text-sm font-bold`} style={{ color }}>{value}</span>
+          {trend && <TrendIcon size={14} className={trendColor} />}
+        </div>
       </div>
 
-      {/* Bar Chart Mockup */}
-      <div className="flex items-end gap-1.5 mb-4 h-12">
-        {bars.map((height, i) => (
-          <div 
-            key={i} 
-            className={`flex-1 rounded-md transition-all duration-500 ${height.active ? colorClass : 'bg-[#2a2a38]'}`}
-            style={{ height: `${height.val}%` }}
-          ></div>
-        ))}
-      </div>
+      {/* Mini Chart */}
+      {bars && bars.length > 0 && (
+        <div className="my-3">
+          <SparkChart data={bars} color={color} height={40} />
+        </div>
+      )}
 
-      <p className={`text-[11px] leading-tight font-medium ${colorClass.replace('bg-', 'text-')}`}>
-        {subtext}
-      </p>
-      
-      <button className="text-[10px] text-gray-600 mt-3 font-bold hover:text-gray-400 transition-colors">
-        Tap for 7-day history ›
-      </button>
-    </div>
+      {/* Footer */}
+      <div className="flex justify-between items-center">
+        <p className={`text-[11px] font-medium ${t.textMuted}`}>{subtext}</p>
+        {signalId && (
+          <div className={`flex items-center gap-1 ${t.textDim}`}>
+            <span className="text-[10px] font-bold">Details</span>
+            <ChevronRight size={12} />
+          </div>
+        )}
+      </div>
+    </button>
   );
 }
