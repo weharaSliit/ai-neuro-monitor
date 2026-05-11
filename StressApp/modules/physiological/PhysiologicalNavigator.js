@@ -1,6 +1,6 @@
 import React, { useRef, useEffect } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { View, Text, Animated, TouchableOpacity } from 'react-native';
+import { View, Text, Animated } from 'react-native';
 import { useTheme } from './config/ThemeContext';
 
 import DashboardScreen   from './screens/DashboardScreen';
@@ -14,31 +14,30 @@ import ExploratoryScreen from './screens/ExploratoryScreen';
 const Tab = createBottomTabNavigator();
 
 const TABS = [
-  { name: 'Dashboard',   icon: '🏠', activeIcon: '🏠' },
-  { name: 'Simulation',  icon: '▶️',  activeIcon: '▶️'  },
-  { name: 'Calibration', icon: '🎯', activeIcon: '🎯' },
-  { name: 'EMA Update',  icon: '🔄', activeIcon: '🔄' },
-  { name: 'PSS-4',       icon: '📋', activeIcon: '📋' },
-  { name: 'History',     icon: '📊', activeIcon: '📊' },
-  { name: 'Analysis',    icon: '🔬', activeIcon: '🔬' },
+  { name: 'Dashboard',   icon: '🏠' },
+  { name: 'Simulation',  icon: '▶️'  },
+  { name: 'Calibration', icon: '🎯' },
+  { name: 'EMA Update',  icon: '🔄' },
+  { name: 'PSS-4',       icon: '📋' },
+  { name: 'History',     icon: '📊' },
+  { name: 'Analysis',    icon: '🔬' },
 ];
 
-function AnimatedTabIcon({ name, focused, color }) {
+function TabIcon({ name, focused, color, COLORS }) {
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const glowAnim  = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    if (focused) {
-      Animated.parallel([
-        Animated.spring(scaleAnim, { toValue: 1.2, tension: 200, friction: 8, useNativeDriver: true }),
-        Animated.timing(glowAnim,  { toValue: 1, duration: 200, useNativeDriver: true }),
-      ]).start();
-    } else {
-      Animated.parallel([
-        Animated.spring(scaleAnim, { toValue: 1, tension: 200, friction: 8, useNativeDriver: true }),
-        Animated.timing(glowAnim,  { toValue: 0, duration: 200, useNativeDriver: true }),
-      ]).start();
-    }
+    Animated.parallel([
+      Animated.spring(scaleAnim, {
+        toValue: focused ? 1.2 : 1,
+        tension: 200, friction: 8, useNativeDriver: true
+      }),
+      Animated.timing(glowAnim, {
+        toValue: focused ? 1 : 0,
+        duration: 180, useNativeDriver: true
+      }),
+    ]).start();
   }, [focused]);
 
   const tab = TABS.find(t => t.name === name);
@@ -47,28 +46,19 @@ function AnimatedTabIcon({ name, focused, color }) {
     <View style={{ alignItems: 'center', justifyContent: 'center', paddingTop: 4 }}>
       {focused && (
         <Animated.View style={{
-          position:        'absolute',
-          top:             -6,
-          width:           40,
-          height:          40,
-          borderRadius:    20,
-          backgroundColor: '#6366f120',
-          opacity:         glowAnim,
+          position: 'absolute', top: -8,
+          width: 38, height: 38, borderRadius: 19,
+          backgroundColor: COLORS.brand + '18',
+          opacity: glowAnim,
         }} />
       )}
-      <Animated.Text style={{
-        fontSize:  focused ? 20 : 17,
-        transform: [{ scale: scaleAnim }],
-      }}>
+      <Animated.Text style={{ fontSize: focused ? 20 : 17, transform: [{ scale: scaleAnim }] }}>
         {tab?.icon || '•'}
       </Animated.Text>
       {focused && (
         <View style={{
-          width:        4,
-          height:       4,
-          borderRadius: 2,
-          backgroundColor: '#6366f1',
-          marginTop:    3,
+          width: 4, height: 4, borderRadius: 2,
+          backgroundColor: COLORS.brand, marginTop: 3,
         }} />
       )}
     </View>
@@ -76,32 +66,28 @@ function AnimatedTabIcon({ name, focused, color }) {
 }
 
 export default function PhysiologicalNavigator() {
-  const { isDark } = useTheme();
-
-  const tabBg     = isDark ? '#0f1f35' : '#ffffff';
-  const borderCol = isDark ? '#1e3a5f' : '#e2e8f0';
+  const { isDark, theme, COLORS } = useTheme();
+  const t = theme;
 
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
         headerShown: false,
-        tabBarIcon:  ({ focused, color }) => (
-          <AnimatedTabIcon name={route.name} focused={focused} color={color} />
+        tabBarIcon: ({ focused, color }) => (
+          <TabIcon name={route.name} focused={focused} color={color} COLORS={COLORS} />
         ),
-        tabBarActiveTintColor:   '#6366f1',
-        tabBarInactiveTintColor: isDark ? '#475569' : '#94a3b8',
+        tabBarActiveTintColor:   COLORS.brand,
+        tabBarInactiveTintColor: isDark ? '#3a5a7a' : '#8aacc8',
         tabBarStyle: {
-          backgroundColor: tabBg,
-          borderTopColor:  borderCol,
+          backgroundColor: isDark ? '#0a1628' : '#ffffff',
+          borderTopColor:  isDark ? '#1a3352' : '#dceaf7',
           borderTopWidth:  1,
-          height:          62,
-          paddingBottom:   8,
+          height:          64,
+          paddingBottom:   10,
           paddingTop:      4,
         },
         tabBarLabelStyle: {
-          fontSize:   9,
-          fontWeight: '700',
-          letterSpacing: 0.3,
+          fontSize: 9, fontWeight: '700', letterSpacing: 0.3,
         },
       })}
     >
