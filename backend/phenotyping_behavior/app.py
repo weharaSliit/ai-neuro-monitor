@@ -12,9 +12,9 @@ if __package__ is None:
         sys.path.insert(0, str(repo_root))
 
 # Import your local services
-from .firebase_service import init_firebase, save_behavioral_window, get_user_baselines, save_stress_prediction, save_validation_label
-from .predictor import predictor
-from .ema_service import update_personalized_baseline
+from firebase_service import init_firebase, save_behavioral_window, get_user_baselines, save_stress_prediction, save_validation_label
+from predictor import predictor
+from ema_service import update_personalized_baseline
 
 app = Flask(__name__)
 CORS(app)

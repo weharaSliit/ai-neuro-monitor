@@ -1,5 +1,5 @@
 import numpy as np
-from .firebase_service import get_user_baselines, update_user_baselines
+from firebase_service import get_user_baselines, update_user_baselines
 
 # Alpha = smoothing factor (0.2 as per your SMART plan)
 # High alpha = adapts quickly; Low alpha = more stable

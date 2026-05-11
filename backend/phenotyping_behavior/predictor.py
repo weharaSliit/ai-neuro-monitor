@@ -1,12 +1,12 @@
 import numpy as np
 import joblib
 import os
-from .ema_service import calculate_z_score
+from ema_service import calculate_z_score
 
 # --- PATH SETUP ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Updated to point to the Step 8 Production Model
-MODEL_PATH = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "phenotyping", "outputs", "models", "final_stress_model_s002.joblib"))
+MODEL_PATH = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "phenotyping", "models", "stress_engine.pkl"))
 
 class StressPredictor:
     def __init__(self):
@@ -20,41 +20,40 @@ class StressPredictor:
 
     def predict(self, firebase_metrics, user_baselines):
         """
-        Decision Logic: Maps Android Sensors to SWELL-KW Behavioral Phenotypes.
+        Decision Logic: Maps Android Sensors to Deployed Model Features.
         """
-        if not self.model or not user_baselines:
+        if not self.model:
             return {"label": "Error", "score": 0.0, "is_anomaly": False}
+            
+        if not user_baselines:
+            user_baselines = {}
 
-        # 1. Feature Mapping (Android -> SWELL-KW logic)
-        # SWELL-KW expected: [SnKeyStrokes, SnChars, ErrorKeyRatio]
-        # Android provides: [keystrokeCount, typing_speed, typing_rhythm_ms]
-        
-        keystrokes = float(firebase_metrics.get('keystrokeCount', 0))
-        chars = float(firebase_metrics.get('typing_speed', 0)) # WPM as proxy
-        error_ratio = 0.02 # Placeholder until backspace tracking is added
+        # 1. Feature Mapping (Android -> Deployed Model logic)
+        # s8_deploy_production.py expected: ["dwell_time", "flight_time", "scroll_velocity"]
+        dwell_time = float(firebase_metrics.get('avg_dwell', 0))
+        flight_time = float(firebase_metrics.get('avg_flight', 0))
+        scroll_velocity = float(firebase_metrics.get('scroll_velocity', 0))
 
-        feat_array = np.array([[keystrokes, chars, error_ratio]])
+        feat_array = np.array([[dwell_time, flight_time, scroll_velocity]])
 
         # 2. Anomaly Detection (Objective 1 Winner)
         # Output: 1 (Normal), -1 (Anomaly/Stress)
         model_prediction = self.model.predict(feat_array)[0]
-        is_anomaly = (model_prediction == -1)
+        is_anomaly = bool(model_prediction == -1)
 
         # 3. Z-Score Validation (The "Digital Phenotype" Deviation)
-        # We check how far the current Typing Rhythm (ms) is from the user's baseline
-        rhythm_val = float(firebase_metrics.get('typing_rhythm_ms', 0))
+        # We check how far the current Dwell Time is from the user's baseline
+        # Pull baseline for avg_dwell (Objective 2 Task 1)
+        mean_dwell = user_baselines.get('avg_dwell', {}).get('mean', 200)
+        std_dwell = user_baselines.get('avg_dwell', {}).get('std', 50)
         
-        # Pull baseline for rhythm (Objective 2 Task 1)
-        mean_rhythm = user_baselines.get('typing_rhythm_ms', {}).get('mean', 200)
-        std_rhythm = user_baselines.get('typing_rhythm_ms', {}).get('std', 50)
-        
-        z_score_rhythm = abs(calculate_z_score(rhythm_val, mean_rhythm, std_rhythm))
+        z_score_dwell = abs(calculate_z_score(dwell_time, mean_dwell, std_dwell))
 
         # 4. Final Stress Classification
-        if is_anomaly and z_score_rhythm > 2.0:
+        if is_anomaly and z_score_dwell > 2.0:
             label = "High Confidence Stress"
             score = 0.9
-        elif is_anomaly or z_score_rhythm > 1.5:
+        elif is_anomaly or z_score_dwell > 1.5:
             label = "Pre-Stress (Digital Phenotype detected)"
             score = 0.6
         else:
@@ -64,9 +63,9 @@ class StressPredictor:
         return {
             "label": label,
             "score": score,
-            "avg_z": round(float(z_score_rhythm), 4),
+            "avg_z": round(float(z_score_dwell), 4),
             "is_anomaly": is_anomaly,
-            "phenotype_metric": "Typing Rhythm"
+            "phenotype_metric": "Dwell Time"
         }
 
 predictor = StressPredictor()
