@@ -7,7 +7,6 @@ Input    : unified_output/preprocessed_dataset.npz
            Keys → X_teacher  (E, 32, W)  clean, epoched, all 32 channels
                   X_student  (E,  2, W)  clean, epoched, T7 + T8 only
                   y_emo      (E,)         emotional stress labels
-                  y_perc     (E,)         latent sustained stress targets (self-supervised auxiliary)
                   source     (E,)         'deap' | 'sam40' per epoch
                   trial_idx  (E,)         parent trial index
 
@@ -15,7 +14,6 @@ Output   : unified_output/normalized_dataset.npz
            Keys → X_teacher  (E, 32, W)  normalised, all 32 channels
                   X_student  (E,  2, W)  normalised, T7 + T8 only
                   y_emo      (E,)         unchanged
-                  y_perc     (E,)         unchanged
                   source     (E,)         unchanged
                   trial_idx  (E,)         unchanged
                   subject_id (E,)         subject index per epoch (int32)
@@ -463,8 +461,7 @@ def run_normalisation_pipeline(
     Returns
     -------
     dict with keys:
-        'X_teacher', 'X_student', 'y_emo', 'y_perc',
-        'source', 'trial_idx', 'subject_id'
+        'X_teacher', 'X_student', 'y_emo', 'source', 'trial_idx', 'subject_id'
     """
     if output_npz is None:
         output_npz = UNIFIED_OUTPUT_DIR / "normalized_dataset.npz"
@@ -486,7 +483,6 @@ def run_normalisation_pipeline(
     data      = np.load(input_npz, allow_pickle=True)
     X_teacher = data['X_teacher'].astype(np.float32)
     y_emo     = data['y_emo']
-    y_perc    = data['y_perc']
     source    = data['source']
     trial_idx = data['trial_idx']
 
@@ -502,14 +498,11 @@ def run_normalisation_pipeline(
         n_before  = len(X_teacher)
         X_teacher = X_teacher[deap_mask]
         y_emo     = y_emo[deap_mask]
-        y_perc    = y_perc[deap_mask]
         source    = source[deap_mask]
         trial_idx = trial_idx[deap_mask]
         E         = len(X_teacher)
-        pw = float(((y_perc==0).sum() / max(y_perc.sum(),1))**0.5)
         print(f"  DEAP-only: kept {E:,} / {n_before:,} epochs  ({n_before-E:,} SAM40 removed)")
         print(f"  y_emo  : pos={int(y_emo.sum()):,}  balance={y_emo.mean():.2%}")
-        print(f"  y_perc : pos={int(y_perc.sum()):,}  balance={y_perc.mean():.2%}  pw_sqrt={pw:.2f}x")
     elif not deap_mask.any():
         print("  WARNING: no DEAP epochs — proceeding with all data")
     else:
@@ -565,7 +558,6 @@ def run_normalisation_pipeline(
         X_teacher  = X_teacher,
         X_student  = X_student,
         y_emo      = y_emo,
-        y_perc     = y_perc,
         source     = source,
         trial_idx  = trial_idx,
         subject_id = subj_ids_save,
@@ -578,7 +570,6 @@ def run_normalisation_pipeline(
     print(f"  X_teacher  : {X_teacher.shape}  dtype={X_teacher.dtype}")
     print(f"  X_student  : {X_student.shape}   dtype={X_student.dtype}")
     print(f"  y_emo      : {y_emo.shape}    unique={np.unique(y_emo)}")
-    print(f"  y_perc     : {y_perc.shape}   unique={np.unique(y_perc)}")
     print(f"  source     : {source.shape}   unique={np.unique(source)}")
     print(f"  trial_idx  : {trial_idx.shape}")
     print(f"  subject_id : {subj_ids_save.shape}  "
@@ -592,7 +583,6 @@ def run_normalisation_pipeline(
         'X_teacher'  : X_teacher,
         'X_student'  : X_student,
         'y_emo'      : y_emo,
-        'y_perc'     : y_perc,
         'source'     : source,
         'trial_idx'  : trial_idx,
         'subject_id' : subj_ids_save,
@@ -628,7 +618,7 @@ def _make_synthetic_preprocessed_npz(
             0.1 * rng.standard_normal(W)
         )
 
-    teacher_list, y_emo_list, y_perc_list = [], [], []
+    teacher_list, y_emo_list = [], []
     source_list, trial_list = [], []
 
     # DEAP: amplitude scale ~5 µV
@@ -638,7 +628,6 @@ def _make_synthetic_preprocessed_npz(
             ep     = np.stack([neural(amp=5.0) + drift for _ in range(32)])
             teacher_list.append(ep.astype(np.float32))
             y_emo_list.append(rng.integers(0, 2))
-            y_perc_list.append(rng.integers(0, 2))
             source_list.append('deap')
             trial_list.append(trial)
 
@@ -651,21 +640,19 @@ def _make_synthetic_preprocessed_npz(
             ep     = np.stack([neural(amp=30.0) + wander + drift for _ in range(32)])
             teacher_list.append(ep.astype(np.float32))
             y_emo_list.append(rng.integers(0, 2))
-            y_perc_list.append(rng.integers(0, 2))
             source_list.append('sam40')
             trial_list.append(trial + sam40_trial_offset)
 
     X_teacher = np.stack(teacher_list)
     X_student = X_teacher[:, [T7_INDEX, T8_INDEX], :]
     y_emo     = np.array(y_emo_list,  dtype=np.int32)
-    y_perc    = np.array(y_perc_list, dtype=np.int32)
     source    = np.array(source_list)
     trial_idx = np.array(trial_list,  dtype=np.int32)
 
     npz_path = out_dir / "preprocessed_dataset.npz"
     np.savez(npz_path,
              X_teacher=X_teacher, X_student=X_student,
-             y_emo=y_emo, y_perc=y_perc, source=source, trial_idx=trial_idx)
+             y_emo=y_emo, source=source, trial_idx=trial_idx)
 
     E_deap  = n_deap  * epochs_per_trial
     E_sam40 = n_sam40 * epochs_per_trial

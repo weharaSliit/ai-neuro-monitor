@@ -7,14 +7,12 @@ Input    : unified_output/bandpass_filtered_dataset.npz
            Keys → X_teacher  (N, 32, T)  bandpass-filtered, all 32 channels
                   X_student  (N,  2, T)  bandpass-filtered, T7 + T8 only
                   y_emo      (N,)         emotional stress labels
-                  y_perc     (N,)         latent sustained stress targets (self-supervised auxiliary)
                   source     (N,)         'deap' | 'sam40' per sample
 
 Output   : unified_output/preprocessed_dataset.npz
            Keys → X_teacher  (E, 32, W)  clean, epoched, all 32 channels
                   X_student  (E,  2, W)  clean, epoched, T7 + T8 only
                   y_emo      (E,)         emotional stress target per epoch (inherited from trial)
-                  y_perc     (E,)         latent sustained stress target per epoch (inherited from trial)
                   source     (E,)         source per epoch (inherited from trial)
                   trial_idx  (E,)         parent trial index (for tracing)
            where E = total epochs, W = epoch length in samples
@@ -55,7 +53,7 @@ Epoch segmentation specification
   Stride      : EPOCH_STRIDE_S seconds (default 0.5 s = 128 samples, 50% overlap)
   Rejection   : epochs whose peak-to-peak amplitude > EPOCH_REJECT_UV are
                 discarded (residual artifacts after ICA)
-  Labels      : each epoch inherits y_emo, y_perc, source of its parent trial
+  Labels      : each epoch inherits y_emo and source of its parent trial
 
 Next step → feature_extraction.py
 """
@@ -411,21 +409,16 @@ def segment_epochs(
     X_teacher:   np.ndarray,
     X_student:   np.ndarray,
     y_emo:       np.ndarray,
-    y_perc:      np.ndarray,
     source:      np.ndarray,
     fs:          float = SAMPLING_RATE_HZ,
     epoch_len_s: float = EPOCH_LEN_S,
     stride_s:    float = EPOCH_STRIDE_S,
     reject_uv:   float = EPOCH_REJECT_UV,
-    y_pre_stage: Optional[np.ndarray] = None,
 ) -> Dict[str, np.ndarray]:
     """
     Segment trials into fixed-length overlapping epochs.
 
-    Each epoch inherits y_emo, y_perc, y_pre_stage, and source from its
-    parent trial.  y_pre_stage marks the build-up phase (y_emo=1, y_perc=0)
-    that precedes full perceived stress — the primary target for early warning.
-
+    Each epoch inherits y_emo and source from its parent trial.
     Epochs whose peak-to-peak amplitude on any channel exceeds reject_uv
     are discarded to remove residual artifacts that survived ICA.
 
@@ -434,10 +427,7 @@ def segment_epochs(
     X_teacher    : np.ndarray  (N, 32, T)
     X_student    : np.ndarray  (N,  2, T)
     y_emo        : np.ndarray  (N,)
-    y_perc       : np.ndarray  (N,)
     source       : np.ndarray  (N,)
-    y_pre_stage  : np.ndarray  (N,)  optional; derived as (y_emo==1)&(y_perc==0)
-                                     when not provided.
 
     Returns
     -------
@@ -445,26 +435,19 @@ def segment_epochs(
         'X_teacher'   : (E, 32, W)
         'X_student'   : (E,  2, W)
         'y_emo'       : (E,)
-        'y_perc'      : (E,)
-        'y_pre_stage' : (E,)   1 = pre-stage stress (emo=1, perc=0)
         'source'      : (E,)
         'trial_idx'   : (E,)
     where W = int(epoch_len_s * fs).
     """
-    if y_pre_stage is None:
-        y_pre_stage = ((y_emo == 1) & (y_perc == 0)).astype(np.int32)
-
     W      = int(epoch_len_s * fs)
     stride = int(stride_s    * fs)
     N, _, T = X_teacher.shape
 
-    teacher_epochs:    List[np.ndarray] = []
-    student_epochs:    List[np.ndarray] = []
-    y_emo_list:        List[int]        = []
-    y_perc_list:       List[int]        = []
-    y_pre_stage_list:  List[int]        = []
-    source_list:       List[str]        = []
-    trial_idx_list:    List[int]        = []
+    teacher_epochs: List[np.ndarray] = []
+    student_epochs: List[np.ndarray] = []
+    y_emo_list:     List[int]        = []
+    source_list:    List[str]        = []
+    trial_idx_list: List[int]        = []
 
     n_extracted = 0
     n_rejected  = 0
@@ -486,14 +469,11 @@ def segment_epochs(
             teacher_epochs.append(epoch_t)
             student_epochs.append(epoch_s)
             y_emo_list.append(int(y_emo[i]))
-            y_perc_list.append(int(y_perc[i]))
-            y_pre_stage_list.append(int(y_pre_stage[i]))
             source_list.append(str(source[i]))
             trial_idx_list.append(i)
             n_extracted += 1
 
     total = n_extracted + n_rejected
-    pre_stage_arr = np.array(y_pre_stage_list, dtype=np.int32)
     print(f"\n  Epoch segmentation:")
     print(f"    Window      : {epoch_len_s:.1f} s = {W} samples")
     print(f"    Stride      : {stride_s:.1f} s = {stride} samples  "
@@ -503,17 +483,13 @@ def segment_epochs(
     print(f"    Rejected    : {n_rejected:,}  (ptp > {reject_uv} µV)")
     print(f"    Retained    : {n_extracted:,} / {total:,}  "
           f"({n_extracted / total * 100:.1f}%)")
-    print(f"    Pre-stage   : {int(pre_stage_arr.sum()):,} epochs  "
-          f"({pre_stage_arr.mean():.1%} of total)")
 
     return {
-        'X_teacher'   : np.stack(teacher_epochs).astype(np.float32),
-        'X_student'   : np.stack(student_epochs).astype(np.float32),
-        'y_emo'       : np.array(y_emo_list,       dtype=np.int32),
-        'y_perc'      : np.array(y_perc_list,      dtype=np.int32),
-        'y_pre_stage' : pre_stage_arr,
-        'source'      : np.array(source_list),
-        'trial_idx'   : np.array(trial_idx_list,   dtype=np.int32),
+        'X_teacher' : np.stack(teacher_epochs).astype(np.float32),
+        'X_student' : np.stack(student_epochs).astype(np.float32),
+        'y_emo'     : np.array(y_emo_list,     dtype=np.int32),
+        'source'    : np.array(source_list),
+        'trial_idx' : np.array(trial_idx_list, dtype=np.int32),
     }
 
 
@@ -599,8 +575,7 @@ def run_notch_ica_epoch_pipeline(
 
     Returns
     -------
-    dict with keys: 'X_teacher', 'X_student', 'y_emo', 'y_perc',
-                    'y_pre_stage', 'source', 'trial_idx'
+    dict with keys: 'X_teacher', 'X_student', 'y_emo', 'source', 'trial_idx'
     """
     if output_npz is None:
         output_npz = UNIFIED_OUTPUT_DIR / "preprocessed_dataset.npz"
@@ -621,18 +596,11 @@ def run_notch_ica_epoch_pipeline(
     data        = np.load(input_npz, allow_pickle=True)
     X_teacher   = data['X_teacher'].astype(np.float32)
     y_emo       = data['y_emo']
-    y_perc      = data['y_perc']
     source      = data['source']
-    y_pre_stage = (data['y_pre_stage'] if 'y_pre_stage' in data
-                   else ((y_emo == 1) & (y_perc == 0)).astype(np.int32))
 
     N, n_ch, T = X_teacher.shape
     print(f"    X_teacher   : {X_teacher.shape}  dtype={X_teacher.dtype}")
     print(f"    y_emo       : {y_emo.shape}   pos={int(y_emo.sum())}  neg={int((y_emo==0).sum())}")
-    print(f"    y_perc      : {y_perc.shape}  pos={int((y_perc>=0).sum())}  "
-          f"neg={int((y_perc==0).sum())}")
-    print(f"    y_pre_stage : {y_pre_stage.shape}  pos={int(y_pre_stage.sum())}  "
-          f"({y_pre_stage.mean():.1%})")
     print(f"    sources     : {np.unique(source)}")
 
     if n_ch != 32:
@@ -662,13 +630,11 @@ def run_notch_ica_epoch_pipeline(
         X_teacher   = X_clean,
         X_student   = X_student,
         y_emo       = y_emo,
-        y_perc      = y_perc,
         source      = source,
         fs          = fs,
         epoch_len_s = epoch_len_s,
         stride_s    = stride_s,
         reject_uv   = reject_uv,
-        y_pre_stage = y_pre_stage,
     )
 
     # ── [6] Save ───────────────────────────────────────────────
@@ -684,9 +650,6 @@ def run_notch_ica_epoch_pipeline(
     print(f"  X_teacher   : {epochs['X_teacher'].shape}  dtype={epochs['X_teacher'].dtype}")
     print(f"  X_student   : {epochs['X_student'].shape}   dtype={epochs['X_student'].dtype}")
     print(f"  y_emo       : {epochs['y_emo'].shape}    unique={np.unique(epochs['y_emo'])}")
-    print(f"  y_perc      : {epochs['y_perc'].shape}   unique={np.unique(epochs['y_perc'])}")
-    print(f"  y_pre_stage : {epochs['y_pre_stage'].shape}  "
-          f"pos={int(epochs['y_pre_stage'].sum())}  ({epochs['y_pre_stage'].mean():.1%})")
     print(f"  source      : {epochs['source'].shape}   unique={np.unique(epochs['source'])}")
     print(f"  trial_idx   : {epochs['trial_idx'].shape}")
     print(f"\n  Epochs total  : {E:,}  ({N} trials × ~{E // N} epochs/trial)")
@@ -751,13 +714,12 @@ def _make_synthetic_bandpass_npz(out_dir: Path, n_samples: int = 30) -> Path:
     X_teacher = np.stack(X_teacher_list)                              # (N, 32, T)
     X_student = X_teacher[:, [T7_INDEX, T8_INDEX], :]
     y_emo     = rng.integers(0, 2, size=n_samples)
-    y_perc    = rng.integers(0, 2, size=n_samples)
     source    = np.array(['deap' if i % 2 == 0 else 'sam40'
                           for i in range(n_samples)])
 
     npz_path = out_dir / "bandpass_filtered_dataset.npz"
     np.savez(npz_path, X_teacher=X_teacher, X_student=X_student,
-             y_emo=y_emo, y_perc=y_perc, source=source)
+             y_emo=y_emo, source=source)
 
     print(f"  Synthetic bandpass_filtered_dataset.npz → {npz_path}")
     print(f"    X_teacher : {X_teacher.shape}  "

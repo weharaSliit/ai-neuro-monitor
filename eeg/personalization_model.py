@@ -166,9 +166,8 @@ N_CALIB_EPOCHS = int(N_CALIB_MIN * 60 / EPOCH_STRIDE_S)   # epochs in calibratio
 
 class StudentCNNBiLSTM(nn.Module):
     """
-    T7+T8 student model: CNN spatial → BiLSTM temporal → dual head.
+    T7+T8 student model: CNN spatial → BiLSTM temporal → single head (y_emo only).
     Architecture must exactly match the saved checkpoint from student_model.py.
-    If the saved model uses a different architecture, replace this class.
     """
     def __init__(self, n_features: int = 30, hidden: int = 64,
                  dropout: float = 0.35):
@@ -179,19 +178,15 @@ class StudentCNNBiLSTM(nn.Module):
         )
         self.lstm = nn.LSTM(32, hidden, num_layers=2, batch_first=True,
                             bidirectional=True, dropout=dropout)
-        self.norm  = nn.LayerNorm(hidden * 2)
-        self.drop  = nn.Dropout(dropout)
-        self.head_emo  = nn.Linear(hidden * 2, 1)
-        self.head_perc = nn.Linear(hidden * 2, 1)
+        self.norm     = nn.LayerNorm(hidden * 2)
+        self.drop     = nn.Dropout(dropout)
+        self.head_emo = nn.Linear(hidden * 2, 1)
 
     def forward(self, x):
-        # x: (B, F) — single epoch feature vector
-        feat = self.cnn(x)                         # (B, 32)
-        feat = feat.unsqueeze(1)                   # (B, 1, 32) — single time step
+        feat = self.cnn(x).unsqueeze(1)
         out, _ = self.lstm(feat)
         h = self.drop(self.norm(out[:, -1, :]))
-        return torch.sigmoid(self.head_emo(h)).squeeze(1), \
-               torch.sigmoid(self.head_perc(h)).squeeze(1)
+        return torch.sigmoid(self.head_emo(h)).squeeze(1)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -203,7 +198,7 @@ class SpiralLSTM(nn.Module):
     Bidirectional 2-layer LSTM for stress spiral early warning.
     Architecture must match spiral_predictor.py checkpoint.
     """
-    def __init__(self, n_input: int = 5, hidden: int = 96, n_layers: int = 2,
+    def __init__(self, n_input: int = 3, hidden: int = 96, n_layers: int = 2,
                  dropout: float = 0.35):
         super().__init__()
         self.lstm = nn.LSTM(n_input, hidden, num_layers=n_layers,
@@ -224,6 +219,40 @@ class SpiralLSTM(nn.Module):
         if calibrate:
             logit = logit / self.log_temperature.exp().clamp(0.05, 20.0)
         return torch.sigmoid(logit)
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  PERSONAL BASELINE CALIBRATION
+# ═══════════════════════════════════════════════════════════════════
+
+class PersonalBaseline:
+    """
+    Learns an individual's resting p_emo distribution during a calibration
+    period and sets a personalised stress threshold at mean + 2σ.
+
+    This replaces the pre-stage classifier. Instead of asking "is this epoch
+    pre-stress?", the system asks "is p_emo significantly above this person's
+    personal resting baseline?" — a question the data actually supports.
+    """
+
+    def __init__(self):
+        self.mean      = 0.5
+        self.std       = 0.1
+        self.threshold = 0.7   # fallback before fit() is called
+
+    def fit(self, p_emo_calib: np.ndarray):
+        self.mean      = float(p_emo_calib.mean())
+        self.std       = float(p_emo_calib.std()) + 1e-6
+        self.threshold = float(self.mean + 2.0 * self.std)
+        self.threshold = float(np.clip(self.threshold, 0.30, 0.95))
+        print(f"  PersonalBaseline: mean={self.mean:.4f}  std={self.std:.4f}  "
+              f"threshold={self.threshold:.4f}")
+
+    def is_stressed(self, p: float) -> bool:
+        return float(p) >= self.threshold
+
+    def to_dict(self) -> dict:
+        return {"mean": self.mean, "std": self.std, "threshold": self.threshold}
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -290,10 +319,9 @@ class EWC:
             model.zero_grad()
 
             if task == "student":
-                X_b, y_emo_b, _ = batch
+                X_b, y_emo_b = batch
                 X_b = X_b.to(DEVICE)
-                pred_emo, _ = model(X_b)
-                # Use log-likelihood of emotional stress head for Fisher
+                pred_emo = model(X_b)
                 loss = F.binary_cross_entropy(pred_emo, y_emo_b.float().to(DEVICE))
             else:  # spiral
                 X_b, y_b = batch
@@ -334,14 +362,13 @@ class EWC:
 # ═══════════════════════════════════════════════════════════════════
 
 class StudentCalibDataset(Dataset):
-    """Feature vectors + labels for student model personalisation."""
-    def __init__(self, F: np.ndarray, y_emo: np.ndarray, y_perc: np.ndarray):
+    """Feature vectors + y_emo labels for student model personalisation."""
+    def __init__(self, F: np.ndarray, y_emo: np.ndarray):
         self.F     = torch.tensor(F,     dtype=torch.float32)
-        self.y_emo  = torch.tensor(y_emo, dtype=torch.float32)
-        self.y_perc = torch.tensor(y_perc, dtype=torch.float32)
+        self.y_emo = torch.tensor(y_emo, dtype=torch.float32)
 
     def __len__(self): return len(self.y_emo)
-    def __getitem__(self, i): return self.F[i], self.y_emo[i], self.y_perc[i]
+    def __getitem__(self, i): return self.F[i], self.y_emo[i]
 
 
 class SpiralCalibDataset(Dataset):
@@ -393,15 +420,13 @@ class ContinuousUpdateBuffer:
         self.capacity   = capacity
         self._buffer_F  = deque(maxlen=capacity)   # feature vectors
         self._buffer_ye = deque(maxlen=capacity)   # y_emo
-        self._buffer_yp = deque(maxlen=capacity)   # y_perc
         self._last_update_t = 0.0
         self._n_total   = 0
 
-    def push(self, f: np.ndarray, y_emo: int, y_perc: int):
-        """Add one epoch's features + labels to the buffer."""
+    def push(self, f: np.ndarray, y_emo: int):
+        """Add one epoch's features + y_emo label to the buffer."""
         self._buffer_F.append(f)
         self._buffer_ye.append(y_emo)
-        self._buffer_yp.append(y_perc)
         self._n_total += 1
 
     def should_update(self, current_time_s: float) -> bool:
@@ -410,10 +435,9 @@ class ContinuousUpdateBuffer:
         return fill >= self.TRIGGER_FRAC and time_ok
 
     def get_dataset(self) -> StudentCalibDataset:
-        F      = np.stack(list(self._buffer_F))
-        y_emo  = np.array(list(self._buffer_ye), dtype=np.int32)
-        y_perc = np.array(list(self._buffer_yp), dtype=np.int32)
-        return StudentCalibDataset(F, y_emo, y_perc)
+        F     = np.stack(list(self._buffer_F))
+        y_emo = np.array(list(self._buffer_ye), dtype=np.int32)
+        return StudentCalibDataset(F, y_emo)
 
     def mark_updated(self, current_time_s: float):
         self._last_update_t = current_time_s
@@ -462,7 +486,8 @@ def personalise_model(
     model = copy.deepcopy(model).to(DEVICE)
     opt   = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
 
-    best_val_auc, no_imp, best_state, history = 0.0, 0, {}, []
+    best_state   = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+    best_val_auc, no_imp, history = 0.0, 0, []
 
     for ep in range(1, epochs + 1):
         model.train()
@@ -470,15 +495,10 @@ def personalise_model(
         for batch in calib_loader:
             opt.zero_grad()
             if task == "student":
-                X_b, ye_b, yp_b = batch
-                X_b, ye_b, yp_b = X_b.to(DEVICE), ye_b.to(DEVICE), yp_b.to(DEVICE)
-                pred_e, pred_p   = model(X_b)
-                # Only train on valid y_perc epochs (not -1 sentinel)
-                valid_p = yp_b >= 0
-                loss = F.binary_cross_entropy(pred_e, ye_b)
-                if valid_p.any():
-                    loss = loss + F.binary_cross_entropy(
-                        pred_p[valid_p], yp_b[valid_p].float())
+                X_b, ye_b = batch
+                X_b, ye_b = X_b.to(DEVICE), ye_b.to(DEVICE)
+                pred_e   = model(X_b)
+                loss     = F.binary_cross_entropy(pred_e, ye_b)
             else:  # spiral
                 X_b, y_b = batch
                 X_b, y_b = X_b.to(DEVICE), y_b.to(DEVICE)
@@ -500,8 +520,8 @@ def personalise_model(
         with torch.no_grad():
             for batch in val_loader:
                 if task == "student":
-                    X_b, ye_b, _ = batch
-                    pred_e, _ = model(X_b.to(DEVICE))
+                    X_b, ye_b = batch
+                    pred_e = model(X_b.to(DEVICE))
                     probs_v.extend(pred_e.cpu().numpy())
                     labels_v.extend(ye_b.numpy())
                 else:
@@ -540,7 +560,6 @@ def personalise_model(
 def split_calibration(
     F:         np.ndarray,   # (E, n_features)
     y_emo:     np.ndarray,   # (E,)
-    y_perc:    np.ndarray,   # (E,)
     n_calib:   int,          # number of calibration epochs to use
     val_frac:  float = 0.25,
 ) -> tuple:
@@ -550,25 +569,20 @@ def split_calibration(
       - val_frac × n_calib for calibration validation
       - remainder for held-out personalisation evaluation
 
-    Epochs are selected from the START of the subject's recording to simulate
-    a real deployment scenario where the user completes a calibration session
-    before using the device.  Validation epochs are drawn from the middle of
-    the calibration window to avoid temporal leakage.
-
-    Returns (F_cal, ye_cal, yp_cal, F_val, ye_val, F_test, ye_test)
+    Returns (F_cal, ye_cal, F_val, ye_val, F_test, ye_test)
+    or None if insufficient data.
     """
     E = len(F)
-    n_calib  = min(n_calib, int(E * 0.4))   # never use >40% of data for calibration
+    n_calib  = min(n_calib, int(E * 0.4))
     n_val    = max(int(n_calib * val_frac), 10)
     n_train  = n_calib - n_val
 
     if n_train < MIN_CALIB_EPOCHS // 2:
-        return None   # insufficient calibration data
+        return None
 
-    cal_idx   = np.arange(n_calib)
-    test_idx  = np.arange(n_calib, E)
+    cal_idx  = np.arange(n_calib)
+    test_idx = np.arange(n_calib, E)
 
-    # Stratified split within calibration window for train/val
     if np.unique(y_emo[cal_idx]).size > 1:
         sss = StratifiedShuffleSplit(n_splits=1, test_size=n_val, random_state=RANDOM_STATE)
         tr_i, va_i = next(sss.split(cal_idx, y_emo[cal_idx]))
@@ -578,7 +592,7 @@ def split_calibration(
         val_idx   = cal_idx[n_train:]
 
     return (
-        F[train_idx], y_emo[train_idx], y_perc[train_idx],
+        F[train_idx], y_emo[train_idx],
         F[val_idx],   y_emo[val_idx],
         F[test_idx],  y_emo[test_idx],
     )
@@ -609,8 +623,8 @@ def measure_forgetting(
         with torch.no_grad():
             for batch in loader:
                 if task == "student":
-                    X_b, ye_b, _ = batch
-                    pe, _ = model(X_b.to(DEVICE))
+                    X_b, ye_b = batch
+                    pe = model(X_b.to(DEVICE))
                     probs.extend(pe.cpu().numpy())
                     labs.extend(ye_b.numpy())
                 else:
@@ -640,30 +654,22 @@ def measure_forgetting(
 # ═══════════════════════════════════════════════════════════════════
 
 def build_personal_spiral_sequences(
-    soft_emo:   np.ndarray,
-    soft_perc:  np.ndarray,
-    y_perc:     np.ndarray,
-    seq_len:    int = 20,
-    k_ahead:    int = 6,
-    soft_pre:   np.ndarray = None,
+    soft_emo: np.ndarray,
+    y_emo:    np.ndarray,
+    seq_len:  int = 20,
+    k_ahead:  int = 6,
 ) -> tuple:
-    """Build look-back sequences for one subject's personal spiral data."""
+    """Build 3-feature look-back sequences for one subject's personal spiral data."""
     X_list, y_list = [], []
-    n = len(soft_emo)
-    if soft_pre is None:
-        soft_pre = np.zeros(n, dtype=np.float32)
+    n  = len(soft_emo)
+    d1 = np.diff(soft_emo, prepend=soft_emo[0])
+    d2 = np.diff(d1, prepend=d1[0])
+
     for t in range(seq_len - 1, n - k_ahead):
-        se  = soft_emo[t - seq_len + 1 : t + 1]
-        sps = soft_pre[t - seq_len + 1 : t + 1]
-        sp  = soft_perc[t - seq_len + 1 : t + 1]
-        de  = np.diff(se, prepend=se[0])
-        dp  = np.diff(sp, prepend=sp[0])
-        seq = np.stack([se, sps, sp, de, dp], axis=1).astype(np.float32)
-        label = int(y_perc[min(t + k_ahead, n - 1)])
-        if label < 0:
-            continue
+        s   = t - seq_len + 1
+        seq = np.stack([soft_emo[s:t+1], d1[s:t+1], d2[s:t+1]], axis=1).astype(np.float32)
         X_list.append(seq)
-        y_list.append(label)
+        y_list.append(int(y_emo[min(t + k_ahead, n - 1)]))
 
     if not X_list:
         return None, None
@@ -686,28 +692,26 @@ def _synthetic_data(
     amplitude differences EWC personalisation is designed to correct).
     """
     rng = np.random.default_rng(RANDOM_STATE)
-    F_list, ye_list, yp_list, sid_list = [], [], [], []
+    F_list, ye_list, sid_list = [], [], []
 
     for s in range(n_subjects):
-        amp_offset = rng.uniform(0.5, 2.0)   # individual amplitude difference
+        amp_offset = rng.uniform(0.5, 2.0)
         F  = (rng.standard_normal((epochs_per_s, n_features_s)) * amp_offset).astype(np.float32)
         ye = rng.integers(0, 2, epochs_per_s)
-        yp = np.where(ye == 1, rng.integers(0, 2, epochs_per_s), 0).astype(np.int32)
-        # Label-feature correlation (makes personalisation measurable)
         stressed_idx = np.where(ye == 1)[0]
         if len(stressed_idx):
-            F[stressed_idx, :5] += amp_offset * 0.8   # stressed epochs have higher PSD
+            F[stressed_idx, :5] += amp_offset * 0.8
 
-        F_list.append(F); ye_list.append(ye); yp_list.append(yp)
+        F_list.append(F)
+        ye_list.append(ye)
         sid_list.extend([s] * epochs_per_s)
 
     F_all      = np.concatenate(F_list)
     y_emo_all  = np.concatenate(ye_list).astype(np.int32)
-    y_perc_all = np.concatenate(yp_list)
     subject_id = np.array(sid_list, dtype=np.int32)
     source     = np.array(["deap"] * len(y_emo_all))
 
-    return F_all, y_emo_all, y_perc_all, subject_id, source
+    return F_all, y_emo_all, subject_id, source
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -742,7 +746,7 @@ def run_personalisation_pipeline(
     print("\n[1] Loading feature data")
     if use_synthetic:
         print("  Using synthetic data")
-        F_all, y_emo_all, y_perc_all, subject_id, source = _synthetic_data()
+        F_all, y_emo_all, subject_id, source = _synthetic_data()
         general_model_s = StudentCNNBiLSTM(n_features=F_all.shape[1])
         general_model_s.apply(lambda m: (nn.init.xavier_uniform_(m.weight)
                               if isinstance(m, nn.Linear) else None))
@@ -753,7 +757,6 @@ def run_personalisation_pipeline(
         spiral_k_ahead   = 6
         spiral_opt_thresh= 0.3
     else:
-        # Load feature dataset
         if not FEATURES_NPZ.exists():
             print(f"  ERROR: {FEATURES_NPZ} not found. Run feature_extraction.py first.")
             sys.exit(1)
@@ -761,11 +764,9 @@ def run_personalisation_pipeline(
         d          = np.load(FEATURES_NPZ, allow_pickle=True)
         F_all      = d["F_student"].astype(np.float32)
         y_emo_all  = d["y_emo"].astype(np.int32)
-        y_perc_all = d["y_perc"].astype(np.int32)
         subject_id = d["subject_id"].astype(np.int32)
         source     = d["source"]
 
-        # Load general student model (train from scratch if missing or architecture mismatch)
         general_model_s = StudentCNNBiLSTM(n_features=F_all.shape[1])
         _loaded = False
         if STUDENT_MODEL_PATH.exists():
@@ -775,25 +776,23 @@ def run_personalisation_pipeline(
                 _loaded = True
                 print(f"  Loaded student model from {STUDENT_MODEL_PATH.name}")
             except RuntimeError as e:
-                print(f"  WARNING: checkpoint architecture mismatch — training from scratch. ({e})")
+                print(f"  WARNING: checkpoint mismatch — training from scratch. ({e})")
         if not _loaded:
             print("  Pre-training StudentCNNBiLSTM on full dataset …")
-            _ds  = StudentCalibDataset(F_all.astype(np.float32), y_emo_all, y_perc_all)
+            _ds  = StudentCalibDataset(F_all.astype(np.float32), y_emo_all)
             _ld  = DataLoader(_ds, batch_size=256, shuffle=True)
             _opt = torch.optim.Adam(general_model_s.parameters(), lr=1e-3, weight_decay=1e-5)
             general_model_s.to(DEVICE).train()
             for _ep in range(10):
                 for _batch in _ld:
-                    _X, _ye, _yp = [t.to(DEVICE) for t in _batch]
-                    _pe, _pp = general_model_s(_X)
-                    _loss = (nn.functional.binary_cross_entropy(_pe, _ye.float()) +
-                             nn.functional.binary_cross_entropy(_pp, _yp.float().clamp(min=0)))
+                    _X, _ye = [t.to(DEVICE) for t in _batch]
+                    _pe = general_model_s(_X)
+                    _loss = nn.functional.binary_cross_entropy(_pe, _ye.float())
                     _opt.zero_grad(); _loss.backward(); _opt.step()
             general_model_s.cpu()
             torch.save({"state_dict": general_model_s.state_dict()}, STUDENT_MODEL_PATH)
             print(f"  Saved fresh student model → {STUDENT_MODEL_PATH.name}")
 
-        # Load general spiral model
         if not SPIRAL_MODEL_PATH.exists():
             print(f"  ERROR: {SPIRAL_MODEL_PATH} not found. Run spiral_predictor.py first.")
             sys.exit(1)
@@ -822,8 +821,7 @@ def run_personalisation_pipeline(
     np.random.shuffle(general_pool)
     gen_F   = F_all[general_pool[:FISHER_SAMPLES]]
     gen_ye  = y_emo_all[general_pool[:FISHER_SAMPLES]]
-    gen_yp  = y_perc_all[general_pool[:FISHER_SAMPLES]]
-    gen_ds  = StudentCalibDataset(gen_F, gen_ye, gen_yp)
+    gen_ds  = StudentCalibDataset(gen_F, gen_ye)
     gen_ld  = DataLoader(gen_ds, CALIB_BATCH, shuffle=False)
 
     ewc_student = EWC(general_model_s, gen_ld, lambda_=ewc_lambda, task="student")
@@ -836,18 +834,17 @@ def run_personalisation_pipeline(
         mask = deap_mask & (subject_id == subj)
         F_s    = F_all[mask]
         ye_s   = y_emo_all[mask]
-        yp_s   = y_perc_all[mask]
 
         if len(F_s) < MIN_CALIB_EPOCHS * 2:
             print(f"\n  [Subject {subj}] Skipped — only {len(F_s)} epochs")
             continue
 
-        split = split_calibration(F_s, ye_s, yp_s, n_calib_epochs)
+        split = split_calibration(F_s, ye_s, n_calib_epochs)
         if split is None:
             print(f"\n  [Subject {subj}] Insufficient calibration data")
             continue
 
-        F_cal, ye_cal, yp_cal, F_val, ye_val, F_test, ye_test = split
+        F_cal, ye_cal, F_val, ye_val, F_test, ye_test = split
 
         print(f"\n  [Subject {subj}]  "
               f"train={len(F_cal)}  val={len(F_val)}  test={len(F_test)}  "
@@ -856,14 +853,23 @@ def run_personalisation_pipeline(
         # General model AUC on this subject's test set (baseline)
         general_model_s.eval().to(DEVICE)
         with torch.no_grad():
-            t_F = torch.tensor(F_test, dtype=torch.float32).to(DEVICE)
-            p_gen, _ = general_model_s(t_F)
+            t_F   = torch.tensor(F_test, dtype=torch.float32).to(DEVICE)
+            p_gen = general_model_s(t_F)
         auc_general = _auc(p_gen.cpu().numpy(), ye_test)
         print(f"  General model AUC on subject {subj}: {auc_general:.4f}")
 
-        # Fine-tune with EWC
-        cal_ds  = StudentCalibDataset(F_cal, ye_cal, yp_cal)
-        val_ds  = StudentCalibDataset(F_val, ye_val, np.zeros_like(ye_val))
+        # PersonalBaseline: fit on calibration p_emo from the general model
+        general_model_s.eval().to(DEVICE)
+        with torch.no_grad():
+            t_cal = torch.tensor(F_cal, dtype=torch.float32).to(DEVICE)
+            p_cal = general_model_s(t_cal).cpu().numpy()
+        baseline = PersonalBaseline()
+        baseline.fit(p_cal)
+        print(f"  PersonalBaseline: mean={baseline.mean:.3f}  "
+              f"std={baseline.std:.3f}  threshold={baseline.threshold:.3f}")
+
+        cal_ds  = StudentCalibDataset(F_cal, ye_cal)
+        val_ds  = StudentCalibDataset(F_val, ye_val)
         cal_ld  = DataLoader(cal_ds, min(CALIB_BATCH, len(F_cal)), shuffle=True)
         val_ld  = DataLoader(val_ds, CALIB_BATCH, shuffle=False)
 
@@ -879,8 +885,8 @@ def run_personalisation_pipeline(
         # Personal AUC on held-out test
         personal_model.eval().to(DEVICE)
         with torch.no_grad():
-            t_F = torch.tensor(F_test, dtype=torch.float32).to(DEVICE)
-            p_per, _ = personal_model(t_F)
+            t_F   = torch.tensor(F_test, dtype=torch.float32).to(DEVICE)
+            p_per = personal_model(t_F)
         auc_personal = _auc(p_per.cpu().numpy(), ye_test)
         auc_gain     = auc_personal - auc_general
 
@@ -891,23 +897,16 @@ def run_personalisation_pipeline(
         # Spiral personalisation (if soft logits available)
         spiral_result = None
         if not use_synthetic and SOFT_LOGITS_DIR.exists():
-            soft_emo_all  = np.load(SOFT_LOGITS_DIR / "soft_emo.npy")
-            soft_perc_all = np.load(SOFT_LOGITS_DIR / "soft_perc.npy")
-            pre_path      = SOFT_LOGITS_DIR / "soft_pre_stage.npy"
-            soft_pre_all  = (np.load(pre_path) if pre_path.exists()
-                             else np.zeros(len(soft_emo_all), dtype=np.float32))
+            soft_emo_all = np.load(SOFT_LOGITS_DIR / "soft_emo.npy")
             n = min(len(soft_emo_all), mask.sum())
-            # Use subject's slice (aligned with feature epochs)
             subj_ep_idx = np.where(mask)[0][:n]
 
-            soft_emo_s  = soft_emo_all[subj_ep_idx]
-            soft_perc_s = soft_perc_all[subj_ep_idx]
-            soft_pre_s  = soft_pre_all[subj_ep_idx]
-            yp_spiral   = yp_s[:n]
+            soft_emo_s = soft_emo_all[subj_ep_idx]
+            ye_spiral  = ye_s[:n]
 
             X_sp, y_sp = build_personal_spiral_sequences(
-                soft_emo_s, soft_perc_s, yp_spiral,
-                spiral_seq_len, spiral_k_ahead, soft_pre=soft_pre_s)
+                soft_emo_s, ye_spiral,
+                spiral_seq_len, spiral_k_ahead)
 
             if X_sp is not None and len(y_sp) >= MIN_CALIB_EPOCHS:
                 sp_n_cal = min(n_calib_epochs, len(X_sp) // 2)
@@ -945,6 +944,8 @@ def run_personalisation_pipeline(
             "calib_lr"          : CALIB_LR,
             "fisher_means"      : {k: v.cpu() for k, v in ewc_student._means.items()},
             "fisher_diagonals"  : {k: v.cpu() for k, v in ewc_student._fishers.items()},
+            "personal_baseline" : baseline.to_dict(),
+            "personal_threshold": baseline.threshold,
             "buffer_capacity"   : BUFFER_EPOCHS,
             "continuous_ready"  : True,
         }, save_path)

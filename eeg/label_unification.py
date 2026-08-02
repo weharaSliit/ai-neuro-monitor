@@ -762,8 +762,6 @@ class UnifiedStressDataset:
         self.X_full_list        : List[np.ndarray] = []
         self.X_t7t8_list        : List[np.ndarray] = []
         self.y_emo_list         : List[int]         = []
-        self.y_perc_list        : List[int]         = []
-        self.y_pre_stage_list   : List[int]         = []
         self.source_list        : List[str]         = []
         self.subject_id_list    : List[int]         = []
         self.trial_idx_list     : List[int]         = []
@@ -783,13 +781,9 @@ class UnifiedStressDataset:
         n_trials = len(processed['emotional_labels'])
         for i in range(n_trials):
             emo  = int(processed['emotional_labels'][i])
-            perc = int(processed['perceived_labels'][i])
             self.X_full_list.append(processed['eeg_full'][i])
             self.X_t7t8_list.append(processed['eeg_t7t8'][i])
             self.y_emo_list.append(emo)
-            self.y_perc_list.append(perc)
-            # Pre-stage: emotionally stressed but perceived stress not yet established
-            self.y_pre_stage_list.append(int(emo == 1 and perc == 0))
             self.source_list.append('deap')
             self.subject_id_list.append(subject_id)
             self.trial_idx_list.append(len(self.trial_idx_list))
@@ -822,14 +816,9 @@ class UnifiedStressDataset:
         n_trials = len(processed['emotional_labels'])
         for i in range(n_trials):
             emo  = int(processed['emotional_labels'][i])
-            perc = int(processed['perceived_labels'][i])
             self.X_full_list.append(processed['eeg_full'][i])
             self.X_t7t8_list.append(processed['eeg_t7t8'][i])
             self.y_emo_list.append(emo)
-            self.y_perc_list.append(perc)  # 0/1 or -1 sentinel
-            # Pre-stage: emo=1 but perc=0 → the build-up phase before sustained stress
-            # Exclude SAM40 sentinel (-1) from pre-stage labelling
-            self.y_pre_stage_list.append(int(emo == 1 and perc == 0) if perc >= 0 else 0)
             self.source_list.append('sam40')
             # SAM40 subject IDs offset by 100 to avoid collision with DEAP (1-32)
             self.subject_id_list.append(subject_id + 100)
@@ -853,18 +842,15 @@ class UnifiedStressDataset:
         #     'X_full'   : (N, 32, T) — full EEG for teacher
         #     'X_t7t8'   : (N, 2,  T) — T7/T8 EEG for student
         #     'y_emo'    : (N,)       — emotional stress labels
-        #     'y_perc'   : (N,)       — latent sustained stress targets (self-supervised auxiliary)
         #     'source'   : (N,)       — 'deap' or 'sam40'
         # """
         return {
-            'X_full'      : np.stack(self.X_full_list,       axis=0),
-            'X_t7t8'      : np.stack(self.X_t7t8_list,       axis=0),
-            'y_emo'       : np.array(self.y_emo_list,        dtype=np.int32),
-            'y_perc'      : np.array(self.y_perc_list,       dtype=np.int32),
-            'y_pre_stage' : np.array(self.y_pre_stage_list,  dtype=np.int32),
-            'source'      : np.array(self.source_list),
-            'subject_id'  : np.array(self.subject_id_list,   dtype=np.int32),
-            'trial_idx'   : np.array(self.trial_idx_list,    dtype=np.int32),
+            'X_full'     : np.stack(self.X_full_list,    axis=0),
+            'X_t7t8'     : np.stack(self.X_t7t8_list,   axis=0),
+            'y_emo'      : np.array(self.y_emo_list,     dtype=np.int32),
+            'source'     : np.array(self.source_list),
+            'subject_id' : np.array(self.subject_id_list, dtype=np.int32),
+            'trial_idx'  : np.array(self.trial_idx_list, dtype=np.int32),
         }
 
     def label_statistics(self) -> Dict:
@@ -872,35 +858,17 @@ class UnifiedStressDataset:
         # Print and return label distribution statistics.
         # Useful for checking class balance before training.
         # """
-        y_emo       = np.array(self.y_emo_list)
-        y_perc      = np.array(self.y_perc_list)
-        y_pre_stage = np.array(self.y_pre_stage_list)
-        src         = np.array(self.source_list)
-
-        # SAM40 y_perc = 0/1 when enable_sam40_perceived=True (trial-progression labeling).
-        # Sentinels (-1) occur when enable_sam40_perceived=False. Exclude sentinels from stats.
-        valid_perc   = y_perc[y_perc >= 0]
-        n_valid_perc = len(valid_perc)
+        y_emo = np.array(self.y_emo_list)
+        src   = np.array(self.source_list)
 
         total = len(y_emo)
         stats = {
-            'total_samples'              : total,
-            'emotional_stress_pos'       : int(y_emo.sum()),
-            'emotional_stress_neg'       : int((y_emo == 0).sum()),
-            'emotional_stress_ratio'     : float(y_emo.mean()),
-            'perceived_stress_pos'       : int(valid_perc.sum()),
-            'perceived_stress_neg'       : int((valid_perc == 0).sum()),
-            'perceived_stress_ratio'     : float(valid_perc.mean()) if n_valid_perc > 0 else 0.0,
-            'perceived_sentinel_count'   : int((y_perc == -1).sum()),
-            'pre_stage_pos'              : int(y_pre_stage.sum()),
-            'pre_stage_neg'              : int((y_pre_stage == 0).sum()),
-            'pre_stage_ratio'            : float(y_pre_stage.mean()),
-            'deap_samples'               : int((src == 'deap').sum()),
-            'sam40_samples'              : int((src == 'sam40').sum()),
-            'both_stressed'              : int(((y_emo == 1) & (y_perc == 1)).sum()),
-            'pre_stage_only'             : int(y_pre_stage.sum()),   # emo=1, perc=0
-            'perceived_only'             : int(((y_emo == 0) & (y_perc == 1)).sum()),
-            'emotional_only'             : int(((y_emo == 1) & (y_perc != 1)).sum()),
+            'total_samples'          : total,
+            'emotional_stress_pos'   : int(y_emo.sum()),
+            'emotional_stress_neg'   : int((y_emo == 0).sum()),
+            'emotional_stress_ratio' : float(y_emo.mean()),
+            'deap_samples'           : int((src == 'deap').sum()),
+            'sam40_samples'          : int((src == 'sam40').sum()),
         }
 
         print("\n" + "="*55)
@@ -910,26 +878,10 @@ class UnifiedStressDataset:
         print(f"  DEAP samples           : {stats['deap_samples']}")
         print(f"  SAM40 samples          : {stats['sam40_samples']}")
         print("-"*55)
-        print("  EMOTIONAL STRESS (direct, fast)")
+        print("  EMOTIONAL STRESS (y_emo)")
         print(f"    Positive (stressed)  : {stats['emotional_stress_pos']}")
         print(f"    Negative             : {stats['emotional_stress_neg']}")
         print(f"    Positive ratio       : {stats['emotional_stress_ratio']:.2%}")
-        print("-"*55)
-        print("  PRE-STAGE STRESS (build-up: emo=1, perc=0) ← early-warning target")
-        print(f"    Positive (pre-stage) : {stats['pre_stage_pos']}")
-        print(f"    Negative             : {stats['pre_stage_neg']}")
-        print(f"    Positive ratio       : {stats['pre_stage_ratio']:.2%}")
-        print("-"*55)
-        print("  PERCEIVED/SUSTAINED STRESS (self-supervised auxiliary — DEAP + SAM40 trial-progression)")
-        print(f"    Positive (stressed)  : {stats['perceived_stress_pos']}")
-        print(f"    Negative             : {stats['perceived_stress_neg']}")
-        print(f"    Positive ratio       : {stats['perceived_stress_ratio']:.2%}")
-        print(f"    Sentinels (-1)       : {stats['perceived_sentinel_count']}  (masked in training; 0 when enable_sam40_perceived=True)")
-        print("-"*55)
-        print("  STRESS STAGE BREAKDOWN")
-        print(f"    Stage 0 (no stress)  : {total - stats['emotional_stress_pos']}")
-        print(f"    Stage 1 (pre-stage)  : {stats['pre_stage_pos']}")
-        print(f"    Stage 2 (full stress): {stats['both_stressed']}")
         print("="*55 + "\n")
 
         return stats
@@ -1071,8 +1023,7 @@ def build_unified_dataset(
             )
             builder.add_deap_subject(processed, subject_id=idx)
             print(f"  DEAP subject {idx:02d} → "
-                  f"emotional +: {processed['emotional_labels'].sum()}/40  "
-                  f"perceived +: {processed['perceived_labels'].sum()}/40")
+                  f"y_emo +: {processed['emotional_labels'].sum()}/40")
 
     # ── Auto-load SAM40 from raw_data/ + scales.xls when a directory is given ──
     if sam40_raw_dir and not sam40_subjects:
@@ -1100,8 +1051,7 @@ def build_unified_dataset(
             builder.add_sam40_subject(processed, subject_id=idx)
             n = len(processed['emotional_labels'])
             print(f"  SAM40 subject {idx:02d} → "
-                  f"emotional +: {processed['emotional_labels'].sum()}/{n}  "
-                  f"perceived +: {processed['perceived_labels'].sum()}/{n}")
+                  f"y_emo +: {processed['emotional_labels'].sum()}/{n}")
 
     # ── Build final arrays ──
     dataset = builder.build()

@@ -269,7 +269,6 @@ def run_bandpass_pipeline(
         'X_teacher' — (N, 32, T) bandpass filtered, all 32 channels
         'X_student' — (N,  2, T) bandpass filtered, T7 + T8 only
         'y_emo'     — (N,) emotional stress labels   (unchanged)
-        'y_perc'    — (N,) latent sustained stress targets (self-supervised auxiliary; unchanged)
         'source'    — (N,) dataset source per sample (unchanged)
     """
     if output_npz is None:
@@ -288,13 +287,11 @@ def run_bandpass_pipeline(
     data   = np.load(input_npz, allow_pickle=True)
     X_full = data['X_full'].astype(np.float32)   # (N, 32, T)
     y_emo  = data['y_emo']
-    y_perc = data['y_perc']
     source = data['source']
 
     N, n_ch, T = X_full.shape
     print(f"    X_full  : {X_full.shape}  (N={N}, channels={n_ch}, samples={T})")
     print(f"    y_emo   : {y_emo.shape}   pos={int(y_emo.sum())}  neg={int((y_emo == 0).sum())}")
-    print(f"    y_perc  : {y_perc.shape}  pos={int(y_perc.sum())}  neg={int((y_perc == 0).sum())}")
     print(f"    sources : {np.unique(source)}")
 
     if n_ch != 32:
@@ -334,7 +331,6 @@ def run_bandpass_pipeline(
         X_teacher = X_teacher,
         X_student = X_student,
         y_emo     = y_emo,
-        y_perc    = y_perc,
         source    = source,
     )
 
@@ -345,7 +341,6 @@ def run_bandpass_pipeline(
     print(f"  X_teacher : {X_teacher.shape}  dtype={X_teacher.dtype}")
     print(f"  X_student : {X_student.shape}   dtype={X_student.dtype}")
     print(f"  y_emo     : {y_emo.shape}        unique={np.unique(y_emo)}")
-    print(f"  y_perc    : {y_perc.shape}        unique={np.unique(y_perc)}")
     print(f"  source    : {source.shape}        unique={np.unique(source)}")
     print(f"\n  Saved to  : {output_npz}")
     print(f"\n  Next step → notch_filter_ica.py")
@@ -355,7 +350,6 @@ def run_bandpass_pipeline(
         'X_teacher' : X_teacher,
         'X_student' : X_student,
         'y_emo'     : y_emo,
-        'y_perc'    : y_perc,
         'source'    : source,
     }
 
@@ -391,20 +385,18 @@ def _make_synthetic_unified_npz(tmp_path: Path, n_samples: int = 20) -> Path:
     X_t7t8 = X_full[:, [T7_INDEX, T8_INDEX], :]   # unfiltered, as produced by
                                                     # apply_unified_labeling.py
     y_emo  = rng.integers(0, 2, size=n_samples)
-    y_perc = rng.integers(0, 2, size=n_samples)
     source = np.array(['deap'  if i % 2 == 0 else 'sam40'
                        for i in range(n_samples)])
 
     npz_path = tmp_path / "unified_dataset.npz"   # tmp_path is unified_output in real use
     np.savez(npz_path,
              X_full=X_full, X_t7t8=X_t7t8,
-             y_emo=y_emo, y_perc=y_perc, source=source)
+             y_emo=y_emo, source=source)
 
     print(f"  Synthetic unified_dataset.npz written → {npz_path}")
     print(f"    X_full  : {X_full.shape}")
     print(f"    X_t7t8  : {X_t7t8.shape}")
     print(f"    y_emo   : {y_emo.shape}  (pos={int(y_emo.sum())})")
-    print(f"    y_perc  : {y_perc.shape}  (pos={int(y_perc.sum())})")
     return npz_path
 
 

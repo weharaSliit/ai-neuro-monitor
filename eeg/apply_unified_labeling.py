@@ -145,13 +145,11 @@ def apply_unified_labeling(
                 'familiarity_raw': (float(processed['familiarity_raw'][i])
                                     if processed.get('familiarity_raw') is not None else None),
                 'y_emo'          : int(processed['emotional_labels'][i]),
-                'y_perc'         : int(processed['perceived_labels'][i]),
             }
             csv_rows.append(row)
             sample_idx += 1
 
-        print(f"  DEAP s{sid:02d} → y_emo+: {processed['emotional_labels'].sum()}/{n}  "
-              f"y_perc+: {processed['perceived_labels'].sum()}/{n}")
+        print(f"  DEAP s{sid:02d} → y_emo+: {processed['emotional_labels'].sum()}/{n}")
 
     # — SAM40 subjects —
     for sid, subj_data in sam40_pairs:
@@ -173,14 +171,12 @@ def apply_unified_labeling(
                 'liking_raw'     : None,
                 'familiarity_raw': None,
                 'y_emo'          : int(processed['emotional_labels'][i]),
-                'y_perc'         : int(processed['perceived_labels'][i]),  # -1 sentinel
             }
             csv_rows.append(row)
             sample_idx += 1
 
         n = len(processed['emotional_labels'])
-        print(f"  SAM40 s{sid:02d} → y_emo+: {processed['emotional_labels'].sum()}/{n}  "
-              f"y_perc: -1 (sentinel)")
+        print(f"  SAM40 s{sid:02d} → y_emo+: {processed['emotional_labels'].sum()}/{n}")
 
     dataset = builder.build()
     stats   = builder.label_statistics()
@@ -193,22 +189,18 @@ def apply_unified_labeling(
         X_full     = dataset['X_full'],
         X_t7t8     = dataset['X_t7t8'],
         y_emo      = dataset['y_emo'],
-        y_perc     = dataset['y_perc'],
         source     = dataset['source'],
         subject_id = dataset['subject_id'],
         trial_idx  = dataset['trial_idx'],
     )
     X_full = dataset['X_full']
     y_emo  = dataset['y_emo']
-    y_perc = dataset['y_perc']
     source = dataset['source']
     sam40_m = np.array([str(s).lower() == 'sam40' for s in source])
     deap_m  = ~sam40_m
     print(f"   ✓ X_full={X_full.shape}  y_emo={y_emo.shape}")
-    print(f"   DEAP  : {deap_m.sum():,} samples  y_emo+={y_emo[deap_m].mean():.1%}  "
-          f"y_perc+={y_perc[deap_m].mean():.1%}")
-    print(f"   SAM40 : {sam40_m.sum():,} samples  y_emo+={y_emo[sam40_m].mean():.1%}  "
-          f"y_perc=-1 (sentinel, masked in training)")
+    print(f"   DEAP  : {deap_m.sum():,} samples  y_emo+={y_emo[deap_m].mean():.1%}")
+    print(f"   SAM40 : {sam40_m.sum():,} samples  y_emo+={y_emo[sam40_m].mean():.1%}")
 
     # ── STEP 6: Save per-trial labels CSV ──
     labels_csv = output_dir / "unified_labels.csv"
@@ -217,7 +209,7 @@ def apply_unified_labeling(
         'sample_id', 'dataset', 'subject_id', 'trial', 'task', 'trial_num',
         'score_raw',
         'valence_raw', 'arousal_raw', 'dominance_raw', 'liking_raw', 'familiarity_raw',
-        'y_emo', 'y_perc',
+        'y_emo',
     ])
     df_labels.to_csv(labels_csv, index=False)
     print(f"   ✓ {len(df_labels)} rows  ×  {len(df_labels.columns)} columns")
@@ -246,18 +238,10 @@ def apply_unified_labeling(
         f.write("LABEL SOURCES:\n")
         f.write(f"  DEAP  ratings XLS:     {deap_ratings_path}\n")
         f.write(f"  SAM40 scales  XLS:     {sam40_scales_path}\n\n")
-        f.write("EMOTIONAL STRESS (direct, fast):\n")
+        f.write("EMOTIONAL STRESS (y_emo):\n")
         f.write(f"  Positive (stressed):   {stats['emotional_stress_pos']}\n")
         f.write(f"  Negative:              {stats['emotional_stress_neg']}\n")
-        f.write(f"  Positive ratio:        {stats['emotional_stress_ratio']:.2%}\n\n")
-        f.write("PERCEIVED STRESS (sustained, pre-detected):\n")
-        f.write(f"  Positive (stressed):   {stats['perceived_stress_pos']}\n")
-        f.write(f"  Negative:              {stats['perceived_stress_neg']}\n")
-        f.write(f"  Positive ratio:        {stats['perceived_stress_ratio']:.2%}\n\n")
-        f.write("CO-OCCURRENCE PATTERNS:\n")
-        f.write(f"  Both stressed:         {stats['both_stressed']}\n")
-        f.write(f"  Emotional only:        {stats['emotional_only']}\n")
-        f.write(f"  Perceived only:        {stats['perceived_only']}\n")
+        f.write(f"  Positive ratio:        {stats['emotional_stress_ratio']:.2%}\n")
         f.write("\n" + "=" * 70 + "\n")
     print(f"   ✓ Statistics saved")
 
@@ -266,7 +250,7 @@ def apply_unified_labeling(
     print("  UNIFIED LABELING COMPLETE")
     print("=" * 70)
     print(f"\n📁 Output: {output_dir}\n")
-    print(f"  • unified_dataset.npz     EEG arrays  (X_full, X_t7t8, y_emo, y_perc, …)")
+    print(f"  • unified_dataset.npz     EEG arrays  (X_full, X_t7t8, y_emo, …)")
     print(f"  • unified_labels.csv      {len(df_labels):,} rows — all labels + metadata")
     print(f"  • deap_labels.csv         DEAP split  (valence/arousal/dominance from XLS)")
     print(f"  • sam40_labels.csv        SAM40 split (self-reported scores from scales.xls)")
@@ -280,8 +264,7 @@ def apply_unified_labeling(
     print(f"data   = np.load('{npz_file}', allow_pickle=True)")
     print("X_full = data['X_full']   # (N, 32, T) teacher EEG")
     print("X_t7t8 = data['X_t7t8']   # (N,  2, T) student EEG (T7/T8)")
-    print("y_emo  = data['y_emo']    # (N,) emotional stress")
-    print("y_perc = data['y_perc']   # (N,) perceived stress\n")
+    print("y_emo  = data['y_emo']    # (N,) emotional stress\n")
     print(f"labels = pd.read_csv('{labels_csv}')")
     print("```\n")
 

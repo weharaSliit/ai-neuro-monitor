@@ -8,8 +8,7 @@ Input
 -----
   unified_output/features_dataset.npz   — epoch labels + metadata
   unified_output/soft_logits/
-    soft_emo.npy   — student's P(emo=1) per epoch  (temperature-scaled)
-    soft_perc.npy  — student's P(perc=1) per epoch (temperature-scaled)
+    soft_emo.npy       — student's P(emo=1) per epoch  (temperature-scaled)
 
 Output
 ------
@@ -19,13 +18,12 @@ Output
 
 Problem the existing pipeline DOESN'T solve
 -------------------------------------------
-  label_unification.py fires y_perc=1 ONLY AFTER 70% of the last 10 epochs
-  (20 s) have been emotionally stressed.  That is REACTIVE detection.
+  The student model fires only at the current epoch (reactive detection).
 
   This module trains a predictor that sees the RISING TREND in soft_emo
-  and fires K_AHEAD epochs (K_AHEAD × EPOCH_STRIDE_S seconds) EARLIER —
-  giving the application a lead window to intervene before perceived stress
-  is fully established.
+  (and its first + second derivatives), and fires K_AHEAD epochs
+  (K_AHEAD × EPOCH_STRIDE_S seconds) EARLIER — giving the application a
+  lead window to intervene before emotional stress is fully established.
 
 Architecture decision: LSTM vs alternatives
 -------------------------------------------
@@ -48,24 +46,25 @@ Architecture decision: LSTM vs alternatives
        - 2-layer stack adds depth without exponential parameter growth.
        - Dropout between layers prevents overfitting on short sequences.
 
-Input feature design: 5 channels per time step
+Input feature design: 3 channels per time step
 -----------------------------------------------
-  Each time step carries [soft_emo, soft_pre_stage, soft_perc, emo_delta, perc_delta]:
-    soft_emo       — emotional-stress probability from student model
-    soft_pre_stage — pre-stage stress probability (emo=1 & perc=0 build-up)
-    soft_perc      — perceived/sustained stress probability from student model
-    emo_delta      — first-order difference of soft_emo (rate of change)
-    perc_delta     — first-order difference of soft_perc (momentum)
+  Each time step carries [p_emo, d1_emo, d2_emo]:
+    p_emo   — emotional-stress probability from student model (calibrated)
+    d1_emo  — first-order difference of p_emo (rate of change / velocity)
+    d2_emo  — second-order difference of p_emo (acceleration of trend)
 
-  soft_pre_stage is the critical early-warning channel: it fires BEFORE
-  perceived stress is established, encoding the transition from Stage 0
-  (no stress) through Stage 1 (pre-stage) toward Stage 2 (perceived stress).
-  A rising soft_pre_stage trajectory is the primary predictor signal.
+  The three-channel design is sufficient because early warning does not
+  depend on a pre-stage classifier — it depends on detecting a RISING
+  TREND in p_emo (d1 > 0) that is also ACCELERATING (d2 > 0). These two
+  derivative channels encode the temporal dynamics of the stress trajectory
+  without requiring a separate pre-stage head that cannot be reliably
+  labelled in DEAP/SAM40 (uniform trial labels prevent within-trial
+  0→1 detection).
 
-Target: y_perc at t + K_AHEAD
-------------------------------
+Target: y_emo at t + K_AHEAD
+-----------------------------
   K_AHEAD = 20 epochs × 0.5 s stride = 10 seconds of lead time.
-  Increased from the original K_AHEAD=6 (3 s).
+  Predicts emotional stress onset rather than sustained perceived stress.
 
   Lead-time extension strategies implemented in this file:
 
@@ -152,7 +151,7 @@ SEQ_LEN       = 40     # look-back window in epochs  (40 × 0.5 s = 20 s)
 #                        sequences per trial — below this, sequence counts
 #                        collapse and CV estimates become unreliable.
 
-K_AHEAD       = 20     # predict y_perc K steps ahead (20 × 0.5 s = 10 s lead)
+K_AHEAD       = 20     # predict y_emo K steps ahead (20 × 0.5 s = 10 s lead)
 #                        Increased from 6 (3 s) to 20 (10 s).
 #                        Feasibility: SEQ_LEN(40) + K_AHEAD(20) = 60 epochs,
 #                        leaving ~60 valid epochs per 120-epoch trial.
@@ -162,7 +161,7 @@ K_AHEAD       = 20     # predict y_perc K steps ahead (20 × 0.5 s = 10 s lead)
 #                          K_AHEAD>50 → beyond DEAP trial length, infeasible.
 #                        For minute-scale prediction, see MacroSpiralLSTM below.
 
-N_INPUT_FEAT  = 5      # soft_emo, soft_pre_stage, soft_perc, emo_delta, perc_delta
+N_INPUT_FEAT  = 3      # p_emo, d1_emo (velocity), d2_emo (acceleration)
 LSTM_HIDDEN   = 96     # increased from 64 — longer horizon needs more capacity
 #                        Rule of thumb: +1 s lead time ≈ +8 hidden units.
 #                        96 balances capacity vs overfitting on 32 DEAP subjects.
@@ -196,20 +195,16 @@ class SpiralSequenceBuilder:
     for training the spiral predictor.
 
     Sequences are constructed WITHIN each (subject_id, trial_idx) group so
-    that temporal context never crosses trial boundaries (perceived stress
-    resets at trial onset).
+    that temporal context never crosses trial boundaries.
 
-    For each epoch t in a trial with at least SEQ_LEN preceding epochs:
-        X[t] : (SEQ_LEN, 4)  ← [soft_emo, soft_perc, emo_delta, perc_delta]
-        y[t] : int            ← y_perc at t + K_AHEAD (clipped to trial end)
-
-    The delta features are first-order differences within the sequence,
-    encoding the rate of change of the emotional-stress trajectory.
+    For each epoch t with at least SEQ_LEN preceding epochs:
+        X[t] : (SEQ_LEN, 3)  ← [p_emo, d1_emo, d2_emo]
+        y[t] : int            ← y_emo at t + K_AHEAD (clipped to trial end)
 
     Parameters
     ----------
     seq_len  : int   Look-back window in epochs.
-    k_ahead  : int   Steps ahead for the future perceived-stress target.
+    k_ahead  : int   Steps ahead for the future emotional-stress target.
     """
 
     def __init__(self, seq_len: int = SEQ_LEN, k_ahead: int = K_AHEAD):
@@ -218,64 +213,48 @@ class SpiralSequenceBuilder:
 
     def build(
         self,
-        soft_emo:       np.ndarray,          # (E,)
-        soft_pre_stage: np.ndarray,          # (E,)  pre-stage prob (Stage 1)
-        soft_perc:      np.ndarray,          # (E,)
-        y_perc:         np.ndarray,          # (E,)  -1 sentinel for SAM40
-        subject_id:     np.ndarray,          # (E,)
-        trial_idx:      np.ndarray,          # (E,)
-        source:         np.ndarray,          # (E,)
+        soft_emo:   np.ndarray,   # (E,)
+        y_emo:      np.ndarray,   # (E,)
+        subject_id: np.ndarray,   # (E,)
+        trial_idx:  np.ndarray,   # (E,)
+        source:     np.ndarray,   # (E,)
     ):
         """
         Returns
         -------
-        X        : np.ndarray (N_seq, seq_len, 5)  input sequences
-        y        : np.ndarray (N_seq,)              future y_perc targets
+        X        : np.ndarray (N_seq, seq_len, 3)  input sequences
+        y        : np.ndarray (N_seq,)              future y_emo targets
         groups   : np.ndarray (N_seq,)              subject_id per sequence
         seq_meta : list of dicts with epoch_end_idx, subject, trial
         """
         X_list, y_list, grp_list, meta_list = [], [], [], []
 
-        # All epochs with valid y_perc labels (DEAP + SAM40 trial-progression)
-        deap_mask = y_perc >= 0
+        deap_mask = np.array([str(s).lower() == "deap" for s in source])
         if not deap_mask.any():
-            raise ValueError("No valid y_perc epochs found. Spiral predictor requires latent sustained stress targets.")
+            raise ValueError("No DEAP epochs found. Spiral predictor requires labelled data.")
 
-        # Group by subject only — treat the full monitoring session as a continuous
-        # stream.  Individual 12.5 s trials are too short for SEQ_LEN+K_AHEAD.
         for subj in np.unique(subject_id[deap_mask]):
             mask = deap_mask & (subject_id == subj)
             if mask.sum() < self.seq_len + self.k_ahead:
-                continue   # too short to form even one sequence
+                continue
 
-            ep_idx  = np.where(mask)[0]   # global indices
-            se      = soft_emo[ep_idx]
-            sps     = soft_pre_stage[ep_idx]
-            sp      = soft_perc[ep_idx]
-            yp      = y_perc[ep_idx]
+            ep_idx = np.where(mask)[0]
+            se     = soft_emo[ep_idx]
+            ye     = y_emo[ep_idx]
+            n      = len(ep_idx)
 
-            n = len(ep_idx)
+            d1 = np.diff(se, prepend=se[0])
+            d2 = np.diff(d1, prepend=d1[0])
 
             for t in range(self.seq_len - 1, n - self.k_ahead):
-                window_se  = se[t - self.seq_len + 1 : t + 1]   # (seq_len,)
-                window_sps = sps[t - self.seq_len + 1 : t + 1]
-                window_sp  = sp[t - self.seq_len + 1 : t + 1]
-
-                # First-order delta features (prepend 0 for the first step)
-                delta_e = np.diff(window_se, prepend=window_se[0])
-                delta_p = np.diff(window_sp, prepend=window_sp[0])
-
+                s = t - self.seq_len + 1
                 seq = np.stack(
-                    [window_se, window_sps, window_sp, delta_e, delta_p], axis=1
-                ).astype(np.float32)   # (seq_len, 5)
+                    [se[s:t+1], d1[s:t+1], d2[s:t+1]], axis=1
+                ).astype(np.float32)   # (seq_len, 3)
 
                 future_t = min(t + self.k_ahead, n - 1)
-                label = int(yp[future_t])
-                if label < 0:
-                    continue   # skip sentinel
-
                 X_list.append(seq)
-                y_list.append(label)
+                y_list.append(int(ye[future_t]))
                 grp_list.append(int(subj))
                 meta_list.append({
                     "subject"       : int(subj),
@@ -287,13 +266,12 @@ class SpiralSequenceBuilder:
         if not X_list:
             raise RuntimeError("No valid sequences built — check data dimensions.")
 
-        X      = np.stack(X_list)            # (N, seq_len, 5)
+        X      = np.stack(X_list)            # (N, seq_len, 3)
         y      = np.array(y_list, dtype=np.int32)
         groups = np.array(grp_list, dtype=np.int32)
 
-        pos_rate = float(y.mean())
         print(f"  Sequences built: {len(y):,}  (shape: {X.shape[1:]})")
-        print(f"  Positive rate (y_perc={1}): {pos_rate:.2%}")
+        print(f"  Positive rate (y_emo=1): {float(y.mean()):.2%}")
         print(f"  Unique DEAP subjects: {len(np.unique(groups))}")
         return X, y, groups, meta_list
 
@@ -447,13 +425,11 @@ class MacroSequenceBuilder:
 
     def build(
         self,
-        soft_emo:       np.ndarray,
-        soft_pre_stage: np.ndarray,
-        soft_perc:      np.ndarray,
-        y_perc:         np.ndarray,
-        subject_id:     np.ndarray,
-        trial_idx:      np.ndarray,
-        source:         np.ndarray,
+        soft_emo:   np.ndarray,
+        y_emo:      np.ndarray,
+        subject_id: np.ndarray,
+        trial_idx:  np.ndarray,
+        source:     np.ndarray,
     ):
         X_list, y_list, grp_list, meta_list = [], [], [], []
         deap_mask = np.array([str(s).lower() == "deap" for s in source])
@@ -468,7 +444,6 @@ class MacroSequenceBuilder:
             ep_idx = np.where(mask)[0]
             n = len(ep_idx)
 
-            # Aggregate into macro-epochs
             n_macro = n // self.stride
             if n_macro < self.seq_len + self.k_ahead:
                 continue
@@ -477,36 +452,22 @@ class MacroSequenceBuilder:
                 soft_emo[ep_idx[m * self.stride:(m + 1) * self.stride]].mean()
                 for m in range(n_macro)
             ])
-            macro_sps = np.array([
-                soft_pre_stage[ep_idx[m * self.stride:(m + 1) * self.stride]].mean()
-                for m in range(n_macro)
-            ])
-            macro_sp = np.array([
-                soft_perc[ep_idx[m * self.stride:(m + 1) * self.stride]].mean()
-                for m in range(n_macro)
-            ])
-            # OR aggregation: macro label = 1 if any fine-grained epoch = 1
-            macro_yp = np.array([
-                int((y_perc[ep_idx[m * self.stride:(m + 1) * self.stride]] > 0).any())
+            macro_ye = np.array([
+                int((y_emo[ep_idx[m * self.stride:(m + 1) * self.stride]] > 0).any())
                 for m in range(n_macro)
             ])
 
-            delta_e = np.diff(macro_se, prepend=macro_se[0])
-            delta_p = np.diff(macro_sp, prepend=macro_sp[0])
+            d1 = np.diff(macro_se, prepend=macro_se[0])
+            d2 = np.diff(d1, prepend=d1[0])
 
             for m in range(self.seq_len - 1, n_macro - self.k_ahead):
-                win_se  = macro_se[m - self.seq_len + 1 : m + 1]
-                win_sps = macro_sps[m - self.seq_len + 1 : m + 1]
-                win_sp  = macro_sp[m - self.seq_len + 1 : m + 1]
-                win_de  = delta_e[m - self.seq_len + 1 : m + 1]
-                win_dp  = delta_p[m - self.seq_len + 1 : m + 1]
-
-                seq = np.stack([win_se, win_sps, win_sp, win_de, win_dp], axis=1).astype(np.float32)
+                s = m - self.seq_len + 1
+                seq = np.stack(
+                    [macro_se[s:m+1], d1[s:m+1], d2[s:m+1]], axis=1
+                ).astype(np.float32)  # (seq_len, 3)
                 future_m = min(m + self.k_ahead, n_macro - 1)
-                label = int(macro_yp[future_m])
-
                 X_list.append(seq)
-                y_list.append(label)
+                y_list.append(int(macro_ye[future_m]))
                 grp_list.append(int(subj))
                 meta_list.append({
                     "subject": int(subj),
@@ -695,43 +656,40 @@ def _apply_confirmation_and_cooldown(
 
 def compute_lead_time(
     risk_scores:  np.ndarray,   # (E,) per trial
-    y_perc:       np.ndarray,   # (E,) latent sustained stress target (self-supervised auxiliary)
+    y_emo:        np.ndarray,   # (E,) emotional stress target
     soft_emo:     np.ndarray,   # (E,) for baseline
     alert_thresh: float = ALERT_THRESH,
 ) -> dict:
     """
     For each trial, find the first epoch where the predictor fires and the
-    first epoch where y_perc=1 first appears. Lead time = latent target onset −
+    first epoch where y_emo=1 first appears. Lead time = emo onset −
     predictor fire epoch (positive = predictor fired FIRST).
 
     Also compute baseline (rolling window rule) lead time for comparison.
-
-    Returns dict with per-trial lead times and summary statistics.
     """
     raw_fires       = (risk_scores >= alert_thresh).astype(np.int32)
-    predictor_fires = _apply_confirmation_and_cooldown(raw_fires)   # debounced
+    predictor_fires = _apply_confirmation_and_cooldown(raw_fires)
     baseline_fires  = rolling_window_baseline(soft_emo)
 
-    # First onset of y_perc=1
-    perc_onset = int(np.argmax(y_perc > 0)) if (y_perc > 0).any() else -1
+    emo_onset  = int(np.argmax(y_emo > 0)) if (y_emo > 0).any() else -1
     pred_onset = int(np.argmax(predictor_fires)) if predictor_fires.any() else -1
     base_onset = int(np.argmax(baseline_fires))  if baseline_fires.any() else -1
 
-    lead_pred = (perc_onset - pred_onset) if (perc_onset >= 0 and pred_onset >= 0) else None
-    lead_base = (perc_onset - base_onset) if (perc_onset >= 0 and base_onset >= 0) else None
+    lead_pred = (emo_onset - pred_onset) if (emo_onset >= 0 and pred_onset >= 0) else None
+    lead_base = (emo_onset - base_onset) if (emo_onset >= 0 and base_onset >= 0) else None
 
     return {
-        "perc_onset_epoch"      : perc_onset,
+        "emo_onset_epoch"       : emo_onset,
         "predictor_fire"        : pred_onset,
         "baseline_fire"         : base_onset,
         "lead_predictor_epochs" : lead_pred,
         "lead_baseline_epochs"  : lead_base,
         "lead_predictor_s"      : lead_pred * EPOCH_STRIDE_S if lead_pred is not None else None,
         "lead_baseline_s"       : lead_base * EPOCH_STRIDE_S if lead_base is not None else None,
-        "predictor_false_alarm" : int(pred_onset >= 0 and perc_onset < 0),
-        "baseline_false_alarm"  : int(base_onset >= 0 and perc_onset < 0),
-        "raw_alert_epochs"      : int(raw_fires.sum()),       # before debounce
-        "confirmed_alert_epochs": int(predictor_fires.sum()), # after debounce
+        "predictor_false_alarm" : int(pred_onset >= 0 and emo_onset < 0),
+        "baseline_false_alarm"  : int(base_onset >= 0 and emo_onset < 0),
+        "raw_alert_epochs"      : int(raw_fires.sum()),
+        "confirmed_alert_epochs": int(predictor_fires.sum()),
     }
 
 
@@ -1128,12 +1086,12 @@ def cross_validate(
 def analyse_lead_times(
     risk_scores: np.ndarray,
     soft_emo:    np.ndarray,
-    y_perc:      np.ndarray,
+    y_emo:       np.ndarray,
     subject_id:  np.ndarray,
     trial_idx:   np.ndarray,
     source:      np.ndarray,
     seq_meta:    list,
-    alert_thresh: float = ALERT_THRESH,   # use model's optimal threshold
+    alert_thresh: float = ALERT_THRESH,
 ) -> dict:
     """
     Compute per-trial lead times for predictor vs rolling-window baseline.
@@ -1170,13 +1128,13 @@ def analyse_lead_times(
             continue
 
         rs_trial = np.where(valid_mask, rs, 0.0)
-        yp_trial = y_perc[ep_idx]
+        ye_trial = y_emo[ep_idx]
         se_trial = soft_emo[ep_idx]
 
-        lt = compute_lead_time(rs_trial, yp_trial, se_trial, alert_thresh)
+        lt = compute_lead_time(rs_trial, ye_trial, se_trial, alert_thresh)
         per_trial.append({"subject": int(subj), "trial": int(trial), **lt})
 
-        if yp_trial.max() > 0:
+        if ye_trial.max() > 0:
             if lt["lead_predictor_epochs"] is not None:
                 leads_pred.append(lt["lead_predictor_epochs"])
             if lt["lead_baseline_epochs"] is not None:
@@ -1210,7 +1168,7 @@ def analyse_lead_times(
     extra_mean  = ((summary["lead_predictor_mean_epochs"] or 0) -
                    (summary["lead_baseline_mean_epochs"]  or 0))
     print(f"\n  Lead-time analysis over {len(per_trial)} DEAP trials  "
-          f"(threshold={alert_thresh:.3f}):")
+          f"(threshold={alert_thresh:.3f}, target=y_emo):")
     print(f"  Predictor  mean lead = {_fmt(summary['lead_predictor_mean_s'])} s  "
           f"(median {_fmt(summary['lead_predictor_median_s'])} s)  "
           f"[{len(leads_pred)} stress trials fired]")
@@ -1229,14 +1187,14 @@ def analyse_lead_times(
 
 def load_data(npz_path=None, soft_dir=SOFT_DIR):
     """
-    Load features_dataset.npz + student soft logits (including soft_pre_stage).
+    Load features_dataset.npz + student soft_emo logits.
     Falls back to synthetic data if either is missing.
-    Returns: (soft_emo, soft_pre_stage, soft_perc, y_emo, y_perc, subject_id, trial_idx, source)
+    Returns: (soft_emo, y_emo, subject_id, trial_idx, source)
     """
     npz_path = Path(npz_path) if npz_path else UNIFIED_OUTPUT_DIR / "features_dataset.npz"
     soft_dir = Path(soft_dir)
 
-    needed = ["soft_emo.npy", "soft_perc.npy", "y_emo.npy", "y_perc.npy", "source.npy"]
+    needed   = ["soft_emo.npy", "y_emo.npy", "source.npy"]
     has_real = npz_path.exists() and all((soft_dir / f).exists() for f in needed)
 
     if not has_real:
@@ -1244,28 +1202,14 @@ def load_data(npz_path=None, soft_dir=SOFT_DIR):
         return _synthetic_data()
 
     d          = np.load(npz_path, allow_pickle=True)
-    y_perc     = d["y_perc"].astype(np.int32).copy()
     y_emo      = d["y_emo"].astype(np.int32)
     subject_id = d["subject_id"].astype(np.int32)
     trial_idx  = d["trial_idx"].astype(np.int32)
     source     = d["source"]
     soft_emo   = np.load(soft_dir / "soft_emo.npy").astype(np.float32)
-    soft_perc  = np.load(soft_dir / "soft_perc.npy").astype(np.float32)
 
-    # Pre-stage soft logits: use teacher's output if available, else derive from labels
-    pre_path = soft_dir / "soft_pre_stage.npy"
-    if pre_path.exists():
-        soft_pre = np.load(pre_path).astype(np.float32)
-    else:
-        y_pre_raw = (d["y_pre_stage"].astype(np.int32) if "y_pre_stage" in d
-                     else ((y_emo == 1) & (y_perc >= 0) & (y_perc == 0)).astype(np.int32))
-        soft_pre = y_pre_raw.astype(np.float32)
-        print("  [INFO] soft_pre_stage.npy not found — using hard y_pre_stage labels as proxy")
-
-    # Clip arrays to same length (student soft logits may differ by 1)
-    n = min(len(y_perc), len(soft_emo), len(soft_pre))
-    return (soft_emo[:n], soft_pre[:n], soft_perc[:n], y_emo[:n], y_perc[:n],
-            subject_id[:n], trial_idx[:n], source[:n])
+    n = min(len(y_emo), len(soft_emo))
+    return (soft_emo[:n], y_emo[:n], subject_id[:n], trial_idx[:n], source[:n])
 
 
 def _synthetic_data(
@@ -1277,23 +1221,23 @@ def _synthetic_data(
     Generate realistic synthetic data that mirrors the pipeline output.
 
     Stress patterns simulated:
-      · Low-stress trials : soft_emo stays below 0.4, no y_perc=1
-      · Rising trials     : soft_emo rises gradually → y_perc=1 near end
-      · Spike trials      : single transient spike, no sustained perceived stress
+      · Low-stress trials : soft_emo stays below 0.4, no y_emo onset
+      · Rising trials     : soft_emo rises gradually → y_emo=1 near end
+      · Spike trials      : single transient spike, no sustained stress
 
-    Returns: (soft_emo, soft_pre_stage, soft_perc, y_emo, y_perc, subject_id, trial_idx, source)
+    Returns: (soft_emo, y_emo, subject_id, trial_idx, source)
     """
     rng   = np.random.default_rng(RANDOM_STATE)
-    n_sam = 8   # SAM40 subjects (emo-only)
+    n_sam = 8   # SAM40 subjects
 
-    se_list, sps_list, sp_list = [], [], []
-    ye_l, yp_l                 = [], []
-    sid_l, tid_l               = [], []
-    src_l                      = []
+    se_list = []
+    ye_l    = []
+    sid_l, tid_l = [], []
+    src_l   = []
 
     global_trial = 0
     for s in range(n_deap_subj):
-        for t in range(trials_per):
+        for _ in range(trials_per):
             trial_type = rng.choice(["low", "rising", "spike"],
                                      p=[0.5, 0.35, 0.15])
             n = epochs_per + rng.integers(-5, 5)
@@ -1302,52 +1246,39 @@ def _synthetic_data(
                 base  = rng.uniform(0.1, 0.25)
                 slope = rng.uniform(0.015, 0.03)
                 se    = np.clip(base + slope * np.arange(n) + rng.normal(0, 0.05, n), 0, 1)
-                onset = max(0, n - 15)
-                yp    = (np.arange(n) >= onset).astype(np.int32)
             elif trial_type == "spike":
                 se   = rng.uniform(0.05, 0.2, n).astype(np.float32)
                 spike_t = rng.integers(n // 3, 2 * n // 3)
                 se[spike_t : spike_t + 4] = rng.uniform(0.7, 0.9)
-                yp = np.zeros(n, dtype=np.int32)
             else:
                 se = rng.uniform(0.05, 0.3, n).astype(np.float32)
-                yp = np.zeros(n, dtype=np.int32)
 
-            sp  = np.clip(se * 0.6 + rng.normal(0, 0.05, n), 0, 1).astype(np.float32)
-            ye  = (se >= 0.5).astype(np.int32)
-            # pre-stage: elevated in the build-up window just before yp fires
-            yps = ((ye == 1) & (yp == 0)).astype(np.int32)
-            sps = np.clip(yps.astype(np.float32) * 0.7 + rng.normal(0, 0.08, n), 0, 1).astype(np.float32)
+            ye = (se >= 0.5).astype(np.int32)
 
-            se_list.extend(se.tolist());  sps_list.extend(sps.tolist())
-            sp_list.extend(sp.tolist())
-            ye_l.extend(ye.tolist());     yp_l.extend(yp.tolist())
-            sid_l.extend([s] * n);        tid_l.extend([global_trial] * n)
+            se_list.extend(se.tolist())
+            ye_l.extend(ye.tolist())
+            sid_l.extend([s] * n)
+            tid_l.extend([global_trial] * n)
             src_l.extend(["deap"] * n)
             global_trial += 1
 
-    # SAM40 (emo-only, y_perc=-1 sentinel)
     for s in range(n_sam):
-        for t in range(6):
+        for _ in range(6):
             n  = 30
             se = rng.uniform(0.05, 0.85, n).astype(np.float32)
             ye = (se >= 0.5).astype(np.int32)
-            # SAM40 has no y_perc so no pre-stage signal — set to 0
-            se_list.extend(se.tolist());  sps_list.extend([0.0] * n)
-            sp_list.extend([0.0] * n)
-            ye_l.extend(ye.tolist());     yp_l.extend([-1] * n)
-            sid_l.extend([s + 100] * n);  tid_l.extend([global_trial] * n)
+            se_list.extend(se.tolist())
+            ye_l.extend(ye.tolist())
+            sid_l.extend([s + 100] * n)
+            tid_l.extend([global_trial] * n)
             src_l.extend(["sam40"] * n)
             global_trial += 1
 
     return (
-        np.array(se_list,   dtype=np.float32),
-        np.array(sps_list,  dtype=np.float32),
-        np.array(sp_list,   dtype=np.float32),
-        np.array(ye_l,      dtype=np.int32),
-        np.array(yp_l,      dtype=np.int32),
-        np.array(sid_l,     dtype=np.int32),
-        np.array(tid_l,     dtype=np.int32),
+        np.array(se_list, dtype=np.float32),
+        np.array(ye_l,    dtype=np.int32),
+        np.array(sid_l,   dtype=np.int32),
+        np.array(tid_l,   dtype=np.int32),
         np.array(src_l),
     )
 
@@ -1367,22 +1298,20 @@ def run_spiral_pipeline(npz_path=None, soft_dir=SOFT_DIR, eval_only=False):
 
     # ── [1] Load ──────────────────────────────────────────────────
     print("\n[1] Loading soft probabilities + labels")
-    (soft_emo, soft_pre, soft_perc, y_emo, y_perc,
-     subject_id, trial_idx, source) = load_data(npz_path, soft_dir)
+    (soft_emo, y_emo, subject_id, trial_idx, source) = load_data(npz_path, soft_dir)
 
     deap_mask = np.array([str(s).lower() == "deap" for s in source])
-    perc_valid = y_perc >= 0
-    print(f"  Total epochs   : {len(y_perc):,}")
-    print(f"  DEAP epochs    : {deap_mask.sum():,}  (y_perc via rolling-window auxiliary)")
-    print(f"  SAM40 epochs   : {(~deap_mask).sum():,}  (y_perc via trial-progression; {int(perc_valid[~deap_mask].sum()):,} valid)")
-    yp_v = y_perc[perc_valid]
-    print(f"  y_perc balance : {yp_v.mean():.2%}  pos={int(yp_v.sum()):,}")
+    print(f"  Total epochs   : {len(y_emo):,}")
+    print(f"  DEAP epochs    : {deap_mask.sum():,}")
+    print(f"  SAM40 epochs   : {(~deap_mask).sum():,}")
+    ye_d = y_emo[deap_mask]
+    print(f"  y_emo balance  : {ye_d.mean():.2%}  pos={int(ye_d.sum()):,}")
 
     # ── [2] Build sequences ───────────────────────────────────────
     print("\n[2] Building look-back sequences")
     builder = SpiralSequenceBuilder(SEQ_LEN, K_AHEAD)
     X, y, groups, seq_meta = builder.build(
-        soft_emo, soft_pre, soft_perc, y_perc, subject_id, trial_idx, source)
+        soft_emo, y_emo, subject_id, trial_idx, source)
 
     pw_emo = float(np.sqrt((y == 0).sum() / max((y == 1).sum(), 1)))
     print(f"  Positive weight: {pw_emo:.2f}x")
@@ -1400,7 +1329,8 @@ def run_spiral_pipeline(npz_path=None, soft_dir=SOFT_DIR, eval_only=False):
     else:
         # ── [3] Cross-validation ──────────────────────────────────
         print("\n[3] Subject-stratified cross-validation")
-        cv_results = cross_validate(X, y, groups, CV_FOLDS)
+        n_subjs = len(np.unique(groups))
+        cv_results = cross_validate(X, y, groups, min(CV_FOLDS, n_subjs))
 
         # ── [4] Final model on all data ───────────────────────────
         print("\n[4] Training final model on all DEAP data")
@@ -1454,7 +1384,7 @@ def run_spiral_pipeline(npz_path=None, soft_dir=SOFT_DIR, eval_only=False):
     # ── [7] Lead-time analysis ────────────────────────────────────
     print("\n[7] Lead-time analysis")
     lead_results = analyse_lead_times(
-        risk_scores, soft_emo, y_perc, subject_id, trial_idx, source,
+        risk_scores, soft_emo, y_emo, subject_id, trial_idx, source,
         seq_meta, alert_thresh=opt_thresh)
 
     # ── [8] Save model ────────────────────────────────────────────
@@ -1543,13 +1473,12 @@ def _run_self_test():
     print("=" * 62)
 
     print("\n[0] Generating synthetic soft logits")
-    (soft_emo, soft_pre, soft_perc, y_emo, y_perc,
-     subject_id, trial_idx, source) = _synthetic_data()
+    (soft_emo, y_emo, subject_id, trial_idx, source) = _synthetic_data()
 
     print("\n[1] Building sequences")
     builder = SpiralSequenceBuilder(SEQ_LEN, K_AHEAD)
     X, y, groups, seq_meta = builder.build(
-        soft_emo, soft_pre, soft_perc, y_perc, subject_id, trial_idx, source)
+        soft_emo, y_emo, subject_id, trial_idx, source)
 
     pw = float(np.sqrt((y == 0).sum() / max((y == 1).sum(), 1)))
 
@@ -1581,12 +1510,12 @@ def _run_self_test():
     auc = roc_auc_score(y, rs) if len(np.unique(y)) > 1 else 0.0
     ece = expected_calibration_error(rs, y)
 
-    lt = analyse_lead_times(rs, soft_emo, y_perc, subject_id, trial_idx, source,
+    lt = analyse_lead_times(rs, soft_emo, y_emo, subject_id, trial_idx, source,
                             seq_meta, alert_thresh=opt_thresh)
 
     # Checks
     checks = {
-        "X shape (N, seq_len, 4)"           : X.shape[1:] == (SEQ_LEN, N_INPUT_FEAT),
+        f"X shape (N, seq_len, {N_INPUT_FEAT})"  : X.shape[1:] == (SEQ_LEN, N_INPUT_FEAT),
         "risk scores in [0, 1]"             : bool(rs.min() >= 0) and bool(rs.max() <= 1),
         "AUC > 0.5"                         : auc > 0.5,
         "ECE < 0.3"                         : ece < 0.3,
@@ -1599,6 +1528,20 @@ def _run_self_test():
         print(f"  {'✓' if ok else '✗'} {desc}")
     print(f"  AUC={auc:.4f}  ECE={ece:.4f}  T={T_val:.3f}")
     print(f"{'─' * 48}")
+
+    # Save so downstream inference can load a compatible 3-feature checkpoint
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    torch.save({
+        "state_dict"   : model.cpu().state_dict(),
+        "seq_len"      : SEQ_LEN,
+        "k_ahead"      : K_AHEAD,
+        "n_input"      : N_INPUT_FEAT,
+        "opt_threshold": opt_thresh,
+        "cv_results"   : cv,
+        "history"      : history,
+    }, MODEL_PATH)
+    print(f"  [test] Saved synthetic model → {MODEL_PATH}")
+
     print(f"\n  Self-test complete.  {'All checks passed.' if all(checks.values()) else 'Some checks failed.'}\n")
     return int(not all(checks.values()))
 

@@ -661,7 +661,6 @@ def export_to_csv(
     F_student  = data['F_student']
     feat_names = data['feature_names'].tolist()
     y_emo      = data['y_emo']
-    y_perc     = data['y_perc']
     source     = data['source']
     trial_idx  = data['trial_idx']
     subject_id = data['subject_id']
@@ -670,14 +669,13 @@ def export_to_csv(
 
     meta = {
         'y_emo'      : y_emo,
-        'y_perc'     : y_perc,
         'source'     : source,
         'trial_idx'  : trial_idx,
         'subject_id' : subject_id,
     }
 
     # ── Teacher CSV ───────────────────────────────────────────
-    print(f"  Building teacher DataFrame  ({E} rows × {len(feat_names) + 5} cols) …")
+    print(f"  Building teacher DataFrame  ({E} rows × {len(feat_names) + 4} cols) …")
     df_teacher = pd.DataFrame(F_teacher, columns=feat_names)
     for col, arr in meta.items():
         df_teacher[col] = arr
@@ -691,7 +689,7 @@ def export_to_csv(
     # ── Student CSV ───────────────────────────────────────────
     student_feat_names = [n for n in feat_names
                           if n.endswith('_T7') or n.endswith('_T8')]
-    print(f"\n  Building student DataFrame  ({E} rows × {len(student_feat_names) + 5} cols) …")
+    print(f"\n  Building student DataFrame  ({E} rows × {len(student_feat_names) + 4} cols) …")
     df_student = pd.DataFrame(F_student, columns=student_feat_names)
     for col, arr in meta.items():
         df_student[col] = arr
@@ -882,7 +880,6 @@ def run_feature_extraction_pipeline(
         'F_student'     : (E,  30)   student feature matrix (T7+T8)
         'feature_names' : (480,)     feature label per column
         'y_emo'         : (E,)
-        'y_perc'        : (E,)
         'source'        : (E,)
         'trial_idx'     : (E,)
         'subject_id'    : (E,)
@@ -912,12 +909,9 @@ def run_feature_extraction_pipeline(
     X_teacher   = data['X_teacher'].astype(np.float32)   # (E, 32, W)
     X_student   = data['X_student'].astype(np.float32)   # (E,  2, W)
     y_emo       = data['y_emo']
-    y_perc      = data['y_perc']
     source      = data['source']
     trial_idx   = data['trial_idx']
     subject_id  = data['subject_id']
-    y_pre_stage = (data['y_pre_stage'] if 'y_pre_stage' in data
-                   else ((y_emo == 1) & (y_perc == 0)).astype(np.int32))
 
     E, _, W = X_teacher.shape
     print(f"    X_teacher   : {X_teacher.shape}")
@@ -928,13 +922,9 @@ def run_feature_extraction_pipeline(
     deap_m  = np.array([str(s).lower() == 'deap'  for s in source])
     sam40_m = np.array([str(s).lower() == 'sam40' for s in source])
     print(f"  DEAP  : {deap_m.sum():,} epochs  ({len(np.unique(subject_id[deap_m]))} subjects)")
-    sam40_valid_perc = int((y_perc[sam40_m] >= 0).sum())
-    print(f"  SAM40 : {sam40_m.sum():,} epochs  ({len(np.unique(subject_id[sam40_m]))} subjects)  y_perc valid: {sam40_valid_perc:,}")
-    print(f"  Total : {len(X_teacher):,} epochs for emo head")
-    print(f"  y_emo       balance : {y_emo.mean():.2%}  (DEAP+SAM40)")
-    yp_valid = y_perc[y_perc >= 0]
-    print(f"  y_perc      balance : {yp_valid.mean():.2%}  (DEAP + SAM40, {len(yp_valid):,} labeled epochs)")
-    print(f"  y_pre_stage balance : {y_pre_stage.mean():.2%}  pos={int(y_pre_stage.sum()):,}  (build-up phase)")
+    print(f"  SAM40 : {sam40_m.sum():,} epochs  ({len(np.unique(subject_id[sam40_m]))} subjects)")
+    print(f"  Total : {len(X_teacher):,} epochs")
+    print(f"  y_emo balance : {y_emo.mean():.2%}  pos={int(y_emo.sum()):,}  (DEAP+SAM40)")
 
     # ── [2] Build feature names ────────────────────────────────
     teacher_feat_names = build_feature_names(EEG_CHANNELS)
@@ -969,24 +959,21 @@ def run_feature_extraction_pipeline(
     print(f"\n[5] Saving NPZ  →  {output_npz}")
     # Compute frontal asymmetry (teacher only — T7/T8 student cannot see frontal)
     print(f"\n[compute] Frontal DE asymmetry features ...")
-    check_label_correlation(y_emo, y_perc, source)
     F_frontal_asym, asym_names = frontal_de_asymmetry(F_teacher, teacher_feat_names)
 
     np.savez(
         output_npz,
-        F_teacher               = F_teacher,
-        F_student               = F_student,
-        F_student_ext           = F_student_ext,
-        F_frontal_asym          = F_frontal_asym,
-        feature_names           = np.array(teacher_feat_names),
-        student_feat_names_ext  = np.array(student_ext_names),
-        frontal_asym_names      = np.array(asym_names),
-        y_emo                   = y_emo,
-        y_perc                  = y_perc,
-        y_pre_stage             = y_pre_stage,
-        source                  = source,
-        trial_idx               = trial_idx,
-        subject_id              = subject_id,
+        F_teacher              = F_teacher,
+        F_student              = F_student,
+        F_student_ext          = F_student_ext,
+        F_frontal_asym         = F_frontal_asym,
+        feature_names          = np.array(teacher_feat_names),
+        student_feat_names_ext = np.array(student_ext_names),
+        frontal_asym_names     = np.array(asym_names),
+        y_emo                  = y_emo,
+        source                 = source,
+        trial_idx              = trial_idx,
+        subject_id             = subject_id,
     )
 
     # ── [7] Export CSV ─────────────────────────────────────────
@@ -1003,9 +990,6 @@ def run_feature_extraction_pipeline(
     print(f"  F_student_ext : {F_student_ext.shape}  dtype={F_student_ext.dtype}  (extended 76-dim)")
     print(f"  feature_names : {len(teacher_feat_names)} labels")
     print(f"  y_emo         : {y_emo.shape}  pos={int(y_emo.sum())}  neg={int((y_emo==0).sum())}")
-    print(f"  y_pre_stage   : {y_pre_stage.shape}  pos={int(y_pre_stage.sum())}  "
-          f"({y_pre_stage.mean():.1%})  ← pre-stage stress target")
-    print(f"  y_perc        : {y_perc.shape}  pos={int(y_perc.sum())}  neg={int((y_perc==0).sum())}")
     print(f"  source        : {np.unique(source)}")
     print(f"  subject_id    : {len(np.unique(subject_id))} unique subjects")
     print(f"\n  Feature layout per channel (×{n_per_ch}):")
@@ -1028,8 +1012,6 @@ def run_feature_extraction_pipeline(
         'feature_names'     : np.array(teacher_feat_names),
         'student_ext_names' : np.array(student_ext_names),
         'y_emo'             : y_emo,
-        'y_perc'            : y_perc,
-        'y_pre_stage'       : y_pre_stage,
         'source'            : source,
         'trial_idx'         : trial_idx,
         'subject_id'        : subject_id,
@@ -1067,7 +1049,7 @@ def _make_synthetic_normalized_npz(
         )).astype(np.float32)
 
     X_teacher_list, source_list, trial_list = [], [], []
-    subj_list, y_emo_list, y_perc_list      = [], [], []
+    subj_list, y_emo_list                   = [], []
 
     for e in range(n_epochs):
         is_deap     = e < n_epochs // 2
@@ -1083,22 +1065,18 @@ def _make_synthetic_normalized_npz(
         trial_list.append(trial)
         subj_list.append(subj + subj_offset)
         y_emo_list.append(int(rng.integers(0, 2)))
-        y_perc_list.append(int(rng.integers(0, 2)))
 
-    X_teacher   = np.stack(X_teacher_list)
-    X_student   = X_teacher[:, [T7_INDEX, T8_INDEX], :]
-    y_emo       = np.array(y_emo_list,  dtype=np.int32)
-    y_perc      = np.array(y_perc_list, dtype=np.int32)
-    y_pre_stage = ((y_emo == 1) & (y_perc == 0)).astype(np.int32)
-    source      = np.array(source_list)
-    trial_idx   = np.array(trial_list,  dtype=np.int32)
-    subject_id  = np.array(subj_list,   dtype=np.int32)
+    X_teacher  = np.stack(X_teacher_list)
+    X_student  = X_teacher[:, [T7_INDEX, T8_INDEX], :]
+    y_emo      = np.array(y_emo_list, dtype=np.int32)
+    source     = np.array(source_list)
+    trial_idx  = np.array(trial_list, dtype=np.int32)
+    subject_id = np.array(subj_list,  dtype=np.int32)
 
     npz_path = out_dir / "normalized_dataset.npz"
     np.savez(npz_path,
              X_teacher=X_teacher, X_student=X_student,
-             y_emo=y_emo, y_perc=y_perc, y_pre_stage=y_pre_stage,
-             source=source, trial_idx=trial_idx, subject_id=subject_id)
+             y_emo=y_emo, source=source, trial_idx=trial_idx, subject_id=subject_id)
 
     print(f"  Synthetic normalized_dataset.npz → {npz_path}")
     print(f"    X_teacher : {X_teacher.shape}  (multi-band neural + noise)")

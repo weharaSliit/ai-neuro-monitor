@@ -11,22 +11,21 @@ Signal chain per epoch
   raw window (2, 512)
     → bandpass 0.5–45 Hz
     → z-score normalise (running per-channel stats)
-    → extract 30 student features (PSD + DE + Hjorth on T7, T8)
-    → StudentKNN → (p_emo, p_pre, p_perc)
+    → extract 30/76 student features (PSD + DE + Hjorth on T7, T8)
+    → StudentMLP/CNN+BiLSTM → p_emo (single head)
     → SpiralLSTM look-back buffer (SEQ_LEN=40 epochs)
-    → spiral risk score → alert if risk ≥ ALERT_THRESH
+      · 3-feature input: [p_emo, d1_emo (velocity), d2_emo (acceleration)]
+    → spiral risk score → early warning if risk ≥ ALERT_THRESH
 
 Output per epoch
 ----------------
   {
-    "epoch"      : int,           # 0-based epoch counter
-    "time_s"     : float,         # wall time in seconds
-    "p_emo"      : float,         # emotional stress probability
-    "p_pre"      : float,         # pre-stage (build-up) stress probability
-    "p_perc"     : float,         # perceived/sustained stress probability
-    "risk"       : float,         # spiral risk score (10 s ahead)
-    "alert"      : bool,          # True when risk ≥ ALERT_THRESH
-    "stage"      : int,           # 0=calm  1=pre-stage  2=stressed
+    "epoch"      : int,    # 0-based epoch counter
+    "time_s"     : float,  # wall time in seconds
+    "p_emo"      : float,  # emotional stress probability
+    "risk"       : float,  # spiral risk score (10 s ahead)
+    "alert"      : bool,   # True when risk ≥ ALERT_THRESH
+    "stage"      : int,    # 0=calm  1=rising risk  2=stressed (p_emo ≥ personal_threshold)
   }
 
 Usage
@@ -55,7 +54,22 @@ from scipy.signal import butter, filtfilt
 
 # Make student models importable for pickle.load
 sys.path.insert(0, str(Path(__file__).resolve().parent / "models"))
-from student_model import StudentMLP, StudentKNN  # noqa: F401  (needed by pickle)
+from student_model import StudentMLP, StudentKNN, StudentCNNBiLSTM  # noqa: F401  (needed by pickle)
+from trend_detector import PersonalTrendMonitor
+
+
+class _StudentUnpickler(pickle.Unpickler):
+    """Remap __main__.StudentXxx → student_model.StudentXxx.
+
+    When student_model.py is run directly the classes are recorded in the
+    pickle as '__main__.StudentMLP' etc.  This unpickler transparently
+    redirects those lookups to the proper module so loading works from any
+    entry-point script.
+    """
+    def find_class(self, module: str, name: str):
+        if module == "__main__" and name.startswith("Student"):
+            module = "student_model"
+        return super().find_class(module, name)
 
 # ─────────────────────────────────────────────
 #  PATHS
@@ -65,6 +79,7 @@ _HERE            = Path(__file__).resolve().parent
 UNIFIED_OUT      = _HERE / "data" / "unified_output"
 MODELS_DIR       = UNIFIED_OUT / "models"
 FEATURES_NPZ     = UNIFIED_OUT / "features_dataset.npz"
+PERSONAL_DIR     = UNIFIED_OUT / "personal_models"
 
 STUDENT_PKL      = MODELS_DIR / "student_model.pkl"
 SPIRAL_PT        = MODELS_DIR / "spiral_predictor.pt"
@@ -84,11 +99,12 @@ BP_ORDER         : int   = 4
 
 SEQ_LEN          : int   = 40         # spiral look-back window
 K_AHEAD          : int   = 20         # spiral lead steps
-N_INPUT_FEAT     : int   = 5          # soft_emo, soft_pre, soft_perc, d_emo, d_perc
+N_INPUT_FEAT     : int   = 3          # p_emo, d1_emo (velocity), d2_emo (acceleration)
 LSTM_HIDDEN      : int   = 96
 LSTM_LAYERS      : int   = 2
 LSTM_DROPOUT     : float = 0.35
 ALERT_THRESH     : float = 0.45
+DEFAULT_PERSONAL_THRESH : float = 0.70
 
 # ─────────────────────────────────────────────
 #  SPIRAL LSTM  (must match spiral_predictor.py)
@@ -168,11 +184,11 @@ BANDS = {'delta': (0.5, 4.0), 'theta': (4.0, 8.0),
 LOG_EPS = 1e-10
 
 
-def _psd_band_power(x: np.ndarray) -> np.ndarray:
+def _psd_band_power(x: np.ndarray, fs: float = SAMPLING_RATE_HZ) -> np.ndarray:
     W = len(x)
-    _, pxx = sp_welch(x.astype(np.float64), fs=SAMPLING_RATE_HZ,
+    _, pxx = sp_welch(x.astype(np.float64), fs=fs,
                       nperseg=W, noverlap=W // 2, window='hann')
-    freqs  = np.fft.rfftfreq(W, 1.0 / SAMPLING_RATE_HZ)
+    freqs  = np.fft.rfftfreq(W, 1.0 / fs)
     out    = np.empty(len(BANDS), dtype=np.float32)
     for i, (lo, hi) in enumerate(BANDS.values()):
         mask = (freqs >= lo) & (freqs < hi)
@@ -180,10 +196,10 @@ def _psd_band_power(x: np.ndarray) -> np.ndarray:
     return out
 
 
-def _de(x: np.ndarray) -> np.ndarray:
+def _de(x: np.ndarray, fs: float = SAMPLING_RATE_HZ) -> np.ndarray:
     from scipy.signal import butter as _butter, filtfilt as _ff
     out = np.empty(len(BANDS), dtype=np.float32)
-    nyq = SAMPLING_RATE_HZ / 2.0
+    nyq = fs / 2.0
     for i, (lo, hi) in enumerate(BANDS.values()):
         b, a = _butter(BP_ORDER, [lo / nyq, hi / nyq], btype='band')
         sig  = _ff(b, a, x.astype(np.float64))
@@ -203,27 +219,31 @@ def _td(x: np.ndarray) -> np.ndarray:
 
 
 def extract_student_features(epoch_t7t8: np.ndarray,
-                              extended: bool = True) -> np.ndarray:
+                              extended: bool = True,
+                              fs: float = SAMPLING_RATE_HZ) -> np.ndarray:
     """
     (2, T) → 30-dim base or 76-dim extended student feature vector.
 
+    fs : actual hardware sample rate (default 256 Hz; pass 250 for ADS1292R).
+         Propagated to PSD / DE so band-power estimates use correct frequencies.
+
     When extended=True (default), delegates to feature_extraction.py for
     the full 76-dim vector (base + spectral_ext + nonlinear + connectivity).
-    Falls back to 30-dim base if the import fails (e.g., no scipy available).
+    Falls back to 30-dim base if the import fails.
     """
     if extended:
         try:
             from feature_extraction import extract_student_epoch_extended
-            return extract_student_epoch_extended(epoch_t7t8, SAMPLING_RATE_HZ)
+            return extract_student_epoch_extended(epoch_t7t8, fs)
         except Exception:
             pass  # fall through to base
 
     # Base 30-dim
     feats = []
     for ch in range(epoch_t7t8.shape[0]):
-        feats.append(_psd_band_power(epoch_t7t8[ch]))
+        feats.append(_psd_band_power(epoch_t7t8[ch], fs=fs))
     for ch in range(epoch_t7t8.shape[0]):
-        feats.append(_de(epoch_t7t8[ch]))
+        feats.append(_de(epoch_t7t8[ch], fs=fs))
     for ch in range(epoch_t7t8.shape[0]):
         feats.append(_td(epoch_t7t8[ch]))
     return np.concatenate(feats).astype(np.float32)   # (30,)
@@ -234,33 +254,23 @@ def extract_student_features(epoch_t7t8: np.ndarray,
 # ─────────────────────────────────────────────
 
 class SpiralBuffer:
-    """Maintains a SEQ_LEN rolling buffer of (soft_emo, soft_pre, soft_perc)."""
+    """Rolling buffer of p_emo values; builds 3-feature sequences for SpiralLSTM."""
     def __init__(self, seq_len: int = SEQ_LEN):
-        self.seq_len  = seq_len
-        self._buf_e   = deque(maxlen=seq_len)
-        self._buf_ps  = deque(maxlen=seq_len)
-        self._buf_p   = deque(maxlen=seq_len)
-        self._prev_e  = 0.0
-        self._prev_p  = 0.0
+        self.seq_len = seq_len
+        self._buf    = deque(maxlen=seq_len)
 
-    def push(self, p_emo: float, p_pre: float, p_perc: float):
-        self._buf_e.append(p_emo)
-        self._buf_ps.append(p_pre)
-        self._buf_p.append(p_perc)
-        self._prev_e = p_emo
-        self._prev_p = p_perc
+    def push(self, p_emo: float):
+        self._buf.append(p_emo)
 
     def ready(self) -> bool:
-        return len(self._buf_e) == self.seq_len
+        return len(self._buf) == self.seq_len
 
     def to_tensor(self) -> torch.Tensor:
-        se  = np.array(self._buf_e,  dtype=np.float32)
-        sps = np.array(self._buf_ps, dtype=np.float32)
-        sp  = np.array(self._buf_p,  dtype=np.float32)
-        de  = np.diff(se,  prepend=se[0])
-        dp  = np.diff(sp,  prepend=sp[0])
-        seq = np.stack([se, sps, sp, de, dp], axis=1)   # (SEQ_LEN, 5)
-        return torch.tensor(seq).unsqueeze(0)            # (1, SEQ_LEN, 5)
+        se  = np.array(self._buf, dtype=np.float32)
+        d1  = np.diff(se, prepend=se[0])
+        d2  = np.diff(d1, prepend=d1[0])
+        seq = np.stack([se, d1, d2], axis=1)      # (SEQ_LEN, 3)
+        return torch.tensor(seq).unsqueeze(0)      # (1, SEQ_LEN, 3)
 
 
 # ─────────────────────────────────────────────
@@ -273,18 +283,24 @@ class StressInferenceEngine:
 
     Parameters
     ----------
-    student_pkl   : Path to student_model.pkl (StudentMLP preferred, falls back to KNN)
-    spiral_pt     : Path to spiral_predictor.pt (SpiralLSTM)
-    alert_thresh  : Fallback risk score threshold when no per-subject value exists
-    subject_id    : Optional subject ID — used to look up per-subject threshold from
-                    spiral_report.json (produced by spiral_predictor.py)
+    student_pkl        : Path to student_model.pkl
+    spiral_pt          : Path to spiral_predictor.pt (SpiralLSTM)
+    alert_thresh       : Risk score threshold for early-warning alert
+    personal_threshold : p_emo threshold for stage=2 (stressed).  When None,
+                         the engine tries to load it from the subject's personal
+                         checkpoint; falls back to DEFAULT_PERSONAL_THRESH.
+    subject_id         : Optional subject ID — used to look up per-subject
+                         alert threshold from spiral_report.json and personal
+                         threshold from personal_models/.
     """
 
     def __init__(self,
-                 student_pkl: Path = STUDENT_PKL,
-                 spiral_pt:   Path = SPIRAL_PT,
-                 alert_thresh: float = ALERT_THRESH,
-                 subject_id: int = None):
+                 student_pkl:        Path  = STUDENT_PKL,
+                 spiral_pt:          Path  = SPIRAL_PT,
+                 alert_thresh:       float = ALERT_THRESH,
+                 personal_threshold: float = None,
+                 subject_id:         int   = None,
+                 device_fs:          float = SAMPLING_RATE_HZ):
 
         if not student_pkl.exists():
             raise FileNotFoundError(f"Student model not found: {student_pkl}")
@@ -292,7 +308,7 @@ class StressInferenceEngine:
             raise FileNotFoundError(f"Spiral model not found: {spiral_pt}")
 
         with open(student_pkl, "rb") as f:
-            self.student = pickle.load(f)
+            self.student = _StudentUnpickler(f).load()
         _stype = type(self.student).__name__
         print(f"  [Engine] Loaded student model: {_stype}")
 
@@ -302,7 +318,7 @@ class StressInferenceEngine:
         self.spiral.eval()
         self._opt_thresh = float(ckpt.get("opt_threshold", alert_thresh))
 
-        # Load per-subject thresholds from spiral_report.json when available
+        # Load per-subject alert thresholds from spiral_report.json
         self._per_subject_thresholds: dict = {}
         if SPIRAL_REPORT.exists():
             try:
@@ -311,23 +327,52 @@ class StressInferenceEngine:
                 raw = rpt.get("per_subject_thresholds", {})
                 self._per_subject_thresholds = {int(k): float(v) for k, v in raw.items()}
                 if self._per_subject_thresholds:
-                    print(f"  [Engine] Loaded per-subject thresholds for "
-                          f"{len(self._per_subject_thresholds)} subjects from spiral_report.json")
+                    print(f"  [Engine] Loaded per-subject alert thresholds for "
+                          f"{len(self._per_subject_thresholds)} subjects")
             except Exception as e:
                 print(f"  [Engine] Warning: could not load per-subject thresholds: {e}")
 
-        # Resolve threshold for this subject
+        # Resolve alert threshold for this subject
         if subject_id is not None and subject_id in self._per_subject_thresholds:
             self.alert_thresh = self._per_subject_thresholds[subject_id]
-            print(f"  [Engine] Subject {subject_id}: using per-subject threshold {self.alert_thresh:.4f}")
+            print(f"  [Engine] Subject {subject_id}: alert_thresh={self.alert_thresh:.4f}")
         else:
             self.alert_thresh = self._opt_thresh if self._opt_thresh != ALERT_THRESH else alert_thresh
-            print(f"  [Engine] Using global threshold {self.alert_thresh:.4f}")
+            print(f"  [Engine] Using global alert_thresh={self.alert_thresh:.4f}")
 
+        # Resolve personal threshold (p_emo ≥ threshold → stage=2)
+        if personal_threshold is not None:
+            self.personal_threshold = float(personal_threshold)
+        elif subject_id is not None and PERSONAL_DIR.exists():
+            ckpt_path = PERSONAL_DIR / f"student_subject_{subject_id:03d}.pt"
+            if ckpt_path.exists():
+                try:
+                    pc = torch.load(ckpt_path, map_location="cpu")
+                    self.personal_threshold = float(pc.get("personal_threshold",
+                                                           DEFAULT_PERSONAL_THRESH))
+                    print(f"  [Engine] Subject {subject_id}: "
+                          f"personal_threshold={self.personal_threshold:.4f} (from checkpoint)")
+                except Exception as e:
+                    print(f"  [Engine] Warning: could not load personal checkpoint: {e}")
+                    self.personal_threshold = DEFAULT_PERSONAL_THRESH
+            else:
+                self.personal_threshold = DEFAULT_PERSONAL_THRESH
+        else:
+            self.personal_threshold = DEFAULT_PERSONAL_THRESH
+
+        self.subject_id   = subject_id
+        self._device_fs   = float(device_fs)
         self.norm         = RunningNorm(n_ch=2)   # T7 + T8
         self.buffer       = SpiralBuffer(SEQ_LEN)
         self.epoch_count  = 0
         self._feat_buffer = []   # rolling feature buffer for CNN+BiLSTM student
+
+        # Personal-baseline CUSUM trend detector (see trend_detector.py) —
+        # a genuine, personalized, minutes-scale early-warning signal that
+        # doesn't depend on SpiralLSTM's short, DEAP-trial-label-limited
+        # 10s horizon. Continuously re-personalizes its baseline from this
+        # session's own CALM epochs (online personalization).
+        self.trend_monitor = PersonalTrendMonitor()
 
     def reset(self):
         """Reset between subjects / sessions."""
@@ -335,14 +380,12 @@ class StressInferenceEngine:
         self.buffer       = SpiralBuffer(SEQ_LEN)
         self.epoch_count  = 0
         self._feat_buffer = []
+        self.trend_monitor.reset()
 
     def _mc_risk(self, n_samples: int = 20) -> tuple[float, float]:
         """
         Monte Carlo Dropout estimate of spiral risk and uncertainty.
-
-        Enables dropout layers during inference and runs n_samples forward
-        passes. Returns (mean_risk, std_risk). High std → low confidence.
-        If the spiral model has no dropout, returns (risk, 0.0).
+        Returns (mean_risk, std_risk). High std → low confidence.
         """
         if not self.buffer.ready():
             return 0.0, 0.0
@@ -369,8 +412,9 @@ class StressInferenceEngine:
 
         Returns
         -------
-        dict with keys: epoch, time_s, p_emo, p_pre, p_perc,
-                        risk, alert, stage [, risk_std, confidence]
+        dict with keys: epoch, time_s, p_emo, risk, alert, stage,
+                        trend_score, trend_alarm, calibrating
+                        [, risk_std, confidence]
         """
         if raw_t7t8.shape != (2, EPOCH_SAMPLES):
             raise ValueError(f"Expected (2, {EPOCH_SAMPLES}), got {raw_t7t8.shape}")
@@ -378,33 +422,29 @@ class StressInferenceEngine:
         # Signal chain
         filtered  = bandpass(raw_t7t8)
         normed    = self.norm.update(filtered)
-        features  = extract_student_features(normed, extended=True)  # 30 or 76-dim
+        features  = extract_student_features(normed, extended=True, fs=self._device_fs)
 
         # Handle CNN+BiLSTM (sequence-based) vs flat models
-        from student_model import StudentCNNBiLSTM
         if isinstance(self.student, StudentCNNBiLSTM):
             self._feat_buffer.append(features)
             seq_len = self.student.seq_len
             if len(self._feat_buffer) < seq_len:
-                # Pad with zeros until buffer fills
                 padded = np.zeros((seq_len, features.shape[0]), dtype=np.float32)
                 padded[-len(self._feat_buffer):] = self._feat_buffer
             else:
                 padded = np.array(self._feat_buffer[-seq_len:], dtype=np.float32)
-            p_emo, p_pre, p_perc = self.student.predict_proba(padded[np.newaxis])
+            p_emo_arr = self.student.predict_proba(padded[np.newaxis])
         else:
-            p_emo, p_pre, p_perc = self.student.predict_proba(features.reshape(1, -1))
+            p_emo_arr = self.student.predict_proba(features.reshape(1, -1))
 
-        p_emo  = float(p_emo[0])
-        p_pre  = float(p_pre[0])
-        p_perc = float(p_perc[0])
+        p_emo = float(p_emo_arr[0])
 
         # Spiral buffer + risk score
-        self.buffer.push(p_emo, p_pre, p_perc)
+        self.buffer.push(p_emo)
 
         if mc_samples > 0:
             risk, risk_std = self._mc_risk(mc_samples)
-            confidence = max(0.0, 1.0 - 2.0 * risk_std)   # 1=certain, 0=uncertain
+            confidence = max(0.0, 1.0 - 2.0 * risk_std)
         elif self.buffer.ready():
             with torch.no_grad():
                 risk = float(self.spiral(self.buffer.to_tensor(), calibrate=True)[0])
@@ -415,23 +455,28 @@ class StressInferenceEngine:
 
         alert = risk >= self.alert_thresh
 
-        # Stage: 0=calm, 1=pre-stage build-up, 2=perceived stress
-        if p_perc >= 0.5:
-            stage = 2
-        elif p_pre >= 0.5:
-            stage = 1
-        else:
-            stage = 0
+        # Personal-baseline trend detector: feed it p_emo, tell it whether
+        # this epoch looks CALM so far (i.e. not already at the "stressed"
+        # classification) so it only re-personalizes its baseline from
+        # genuine resting data, never from the stress episode itself.
+        time_s = round(self.epoch_count * EPOCH_STRIDE_S, 2)
+        is_calm_for_baseline = p_emo < self.personal_threshold
+        trend = self.trend_monitor.update(time_s, p_emo, is_calm_for_baseline)
+
+        # Stage: 0=calm, 1=rising risk (spiral 10s risk OR sustained
+        # personal-baseline trend), 2=stressed (personal threshold)
+        stage = 2 if p_emo >= self.personal_threshold else (1 if (alert or trend.trend_alarm) else 0)
 
         result = {
-            "epoch"  : self.epoch_count,
-            "time_s" : round(self.epoch_count * EPOCH_STRIDE_S, 2),
-            "p_emo"  : round(p_emo,  4),
-            "p_pre"  : round(p_pre,  4),
-            "p_perc" : round(p_perc, 4),
-            "risk"   : round(float(risk), 4),
-            "alert"  : alert,
-            "stage"  : stage,
+            "epoch"       : self.epoch_count,
+            "time_s"      : time_s,
+            "p_emo"       : round(p_emo, 4),
+            "risk"        : round(float(risk), 4),
+            "alert"       : alert,
+            "stage"       : stage,
+            "trend_score" : trend.trend_score,
+            "trend_alarm" : trend.trend_alarm,
+            "calibrating" : trend.calibrating,
         }
         if mc_samples > 0:
             result["risk_std"]   = round(float(risk_std), 4)
@@ -454,15 +499,13 @@ def run_simulation(subject_id: int = None, quiet: bool = False):
         sys.exit(1)
 
     d          = np.load(FEATURES_NPZ, allow_pickle=True)
-    F_student  = d["F_student"].astype(np.float32)     # (N, 30)
+    F_student  = d["F_student_ext"].astype(np.float32)
     y_emo      = d["y_emo"].astype(np.int32)
-    y_perc     = d["y_perc"].astype(np.int32)
     source     = d["source"]
     sid        = d["subject_id"].astype(np.int32)
 
     deap_mask = np.array([str(s).lower() == "deap" for s in source])
 
-    # Pick subject
     deap_subjs = np.unique(sid[deap_mask])
     if subject_id is None:
         subject_id = int(deap_subjs[0])
@@ -474,71 +517,60 @@ def run_simulation(subject_id: int = None, quiet: bool = False):
     mask   = deap_mask & (sid == subject_id)
     F_subj = F_student[mask]
     ye     = y_emo[mask]
-    yp     = y_perc[mask]
     N      = len(F_subj)
 
     print(f"\n{'='*60}")
     print(f"  REAL-TIME STRESS INFERENCE — SIMULATION")
     print(f"  Subject: DEAP s{subject_id:02d}  |  {N} epochs  ({N*EPOCH_STRIDE_S:.0f} s)")
-    print(f"  Alert threshold: (subject-specific, loaded after engine init)  "
-          f"|  Lead time: {K_AHEAD*EPOCH_STRIDE_S:.0f} s")
+    print(f"  Lead time: {K_AHEAD*EPOCH_STRIDE_S:.0f} s")
     print(f"{'='*60}\n")
 
     engine = StressInferenceEngine(subject_id=subject_id)
 
-    # Header
     if not quiet:
-        print(f"  {'ep':>5}  {'t(s)':>6}  {'p_emo':>6}  {'p_pre':>6}  "
-              f"{'p_perc':>6}  {'risk':>6}  {'alert':>5}  {'stage':>5}  "
-              f"{'y_emo':>5}  {'y_perc':>5}")
-        print("  " + "-"*75)
+        print(f"  {'ep':>5}  {'t(s)':>6}  {'p_emo':>6}  "
+              f"{'risk':>6}  {'alert':>5}  {'stage':>5}  {'y_emo':>5}")
+        print("  " + "-"*52)
 
     results  = []
     n_alerts = 0
     tp = fp = fn = tn = 0
 
     for i in range(N):
-        # In simulation we pass the stored 30-dim features directly to the student
-        # (bypassing the signal chain — features already extracted and normalised).
-        # This faithfully replays the trained distribution without needing raw EEG.
-        features = F_subj[i].reshape(1, -1)
-        p_emo_a, p_pre_a, p_perc_a = engine.student.predict_proba(features)
-        p_emo  = float(p_emo_a[0])
-        p_pre  = float(p_pre_a[0])
-        p_perc = float(p_perc_a[0])
+        # Bypass signal chain — features already extracted and normalised
+        features  = F_subj[i].reshape(1, -1)
+        p_emo_arr = engine.student.predict_proba(features)
+        p_emo     = float(p_emo_arr[0])
 
-        engine.buffer.push(p_emo, p_pre, p_perc)
+        engine.buffer.push(p_emo)
         if engine.buffer.ready():
             with torch.no_grad():
                 risk = float(engine.spiral(engine.buffer.to_tensor(), calibrate=False)[0])
         else:
             risk = 0.0
 
-        alert = risk >= ALERT_THRESH
-        stage = 2 if p_perc >= 0.5 else (1 if p_pre >= 0.5 else 0)
+        alert = risk >= engine.alert_thresh
+        stage = 2 if p_emo >= engine.personal_threshold else (1 if alert else 0)
 
         if alert: n_alerts += 1
-        if yp[i] == 1 and alert:   tp += 1
-        if yp[i] == 0 and alert:   fp += 1
-        if yp[i] == 1 and not alert: fn += 1
-        if yp[i] == 0 and not alert: tn += 1
+        if ye[i] == 1 and alert:       tp += 1
+        if ye[i] == 0 and alert:       fp += 1
+        if ye[i] == 1 and not alert:   fn += 1
+        if ye[i] == 0 and not alert:   tn += 1
 
         r = {"epoch": i, "time_s": round(i * EPOCH_STRIDE_S, 2),
-             "p_emo": round(p_emo, 4), "p_pre": round(p_pre, 4),
-             "p_perc": round(p_perc, 4), "risk": round(risk, 4),
-             "alert": alert, "stage": stage,
-             "y_emo": int(ye[i]), "y_perc": int(yp[i])}
+             "p_emo": round(p_emo, 4),
+             "risk": round(risk, 4), "alert": alert, "stage": stage,
+             "y_emo": int(ye[i])}
         results.append(r)
         engine.epoch_count += 1
 
         if not quiet:
-            alert_str = "🚨" if alert else "  "
-            stage_str = ["CALM", "PRE ", "STRSS"][stage]
-            print(f"  {i:>5}  {i*EPOCH_STRIDE_S:>6.1f}  {p_emo:>6.3f}  {p_pre:>6.3f}  "
-                  f"{p_perc:>6.3f}  {risk:>6.3f}  {alert_str}  {stage_str}  "
-                  f"{ye[i]:>5}  {yp[i]:>5}")
+            alert_str = "!!" if alert else "  "
+            stage_str = ["CALM", "RISE", "STRSS"][stage]
+            print(f"  {i:>5}  {i*EPOCH_STRIDE_S:>6.1f}  {p_emo:>6.3f}  "
+                  f"{risk:>6.3f}  {alert_str}  {stage_str}  {ye[i]:>5}")
 
-    # Summary
     prec  = tp / max(tp + fp, 1)
     rec   = tp / max(tp + fn, 1)
     f1    = 2 * prec * rec / max(prec + rec, 1e-6)
@@ -547,12 +579,13 @@ def run_simulation(subject_id: int = None, quiet: bool = False):
     print(f"\n{'='*60}")
     print(f"  SIMULATION SUMMARY — DEAP s{subject_id:02d}")
     print(f"{'='*60}")
-    print(f"  Epochs processed : {N}")
-    print(f"  Alerts fired     : {n_alerts}  ({n_alerts/N:.1%})")
-    print(f"  Precision        : {prec:.3f}")
-    print(f"  Recall           : {rec:.3f}")
-    print(f"  F1-score         : {f1:.3f}")
-    print(f"  Specificity      : {spec:.3f}")
+    print(f"  Epochs processed   : {N}")
+    print(f"  Alerts fired       : {n_alerts}  ({n_alerts/N:.1%})")
+    print(f"  Personal threshold : {engine.personal_threshold:.4f}")
+    print(f"  Precision          : {prec:.3f}")
+    print(f"  Recall             : {rec:.3f}")
+    print(f"  F1-score           : {f1:.3f}")
+    print(f"  Specificity        : {spec:.3f}")
     print(f"{'='*60}\n")
 
     return results
