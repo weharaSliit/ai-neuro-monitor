@@ -14,6 +14,8 @@ import { Analysis } from './pages/Analysis';
 import { Toolkit } from './pages/Toolkit';
 import { Profile } from './pages/Profile';
 
+import { EmaSurvey } from './pages/EmaSurvey';
+
 function App() {
     return (
         <ThemeProvider>
@@ -33,6 +35,7 @@ function App() {
                             <Route path="/analysis" element={<Analysis />} />
                             <Route path="/toolkit" element={<Toolkit />} />
                             <Route path="/profile" element={<Profile />} />
+                            <Route path="/ema-survey" element={<EmaSurvey />} />
                         </Routes>
                     </div>
                 </div>

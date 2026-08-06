@@ -29,7 +29,7 @@ def init_firebase():
         firebase_admin.initialize_app(cred, {
             'databaseURL': FIREBASE_DB_URL
         })
-    print(f"Firebase initialized for {NAMESPACE} ✓")
+    print(f"[OK] Firebase initialized for {NAMESPACE}")
 
 # --- USER & BASELINE OPERATIONS (Objective 2) ---
 
@@ -53,6 +53,33 @@ def get_user_baselines(user_id):
 def update_user_baselines(user_id, updated_baselines):
     """Saves the EMA-updated baselines back to Firebase."""
     _ref(f'users/{user_id}/baselines').update(updated_baselines)
+
+def get_calibration_windows(user_id):
+    """
+    Retrieves all stored behavioral windows for a user from data_logs.
+    Used by /behavior/calibrate to compute the initial 7-day baseline.
+    Returns a list of window feature dicts (only data_valid=True windows).
+    """
+    raw = _ref(f'data_logs/{user_id}').get()
+    if not raw:
+        return []
+    # Filter: only include windows where data_valid was True (user was stationary)
+    valid_windows = [
+        window for window in raw.values()
+        if isinstance(window, dict) and window.get('data_valid', True)
+    ]
+    return valid_windows
+
+def set_user_calibration_status(user_id, is_calibrated, window_count=0):
+    """
+    Updates the calibration status flag for a user profile.
+    Called after the 7-day baseline has been successfully computed.
+    """
+    _ref(f'users/{user_id}').update({
+        'is_calibrated': is_calibrated,
+        'calibration_window_count': window_count,
+        'calibrated_at': datetime.now().isoformat()
+    })
 
 # --- DATA INGESTION (Objective 3) ---
 
@@ -79,6 +106,28 @@ def save_stress_prediction(user_id, result):
         'stress_score': result['score'],
         'is_anomaly': result['is_anomaly']
     })
+
+def get_latest_stress_prediction(user_id):
+    """
+    T7-B: Returns the most recent stress prediction for a user.
+    Used by the /behavior/stress-summary endpoint so the neuroadaptive
+    guidance module can query the current behavioral stress state.
+
+    Returns a dict like:
+        { 'label': 'Pre-Stress (Digital Phenotype detected)',
+          'stress_score': 0.6,
+          'is_anomaly': True,
+          'timestamp': '2026-08-02T14:30:00' }
+    Returns None if no predictions exist yet for this user.
+    """
+    raw = _ref(f'predictions/{user_id}').get()
+    if not raw:
+        return None
+    # Firebase push-keys are lexicographically ordered by time,
+    # so the last entry when sorted by key is the most recent.
+    sorted_entries = sorted(raw.items(), key=lambda kv: kv[0])
+    _, latest = sorted_entries[-1]
+    return latest
 
 def save_validation_label(user_id, label_type, score):
     """

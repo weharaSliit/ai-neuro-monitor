@@ -43,6 +43,10 @@ dependencies {
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
+
+    // T7-A: Activity Recognition — noise gate for behavioral data collection
+    // play-services-location bundles ActivityRecognitionClient (no separate artifact needed)
+    implementation 'com.google.android.gms:play-services-location:21.3.0'
 }
 
 apply from: 'capacitor.build.gradle'

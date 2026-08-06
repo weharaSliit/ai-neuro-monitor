@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useTheme } from '../context/ThemeContext';
 import { BottomNav } from '../components/BottomNav';
-import { Wind, BookOpen, Lightbulb, ChevronRight, Pause, Play, RotateCcw } from 'lucide-react';
+import { Wind, BookOpen, Lightbulb, ChevronRight, Pause, Play, RotateCcw, AlertTriangle } from 'lucide-react';
+import { db } from '../firebase';
+import { ref, onValue, query, limitToLast } from 'firebase/database';
+import { PHENOTYPING_USER_ID } from './PhenotypingDashboard';
 
 const DID_YOU_KNOW = [
     { emoji: '⌨️', fact: 'Your typing speed drops 15–20% before you consciously feel stressed (Gjoreski et al., 2017).' },
@@ -25,11 +28,37 @@ export function Toolkit() {
     const [activeSection, setActiveSection] = useState(null);
     const [moodSelected, setMoodSelected] = useState(null);
     const [moodSaved, setMoodSaved] = useState(false);
-    const [breathPhase, setBreathPhase] = useState('idle'); // idle, inhale, hold, exhale
+    const [breathPhase, setBreathPhase] = useState('idle');
     const [breathTimer, setBreathTimer] = useState(0);
     const [breathRunning, setBreathRunning] = useState(false);
     const [factIndex, setFactIndex] = useState(0);
     const breathRef = useRef(null);
+
+    // T7-B: Live stress state from Firebase → auto-suggest guidance
+    const [stressAlert, setStressAlert] = useState(null); // null | { score, label, action }
+    const [alertDismissed, setAlertDismissed] = useState(false);
+
+    useEffect(() => {
+        const predictionsRef = query(
+            ref(db, `phenotyping/predictions/${PHENOTYPING_USER_ID}`),
+            limitToLast(1)
+        );
+        const unsub = onValue(predictionsRef, (snap) => {
+            const val = snap.val();
+            if (!val) return;
+            const latest = Object.values(val)[0];
+            const score = latest?.stress_score ?? 0;
+
+            if (score > 0.5) {
+                const action = score >= 0.7 ? 'mindfulness' : 'breathing';
+                setStressAlert({ score, label: latest.label, action });
+                setAlertDismissed(false); // reset so banner re-shows on new spike
+            } else {
+                setStressAlert(null);
+            }
+        });
+        return () => unsub();
+    }, []);
 
     // Breathing exercise logic
     useEffect(() => {
@@ -97,6 +126,52 @@ export function Toolkit() {
                 <h1 className={`text-xl font-bold ${t.text} mb-1`}>Toolkit</h1>
                 <p className={`text-xs ${t.textMuted}`}>Self-care tools and stress management</p>
             </div>
+
+            {/* T7-B: Stress-triggered guidance banner */}
+            {stressAlert && !alertDismissed && (
+                <div
+                    className={`mx-5 mb-3 p-4 rounded-2xl border animate-fade-in-up ${
+                        isDark ? 'bg-[#1a1228] border-[#7c6bf7]/40' : 'bg-indigo-50 border-indigo-300'
+                    }`}
+                    style={{ boxShadow: isDark ? '0 0 24px rgba(124,107,247,0.12)' : 'none' }}
+                >
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                        <div className="flex items-center gap-2">
+                            <AlertTriangle size={15} className="text-[#f59e0b] shrink-0 mt-0.5" />
+                            <span className={`text-xs font-bold ${
+                                isDark ? 'text-[#c0c0d8]' : 'text-indigo-800'
+                            }`}>
+                                Pre-stress detected by PhenoCare
+                            </span>
+                        </div>
+                        <button
+                            onClick={() => setAlertDismissed(true)}
+                            className={`text-[10px] font-bold ${t.textDim} shrink-0`}
+                        >
+                            ✕
+                        </button>
+                    </div>
+                    <p className={`text-[11px] leading-relaxed mb-3 ${
+                        isDark ? 'text-gray-400' : 'text-indigo-700/80'
+                    }`}>
+                        Your behavioral signals show stress score&nbsp;
+                        <strong>{Math.round(stressAlert.score * 100)}/100</strong>.
+                        {stressAlert.action === 'breathing'
+                            ? ' A short breathing exercise can help reset your focus.'
+                            : ' Consider a mindfulness break — your readings are significantly elevated.'}
+                    </p>
+                    <button
+                        onClick={() => {
+                            setAlertDismissed(true);
+                            setBreathRunning(true); // auto-start breathing exercise
+                        }}
+                        className="flex items-center gap-1.5 text-[11px] font-bold text-[#7c6bf7] active:opacity-70"
+                    >
+                        <Wind size={13} />
+                        Start breathing exercise now →
+                    </button>
+                </div>
+            )}
 
             <div className="px-5 flex-1 stagger-children">
                 {/* Breathing Exercise */}

@@ -5,6 +5,7 @@ import { SignalDetailCard } from '../components/SignalDetailCard';
 import { BottomNav } from '../components/BottomNav';
 import { useTheme } from '../context/ThemeContext';
 import { Loader2 } from 'lucide-react';
+import { PHENOTYPING_USER_ID } from './PhenotypingDashboard';
 
 // Mock data generators for the 2 new signals
 function generateMockBars(count = 10, min = 20, max = 80) {
@@ -18,7 +19,7 @@ export function DigitalSignals() {
     const { t, isDark } = useTheme();
     const [metrics, setMetrics] = useState(null);
     const [loading, setLoading] = useState(true);
-    const userId = 'demo_user_123';
+    const userId = PHENOTYPING_USER_ID;
 
     useEffect(() => {
         const metricsRef = ref(db, `phenotyping/data_logs/${userId}`);
@@ -79,12 +80,14 @@ export function DigitalSignals() {
                     {
                         signalId: 'activity',
                         title: '🚶 Activity Context',
-                        value: 'Stationary',
-                        subtext: 'Physical activity detection & noise gate',
-                        colorClass: 'bg-emerald-500',
+                        value: latest.data_valid === false ? 'In motion' : 'Stationary',
+                        subtext: latest.data_valid === false
+                            ? 'Motion detected — window excluded from baseline'
+                            : 'Physical activity detection & noise gate',
+                        colorClass: latest.data_valid === false ? 'bg-orange-500' : 'bg-emerald-500',
                         bars: generateMockBars(10, 60, 95),
                         trend: null,
-                        status: 'normal',
+                        status: latest.data_valid === false ? 'elevated' : 'normal',
                     }
                 );
             } else {
