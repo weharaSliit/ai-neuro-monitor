@@ -41,6 +41,13 @@ MLP_LR        = 1e-3
 MLP_BATCH     = 256
 MLP_FOCAL_G   = 2.0    # focal loss gamma — down-weights easy negatives
 
+MLP_KD_ALPHA  = 0.5    # weight on hard-label focal loss
+MLP_KD_BETA   = 0.5    # weight on teacher soft-label KL distillation loss
+MLP_KD_GAMMA  = 0.3    # weight on teacher hidden-feature matching loss
+KD_EPS        = 1e-6   # clipping for the KL-divergence log terms
+
+TEACHER_FEAT_DIM = 256  # CNN+BiLSTM teacher's post-BiLSTM hidden size (lstm_hidden*2)
+
 CNN_HIDDEN    = 64     # BiLSTM hidden units (x2 bidirectional)
 CNN_DROPOUT   = 0.35
 CNN_EPOCHS    = 80
@@ -94,15 +101,25 @@ def _synthetic_data():
 
 
 def load_soft_logits(soft_dir=SOFT_DIR):
-    """Load soft logits from teacher (emo only)."""
+    """
+    Load soft logits from teacher (emo only), plus the teacher's hidden
+    feature representation if available (written by
+    teacher_model.py's --ensemble mode) for feature-level distillation.
+    teacher_features is None if that file doesn't exist — older
+    soft_logits directories (probability-only distillation) still work.
+    """
     soft_dir = Path(soft_dir)
     for f in ["soft_emo.npy", "y_emo.npy", "source.npy"]:
         if not (soft_dir / f).exists():
             raise FileNotFoundError(
                 f"Missing: {soft_dir / f}\nRun teacher_model.py first.")
+    feat_path = soft_dir / "teacher_features.npy"
+    teacher_features = (np.load(feat_path).astype(np.float32)
+                         if feat_path.exists() else None)
     return (np.load(soft_dir / "soft_emo.npy").astype(np.float32),
             np.load(soft_dir / "y_emo.npy").astype(np.int64),
-            np.load(soft_dir / "source.npy", allow_pickle=True))
+            np.load(soft_dir / "source.npy", allow_pickle=True),
+            teacher_features)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -164,6 +181,44 @@ def _focal_loss_mlp(pred, target, gamma=MLP_FOCAL_G):
     return ((1.0 - p_t) ** gamma * bce).mean()
 
 
+def _temp_scale(p, T, eps=1e-7):
+    """Apply temperature T to a probability array via its logit. Kept local
+    (not imported from teacher_model.py) so student_model.pkl stays loadable
+    standalone at live-inference time without pulling in the teacher module."""
+    p = np.asarray(p, dtype=np.float64)
+    lo = np.log(np.clip(p, eps, 1 - eps)) - np.log(np.clip(1 - p, eps, 1 - eps))
+    return (1 / (1 + np.exp(-lo / T))).astype(np.float32)
+
+
+def _fit_temperature(p, y_true, t_bounds=(0.3, 10.0)):
+    """Find T minimizing binary cross-entropy of temperature-scaled p
+    against y_true — the same post-hoc calibration technique already used
+    for the teacher ensemble and SpiralLSTM."""
+    from scipy.optimize import minimize_scalar
+    eps = 1e-7
+    y_true = np.asarray(y_true, dtype=np.float64)
+
+    def nll(T):
+        ps = np.clip(_temp_scale(p, T), eps, 1 - eps)
+        return -np.mean(y_true * np.log(ps) + (1 - y_true) * np.log(1 - ps))
+
+    res = minimize_scalar(nll, bounds=t_bounds, method="bounded")
+    return float(res.x), float(res.fun)
+
+
+def _kd_kl_loss(student_prob, teacher_prob, eps=KD_EPS):
+    """
+    Knowledge-distillation loss: binary KL(teacher || student) between the
+    teacher's temperature-scaled soft probability and the student's own
+    predicted probability. Gradients flow only through student_prob — this
+    is what actually pulls the student's decision boundary toward the
+    teacher's, on top of the hard-label focal loss.
+    """
+    p = teacher_prob.clamp(eps, 1.0 - eps)
+    q = student_prob.clamp(eps, 1.0 - eps)
+    return (p * torch.log(p / q) + (1.0 - p) * torch.log((1.0 - p) / (1.0 - q))).mean()
+
+
 def _balanced_sampler(y: np.ndarray):
     """WeightedRandomSampler that gives each class equal expected frequency."""
     n_pos = max(int(y.sum()), 1)
@@ -178,12 +233,27 @@ class StudentMLP(nn.Module):
     """
     Single-head compact MLP student (T7+T8, 30/76-dim input, y_emo only).
 
-    Architecture: trunk (n_feat→64→64) + sigmoid head_emo.
-    Trained with focal loss + WeightedRandomSampler.
-    Scaler stored inside the object so pickle is self-contained.
+    Architecture: trunk (n_feat→64→64) + sigmoid head_emo, plus a
+    feat_proj (hidden→TEACHER_FEAT_DIM) head used only during training for
+    feature-level distillation (discarded at inference — predict_proba
+    never touches it).
+
+    Trained with L_total = alpha*L_hard + beta*L_KD + gamma*L_feat:
+      L_hard  — focal loss on the ground-truth label
+      L_KD    — binary KL(teacher || student) against the teacher's
+                temperature-scaled soft probability (see _kd_kl_loss)
+      L_feat  — MSE between the teacher's frozen hidden representation and
+                the student's own trunk output, projected up to the same
+                dimensionality (multi-level distillation, not just
+                probability matching)
+    Falls back gracefully: hard-only if no soft_emo given, hard+KD-only if
+    soft_emo given but no teacher_features. WeightedRandomSampler handles
+    class imbalance throughout. Scaler stored inside the object so pickle
+    is self-contained.
     """
 
-    def __init__(self, n_feat=N_FEAT_FLAT, hidden=MLP_HIDDEN, dropout=MLP_DROPOUT):
+    def __init__(self, n_feat=N_FEAT_FLAT, hidden=MLP_HIDDEN, dropout=MLP_DROPOUT,
+                 teacher_feat_dim=TEACHER_FEAT_DIM):
         super().__init__()
         self.n_feat = n_feat
         self.scaler = StandardScaler()
@@ -193,31 +263,74 @@ class StudentMLP(nn.Module):
             nn.Linear(hidden, hidden),
             nn.BatchNorm1d(hidden), nn.ReLU(), nn.Dropout(dropout),
         )
-        self.head_emo = nn.Linear(hidden, 1)
+        self.head_emo  = nn.Linear(hidden, 1)
+        self.feat_proj = nn.Linear(hidden, teacher_feat_dim)
+        # post-hoc calibration temperature — 1.0 is a no-op (uncalibrated),
+        # set by calibrate() on a held-out split after training. Not a
+        # torch Parameter: fit by 1-D scalar search (see calibrate()), not
+        # gradient descent, so a plain float is enough and keeps old
+        # pickled models (without this attribute) loadable via getattr.
+        self.temperature = 1.0
+
+    def _trunk_and_pred(self, x):
+        feat = self.trunk(x)
+        pred = torch.sigmoid(self.head_emo(feat)).squeeze(1)
+        return feat, pred
 
     def forward(self, x):
-        return torch.sigmoid(self.head_emo(self.trunk(x))).squeeze(1)
+        return self._trunk_and_pred(x)[1]
 
-    def fit(self, X, ye, soft_emo=None):
+    def fit(self, X, ye, soft_emo=None, teacher_features=None,
+            alpha=MLP_KD_ALPHA, beta=MLP_KD_BETA, gamma=MLP_KD_GAMMA):
         self.scaler.fit(X)
         X_sc = self.scaler.transform(X).astype(np.float32)
         self.to(DEVICE)
         sampler = _balanced_sampler(ye)
-        ds = torch.utils.data.TensorDataset(
+
+        use_kd   = soft_emo is not None
+        use_feat = use_kd and teacher_features is not None
+        tensors = [
             torch.tensor(X_sc, dtype=torch.float32),
             torch.tensor(ye, dtype=torch.float32),
-        )
+        ]
+        if use_kd:
+            tensors.append(torch.tensor(soft_emo, dtype=torch.float32))
+        if use_feat:
+            tensors.append(torch.tensor(teacher_features, dtype=torch.float32))
+        ds = torch.utils.data.TensorDataset(*tensors)
         loader = torch.utils.data.DataLoader(ds, batch_size=MLP_BATCH, sampler=sampler)
         opt = torch.optim.Adam(self.parameters(), lr=MLP_LR, weight_decay=1e-5)
         sch = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=MLP_EPOCHS)
-        print(f"  [StudentMLP hidden={MLP_HIDDEN}] emo head "
+
+        if use_feat:
+            mode = f"hard+KD+feature loss (alpha={alpha}, beta={beta}, gamma={gamma})"
+        elif use_kd:
+            mode = f"hard+KD loss (alpha={alpha}, beta={beta})"
+        else:
+            mode = "hard-only focal loss (no teacher soft labels supplied)"
+        print(f"  [StudentMLP hidden={MLP_HIDDEN}] emo head, {mode} "
               f"(pos={int(ye.sum()):,} = {ye.mean():.1%}) ...")
         self.train()
         for _ in range(MLP_EPOCHS):
-            for Xb, yb in loader:
+            for batch in loader:
+                idx = 2
+                Xb, yb = batch[0], batch[1]
+                sb = fb = None
+                if use_kd:
+                    sb = batch[idx].to(DEVICE); idx += 1
+                if use_feat:
+                    fb = batch[idx].to(DEVICE); idx += 1
                 Xb, yb = Xb.to(DEVICE), yb.to(DEVICE)
+
                 opt.zero_grad()
-                _focal_loss_mlp(self(Xb), yb).backward()
+                feat, pred = self._trunk_and_pred(Xb)
+                loss = _focal_loss_mlp(pred, yb)
+                if use_kd:
+                    loss = alpha * loss + beta * _kd_kl_loss(pred, sb)
+                if use_feat:
+                    feat_loss = nn.functional.mse_loss(self.feat_proj(feat), fb)
+                    loss = loss + gamma * feat_loss
+                loss.backward()
                 opt.step()
             sch.step()
         self.cpu()
@@ -227,8 +340,25 @@ class StudentMLP(nn.Module):
         self.eval()
         X_sc = self.scaler.transform(X).astype(np.float32)
         with torch.no_grad():
-            p = self(torch.tensor(X_sc))
-        return p.numpy().astype(np.float32)
+            p = self(torch.tensor(X_sc)).numpy().astype(np.float32)
+        T = getattr(self, "temperature", 1.0)   # getattr: old pickles predate this attr
+        if T != 1.0:
+            p = _temp_scale(p, T)
+        return p
+
+    def calibrate(self, X_val, y_val):
+        """
+        Post-hoc temperature calibration on a held-out validation split
+        (must NOT be the final test split, to avoid contaminating the
+        reported test metrics). Same NLL-minimization technique already
+        used for the teacher ensemble and SpiralLSTM — sets self.temperature,
+        applied automatically by predict_proba from then on.
+        """
+        self.temperature = 1.0                  # fit against raw, uncalibrated probs
+        p_raw = self.predict_proba(X_val)
+        T, nll = _fit_temperature(p_raw, y_val)
+        self.temperature = T
+        return T, nll
 
     def predict(self, X, threshold=0.5):
         return (self.predict_proba(X) >= threshold).astype(int)
@@ -400,10 +530,29 @@ def find_optimal_threshold(probs, y_true, metric="f1_pos"):
     return float(best_t), float(best_s)
 
 
+def _ece_and_brier(probs, y_true, n_bins=10):
+    """Expected Calibration Error (equal-width bins) + Brier score."""
+    probs = np.asarray(probs, dtype=np.float64)
+    y_true = np.asarray(y_true, dtype=np.float64)
+    brier = float(np.mean((probs - y_true) ** 2))
+    bin_edges = np.linspace(0, 1, n_bins + 1)
+    bin_ids = np.clip(np.digitize(probs, bin_edges[1:-1]), 0, n_bins - 1)
+    n = len(probs)
+    ece = 0.0
+    for b in range(n_bins):
+        mask = bin_ids == b
+        if mask.sum() == 0:
+            continue
+        ece += (mask.sum() / n) * abs(y_true[mask].mean() - probs[mask].mean())
+    return float(ece), brier
+
+
 def evaluate_student(model, X_te, ye_te, tag="Student"):
     """
     Single-head evaluation (y_emo only).
-    Reports ROC-AUC and PR-AUC (average precision).
+    Reports ROC-AUC, PR-AUC (average precision), and calibration (ECE,
+    Brier — using predict_proba's output as-is, so already reflects
+    StudentMLP.temperature if calibrate() was called beforehand).
     """
     p_emo = model.predict_proba(X_te)
 
@@ -413,6 +562,7 @@ def evaluate_student(model, X_te, ye_te, tag="Student"):
 
     thr, _ = find_optimal_threshold(p_emo, ye_te, "f1_pos")
     pred   = (p_emo >= thr).astype(int)
+    ece, brier = _ece_and_brier(p_emo, ye_te)
     results = {
         "emo": {
             "accuracy"          : float(accuracy_score(ye_te, pred)),
@@ -421,6 +571,9 @@ def evaluate_student(model, X_te, ye_te, tag="Student"):
             "f1_pos"            : float(f1_score(ye_te, pred, pos_label=1, zero_division=0)),
             "auc_roc"           : float(roc_auc_score(ye_te, p_emo)),
             "auc_pr"            : float(average_precision_score(ye_te, p_emo)),
+            "ece"               : ece,
+            "brier"             : brier,
+            "temperature"       : float(getattr(model, "temperature", 1.0)),
             "threshold"         : thr,
             "n"                 : int(len(ye_te)),
             "pos_rate"          : float(ye_te.mean()),
@@ -428,10 +581,12 @@ def evaluate_student(model, X_te, ye_te, tag="Student"):
     }
     m = results["emo"]
     print(f"\n  [{tag}]")
-    print(f"  {'Head':<6} {'Acc':>6} {'BalAcc':>7} {'F1+':>6} {'ROC-AUC':>8} {'PR-AUC':>7} {'PosRate':>8}")
-    print("  " + "─" * 54)
+    print(f"  {'Head':<6} {'Acc':>6} {'BalAcc':>7} {'F1+':>6} {'ROC-AUC':>8} {'PR-AUC':>7} "
+          f"{'ECE':>6} {'Brier':>6} {'PosRate':>8}")
+    print("  " + "─" * 70)
     print(f"  {'emo':<6} {m['accuracy']:.4f} {m['balanced_accuracy']:.4f} "
-          f"{m['f1_pos']:.4f}  {m['auc_roc']:.4f}   {m['auc_pr']:.4f}  {m['pos_rate']:.2%}")
+          f"{m['f1_pos']:.4f}  {m['auc_roc']:.4f}   {m['auc_pr']:.4f}  "
+          f"{m['ece']:.4f} {m['brier']:.4f}  {m['pos_rate']:.2%}")
     return results
 
 
@@ -443,9 +598,10 @@ def run_student_pipeline(npz_path=None, soft_dir=SOFT_DIR,
                          model_type="mlp", use_extended=False):
     model_type = model_type.lower()
     _labels = {
-        "mlp":        f"MLP (hidden={MLP_HIDDEN}, focal-loss, gamma={MLP_FOCAL_G})",
-        "knn":        f"KNN (k={KNN_K}, ball_tree)",
-        "cnn_bilstm": f"CNN+BiLSTM (hidden={CNN_HIDDEN}, seq={CNN_SEQ_LEN}, focal-loss)",
+        "mlp":        f"MLP (hidden={MLP_HIDDEN}, focal_gamma={MLP_FOCAL_G}, "
+                      f"KD alpha={MLP_KD_ALPHA}/beta={MLP_KD_BETA}/feat_gamma={MLP_KD_GAMMA})",
+        "knn":        f"KNN (k={KNN_K}, ball_tree, distilled via weighted resampling)",
+        "cnn_bilstm": f"CNN+BiLSTM (hidden={CNN_HIDDEN}, seq={CNN_SEQ_LEN}, focal-loss, no KD)",
     }
     label     = _labels.get(model_type, model_type)
     feat_desc = "76-dim extended" if use_extended else "30-dim base"
@@ -459,13 +615,19 @@ def run_student_pipeline(npz_path=None, soft_dir=SOFT_DIR,
     X, y_emo, sid, source = load_student_data(npz_path, use_extended=use_extended)
 
     print("\n[2] Loading teacher soft logits")
-    soft_emo, _, _ = load_soft_logits(soft_dir)
+    soft_emo, _, _, teacher_feat = load_soft_logits(soft_dir)
     n = min(len(X), len(soft_emo))
     if len(X) != len(soft_emo):
         print(f"  Size mismatch — trimming to {n}")
     X        = X[:n];        y_emo    = y_emo[:n]
     sid      = sid[:n];      source   = source[:n]
     soft_emo = soft_emo[:n]
+    if teacher_feat is not None:
+        teacher_feat = teacher_feat[:n]
+        print(f"  Teacher hidden features available: {teacher_feat.shape} "
+              f"(feature-level distillation enabled)")
+    else:
+        print("  No teacher_features.npy found — probability-only distillation")
 
     print("\n[3] Subject-stratified split (80/20)")
     gss = GroupShuffleSplit(1, test_size=TEST_SIZE, random_state=RANDOM_STATE)
@@ -473,9 +635,20 @@ def run_student_pipeline(npz_path=None, soft_dir=SOFT_DIR,
     X_tr, X_te   = X[tr],      X[te]
     ye_tr, ye_te = y_emo[tr],  y_emo[te]
     se_tr        = soft_emo[tr]
+    tf_tr        = teacher_feat[tr] if teacher_feat is not None else None
     src_tr       = source[tr]
     print(f"  Train:{len(tr):,} ({len(np.unique(sid[tr]))} subj)  "
           f"Test:{len(te):,} ({len(np.unique(sid[te]))} subj)")
+
+    # further split off a calibration set from TRAIN only (never test) —
+    # temperature is fit here so the final test-set metrics stay unbiased
+    gss_cal = GroupShuffleSplit(1, test_size=0.15, random_state=RANDOM_STATE)
+    fit_i, calib_i = next(gss_cal.split(X_tr, ye_tr, groups=sid[tr]))
+    X_fit, ye_fit   = X_tr[fit_i],   ye_tr[fit_i]
+    se_fit          = se_tr[fit_i]
+    tf_fit          = tf_tr[fit_i] if tf_tr is not None else None
+    X_calib, ye_calib = X_tr[calib_i], ye_tr[calib_i]
+    print(f"  Fit:{len(fit_i):,}  Calibration:{len(calib_i):,} (carved out of train)")
 
     if model_type == "cnn_bilstm":
         print(f"\n[4] Building epoch sequences (seq_len={CNN_SEQ_LEN})")
@@ -493,7 +666,11 @@ def run_student_pipeline(npz_path=None, soft_dir=SOFT_DIR,
     if model_type == "mlp":
         print(f"\n[4] Training MLP student")
         model = StudentMLP(n_feat=X.shape[1])
-        model.fit(X_tr, ye_tr, soft_emo=se_tr)
+        model.fit(X_fit, ye_fit, soft_emo=se_fit, teacher_features=tf_fit)
+
+        print("\n[4b] Post-hoc temperature calibration (on held-out calibration split)")
+        T_cal, nll_cal = model.calibrate(X_calib, ye_calib)
+        print(f"  Calibrated temperature={T_cal:.3f}  (calib NLL={nll_cal:.4f})")
 
     elif model_type == "knn":
         print("\n[4] Training KNN student")

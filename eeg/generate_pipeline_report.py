@@ -878,7 +878,7 @@ def build_report():
 
     pdf.sub_section("9.2  MQTT Interface")
     pdf.kv_block([
-        ("Broker",          "192.168.1.2  (configurable via BROKER constant)"),
+        ("Broker",          "192.168.1.5  (configurable via BROKER constant)"),
         ("Topic",           "eeg/t7t8/raw"),
         ("Payload format",  "timestamp_ms,ch1,ch2   (comma-separated ASCII integers)"),
         ("QoS",             "0  (fire-and-forget — latency over reliability)"),

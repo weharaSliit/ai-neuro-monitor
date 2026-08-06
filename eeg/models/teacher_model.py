@@ -494,6 +494,185 @@ def save_soft_logits(model, X, y_emo, source, save_dir=None, T=TEMPERATURE):
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  TEACHER ENSEMBLE  (stronger teacher = weighted combination of the
+#  three individually-weak teachers, rather than a single new architecture)
+# ═══════════════════════════════════════════════════════════════════
+
+def _temp_scale(p, T, eps=1e-7):
+    """Apply temperature T to a probability array via the logit."""
+    lo = np.log(np.clip(p, eps, 1 - eps)) - np.log(np.clip(1 - p, eps, 1 - eps))
+    return (1 / (1 + np.exp(-lo / T))).astype(np.float32)
+
+
+def optimize_temperature(p, y_true, t_bounds=(0.3, 10.0)):
+    """
+    Adaptive temperature optimization (replaces the fixed T=4.0): find the T
+    that minimizes binary cross-entropy of the temperature-scaled
+    probabilities against true labels on a held-out validation split —
+    i.e. post-hoc calibration, same idea as spiral_predictor.py's
+    calibrate_temperature but as a simple 1-D scalar search since there's
+    no network to backprop through here.
+    """
+    from scipy.optimize import minimize_scalar
+    eps = 1e-7
+
+    def nll(T):
+        ps = _temp_scale(p, T)
+        ps = np.clip(ps, eps, 1 - eps)
+        return -np.mean(y_true * np.log(ps) + (1 - y_true) * np.log(1 - ps))
+
+    res = minimize_scalar(nll, bounds=t_bounds, method="bounded")
+    return float(res.x), float(res.fun)
+
+
+class TeacherEnsemble:
+    """
+    Validation-AUC-weighted ensemble of the three trained teachers.
+    Rationale (item 1 of the future-work list): distillation only transfers
+    useful knowledge when the teacher meaningfully outperforms the student;
+    no single existing teacher does (CNN+BiLSTM AUC ~0.63, about equal to
+    the student). Combining all three — weighted toward whichever is
+    actually discriminative on held-out subjects — is a stronger, still
+    fully-trained-and-verified teacher signal without inventing an
+    unvalidated new architecture from scratch.
+
+    Weights: w_i ∝ max(auc_i - 0.5, floor), i.e. a teacher no better than
+    chance gets ~zero weight rather than diluting the ensemble.
+    """
+
+    def __init__(self, svm, eegnet, cnn_bilstm, weights: dict):
+        self.svm = svm
+        self.eegnet = eegnet
+        self.cnn_bilstm = cnn_bilstm
+        self.weights = weights   # {"svm":.., "eegnet":.., "cnn_bilstm":..}
+
+    @staticmethod
+    def compute_weights(auc_svm, auc_eegnet, auc_cnn_bilstm, floor=0.01):
+        raw = {
+            "svm":        max(auc_svm - 0.5, floor),
+            "eegnet":     max(auc_eegnet - 0.5, floor),
+            "cnn_bilstm": max(auc_cnn_bilstm - 0.5, floor),
+        }
+        total = sum(raw.values())
+        return {k: v / total for k, v in raw.items()}
+
+    def predict_proba(self, X_feat, X_raw):
+        """X_feat: (E,480) for SVM.  X_raw: (E,32,256) for EEGNet/CNN+BiLSTM."""
+        p_svm = self.svm.predict_proba(X_feat)
+        p_egn = self.eegnet.predict_proba(X_raw)
+        p_cbl = self.cnn_bilstm.predict_proba(X_raw)
+        return (self.weights["svm"] * p_svm +
+                self.weights["eegnet"] * p_egn +
+                self.weights["cnn_bilstm"] * p_cbl).astype(np.float32)
+
+    def teacher_features(self, X_raw):
+        """
+        Penultimate hidden representation for feature-level distillation
+        (item 2 of the future-work list) — taken from the strongest single
+        teacher (CNN+BiLSTM, 256-dim post-BiLSTM state), since the SVM has
+        no comparable hidden representation and EEGNet's conv-flatten
+        features aren't dimensionally consistent with it.
+        """
+        self.cnn_bilstm.eval()
+        X_t = self.cnn_bilstm._prepare_tensor(X_raw)
+        feats = []
+        with torch.no_grad():
+            for i in range(0, len(X_t), DEEP_BATCH):
+                feats.append(self.cnn_bilstm._features(X_t[i:i + DEEP_BATCH]).numpy())
+        return np.concatenate(feats).astype(np.float32)
+
+
+def build_teacher_ensemble(npz_path=None):
+    """
+    Load the three already-trained teacher checkpoints, evaluate each on
+    the shared held-out subject split to derive ensemble weights, then
+    return a fitted TeacherEnsemble. Does not retrain any individual
+    teacher — this only combines what's already trained and verified.
+    """
+    print(f"\n{'=' * 62}")
+    print("  TEACHER ENSEMBLE — weighted combination of SVM/EEGNet/CNN+BiLSTM")
+    print(f"{'=' * 62}")
+
+    print("\n[1] Loading trained teacher checkpoints")
+    svm        = TeacherSVM.load(MODELS_DIR / "teacher_svm.pkl")
+    eegnet     = EEGNetTeacher.load(MODELS_DIR / "teacher_eegnet.pkl")
+    cnn_bilstm = CNNBiLSTMTeacher.load(MODELS_DIR / "teacher_cnn_bilstm.pkl")
+
+    print("\n[2] Loading feature + raw datasets (must be row-aligned)")
+    X_feat, ye_f, sid_f, src_f = load_teacher_data(npz_path)
+    X_raw,  ye_r, sid_r, src_r = load_teacher_data_raw(
+        npz_path.parent / "normalized_dataset.npz" if npz_path else None
+    )
+    assert len(X_feat) == len(X_raw), "feature/raw dataset length mismatch"
+    assert np.array_equal(ye_f, ye_r), "feature/raw dataset label mismatch — not row-aligned"
+
+    print("\n[3] Evaluating each teacher on the shared held-out split")
+    gss = GroupShuffleSplit(1, test_size=TEST_SIZE, random_state=RANDOM_STATE)
+    tr, te = next(gss.split(X_feat, ye_f, groups=sid_f))
+
+    auc_svm = roc_auc_score(ye_f[te], svm.predict_proba(X_feat[te]))
+    auc_egn = roc_auc_score(ye_r[te], eegnet.predict_proba(X_raw[te]))
+    auc_cbl = roc_auc_score(ye_r[te], cnn_bilstm.predict_proba(X_raw[te]))
+    print(f"  SVM        AUC={auc_svm:.4f}")
+    print(f"  EEGNet     AUC={auc_egn:.4f}")
+    print(f"  CNN+BiLSTM AUC={auc_cbl:.4f}")
+
+    weights = TeacherEnsemble.compute_weights(auc_svm, auc_egn, auc_cbl)
+    print(f"  Ensemble weights: {weights}")
+
+    ensemble = TeacherEnsemble(svm, eegnet, cnn_bilstm, weights)
+
+    p_ens_val = ensemble.predict_proba(X_feat[te], X_raw[te])
+    auc_ens = roc_auc_score(ye_f[te], p_ens_val)
+    print(f"  Ensemble   AUC={auc_ens:.4f}  "
+          f"(best single teacher was {max(auc_svm, auc_egn, auc_cbl):.4f})")
+
+    return ensemble, (X_feat, X_raw, ye_f, src_f, sid_f, tr, te)
+
+
+def save_ensemble_soft_logits(save_dir=None, npz_path=None):
+    """
+    Full pipeline: build the ensemble, adaptively calibrate its temperature
+    on the held-out split (replacing the fixed T=4.0), then export
+    soft_emo.npy (ensemble, adaptively-calibrated) and teacher_features.npy
+    (CNN+BiLSTM hidden state, for feature-level distillation) over the
+    FULL dataset for student training.
+    """
+    if save_dir is None:
+        save_dir = SOFT_DIR
+    ensemble, (X_feat, X_raw, ye, src, sid, tr, te) = build_teacher_ensemble(npz_path)
+
+    print("\n[4] Adaptive temperature optimization (val split)")
+    p_val = ensemble.predict_proba(X_feat[te], X_raw[te])
+    T_opt, nll = optimize_temperature(p_val, ye[te])
+    print(f"  Optimized T={T_opt:.3f}  (val NLL={nll:.4f}, was fixed at T={TEMPERATURE})")
+
+    print("\n[5] Exporting soft labels + teacher features over full dataset")
+    p_full = ensemble.predict_proba(X_feat, X_raw)
+    soft_emo = _temp_scale(p_full, T_opt)
+    feats = ensemble.teacher_features(X_raw)
+
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+    np.save(Path(save_dir) / "soft_emo.npy", soft_emo)
+    np.save(Path(save_dir) / "y_emo.npy", ye)
+    np.save(Path(save_dir) / "source.npy", src)
+    np.save(Path(save_dir) / "teacher_features.npy", feats)
+    print(f"  soft_emo.npy         → {soft_emo.shape}  mean={soft_emo.mean():.4f}")
+    print(f"  teacher_features.npy → {feats.shape}")
+
+    rpt = {
+        "ensemble_weights": ensemble.weights,
+        "optimized_temperature": T_opt,
+        "val_nll_at_optimal_T": nll,
+        "fixed_temperature_previously": TEMPERATURE,
+    }
+    with open(MODELS_DIR / "teacher_ensemble_report.json", "w") as f:
+        json.dump(rpt, f, indent=2)
+    print(f"  Report → {MODELS_DIR}/teacher_ensemble_report.json")
+    return ensemble, T_opt
+
+
+# ═══════════════════════════════════════════════════════════════════
 #  FULL PIPELINE — supports svm | eegnet | cnn_bilstm
 # ═══════════════════════════════════════════════════════════════════
 
@@ -667,11 +846,17 @@ if __name__ == "__main__":
                    help="Run all three models and compare (ignores --model)")
     p.add_argument("--soft_only", action="store_true",
                    help="Skip training — load saved pkl and regenerate soft_logits only")
+    p.add_argument("--ensemble", action="store_true",
+                   help="Build the weighted teacher ensemble from already-trained "
+                        "SVM/EEGNet/CNN+BiLSTM checkpoints, adaptively calibrate "
+                        "temperature, and export soft_emo.npy + teacher_features.npy")
     args = p.parse_args()
 
     npz = Path(args.npz) if args.npz else None
 
-    if args.soft_only:
+    if args.ensemble:
+        save_ensemble_soft_logits(npz_path=npz)
+    elif args.soft_only:
         suffix   = args.model
         pkl_path = MODELS_DIR / f"teacher_{suffix}.pkl"
         if not pkl_path.exists():

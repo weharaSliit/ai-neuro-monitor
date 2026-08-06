@@ -40,8 +40,13 @@ from real_time_inference import (         # noqa: E402
     StressInferenceEngine, SAMPLING_RATE_HZ, EPOCH_SAMPLES, EPOCH_STRIDE_S,
     ALERT_THRESH, K_AHEAD,
 )
+from trend_detector import FixedBaseline  # noqa: E402
 
-BROKER = "192.168.1.2"
+BROKER = "localhost"   # mosquitto runs on this same Mac (brew services) — using
+                        # localhost instead of the LAN IP means this never needs
+                        # to change again, regardless of what IP the router hands
+                        # out (the ESP32 still needs the real LAN IP — see the
+                        # DHCP reservation note in the .ino sketch).
 TOPIC  = "eeg/t7t8/raw"
 
 EPOCH_STRIDE = int(round(EPOCH_STRIDE_S * SAMPLING_RATE_HZ))   # 128
@@ -56,9 +61,80 @@ DROPOUT_GAP_S       = 0.05      # inter-sample gap treated as a connection dropo
 
 RAW_BROADCAST_INTERVAL_S = 0.02   # batch raw samples ~50 msgs/sec to the browser
 
+MC_SAMPLES = 15   # MC-Dropout samples for SpiralLSTM risk uncertainty per epoch —
+                  # surfaces honest confidence rather than a bare point estimate
+                  # (see StressInferenceEngine._mc_risk; small enough to stay
+                  # well under the 0.5s epoch cadence on CPU)
+
 
 def _is_clipped(v: float) -> bool:
     return abs(v) >= (ADC_CLIP_CODE - ADC_CLIP_MARGIN)
+
+
+CHANNEL_PNG_BAND_SIGMA = 2   # shaded "within baseline" band, matches ChannelBaselineChart.tsx
+
+def save_channel_baseline_png(csv_path: Path, png_path: Path):
+    """
+    Render a static PNG snapshot of the live 'Channel Deviation from
+    Identified Baseline (T7 / T8)' dashboard chart (see
+    eeg-dashboard/src/components/ChannelBaselineChart.tsx) from this
+    session's logged CSV. Called once at server shutdown so every session
+    gets a saved figure alongside its eeg_raw_*.csv / eeg_stress_*.csv,
+    without needing the browser tab open or a manual screenshot.
+    """
+    import pandas as pd
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    df = pd.read_csv(csv_path)
+    df = df[df["skipped"] == False]  # noqa: E712 — drop clip/dropout-guarded epochs
+    if df.empty:
+        print(f"[PNG] Skipped channel-baseline chart — no valid epochs in {csv_path.name}")
+        return
+
+    specs = [
+        ("ch1_level", "ch1_baseline_mu", "ch1_baseline_sigma", "#1f77b4", "T7"),
+        ("ch2_level", "ch2_baseline_mu", "ch2_baseline_sigma", "#d2691e", "T8"),
+    ]
+    deviate_color = "#d62728"
+
+    fig, axes = plt.subplots(2, 1, figsize=(11, 6), sharex=True)
+    for ax, (level_col, mu_col, sigma_col, color, label) in zip(axes, specs):
+        sub = df.dropna(subset=[level_col])
+        if sub.empty:
+            ax.set_title(f"{label} — no data")
+            continue
+
+        mu_series = sub[mu_col].dropna()
+        sigma_series = sub[sigma_col].dropna()
+        if len(mu_series) and len(sigma_series):
+            mu = float(mu_series.iloc[-1])
+            sigma = float(sigma_series.iloc[-1])
+            band = CHANNEL_PNG_BAND_SIGMA * sigma
+            ax.axhspan(mu - band, mu + band, color=color, alpha=0.12,
+                       label=f"baseline ±{CHANNEL_PNG_BAND_SIGMA}σ")
+            ax.axhline(mu, color=color, linestyle="--", linewidth=1, alpha=0.6)
+            deviating = (sub[level_col] - mu).abs() > band
+        else:
+            deviating = pd.Series(False, index=sub.index)
+
+        ax.plot(sub["time_s"], sub[level_col], color=color, linewidth=1.2, label=f"{label} level")
+        if deviating.any():
+            ax.scatter(sub.loc[deviating, "time_s"], sub.loc[deviating, level_col],
+                       color=deviate_color, s=10, zorder=3,
+                       label=f">{CHANNEL_PNG_BAND_SIGMA}σ from baseline")
+
+        ax.set_ylabel(f"{label} level")
+        ax.legend(loc="upper right", fontsize=8)
+        ax.grid(alpha=0.2)
+
+    axes[-1].set_xlabel("time (s)")
+    fig.suptitle("Channel Deviation from Identified Baseline (T7 / T8)")
+    fig.tight_layout()
+    fig.savefig(png_path, dpi=150)
+    plt.close(fig)
+    print(f"[PNG] Saved channel-baseline chart -> {png_path}")
 
 
 class DashboardState:
@@ -81,21 +157,34 @@ class DashboardState:
         self.new_count = 0
         self.epoch_i   = 0
 
+        # Per-channel raw-signal baseline (same fixed ~30s calibrate-then-freeze
+        # design as trend_detector.FixedBaseline, reused here on each channel's
+        # per-epoch signal level (std) rather than on p_emo) — lets the dashboard
+        # show how T7/T8 are drifting from this user's own resting level.
+        self.ch1_baseline = FixedBaseline()
+        self.ch2_baseline = FixedBaseline()
+
         self.n_epochs  = 0
         self.n_alerts  = 0
         self.n_skipped = 0
         self.session_start = time.time()
         self.latest_epoch: Optional[dict] = None
 
-        session = time.strftime("%Y%m%d_%H%M%S")
-        self.csv_raw_path    = _HERE / f"eeg_raw_{session}.csv"
-        self.csv_stress_path = _HERE / f"eeg_stress_{session}.csv"
+        self.session = time.strftime("%Y%m%d_%H%M%S")
+        self.csv_raw_path    = _HERE / f"eeg_raw_{self.session}.csv"
+        self.csv_stress_path = _HERE / f"eeg_stress_{self.session}.csv"
+        self.channel_png_path = _HERE / f"eeg_channel_baseline_{self.session}.png"
         with open(self.csv_raw_path, "w", newline="") as f:
             csv.writer(f).writerow(["timestamp_ms", "ch1", "ch2"])
         with open(self.csv_stress_path, "w", newline="") as f:
             csv.writer(f).writerow([
                 "time_s", "epoch", "p_emo", "risk", "alert", "stage", "skipped",
                 "trend_score", "trend_alarm", "calibrating",
+                "risk_std", "confidence",
+                "ch1_level", "ch2_level",
+                "ch1_baseline_mu", "ch1_baseline_sigma",
+                "ch2_baseline_mu", "ch2_baseline_sigma",
+                "channel_calibrating",
             ])
         self._f_raw    = open(self.csv_raw_path, "a", newline="", buffering=1)
         self._f_stress = open(self.csv_stress_path, "a", newline="", buffering=1)
@@ -246,14 +335,42 @@ class DashboardState:
                 "p_emo": None, "risk": None, "alert": False, "stage": None,
                 "skipped": True,
                 "trend_score": None, "trend_alarm": False, "calibrating": None,
+                "risk_std": None, "confidence": None,
+                "ch1_level": None, "ch2_level": None,
+                "ch1_baseline_mu": self.ch1_baseline.mu if self.ch1_baseline.ready else None,
+                "ch1_baseline_sigma": self.ch1_baseline.sigma if self.ch1_baseline.ready else None,
+                "ch2_baseline_mu": self.ch2_baseline.mu if self.ch2_baseline.ready else None,
+                "ch2_baseline_sigma": self.ch2_baseline.sigma if self.ch2_baseline.ready else None,
+                "channel_calibrating": not (self.ch1_baseline.ready and self.ch2_baseline.ready),
             }
             self.n_skipped += 1
         else:
             epoch = np.stack([ch1_arr, ch2_arr])
-            r = self.engine.process_epoch(epoch)
+            r = self.engine.process_epoch(epoch, mc_samples=MC_SAMPLES)
             r["epoch"]   = self.epoch_i
             r["time_s"]  = time_s
             r["skipped"] = False
+            r.setdefault("risk_std", None)
+            r.setdefault("confidence", None)
+
+            # Per-channel signal level (epoch std, DC-offset-free) fed into
+            # the same fixed-baseline design used for p_emo (see
+            # trend_detector.FixedBaseline) so the dashboard can show T7/T8
+            # deviating from THIS user's own resting level, not an absolute
+            # threshold.
+            ch1_level = float(np.std(ch1_arr))
+            ch2_level = float(np.std(ch2_arr))
+            self.ch1_baseline.update(time_s, ch1_level)
+            self.ch2_baseline.update(time_s, ch2_level)
+
+            r["ch1_level"] = ch1_level
+            r["ch2_level"] = ch2_level
+            r["ch1_baseline_mu"]    = self.ch1_baseline.mu if self.ch1_baseline.ready else None
+            r["ch1_baseline_sigma"] = self.ch1_baseline.sigma if self.ch1_baseline.ready else None
+            r["ch2_baseline_mu"]    = self.ch2_baseline.mu if self.ch2_baseline.ready else None
+            r["ch2_baseline_sigma"] = self.ch2_baseline.sigma if self.ch2_baseline.ready else None
+            r["channel_calibrating"] = not (self.ch1_baseline.ready and self.ch2_baseline.ready)
+
             result = r
             self.n_epochs += 1
             if r["alert"]:
@@ -263,6 +380,11 @@ class DashboardState:
             result["time_s"], result["epoch"], result["p_emo"], result["risk"],
             result["alert"], result["stage"], result["skipped"],
             result["trend_score"], result["trend_alarm"], result["calibrating"],
+            result["risk_std"], result["confidence"],
+            result["ch1_level"], result["ch2_level"],
+            result["ch1_baseline_mu"], result["ch1_baseline_sigma"],
+            result["ch2_baseline_mu"], result["ch2_baseline_sigma"],
+            result["channel_calibrating"],
         ])
         self.epoch_i += 1
 
@@ -270,6 +392,17 @@ class DashboardState:
         payload["type"] = "epoch"
         self.latest_epoch = payload
         await self.broadcast(payload)
+
+    # ── shutdown ─────────────────────────────────────────────────
+    def close(self):
+        """Flush and close the session's CSV files so they're safe to
+        read back (e.g. for save_channel_baseline_png) once the server
+        is stopping."""
+        for f in (self._f_raw, self._f_stress):
+            try:
+                f.close()
+            except Exception:
+                pass
 
 
 state = DashboardState()
@@ -284,6 +417,11 @@ async def lifespan(app: FastAPI):
     task.cancel()
     if state.mqtt_client is not None:
         state.mqtt_client.loop_stop()
+    state.close()
+    try:
+        save_channel_baseline_png(state.csv_stress_path, state.channel_png_path)
+    except Exception as e:
+        print(f"[PNG] Failed to save channel-baseline chart: {e}")
 
 
 app = FastAPI(title="AI NeuroMonitor Dashboard Bridge", lifespan=lifespan)

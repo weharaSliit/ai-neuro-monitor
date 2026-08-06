@@ -55,7 +55,7 @@ from scipy.signal import butter, filtfilt
 # Make student models importable for pickle.load
 sys.path.insert(0, str(Path(__file__).resolve().parent / "models"))
 from student_model import StudentMLP, StudentKNN, StudentCNNBiLSTM  # noqa: F401  (needed by pickle)
-from trend_detector import PersonalTrendMonitor
+from trend_detector import PersonalTrendMonitor, FeatureTrendMonitor, ShockDetector
 
 
 class _StudentUnpickler(pickle.Unpickler):
@@ -374,6 +374,24 @@ class StressInferenceEngine:
         # session's own CALM epochs (online personalization).
         self.trend_monitor = PersonalTrendMonitor()
 
+        # Multivariate counterpart to trend_monitor: baselines the FULL
+        # 76-dim feature vector (not just p_emo) and tracks Mahalanobis
+        # distance from it, via the same CUSUM+sustain design (see
+        # trend_detector.FeatureTrendMonitor). A second, independent
+        # corroborating deviation signal — surfaced on the result dict but
+        # not currently gating `stage`/`alert`, pending its own validation.
+        self.feature_trend_monitor = FeatureTrendMonitor()
+
+        # Fast, abrupt-transition complement to the two monitors above:
+        # PersonalTrendMonitor/FeatureTrendMonitor need a sustained ~20s
+        # deviation before firing (deliberately, to stay false-alarm-free
+        # on slow drift) — a genuinely sudden shift gets no benefit from
+        # that design. ShockDetector requires p_emo AND the feature-space
+        # distance to both cross a high bar within a few seconds of each
+        # other (see trend_detector.ShockDetector), reacting in seconds
+        # instead of minutes for real abrupt transitions.
+        self.shock_detector = ShockDetector()
+
     def reset(self):
         """Reset between subjects / sessions."""
         self.norm         = RunningNorm(n_ch=2)
@@ -381,6 +399,8 @@ class StressInferenceEngine:
         self.epoch_count  = 0
         self._feat_buffer = []
         self.trend_monitor.reset()
+        self.feature_trend_monitor.reset()
+        self.shock_detector.reset()
 
     def _mc_risk(self, n_samples: int = 20) -> tuple[float, float]:
         """
@@ -412,8 +432,11 @@ class StressInferenceEngine:
 
         Returns
         -------
-        dict with keys: epoch, time_s, p_emo, risk, alert, stage,
-                        trend_score, trend_alarm, calibrating
+        dict with keys: epoch, time_s, p_emo, risk, alert, stage, alert_type,
+                        trend_score, trend_alarm, calibrating,
+                        feature_dist, feature_dist_mu, feature_dist_sigma,
+                        feature_trend_score, feature_trend_alarm,
+                        shock_alarm, p_shock_z, feature_shock_z
                         [, risk_std, confidence]
         """
         if raw_t7t8.shape != (2, EPOCH_SAMPLES):
@@ -462,10 +485,34 @@ class StressInferenceEngine:
         time_s = round(self.epoch_count * EPOCH_STRIDE_S, 2)
         is_calm_for_baseline = p_emo < self.personal_threshold
         trend = self.trend_monitor.update(time_s, p_emo, is_calm_for_baseline)
+        feat_trend = self.feature_trend_monitor.update(time_s, features)
+
+        p_base = self.trend_monitor.fixed_baseline
+        f_base = self.feature_trend_monitor.baseline
+        shock = self.shock_detector.update(
+            time_s,
+            p_emo, p_base.mu if p_base.ready else None, p_base.sigma, not p_base.ready,
+            feat_trend.feature_dist, f_base.dist_mu if f_base.ready else None,
+            f_base.dist_sigma, not f_base.ready,
+        )
 
         # Stage: 0=calm, 1=rising risk (spiral 10s risk OR sustained
-        # personal-baseline trend), 2=stressed (personal threshold)
-        stage = 2 if p_emo >= self.personal_threshold else (1 if (alert or trend.trend_alarm) else 0)
+        # personal-baseline trend OR a corroborated sudden shift),
+        # 2=stressed (personal threshold)
+        stage = 2 if p_emo >= self.personal_threshold else (
+            1 if (alert or trend.trend_alarm or shock.shock_alarm) else 0)
+
+        # alert_type distinguishes WHICH early-warning mechanism fired —
+        # gradual sustained drift (PRE-STAGE) vs an abrupt corroborated
+        # jump (SUDDEN-SHIFT) — since they warrant different interventions.
+        # Purely informational: does not itself change `stage`/`alert`.
+        alert_type = None
+        if trend.trend_alarm and shock.shock_alarm:
+            alert_type = "PRE-STAGE+SUDDEN-SHIFT"
+        elif trend.trend_alarm:
+            alert_type = "PRE-STAGE"
+        elif shock.shock_alarm:
+            alert_type = "SUDDEN-SHIFT"
 
         result = {
             "epoch"       : self.epoch_count,
@@ -474,9 +521,18 @@ class StressInferenceEngine:
             "risk"        : round(float(risk), 4),
             "alert"       : alert,
             "stage"       : stage,
+            "alert_type"  : alert_type,
             "trend_score" : trend.trend_score,
             "trend_alarm" : trend.trend_alarm,
             "calibrating" : trend.calibrating,
+            "feature_dist"         : feat_trend.feature_dist,
+            "feature_dist_mu"      : feat_trend.feature_dist_mu,
+            "feature_dist_sigma"   : feat_trend.feature_dist_sigma,
+            "feature_trend_score"  : feat_trend.feature_trend_score,
+            "feature_trend_alarm"  : feat_trend.feature_trend_alarm,
+            "shock_alarm"          : shock.shock_alarm,
+            "p_shock_z"            : shock.p_shock_z,
+            "feature_shock_z"      : shock.feature_shock_z,
         }
         if mc_samples > 0:
             result["risk_std"]   = round(float(risk_std), 4)
