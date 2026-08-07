@@ -41,6 +41,7 @@ from real_time_inference import (         # noqa: E402
     ALERT_THRESH, K_AHEAD,
 )
 from trend_detector import FixedBaseline  # noqa: E402
+from alert_queue import AlertQueue, StageEdgeWatcher, BooleanAlarmWatcher  # noqa: E402
 
 BROKER = "localhost"   # mosquitto runs on this same Mac (brew services) — using
                         # localhost instead of the LAN IP means this never needs
@@ -174,12 +175,33 @@ class DashboardState:
         self.csv_raw_path    = _HERE / f"eeg_raw_{self.session}.csv"
         self.csv_stress_path = _HERE / f"eeg_stress_{self.session}.csv"
         self.channel_png_path = _HERE / f"eeg_channel_baseline_{self.session}.png"
+
+        # Trend/alarm episode recording + hand-off to the (separate,
+        # out-of-scope) stress-intervention system — see alert_queue.py.
+        # AlertQueue is process-wide (append-only, survives restarts);
+        # StageEdgeWatcher is per-session state that turns this session's
+        # stage transitions into onset/escalate/de-escalate/end events.
+        self.alert_queue = AlertQueue()
+        self.stage_watcher = StageEdgeWatcher(
+            queue=self.alert_queue, session_id=self.session
+        )
+        # shock_alarm can flip on/off several times within one PRE-STAGE
+        # episode without `stage` itself changing (see BooleanAlarmWatcher
+        # docstring) — archived independently so each shock is captured.
+        self.shock_watcher = BooleanAlarmWatcher(
+            queue=self.alert_queue, session_id=self.session,
+            result_key="shock_alarm", label="shock",
+        )
+
         with open(self.csv_raw_path, "w", newline="") as f:
             csv.writer(f).writerow(["timestamp_ms", "ch1", "ch2"])
         with open(self.csv_stress_path, "w", newline="") as f:
             csv.writer(f).writerow([
-                "time_s", "epoch", "p_emo", "risk", "alert", "stage", "skipped",
+                "time_s", "epoch", "p_emo", "risk", "alert", "stage", "alert_type", "skipped",
                 "trend_score", "trend_alarm", "calibrating",
+                "feature_dist", "feature_dist_mu", "feature_dist_sigma",
+                "feature_trend_score", "feature_trend_alarm",
+                "shock_alarm", "p_shock_z", "feature_shock_z",
                 "risk_std", "confidence",
                 "ch1_level", "ch2_level",
                 "ch1_baseline_mu", "ch1_baseline_sigma",
@@ -333,8 +355,11 @@ class DashboardState:
             result = {
                 "epoch": self.epoch_i, "time_s": time_s,
                 "p_emo": None, "risk": None, "alert": False, "stage": None,
-                "skipped": True,
+                "alert_type": None, "skipped": True,
                 "trend_score": None, "trend_alarm": False, "calibrating": None,
+                "feature_dist": None, "feature_dist_mu": None, "feature_dist_sigma": None,
+                "feature_trend_score": None, "feature_trend_alarm": False,
+                "shock_alarm": False, "p_shock_z": None, "feature_shock_z": None,
                 "risk_std": None, "confidence": None,
                 "ch1_level": None, "ch2_level": None,
                 "ch1_baseline_mu": self.ch1_baseline.mu if self.ch1_baseline.ready else None,
@@ -378,8 +403,11 @@ class DashboardState:
 
         self._w_stress.writerow([
             result["time_s"], result["epoch"], result["p_emo"], result["risk"],
-            result["alert"], result["stage"], result["skipped"],
+            result["alert"], result["stage"], result["alert_type"], result["skipped"],
             result["trend_score"], result["trend_alarm"], result["calibrating"],
+            result["feature_dist"], result["feature_dist_mu"], result["feature_dist_sigma"],
+            result["feature_trend_score"], result["feature_trend_alarm"],
+            result["shock_alarm"], result["p_shock_z"], result["feature_shock_z"],
             result["risk_std"], result["confidence"],
             result["ch1_level"], result["ch2_level"],
             result["ch1_baseline_mu"], result["ch1_baseline_sigma"],
@@ -387,6 +415,12 @@ class DashboardState:
             result["channel_calibrating"],
         ])
         self.epoch_i += 1
+
+        # Trend/alarm episode record + hand-off to the stress-intervention
+        # system's local queue (see alert_queue.py) — fires only on a
+        # stage CHANGE, not every epoch.
+        self.stage_watcher.update(result["time_s"], result)
+        self.shock_watcher.update(result["time_s"], result)
 
         payload = dict(result)
         payload["type"] = "epoch"
@@ -403,6 +437,7 @@ class DashboardState:
                 f.close()
             except Exception:
                 pass
+        self.alert_queue.close()
 
 
 state = DashboardState()

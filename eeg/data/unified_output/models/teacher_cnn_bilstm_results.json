@@ -1,0 +1,20 @@
+{
+  "model": "CNN+BiLSTM Teacher \u2014 single head",
+  "model_type": "cnn_bilstm",
+  "head": "emo",
+  "roc_auc": 0.641232904084625,
+  "pr_auc": 0.23277837047461114,
+  "results": {
+    "emo": {
+      "accuracy": 0.6829710144927537,
+      "balanced_accuracy": 0.6102088563627714,
+      "f1_macro": 0.5571264221253405,
+      "f1_pos": 0.32104752667313285,
+      "auc_roc": 0.641232904084625,
+      "auc_pr": 0.23277837047461114,
+      "threshold": 0.15000000000000002,
+      "n": 4416,
+      "pos_rate": 0.1478713768115942
+    }
+  }
+}
