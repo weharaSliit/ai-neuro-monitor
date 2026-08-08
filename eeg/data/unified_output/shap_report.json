@@ -1,0 +1,116 @@
+{
+  "n_background": 100,
+  "n_explained": 300,
+  "top_features": [
+    {
+      "rank": 1,
+      "feature": "nl_higuchi_fd_T8",
+      "mean_abs_shap": 0.0479229735702895
+    },
+    {
+      "rank": 2,
+      "feature": "de_gamma_T8",
+      "mean_abs_shap": 0.04564299192182896
+    },
+    {
+      "rank": 3,
+      "feature": "de_theta_T8",
+      "mean_abs_shap": 0.02528560258852598
+    },
+    {
+      "rank": 4,
+      "feature": "sp_centroid_T8",
+      "mean_abs_shap": 0.024145962833122335
+    },
+    {
+      "rank": 5,
+      "feature": "plv_gamma_T7T8",
+      "mean_abs_shap": 0.02340003682688269
+    },
+    {
+      "rank": 6,
+      "feature": "plv_beta_T7T8",
+      "mean_abs_shap": 0.022529596851805344
+    },
+    {
+      "rank": 7,
+      "feature": "td_hjorth_mob_T8",
+      "mean_abs_shap": 0.021410238350561668
+    },
+    {
+      "rank": 8,
+      "feature": "coh_gamma_T7T8",
+      "mean_abs_shap": 0.021368366183875335
+    },
+    {
+      "rank": 9,
+      "feature": "de_beta_T8",
+      "mean_abs_shap": 0.01940929419124425
+    },
+    {
+      "rank": 10,
+      "feature": "de_alpha_T7",
+      "mean_abs_shap": 0.01886469329397097
+    },
+    {
+      "rank": 11,
+      "feature": "de_theta_T7",
+      "mean_abs_shap": 0.01856392018521488
+    },
+    {
+      "rank": 12,
+      "feature": "de_beta_T7",
+      "mean_abs_shap": 0.01841337332904063
+    },
+    {
+      "rank": 13,
+      "feature": "nl_katz_fd_T8",
+      "mean_abs_shap": 0.018001561628767176
+    },
+    {
+      "rank": 14,
+      "feature": "rel_gamma_T8",
+      "mean_abs_shap": 0.016873138494522762
+    },
+    {
+      "rank": 15,
+      "feature": "plv_alpha_T7T8",
+      "mean_abs_shap": 0.01593691726179329
+    },
+    {
+      "rank": 16,
+      "feature": "xcorr_T7T8",
+      "mean_abs_shap": 0.015708126898293685
+    },
+    {
+      "rank": 17,
+      "feature": "sp_sef95_T7",
+      "mean_abs_shap": 0.015515699746366325
+    },
+    {
+      "rank": 18,
+      "feature": "psd_delta_T7",
+      "mean_abs_shap": 0.014268172791944114
+    },
+    {
+      "rank": 19,
+      "feature": "td_variance_T7",
+      "mean_abs_shap": 0.014246159357518945
+    },
+    {
+      "rank": 20,
+      "feature": "nl_perm_entropy_T8",
+      "mean_abs_shap": 0.013974289769419768
+    }
+  ],
+  "family_importance": {
+    "Differential entropy": 0.18099679097955287,
+    "Connectivity (T7-T8)": 0.1497636703294951,
+    "Nonlinear/entropy/fractal dimension": 0.14935395116658307,
+    "Spectral shape (centroid/SEF95/ratios)": 0.10312232153141174,
+    "Relative band power": 0.09393316375388691,
+    "PSD band power": 0.09031138152921787,
+    "Hjorth parameters": 0.07235013527650398,
+    "Time-domain statistics": 0.025817178627554407
+  }
+}
