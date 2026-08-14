@@ -205,7 +205,7 @@ export default function DashboardScreen({ navigation }) {
 
   const statusColor =
     status === 'connected' ? COLORS.normal :
-    status === 'checking'  ? COLORS.prestress : COLORS.stress;
+    status === 'checking'  ? COLORS.warning : COLORS.stress;
 
   return (
     <SafeAreaView style={[dStyles.safe, { backgroundColor: t.bg }]}>
@@ -246,7 +246,7 @@ export default function DashboardScreen({ navigation }) {
           <View style={[dStyles.statusDiv, { backgroundColor: t.border }]} />
           <View style={dStyles.statusItem}>
             <View style={[dStyles.statusDot, {
-              backgroundColor: baseline?.exists ? COLORS.normal : COLORS.prestress
+              backgroundColor: baseline?.exists ? COLORS.normal : COLORS.warning
             }]} />
             <Text style={[dStyles.statusText, { color: t.textSub }]}>
               {baseline?.exists ? 'Baseline Active' : 'No Baseline'}

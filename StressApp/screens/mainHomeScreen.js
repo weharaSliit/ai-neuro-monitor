@@ -178,7 +178,7 @@ export default function MainHomeScreen({ navigation }) {
             Mind<Text style={{ color: COLORS.brand }}>Pulse</Text>
           </Text>
           <Text style={[hStyles.tagline, { color: t.textMuted }]}>
-            AI-Enhanced Multimodal{'\n'}Pre-Stress Detection System
+            AI-Enhanced Multimodal{'\n'}Stress Detection System
           </Text>
 
           
@@ -207,9 +207,9 @@ export default function MainHomeScreen({ navigation }) {
             {/* Stress state strip */}
             <View style={[hStyles.stressStrip, { backgroundColor: t.surface, borderColor: t.border }]}>
               {[
-                { label: 'Normal',     color: COLORS.normal,    emoji: '😌' },
-                { label: 'Pre-Stress', color: COLORS.prestress, emoji: '😰' },
-                { label: 'Stress',     color: COLORS.stress,    emoji: '😨' },
+                { label: 'Normal',   color: COLORS.normal,  emoji: '😌' },
+                { label: 'Trending', color: COLORS.warning, emoji: '😰' },
+                { label: 'Stress',   color: COLORS.stress,  emoji: '😨' },
               ].map((s, i) => (
                 <View key={i} style={[hStyles.stressItem, i < 2 && { borderRightColor: t.border, borderRightWidth: 1 }]}>
                   <Text style={{ fontSize: 18 }}>{s.emoji}</Text>

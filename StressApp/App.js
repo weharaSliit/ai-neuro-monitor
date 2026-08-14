@@ -11,12 +11,10 @@ import { ThemeProvider } from './modules/physiological/config/ThemeContext';
 const Stack = createNativeStackNavigator();
 
 export default function App() {
-  const [selectedSubject, setSelectedSubject] = useState(2);
   const [lastSessionId,   setLastSessionId]   = useState(null);
   const [lastEmaResult,   setLastEmaResult]   = useState(null);
 
   const sharedState = {
-    selectedSubject, setSelectedSubject,
     lastSessionId,   setLastSessionId,
     lastEmaResult,   setLastEmaResult,
   };

@@ -11,6 +11,8 @@ from backend.common.config import (
     FIREBASE_CRED_FILE,
     FIREBASE_DB_URL,
     FIREBASE_NAMESPACE,
+    MIN_CONFIDENCE_FOR_RETRAIN,
+    MIN_SIGNAL_QUALITY_FOR_RETRAIN,
 )
 
 def _ref(path):
@@ -19,6 +21,14 @@ def _ref(path):
     if not FIREBASE_NAMESPACE:
         return db.reference(clean_path)
     return db.reference(f"{FIREBASE_NAMESPACE}/{clean_path}")
+
+
+def _global_ref(path):
+    """Return a Firebase reference NOT nested under FIREBASE_NAMESPACE —
+    for data shared across modalities (e.g. fusion_engine/), which must
+    sit outside the physiological-only namespace so other modules can
+    read/write it too."""
+    return db.reference(str(path).lstrip('/'))
 
 
 #  Initialize Firebase 
@@ -116,9 +126,9 @@ def end_session(user_id, session_id,
         if pss4_score <= 6:
             update['stress_label'] = 'Normal'
         elif pss4_score <= 12:
-            update['stress_label'] = 'Pre-stress'
-        else:
             update['stress_label'] = 'Stress'
+        else:
+            update['stress_label'] = 'High Stress'
 
     ref.update(update)
 
@@ -133,31 +143,110 @@ def get_session_count(user_id):
     return ref.get() or 0
 
 
-#  Prediction operations 
-def save_prediction(user_id, session_id,
-                    window_idx, prediction,
-                    probabilities, trend_alert,
+#  Prediction operations (binary: Normal/Stress)
+def save_prediction(user_id, session_id, window_idx,
+                    prediction, label,
+                    prob_normal, prob_stress,
+                    trending_toward_stress,
                     features_dict):
     ref = _ref(f'predictions/{user_id}/{session_id}')
-    ref.push({
-        'window_idx':   window_idx,
-        'timestamp':    datetime.now().isoformat(),
-        'prediction':   int(prediction),
-        'label':        ['Normal','Pre-stress','Stress'][prediction],
-        'prob_normal':  float(probabilities[0]),
-        'prob_pre':     float(probabilities[1]),
-        'prob_stress':  float(probabilities[2]),
-        'trend_alert':  bool(trend_alert),
-        'features':     {
-            k: float(v)
-            for k, v in features_dict.items()
+    new_ref = ref.push({
+        'window_idx':             window_idx,
+        'timestamp':               datetime.now().isoformat(),
+        'prediction':              int(prediction),
+        'label':                   label,
+        'prob_normal':             float(prob_normal),
+        'prob_stress':             float(prob_stress),
+        'trending_toward_stress':  bool(trending_toward_stress),
+        'features': {
+            k: float(v) for k, v in features_dict.items()
         }
     })
 
-    # Update window count
     session_ref = _ref(f'sessions/{user_id}/{session_id}/window_count')
     count = session_ref.get() or 0
     session_ref.set(count + 1)
+
+    return new_ref.key
+
+
+def save_prediction_quality(user_id, session_id, window_idx,
+                            confidence, signal_quality,
+                            prob_normal, prob_stress,
+                            trending_toward_stress):
+    """
+    Separate structured table — probability/confidence/signal
+    quality only. Never contains raw sensor arrays or features;
+    those live in predictions/ (features) — raw sensor arrays
+    never reach Firebase at all, only this request's derived numbers.
+    """
+    ref = _ref(f'prediction_quality/{user_id}/{session_id}')
+    ref.push({
+        'window_idx':              window_idx,
+        'timestamp':                datetime.now().isoformat(),
+        'confidence':                float(confidence),
+        'signal_quality':            float(signal_quality),
+        'prob_normal':               float(prob_normal),
+        'prob_stress':               float(prob_stress),
+        'trending_toward_stress':    bool(trending_toward_stress),
+        'eligible_for_retrain': bool(
+            confidence >= MIN_CONFIDENCE_FOR_RETRAIN and
+            signal_quality >= MIN_SIGNAL_QUALITY_FOR_RETRAIN
+        )
+    })
+
+
+def save_fusion_signal(user_id, session_id, window_idx,
+                       confidence, signal_quality,
+                       prob_normal, prob_stress,
+                       label, trending_toward_stress):
+    """
+    Cross-modality feed for the fusion engine — lives OUTSIDE the
+    'physiological' namespace (unlike everything else in this file)
+    so other modalities can write to the same root-level collection
+    later. Kept minimal — confidence/probability/signal quality plus
+    the binary label and trend flag a fusion layer actually needs to
+    combine with other modalities — no raw features or retrain
+    metadata, those stay physiological-module-internal in
+    prediction_quality/.
+    """
+    ref = _global_ref(f'fusion_engine/{user_id}/{session_id}')
+    ref.push({
+        'modality':                'physiological',
+        'window_idx':              window_idx,
+        'timestamp':               datetime.now().isoformat(),
+        'confidence':              float(confidence),
+        'signal_quality':          float(signal_quality),
+        'prob_normal':             float(prob_normal),
+        'prob_stress':             float(prob_stress),
+        'label':                   label,
+        'trending_toward_stress':  bool(trending_toward_stress),
+    })
+
+
+# Device connectivity (written by mqtt_bridge.py on every message,
+# read by Flask's /devices/<id>/status for the mobile app)
+def save_device_heartbeat(device_id, extra=None):
+    ref  = _ref(f'devices/{device_id}')
+    data = {'status': 'online', 'last_seen': datetime.now().isoformat()}
+    if extra:
+        data.update(extra)
+    ref.update(data)
+
+
+def get_device_status(device_id, offline_after_sec=15):
+    ref  = _ref(f'devices/{device_id}')
+    data = ref.get()
+    if not data:
+        return {'status': 'offline', 'last_seen': None}
+    try:
+        last_seen = datetime.fromisoformat(data['last_seen'])
+        if (datetime.now() - last_seen).total_seconds() > offline_after_sec:
+            data = dict(data)
+            data['status'] = 'offline'
+    except Exception:
+        pass
+    return data
 
 
 def get_session_predictions(user_id, session_id):

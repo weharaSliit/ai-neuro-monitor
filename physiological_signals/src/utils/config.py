@@ -30,8 +30,7 @@ WINDOW_SEC   = 60    # seconds
 OVERLAP      = 0.5   # 50%
 STEP_SEC     = 30    # seconds
 
-#  Pre-stress parameters 
-PRESTRESS_TRANSITION_SEC = 90   # first 90s of TSST = Pre-stress
+#  Label boundary parameters
 BOUNDARY_EXCLUSION_SEC   = 30   # ±30s around transitions = exclude
 
 print("Config loaded successfully")

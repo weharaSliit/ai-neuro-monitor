@@ -1,26 +1,29 @@
+// ============================================================
+// PhysiologicalNavigator.js
+// WESAD simulation/calibration tabs removed — the real ring
+// (via mqtt_bridge.py -> Flask /predict, /calibrate) is the only
+// deployment target now.
+// ============================================================
+
 import React, { useRef, useEffect } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { View, Text, Animated } from 'react-native';
 import { useTheme } from './config/ThemeContext';
 
 import DashboardScreen   from './screens/DashboardScreen';
-import SimulationScreen  from './screens/SimulationScreen';
-import CalibrationScreen from './screens/CalibrationScreen';
 import EMAScreen         from './screens/EMAScreen';
 import PSS4Screen        from './screens/PSS4Screen';
 import HistoryScreen     from './screens/HistoryScreen';
-import ExploratoryScreen from './screens/ExploratoryScreen';
+import RingScreen        from './screens/Ringscreen';
 
 const Tab = createBottomTabNavigator();
 
 const TABS = [
   { name: 'Dashboard',   icon: '🏠' },
-  { name: 'Simulation',  icon: '▶️'  },
-  { name: 'Calibration', icon: '🎯' },
   { name: 'EMA Update',  icon: '🔄' },
   { name: 'PSS-4',       icon: '📋' },
   { name: 'History',     icon: '📊' },
-  { name: 'Analysis',    icon: '🔬' },
+  { name: 'Ring',        icon: '💍' },
 ];
 
 function TabIcon({ name, focused, color, COLORS }) {
@@ -92,12 +95,10 @@ export default function PhysiologicalNavigator() {
       })}
     >
       <Tab.Screen name="Dashboard"   component={DashboardScreen}   />
-      <Tab.Screen name="Simulation"  component={SimulationScreen}  />
-      <Tab.Screen name="Calibration" component={CalibrationScreen} />
       <Tab.Screen name="EMA Update"  component={EMAScreen}         />
       <Tab.Screen name="PSS-4"       component={PSS4Screen}        />
       <Tab.Screen name="History"     component={HistoryScreen}      />
-      <Tab.Screen name="Analysis"    component={ExploratoryScreen} />
+      <Tab.Screen name="Ring"        component={RingScreen}        />
     </Tab.Navigator>
   );
 }
