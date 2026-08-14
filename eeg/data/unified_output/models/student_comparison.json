@@ -1,0 +1,76 @@
+{
+  "winner": "KNN (k=7)",
+  "perceived_stress_framing": "perceived-stress CORRELATE distilled from teacher whole-brain context",
+  "spiral_basis": "12.3x RR: emo accumulation -> perceived stress",
+  "candidates": {
+    "CNN+BiLSTM": {
+      "score": 0.467061420524178,
+      "results": {
+        "emo": {
+          "accuracy": 0.293891909178126,
+          "balanced_accuracy": 0.5,
+          "f1_macro": 0.22713791398912506,
+          "f1_pos": 0.4542758279782501,
+          "auc_roc": 0.47601541185677565,
+          "threshold": 0.1,
+          "n": 6254
+        },
+        "perc_deap": {
+          "accuracy": 0.917972497601535,
+          "balanced_accuracy": 0.4996257827496173,
+          "f1_macro": 0.4824774286711165,
+          "f1_pos": 0.007736943907156673,
+          "auc_roc": 0.4581074291915804,
+          "threshold": 0.1,
+          "n": 6254
+        }
+      }
+    },
+    "SVM (Linear)": {
+      "score": 0.4727329026416905,
+      "results": {
+        "emo": {
+          "accuracy": 0.293891909178126,
+          "balanced_accuracy": 0.5,
+          "f1_macro": 0.22713791398912506,
+          "f1_pos": 0.4542758279782501,
+          "auc_roc": 0.47030994967355816,
+          "threshold": 0.1,
+          "n": 6254
+        },
+        "perc_deap": {
+          "accuracy": 0.5780300607611129,
+          "balanced_accuracy": 0.47510013248928534,
+          "f1_macro": 0.419129890024223,
+          "f1_pos": 0.11532014750251425,
+          "auc_roc": 0.4751558556098228,
+          "threshold": 0.1,
+          "n": 6254
+        }
+      }
+    },
+    "KNN (k=7)": {
+      "score": 0.47793436473916223,
+      "results": {
+        "emo": {
+          "accuracy": 0.3541733290693956,
+          "balanced_accuracy": 0.4963131150352462,
+          "f1_macro": 0.3412187087176206,
+          "f1_pos": 0.4335997756275417,
+          "auc_roc": 0.4772270633249752,
+          "threshold": 0.1,
+          "n": 6254
+        },
+        "perc_deap": {
+          "accuracy": 0.6319155740326191,
+          "balanced_accuracy": 0.4808182504079538,
+          "f1_macro": 0.4405037053342138,
+          "f1_pos": 0.11325115562403698,
+          "auc_roc": 0.47864166615334924,
+          "threshold": 0.1,
+          "n": 6254
+        }
+      }
+    }
+  }
+}

@@ -1,78 +1,67 @@
 # ============================================================
 # app.py — Main Flask server
-# All API endpoints for stress detection demo
+# All API endpoints for the real-ring stress detection pipeline.
+# WESAD simulation mode has been removed — the real ring is the
+# only deployment target.
 # ============================================================
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import numpy as np
-import threading
-import time
-import json
 import sys
 from pathlib import Path
 from firebase_admin import db
 
-# When running this file directly ( `python app.py` from this folder),
-# ensure the repository root is on sys.path so `import backend.*` works.
 if __package__ is None:
     repo_root = Path(__file__).resolve().parents[2]
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
 from backend.common.config import (
-    STRESS_LABELS, STRESS_COLORS,
-    EMA_ALPHA, N_BASELINE_WIN,
-    WESAD_SUBJECTS, WINDOW_STEP_SEC
+    STRESS_COLORS,
+    EMA_ALPHA, N_BASELINE_WIN
 )
 from backend.physiological.firebase_service import (
     init_firebase,
-    create_user, get_user, list_users,
+    create_user, list_users,
     save_baseline, load_baseline, baseline_exists,
-    start_session, end_session,
     save_prediction, get_session_predictions,
     get_recent_sessions,
     save_pss4, get_pss4_history,
-    save_ema_update, _ref
+    save_ema_update, _ref,
+    save_prediction_quality,
+    save_fusion_signal,
+    get_device_status
 )
 from backend.physiological.predictor import (
     predict_window, predict_raw,
     compute_baseline, update_baseline_ema,
-    normalize_features, build_feature_dict,
-    feature_cols
+    feature_cols, StressStateMachine
 )
-from backend.physiological.simulator import (
-    get_subject_windows, get_simulation_subjects,
-    get_subject_summary, find_stress_transition_subject
+from backend.physiological.extract_features import (
+    extract_features, compute_signal_quality
 )
 
-# ── App setup ─────────────────────────────────────────────────
 app = Flask(__name__)
 CORS(app)
-
-# ── Initialize Firebase ───────────────────────────────────────
 init_firebase()
 
-# Active simulation state 
-active_simulations = {}
+ring_sessions = {}  # per-user state machines, kept warm across windows
 
 
-# Health check 
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({
         'status':   'running',
-        'model':    'XGBoost 22 features',
+        'model':    'XGBoost binary (Normal/Stress)',
         'features': len(feature_cols),
         'firebase': 'connected'
     })
 
 
-#  User endpoints 
 @app.route('/users', methods=['GET'])
 def get_users():
-    users = list_users()
-    return jsonify({'users': users})
+    return jsonify({'users': list_users()})
 
 
 @app.route('/users', methods=['POST'])
@@ -88,277 +77,244 @@ def create_new_user():
     })
 
 
-# Calibration endpoint 
+# ── /calibrate — real-ring baseline capture ───────────────────
+# Extracts features from N raw sensor windows, then computes/
+# EMA-merges/saves a personal baseline for user_id.
+#
+# REQUEST FORMAT:
+#   {
+#     "user_id": "Wehara",
+#     "windows": [
+#       {"ibi_array": [...], "gsr_adc_array": [...], "acc_array": [...],
+#        "gsr_calibration": 2048, "actual_fs": 5},
+#       ...  (N_BASELINE_WIN windows, collected while resting)
+#     ]
+#   }
 @app.route('/calibrate', methods=['POST'])
 def calibrate():
-    """
-    Receive first session windows for baseline calibration.
-    Body: {user_id, windows: [[f1,f2,...,f22], ...]}
-    """
     data    = request.json
-    user_id = data.get('user_id', 'user_001')
-    windows = np.array(data.get('windows', []))
+    user_id = data.get('user_id', 'Wehara')
+    raw_windows = data.get('windows', [])
 
-    if len(windows) == 0:
+    if len(raw_windows) == 0:
         return jsonify({'error': 'No windows provided'}), 400
 
-    # Validate window feature length
-    if windows.ndim != 2 or windows.shape[1] != len(feature_cols):
-        got = windows.shape[1] if windows.ndim == 2 else None
-        return jsonify({
-            'error': 'Invalid windows shape',
-            'expected_n_features': len(feature_cols),
-            'got_n_features': got,
-            'hint': 'Send windows as a list of 22-value arrays ordered like feature_cols (use /simulate/next features_array).'
-        }), 400
-
-    # Compute personal baseline
-    b_mean, b_std = compute_baseline(windows)
-
-    # Check if existing baseline — apply EMA update
-    if baseline_exists(user_id):
-        old_mean, old_std = load_baseline(
-            user_id, feature_cols
-        )
-        if old_mean is not None:
-            new_mean, new_std = update_baseline_ema(
-                old_mean, old_std, b_mean, b_std
+    feature_rows = []
+    for i, w in enumerate(raw_windows):
+        try:
+            features_2d, motion_rejected, feat_dict = extract_features(
+                w.get('ibi_array', []),
+                w.get('gsr_adc_array', []),
+                w.get('acc_array', []),
+                w.get('gsr_calibration', 2048),
+                actual_fs=w.get('actual_fs', 50)
             )
-            b_mean, b_std = new_mean, new_std
+        except Exception as e:
+            return jsonify({
+                'error':   f'Feature extraction failed on window {i}',
+                'details': str(e)
+            }), 500
 
-    # Save to Firebase
+        if motion_rejected:
+            return jsonify({
+                'error': f'Window {i} rejected for movement — '
+                         f'sit still for the whole calibration period'
+            }), 400
+
+        feature_rows.append(features_2d[0])
+
+    windows_array = np.array(feature_rows)
+    b_mean, b_std = compute_baseline(windows_array)
+
+    if baseline_exists(user_id):
+        old_mean, old_std = load_baseline(user_id, feature_cols)
+        if old_mean is not None:
+            b_mean, b_std = update_baseline_ema(old_mean, old_std, b_mean, b_std)
+
     save_baseline(user_id, b_mean, b_std, feature_cols)
 
     return jsonify({
         'success':      True,
         'user_id':      user_id,
         'baseline_set': True,
-        'n_windows':    len(windows),
+        'n_windows':    len(windows_array),
         'sample_values': {
-            'AVNN_mean':    float(b_mean[0]),
-            'SCL_mean_mean': float(
-                b_mean[feature_cols.index('SCL_mean')]
-            )
+            'AVNN_mean':     float(b_mean[0]),
+            'SCL_mean_mean': float(b_mean[feature_cols.index('SCL_mean')])
         }
     })
 
 
-#  Prediction endpoint 
+# ── /predict — real-ring binary prediction ─────────────────────
+# Binary (Normal/Stress) — model trained directly on WESAD data
+# relabeled to match the ring's real task (see
+# notebooks/05_binary_relabel_retrain.ipynb).
+#
+# Real traffic reaches this via mqtt_bridge.py (ESP32 -> Mosquitto
+# -> bridge -> here). Also works standalone for manual testing
+# (Postman / MQTT Explorer + curl).
+#
+# REQUEST FORMAT:
+#   {
+#     "user_id":         "Wehara",
+#     "session_id":      "live_session_1",
+#     "window_idx":      0,
+#     "ibi_array":       [812, 798, 821, ...],    ms
+#     "gsr_adc_array":   [1992, 1985, 2010, ...], 0-4095
+#     "acc_array":       [0.93, 0.94, 0.92, ...], g
+#     "gsr_calibration": 2048,                    ADC int
+#     "actual_fs":       5                        Hz — real GSR/ACC
+#                                                  sample rate, NOT
+#                                                  WESAD's 50Hz
+#   }
+#
+# MOTION REJECTION:
+#   If >10% of ACC samples exceed 1.2g, window rejected.
+#   Returns motion_rejected: true in response.
+#
+# DB RULE: raw sensor arrays above are never written to Firebase —
+# they exist only in this request. Only extracted features + the
+# prediction go to predictions/, and only probability/confidence/
+# signal_quality go to the separate prediction_quality/ table.
 @app.route('/predict', methods=['POST'])
 def predict():
-    """
-    Predict stress class for one window.
-    Body: {user_id, session_id, window_idx,
-           features: [f1,f2,...,f22],
-           trend_history: [{feat: val}, ...]}
-    """
-    data          = request.json
-    user_id       = data.get('user_id', 'user_001')
-    session_id    = data.get('session_id', 'session_001')
-    window_idx    = data.get('window_idx', 0)
-    features      = np.array(data.get('features', []))
-    trend_history = data.get('trend_history', [])
+    data = request.json
 
-    if len(features) != len(feature_cols):
+    # ── Parse request ─────────────────────────────────────────
+    user_id         = data.get('user_id', 'Wehara')
+    session_id      = data.get('session_id', 'session_001')
+    window_idx      = data.get('window_idx', 0)
+    ibi_array       = data.get('ibi_array', [])
+    gsr_adc_array   = data.get('gsr_adc_array', [])
+    acc_array       = data.get('acc_array', [])
+    gsr_calibration = data.get('gsr_calibration', 2048)
+    actual_fs       = data.get('actual_fs', 50)
+
+    # ── Validate inputs ───────────────────────────────────────
+    if len(ibi_array) < 4:
         return jsonify({
-            'error': f'Expected {len(feature_cols)} features'
+            'error': 'ibi_array too short — minimum 4 IBI values',
+            'hint':  'Ensure MAX30102 is detecting R-peaks correctly'
         }), 400
 
-    features_2d = features.reshape(1, -1)
+    # Floor lowered from 100 (assumed WESAD's 50Hz) — the real ring
+    # runs ~5Hz, so a full 60s window is only ~300 samples. 20 is
+    # just a floor to catch a truncated/degraded window, not a
+    # target — normal windows will be far above this.
+    if len(gsr_adc_array) < 20:
+        return jsonify({
+            'error': 'gsr_adc_array too short — minimum 20 samples',
+            'hint':  f'Send more GSR samples — got {len(gsr_adc_array)} at ~{actual_fs}Hz'
+        }), 400
 
-    # Load personal baseline
+    if len(acc_array) < 10:
+        return jsonify({
+            'error': 'acc_array too short — minimum 10 samples',
+            'hint':  'Send ACC magnitude array from MPU-6050'
+        }), 400
+
+    # ── Extract features from raw arrays ───────────────────────
+    try:
+        features_2d, motion_rejected, feat_dict = \
+            extract_features(
+                ibi_array,
+                gsr_adc_array,
+                acc_array,
+                gsr_calibration,
+                actual_fs=actual_fs
+            )
+    except Exception as e:
+        return jsonify({
+            'error':   'Feature extraction failed',
+            'details': str(e)
+        }), 500
+
+    # ── Motion rejection ──────────────────────────────────────
+    if motion_rejected:
+        return jsonify({
+            'motion_rejected': True,
+            'window_idx':      window_idx,
+            'message':         'Window rejected — too much movement',
+            'hint':            'Keep hand still during measurement'
+        })
+
+    signal_quality = compute_signal_quality(
+        ibi_array, gsr_adc_array, acc_array,
+        motion_rejected, actual_fs=actual_fs
+    )
+
+    # ── Load personal baseline ────────────────────────────────
     b_mean, b_std = load_baseline(user_id, feature_cols)
 
-    if b_mean is None:
-        # No calibration — use raw prediction
-        prediction, probs = predict_raw(features_2d)
-        trend_alert = False
-    else:
-        prediction, probs, trend_alert = predict_window(
-            features_2d, b_mean, b_std, trend_history
+    # ── State machine kept warm per user ──────────────────────
+    if user_id not in ring_sessions:
+        ring_sessions[user_id] = StressStateMachine(
+            feature_cols_list = feature_cols,
+            baseline_mean     = b_mean,
+            window_size       = 5,
+            trend_threshold   = 0.35
         )
+    sm = ring_sessions[user_id]
 
-    label = STRESS_LABELS[prediction]
-    color = STRESS_COLORS[prediction]
+    # ── Predict (binary) ───────────────────────────────────────
+    if b_mean is None:
+        # No personal baseline yet — raw model output,
+        # no trend detection (nothing to compare against).
+        result = predict_raw(features_2d)
+    else:
+        sm.update_baseline(b_mean)
+        result = predict_window(features_2d, b_mean, b_std, sm, feat_dict)
 
-    # Save to Firebase
-    features_dict = build_feature_dict(features_2d)
+    # ── Save structured data only ──────────────────────────────
     save_prediction(
         user_id, session_id, window_idx,
-        prediction, probs, trend_alert, features_dict
+        result['prediction'], result['label'],
+        result['prob_normal'], result['prob_stress'],
+        result['trending_toward_stress'], feat_dict
+    )
+    save_prediction_quality(
+        user_id, session_id, window_idx,
+        result['confidence'], signal_quality,
+        result['prob_normal'], result['prob_stress'],
+        result['trending_toward_stress']
+    )
+    save_fusion_signal(
+        user_id, session_id, window_idx,
+        result['confidence'], signal_quality,
+        result['prob_normal'], result['prob_stress'],
+        result['label'], result['trending_toward_stress']
     )
 
     return jsonify({
-        'prediction':   prediction,
-        'label':        label,
-        'color':        color,
+        'prediction':             result['prediction'],
+        'label':                   result['label'],
+        'color':                   STRESS_COLORS[result['prediction']],
+        'confidence':               result['confidence'],
+        'signal_quality':            signal_quality,
+        'trending_toward_stress':     result['trending_toward_stress'],
         'probabilities': {
-            'normal':    float(probs[0]),
-            'prestress': float(probs[1]),
-            'stress':    float(probs[2])
+            'normal': result['prob_normal'],
+            'stress': result['prob_stress']
         },
-        'trend_alert':  trend_alert,
-        'window_idx':   window_idx
-    })
-
-
-# Simulation endpoint 
-@app.route('/simulate/start', methods=['POST'])
-def start_simulation():
-    """
-    Start streaming WESAD subject data.
-    Body: {user_id, subject_id}
-    Returns: {session_id, total_windows, summary}
-    """
-    data       = request.json
-    user_id    = data.get('user_id', 'demo_user')
-    subject_id = int(data.get('subject_id', 2))
-
-    if subject_id not in WESAD_SUBJECTS:
-        return jsonify({'error': 'Invalid subject'}), 400
-
-    # Get subject windows
-    windows = get_subject_windows(subject_id)
-    if not windows:
-        return jsonify({'error': 'Subject data not found'}), 404
-
-    # Start Firebase session
-    session_id = start_session(user_id)
-
-    # Store simulation state
-    active_simulations[user_id] = {
-        'windows':      windows,
-        'current_idx':  0,
-        'session_id':   session_id,
-        'subject_id':   subject_id,
-        'running':      True,
-        'trend_history': []
-    }
-
-    summary = get_subject_summary(subject_id)
-
-    return jsonify({
-        'success':       True,
-        'session_id':    session_id,
-        'total_windows': len(windows),
-        'subject_id':    subject_id,
-        'summary':       summary
-    })
-
-
-@app.route('/simulate/next', methods=['POST'])
-def next_simulation_window():
-    """
-    Get next window prediction in simulation.
-    Body: {user_id}
-    Returns: prediction + features for this window
-    """
-    data    = request.json
-    user_id = data.get('user_id', 'demo_user')
-
-    if user_id not in active_simulations:
-        return jsonify({'error': 'No active simulation'}), 404
-
-    sim = active_simulations[user_id]
-
-    if sim['current_idx'] >= len(sim['windows']):
-        return jsonify({'done': True, 'message': 'Simulation complete'})
-
-    # Get current window
-    window     = sim['windows'][sim['current_idx']]
-    features   = window['features'].reshape(1, -1)
-    true_label = window['true_label']
-
-    # Load baseline
-    b_mean, b_std = load_baseline(user_id, feature_cols)
-
-    if b_mean is not None:
-        prediction, probs, trend_alert = predict_window(
-            features, b_mean, b_std,
-            sim['trend_history']
-        )
-    else:
-        prediction, probs = predict_raw(features)
-        trend_alert = False
-
-    # Update trend history
-    feat_dict = build_feature_dict(features)
-    sim['trend_history'].append(feat_dict)
-    if len(sim['trend_history']) > 5:
-        sim['trend_history'].pop(0)
-
-    # Save prediction
-    save_prediction(
-        user_id, sim['session_id'],
-        sim['current_idx'],
-        prediction, probs, trend_alert, feat_dict
-    )
-
-    # Provide a stable ordered feature array (matches `feature_cols`)
-    features_array = [float(feat_dict.get(f, 0.0)) for f in feature_cols]
-
-    # Advance index
-    sim['current_idx'] += 1
-    progress = sim['current_idx'] / len(sim['windows'])
-
-    return jsonify({
-        'window_idx':   sim['current_idx'] - 1,
-        'prediction':   prediction,
-        'label':        STRESS_LABELS[prediction],
-        'color':        STRESS_COLORS[prediction],
-        'true_label':   true_label,
-        'true_name':    STRESS_LABELS[true_label],
-        'probabilities': {
-            'normal':    float(probs[0]),
-            'prestress': float(probs[1]),
-            'stress':    float(probs[2])
-        },
-        'trend_alert':  trend_alert,
-        'progress':     float(progress),
-        'done':         sim['current_idx'] >= len(sim['windows']),
+        'window_idx':      window_idx,
+        'motion_rejected': False,
+        # Key sensor readings for live graph display
         'features': {
-            'AVNN':     float(feat_dict.get('AVNN', 0)),
-            'MeanHR':   float(feat_dict.get('MeanHR', 0)),
-            'SCL_mean': float(feat_dict.get('SCL_mean', 0)),
-            'SCR_count': float(feat_dict.get('SCR_count', 0))
-        },
-        'features_array': features_array
+            'AVNN':        float(feat_dict.get('AVNN', 0)),
+            'MeanHR':      float(feat_dict.get('MeanHR', 0)),
+            'SCL_mean':    float(feat_dict.get('SCL_mean', 0)),
+            'SCR_count':   float(feat_dict.get('SCR_count', 0))
+        }
     })
 
 
-@app.route('/simulate/stop', methods=['POST'])
-def stop_simulation():
-    """Stop active simulation."""
-    data    = request.json
-    user_id = data.get('user_id', 'demo_user')
-
-    if user_id in active_simulations:
-        sim = active_simulations[user_id]
-        end_session(user_id, sim['session_id'])
-        del active_simulations[user_id]
-
-    return jsonify({'success': True, 'stopped': True})
+@app.route('/devices/<device_id>/status', methods=['GET'])
+def device_status(device_id):
+    return jsonify(get_device_status(device_id))
 
 
-@app.route('/simulate/subjects', methods=['GET'])
-def get_subjects():
-    """Get list of available simulation subjects with summaries."""
-    subjects = []
-    for sid in WESAD_SUBJECTS:
-        summary = get_subject_summary(sid)
-        if summary:
-            subjects.append(summary)
-    return jsonify({'subjects': subjects})
-
-
-# PSS-4 endpoint 
 @app.route('/pss4', methods=['POST'])
 def submit_pss4():
-    """
-    Submit PSS-4 questionnaire answers.
-    Body: {user_id, session_id, q1, q2, q3, q4}
-    Each question: 0-4 (Never to Very Often)
-    """
     data       = request.json
     user_id    = data.get('user_id', 'user_001')
     session_id = data.get('session_id', 'session_001')
@@ -369,53 +325,43 @@ def submit_pss4():
 
     score = save_pss4(user_id, session_id, q1, q2, q3, q4)
 
-    if score <= 6:
-        level = 'Normal'
-    elif score <= 12:
-        level = 'Pre-stress'
-    else:
-        level = 'Stress'
+    level = (
+        'Normal' if score <= 6 else
+        'Stress' if score <= 12 else
+        'High Stress'
+    )
 
     return jsonify({
-        'success':    True,
-        'score':      score,
-        'level':      level,
-        'max_score':  16
+        'success':   True,
+        'score':     score,
+        'level':     level,
+        'max_score': 16
     })
 
 
-# History endpoints 
 @app.route('/history/<user_id>', methods=['GET'])
 def get_history(user_id):
-    """Get recent session history for a user."""
-    sessions = get_recent_sessions(user_id, limit=10)
-    pss4     = get_pss4_history(user_id)
-
     return jsonify({
         'user_id':  user_id,
-        'sessions': sessions,
-        'pss4':     pss4
+        'sessions': get_recent_sessions(user_id, limit=10),
+        'pss4':     get_pss4_history(user_id)
     })
 
 
 @app.route('/history/<user_id>/<session_id>',
            methods=['GET'])
 def get_session_detail(user_id, session_id):
-    """Get predictions for a specific session."""
-    predictions = get_session_predictions(
-        user_id, session_id
-    )
     return jsonify({
-        'user_id':    user_id,
-        'session_id': session_id,
-        'predictions': predictions
+        'user_id':     user_id,
+        'session_id':  session_id,
+        'predictions': get_session_predictions(
+            user_id, session_id
+        )
     })
 
 
-#  Baseline endpoint 
 @app.route('/baseline/<user_id>', methods=['GET'])
 def get_baseline(user_id):
-    """Get current personal baseline for a user."""
     b_mean, b_std = load_baseline(user_id, feature_cols)
 
     if b_mean is None:
@@ -434,26 +380,8 @@ def get_baseline(user_id):
     })
 
 
-#  Demo helper endpoint 
-@app.route('/demo/best_subject', methods=['GET'])
-def best_demo_subject():
-    """Returns best subject for viva demo."""
-    sid = find_stress_transition_subject()
-    return jsonify({
-        'subject_id': sid,
-        'reason':     'Most pre-stress windows for demo'
-    })
-
-
-# ── EMA update endpoint ───────────────────────────────────────
 @app.route('/ema/update', methods=['POST'])
 def ema_update():
-    """
-    Called after simulation ends.
-    Computes EMA update from session windows.
-    Returns before/after comparison for display.
-    Body: {user_id, session_id}
-    """
     from backend.physiological.ema_service import (
         compute_session_mean,
         compute_ema_update,
@@ -461,54 +389,88 @@ def ema_update():
         interpret_ema_change,
     )
 
-    data = request.get_json(silent=True) or {}
-    user_id    = data.get('user_id', 'kasun')
+    data       = request.get_json(silent=True) or {}
+    user_id    = data.get('user_id', 'Wehara')
     session_id = data.get('session_id', '')
 
-    # Load current baseline
     old_mean, old_std = load_baseline(user_id, feature_cols)
-
     if old_mean is None:
         return jsonify({'error': 'No baseline found'}), 400
 
-    # Get all predictions from this session
-    predictions = get_session_predictions(user_id, session_id)
-
-    if not predictions:
+    predictions_data = get_session_predictions(
+        user_id, session_id
+    )
+    if not predictions_data:
         return jsonify({'error': 'No predictions found'}), 400
 
-    # Extract feature arrays from saved predictions
-    feature_arrays = []
-    for key, pred in predictions.items():
+    feature_arrays  = []
+    prediction_list = []
+
+    for key, pred in predictions_data.items():
         if 'features' in pred:
-            row = [pred['features'].get(f, 0.0) for f in feature_cols]
+            row = [
+                pred['features'].get(f, 0.0)
+                for f in feature_cols
+            ]
             feature_arrays.append(row)
+            prediction_list.append(
+                int(pred.get('prediction', 0))
+            )
 
     if len(feature_arrays) == 0:
         return jsonify({'error': 'No features found'}), 400
 
     feature_arrays = np.array(feature_arrays)
+    normal_count   = sum(
+        1 for p in prediction_list if p == 0
+    )
 
-    # Compute session mean
-    session_mean = compute_session_mean(feature_arrays)
+    session_mean = compute_session_mean(
+        feature_arrays,
+        predictions=prediction_list
+    )
+
     if session_mean is None:
-        return jsonify({'error': 'Session mean could not be computed'}), 400
+        return jsonify({
+            'success':        True,
+            'updated':        False,
+            'user_id':        user_id,
+            'session_id':     session_id,
+            'alpha':          EMA_ALPHA,
+            'n_windows':      len(feature_arrays),
+            'n_normal_used':  normal_count,
+            'reason':         'Fewer than 3 Normal windows in session',
+            'message': (
+                f'Baseline unchanged. Session had only '
+                f'{normal_count} Normal windows '
+                f'(minimum 3 required).'
+            ),
+            'interpretation': [
+                f'Session contained {len(feature_arrays)} windows '
+                f'total, {normal_count} classified as Normal.',
+                'Minimum 3 Normal windows required.',
+                'Your resting baseline remains stable.',
+            ],
+            'comparison': []
+        })
 
-    # Compute EMA update
-    new_mean = compute_ema_update(old_mean, session_mean)
+    new_mean       = compute_ema_update(old_mean, session_mean)
+    summary        = build_ema_summary(
+        old_mean, new_mean, feature_cols
+    )
+    interpretation = interpret_ema_change(
+        old_mean, new_mean, feature_cols
+    )
 
-    # Build summary for display
-    summary = build_ema_summary(old_mean, new_mean, feature_cols)
-    interpretation = interpret_ema_change(old_mean, new_mean, feature_cols)
-
-    # Save updated baseline to Firebase
     save_baseline(user_id, new_mean, old_std, feature_cols)
+    save_ema_update(
+        user_id, session_id,
+        old_mean, new_mean, feature_cols, EMA_ALPHA
+    )
 
-    # Save EMA history
-    save_ema_update(user_id, session_id, old_mean, new_mean, feature_cols, EMA_ALPHA)
-
-    # Build key features comparison for app display
-    key_features = ['AVNN', 'MeanHR', 'SCL_mean', 'SCR_count', 'SD1']
+    key_features = [
+        'AVNN', 'MeanHR', 'SCL_mean', 'SCR_count', 'SD1'
+    ]
     comparison = []
     for feat in key_features:
         if feat in feature_cols:
@@ -517,49 +479,59 @@ def ema_update():
                 'feature': feat,
                 'old':     round(float(old_mean[i]), 3),
                 'new':     round(float(new_mean[i]), 3),
-                'delta':   round(float(new_mean[i] - old_mean[i]), 3),
-                'formula': f"{EMA_ALPHA} × {round(float(session_mean[i]), 2)} + {1-EMA_ALPHA} × {round(float(old_mean[i]), 2)} = {round(float(new_mean[i]), 2)}"
+                'delta':   round(
+                    float(new_mean[i] - old_mean[i]), 3
+                ),
+                'formula': (
+                    f"{EMA_ALPHA} × "
+                    f"{round(float(session_mean[i]), 2)} + "
+                    f"{1-EMA_ALPHA} × "
+                    f"{round(float(old_mean[i]), 2)} = "
+                    f"{round(float(new_mean[i]), 2)}"
+                )
             })
 
     return jsonify({
         'success':        True,
+        'updated':        True,
         'user_id':        user_id,
         'session_id':     session_id,
         'alpha':          EMA_ALPHA,
         'n_windows':      len(feature_arrays),
+        'n_normal_used':  normal_count,
         'comparison':     comparison,
         'interpretation': interpretation,
-        'updated':        True
     })
 
 
 @app.route('/ema/history/<user_id>', methods=['GET'])
 def get_ema_history(user_id):
-    """Get full EMA history for a user."""
     ref  = _ref(f'ema_history/{user_id}')
     data = ref.get() or {}
-    return jsonify({'user_id': user_id, 'ema_history': data})
+    return jsonify({
+        'user_id':     user_id,
+        'ema_history': data
+    })
 
-# Run server 
+
 if __name__ == '__main__':
     print("=" * 50)
     print("STRESS DETECTION API SERVER")
     print("=" * 50)
-    print(f"Model: XGBoost, 22 features")
+    print(f"Model: XGBoost binary (Normal/Stress), {len(feature_cols)} features")
     print(f"Endpoints:")
     print(f"  GET  /health")
-    print(f"  POST /calibrate")
-    print(f"  POST /predict")
-    print(f"  POST /simulate/start")
-    print(f"  POST /simulate/next")
-    print(f"  POST /simulate/stop")
-    print(f"  GET  /simulate/subjects")
+    print(f"  POST /calibrate         ← real-ring baseline capture")
+    print(f"  POST /predict           ← binary (Normal/Stress) + trend")
+    print(f"  GET  /devices/<device_id>/status")
     print(f"  POST /pss4")
     print(f"  GET  /history/<user_id>")
     print(f"  GET  /baseline/<user_id>")
+    print(f"  POST /ema/update")
+    print(f"  GET  /ema/history/<user_id>")
     print("=" * 50)
     app.run(
         host='0.0.0.0',
-        port=5000, # my port
+        port=5000,
         debug=True
     )

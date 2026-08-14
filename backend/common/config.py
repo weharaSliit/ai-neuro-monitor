@@ -4,7 +4,7 @@
 
 import os
 
-# Paths 
+# Paths
 BASE_PATH = r"C:\Users\weha1\OneDrive\Documents\ResearchCode\ai-neuro-monitor"
 
 MODELS_PATH = os.path.join(
@@ -21,14 +21,17 @@ RESULTS_PATH = os.path.join(
     "results"
 )
 
-# Model files 
-MODEL_FILE    = os.path.join(MODELS_PATH, "best_model_obj1.pkl")
-SCALER_FILE   = os.path.join(MODELS_PATH, "scaler_obj1.pkl")
-FEATURES_FILE = os.path.join(MODELS_PATH, "feature_cols_obj1.pkl")
+# Model files — binary (Normal/Stress), trained on WESAD data
+# relabeled to match the ring's real task (see
+# physiological_signals/notebooks/05_binary_relabel_retrain.ipynb
+# and 04_feature_selection.ipynb for the 23-feature set). This is
+# the only model the backend loads — WESAD simulation mode has been
+# removed, the real ring is the only deployment target.
+MODEL_FILE    = os.path.join(MODELS_PATH, "best_model_obj1_v2.pkl")
+SCALER_FILE   = os.path.join(MODELS_PATH, "scaler_obj1_v2.pkl")
+FEATURES_FILE = os.path.join(MODELS_PATH, "feature_cols_obj1_v2.pkl")
 
-import json
-
-# Firebase 
+# Firebase
 _CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
 FIREBASE_CRED_FILE = os.path.join(_CONFIG_DIR, "serviceAccountKey.json")
 
@@ -47,21 +50,31 @@ FIREBASE_DB_URL = "https://stress-monitor-c39ee-default-rtdb.asia-southeast1.fir
 FIREBASE_NAMESPACE = "physiological"
 
 
-#  App settings 
-WESAD_SUBJECTS    = [2,3,4,5,6,7,8,9,10,11,13,14,15,16,17]
-WINDOW_STEP_SEC   = 2    # seconds between simulation windows
+#  App settings
 N_BASELINE_WIN    = 3    # windows for personal baseline
 EMA_ALPHA         = 0.2  # EMA learning rate
 
-#  Stress labels 
+# Stress labels — binary (Normal/Stress). WESAD's old "pre-stress"
+# was a synthetic transition-window label with no real ground truth
+# (~29 windows, F1 0.14-0.29 no matter what was tried), so it was
+# dropped entirely rather than carried forward.
+# "Trending toward stress" is a separate runtime indicator (see
+# TREND_RISING_THRESHOLD below), not a trained class — it never
+# overrides the Normal/Stress label.
 STRESS_LABELS = {
     0: "Normal",
-    1: "Pre-stress",
-    2: "Stress"
+    1: "Stress"
 }
 
 STRESS_COLORS = {
-    0: "#22c55e",   # green
-    1: "#f59e0b",   # amber
-    2: "#ef4444"    # red
+    0: "#22c55e",
+    1: "#ef4444"
 }
+
+# Only pool a real-ring prediction for future retraining if the model was
+# this confident AND the input signal was this clean.
+MIN_CONFIDENCE_FOR_RETRAIN     = 0.75
+MIN_SIGNAL_QUALITY_FOR_RETRAIN = 0.70
+
+# Fraction of state-machine "rising" votes needed to flag trending_toward_stress
+TREND_RISING_THRESHOLD = 0.35
