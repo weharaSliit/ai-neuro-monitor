@@ -34,6 +34,15 @@ FEATURES_FILE = os.path.join(MODELS_PATH, "feature_cols_obj1_v2.pkl")
 # Firebase
 _CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
 FIREBASE_CRED_FILE = os.path.join(_CONFIG_DIR, "serviceAccountKey.json")
+
+# Support for cloud hosting: load credentials from environment variable if it exists
+FIREBASE_CRED_DICT = None
+if "FIREBASE_CRED_JSON" in os.environ:
+    try:
+        FIREBASE_CRED_DICT = json.loads(os.environ["FIREBASE_CRED_JSON"])
+    except Exception as e:
+        print(f"Warning: Failed to parse FIREBASE_CRED_JSON env var: {e}")
+
 FIREBASE_DB_URL = "https://stress-monitor-c39ee-default-rtdb.asia-southeast1.firebasedatabase.app/"
 
 # Prefix all Firebase Realtime Database paths under this namespace
