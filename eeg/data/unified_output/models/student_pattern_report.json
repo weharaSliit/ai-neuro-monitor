@@ -1,0 +1,12 @@
+{
+  "stage8_gaps_filled": {
+    "8a_bilstm": "BiLSTM 2L\u00d764h, delta features, SEQ_LEN=20",
+    "8b_wrs_focal": "WeightedRandomSampler + FocalLoss(\u03b3=2.0)",
+    "8c_pr_threshold": "threshold=-0.035 (PR-curve F1-max)",
+    "8d_temp_scaling": "T=1.4870 (Guo 2017 NLL calibration)",
+    "8e_lead_time": "+0.25s predictor vs +2.10s baseline (+-1.85s advantage)"
+  },
+  "spiral_model_params": 145793,
+  "ap_score": 0.10632402400759697,
+  "k_ahead_seconds": 3.0
+}
