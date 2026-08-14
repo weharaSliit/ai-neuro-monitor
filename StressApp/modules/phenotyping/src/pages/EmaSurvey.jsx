@@ -1,12 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { 
+import {
     ChevronLeft, CheckCircle2, AlertCircle, Heart, Zap, Sparkles, Send
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
+import { getUserProfile } from '../utils/userStorage';
 
-const FLASK_BASE_URL = "http://localhost:5001";
-const USER_ID = "chathurika_001";
+const FLASK_BASE_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:5001";
 
 const PSS4_QUESTIONS = [
     {
@@ -42,17 +42,24 @@ const LIKERT_OPTIONS = [
 export function EmaSurvey() {
     const navigate = useNavigate();
     const { t } = useTheme();
+
+    // All useState hooks must come before any early return
     const [tab, setTab] = useState('siss'); // 'siss' (Quick Check) or 'pss4' (Weekly Survey)
-    
-    // SISS State (1-5 Scale)
     const [sissScore, setSissScore] = useState(3);
-    
-    // PSS-4 State
     const [pssAnswers, setPssAnswers] = useState({ 0: 2, 1: 2, 2: 2, 3: 2 });
-    
-    // Submission Status
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [submitSuccess, setSubmitSuccess] = useState(null);
+
+    const profile = getUserProfile();
+    const USER_ID = profile?.userId;
+
+    // Redirect unregistered users back to onboarding
+    useEffect(() => {
+        if (!USER_ID) navigate('/');
+    }, [USER_ID]);
+
+    // Guard: while redirect is in progress, render nothing
+    if (!USER_ID) return null;
 
     const handleSissSubmit = async () => {
         setIsSubmitting(true);
@@ -126,7 +133,7 @@ export function EmaSurvey() {
         <div className={`h-screen ${t.bg} flex flex-col font-sans overflow-hidden relative max-w-md mx-auto shadow-2xl`}>
             {/* Header */}
             <div className="p-4 flex items-center justify-between border-b border-white/10 z-10">
-                <button 
+                <button
                     onClick={() => navigate('/dashboard')}
                     className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-white/80 transition-colors"
                 >
@@ -147,8 +154,8 @@ export function EmaSurvey() {
                 <button
                     onClick={() => setTab('siss')}
                     className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
-                        tab === 'siss' 
-                            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40 shadow-lg shadow-rose-500/10' 
+                        tab === 'siss'
+                            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40 shadow-lg shadow-rose-500/10'
                             : 'bg-white/5 text-white/60 hover:bg-white/10'
                     }`}
                 >
@@ -158,8 +165,8 @@ export function EmaSurvey() {
                 <button
                     onClick={() => setTab('pss4')}
                     className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
-                        tab === 'pss4' 
-                            ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 shadow-lg shadow-indigo-500/10' 
+                        tab === 'pss4'
+                            ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 shadow-lg shadow-indigo-500/10'
                             : 'bg-white/5 text-white/60 hover:bg-white/10'
                     }`}
                 >
@@ -193,12 +200,12 @@ export function EmaSurvey() {
                                 <span className="text-xs text-rose-400 font-medium">5 - High Stress</span>
                             </div>
 
-                            <input 
-                                type="range" 
-                                min="1" 
-                                max="5" 
+                            <input
+                                type="range"
+                                min="1"
+                                max="5"
                                 step="1"
-                                value={sissScore} 
+                                value={sissScore}
                                 onChange={(e) => setSissScore(Number(e.target.value))}
                                 className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-rose-500"
                             />
@@ -209,8 +216,8 @@ export function EmaSurvey() {
                                         key={lvl}
                                         onClick={() => setSissScore(lvl)}
                                         className={`py-3 rounded-xl text-xs font-bold transition-all ${
-                                            sissScore === lvl 
-                                                ? 'bg-rose-500 text-white shadow-lg shadow-rose-500/30 scale-105' 
+                                            sissScore === lvl
+                                                ? 'bg-rose-500 text-white shadow-lg shadow-rose-500/30 scale-105'
                                                 : 'bg-white/5 text-white/60 hover:bg-white/10'
                                         }`}
                                     >

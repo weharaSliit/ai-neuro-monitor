@@ -1,189 +1,213 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
 import { BackHeader } from '../components/BackHeader';
 import { StatusBadge } from '../components/StatusBadge';
 import { SparkChart } from '../components/SparkChart';
-import { Info, ChevronRight } from 'lucide-react';
+import { Info, ChevronRight, Loader2 } from 'lucide-react';
+import { db } from '../firebase';
+import { ref, onValue } from 'firebase/database';
+import { getUserProfile } from '../utils/userStorage';
 
-const SIGNAL_DATA = {
+// Static configuration for titles and explanations
+const SIGNAL_CONFIG = {
     keyboard: {
         title: '⌨️ Keyboard Patterns',
-        status: 'elevated',
         measures: [
             {
+                id: 'dwell',
                 name: 'Dwell Time',
-                value: '145 ms',
-                baseline: '120 ms',
-                deviation: '+21%',
-                status: 'elevated',
-                bars: [65, 60, 58, 72, 68, 75, 80, 78, 85, 90],
                 explanation: 'Dwell time is how long you hold each key down when typing. When you\'re stressed, your fingers tend to press keys for longer because muscle tension increases and fine motor control becomes less precise.',
                 color: '#f59e0b',
+                unit: 'ms'
             },
             {
+                id: 'flight',
                 name: 'Flight Time',
-                value: '210 ms',
-                baseline: '195 ms',
-                deviation: '+8%',
-                status: 'normal',
-                bars: [50, 55, 48, 52, 60, 55, 58, 62, 57, 60],
                 explanation: 'Flight time is the gap between releasing one key and pressing the next. Longer flight times suggest slower cognitive processing, often linked to distraction or mental fatigue.',
                 color: '#10b981',
-            },
-            {
-                name: 'Typing Speed',
-                value: '38 WPM',
-                baseline: '48 WPM',
-                deviation: '-22%',
-                status: 'elevated',
-                bars: [80, 75, 72, 68, 65, 60, 55, 50, 48, 45],
-                explanation: 'Overall words typed per minute. A consistent drop in typing speed compared to your baseline is one of the strongest indicators of cognitive load and pre-perceived stress.',
-                color: '#f59e0b',
-            },
-        ],
-    },
-    screen: {
-        title: '📱 Screen On/Off Times',
-        status: 'elevated',
-        measures: [
-            {
-                name: 'Unlock Frequency',
-                value: '14 /hr',
-                baseline: '8 /hr',
-                deviation: '+75%',
-                status: 'anomalous',
-                bars: [30, 35, 40, 45, 55, 60, 70, 75, 80, 90],
-                explanation: 'How often you unlock your phone per hour. Frequent, short unlocks are a behavioral marker of restlessness or anxiety — your brain is seeking distraction.',
-                color: '#ef4444',
-            },
-            {
-                name: 'Session Duration',
-                value: '2.1 min',
-                baseline: '4.5 min',
-                deviation: '-53%',
-                status: 'elevated',
-                bars: [80, 75, 65, 55, 45, 40, 35, 30, 28, 25],
-                explanation: 'Average time per screen session. Very short sessions (unlock → check → lock) combined with high frequency indicates distracted behavior patterns.',
-                color: '#f59e0b',
-            },
-            {
-                name: 'Screen On Time',
-                value: '3.2 hrs',
-                baseline: '2.8 hrs',
-                deviation: '+14%',
-                status: 'normal',
-                bars: [50, 55, 52, 58, 60, 55, 62, 65, 60, 68],
-                explanation: 'Total screen-on duration today. Slight increases are normal, but combined with high unlock frequency, it suggests fragmented phone usage.',
-                color: '#10b981',
-            },
-        ],
+                unit: 'ms'
+            }
+        ]
     },
     scroll: {
         title: '📜 Screen Scrolling',
-        status: 'normal',
         measures: [
             {
+                id: 'scroll_vel',
                 name: 'Scroll Velocity',
-                value: '42 px/s',
-                baseline: '38 px/s',
-                deviation: '+11%',
-                status: 'normal',
-                bars: [45, 50, 48, 52, 55, 50, 48, 52, 55, 53],
                 explanation: 'How fast you scroll through content. Faster scrolling than usual can indicate impatience or difficulty focusing on content — a subtle pre-stress marker.',
                 color: '#10b981',
-            },
-            {
-                name: 'Scroll Frequency',
-                value: '120 /hr',
-                baseline: '105 /hr',
-                deviation: '+14%',
-                status: 'normal',
-                bars: [40, 45, 50, 48, 52, 55, 50, 58, 55, 60],
-                explanation: 'Number of scroll gestures per hour. Combined with velocity, this tells us whether you\'re browsing purposefully or rapidly cycling through content.',
-                color: '#10b981',
-            },
-        ],
+                unit: 'px/s'
+            }
+        ]
     },
-    notification: {
-        title: '🔔 Notification Response',
-        status: 'elevated',
+    app_switch: {
+        title: '🔄 App Switching Frequency',
         measures: [
             {
-                name: 'Response Delay',
-                value: '15 min',
-                baseline: '3 min',
-                deviation: '+400%',
-                status: 'anomalous',
-                bars: [20, 25, 30, 40, 50, 60, 70, 80, 85, 95],
-                explanation: 'Average time between receiving a notification and opening it. Significantly delayed responses suggest avoidance behavior — a well-documented pre-stress coping mechanism.',
-                color: '#ef4444',
-            },
-            {
-                name: 'Ignored Count',
-                value: '8 today',
-                baseline: '2 /day',
-                deviation: '+300%',
-                status: 'anomalous',
-                bars: [15, 20, 25, 30, 40, 50, 55, 65, 75, 85],
-                explanation: 'Notifications that were not opened at all. Ignoring notifications often correlates with feeling overwhelmed — the brain\'s way of reducing input.',
-                color: '#ef4444',
-            },
-        ],
+                id: 'switch_rate',
+                name: 'Switch Rate',
+                explanation: 'How often you switch between apps. High switching indicates multitasking and fragmented attention.',
+                color: '#8b5cf6',
+                unit: '/min'
+            }
+        ]
     },
     activity: {
         title: '🚶 Activity Context',
-        status: 'normal',
         measures: [
             {
-                name: 'Stationary Ratio',
-                value: '87%',
-                baseline: '82%',
-                deviation: '+6%',
-                status: 'normal',
-                bars: [75, 78, 80, 82, 85, 83, 86, 84, 87, 87],
-                explanation: 'Percentage of time you\'ve been stationary today. This is used as a noise filter — typing data collected while walking is excluded because physical movement affects keystroke timing.',
+                id: 'motion',
+                name: 'Motion Detected',
+                explanation: 'Whether significant physical motion (like walking) is detected. Motion invalidates keystroke timing analysis.',
                 color: '#10b981',
-            },
-            {
-                name: 'Current State',
-                value: 'Sitting',
-                baseline: '-',
-                deviation: '-',
-                status: 'normal',
-                bars: [90, 92, 88, 95, 90, 85, 92, 88, 95, 92],
-                explanation: 'Your current physical activity state detected via accelerometer. When you\'re stationary, your typing data is "clean" and reliable for stress analysis.',
-                color: '#10b981',
-            },
-        ],
-    },
+                unit: ''
+            }
+        ]
+    }
 };
 
 export function SignalDetail() {
     const { signalId } = useParams();
     const navigate = useNavigate();
     const { t, isDark } = useTheme();
+    const [liveData, setLiveData] = useState(null);
+    const [loading, setLoading] = useState(true);
 
-    const signal = SIGNAL_DATA[signalId];
-    if (!signal) {
+    const config = SIGNAL_CONFIG[signalId];
+    const profile = getUserProfile();
+    const userId = profile?.userId;
+
+    // Redirect unregistered users back to onboarding
+    useEffect(() => {
+        if (!userId) navigate('/');
+    }, [userId]);
+
+    useEffect(() => {
+        if (!config) {
+            setLoading(false);
+            return;
+        }
+
+        const metricsRef = ref(db, `phenotyping/data_logs/${userId}`);
+        const unsubscribe = onValue(metricsRef, (snapshot) => {
+            const rawData = snapshot.val();
+            if (rawData) {
+                const entries = Object.values(rawData).slice(-10); // Last 10 windows
+                const latest = entries[entries.length - 1];
+
+                let processedMeasures = [];
+
+                if (signalId === 'keyboard') {
+                    processedMeasures = [
+                        {
+                            ...config.measures[0],
+                            value: `${Math.round(latest.avg_dwell || 0)} ms`,
+                            baseline: '120 ms',
+                            deviation: latest.avg_dwell > 130 ? `+${Math.round((latest.avg_dwell - 120) / 120 * 100)}%` : '-',
+                            status: latest.avg_dwell > 150 ? 'anomalous' : latest.avg_dwell > 130 ? 'elevated' : 'normal',
+                            bars: entries.map(e => e.avg_dwell || 0)
+                        },
+                        {
+                            ...config.measures[1],
+                            value: `${Math.round(latest.avg_flight || 0)} ms`,
+                            baseline: '195 ms',
+                            deviation: '-',
+                            status: 'normal',
+                            bars: entries.map(e => e.avg_flight || 0)
+                        }
+                    ];
+                } else if (signalId === 'scroll') {
+                    processedMeasures = [
+                        {
+                            ...config.measures[0],
+                            value: `${Math.round(latest.scroll_velocity || 0)} px/s`,
+                            baseline: '38 px/s',
+                            deviation: '-',
+                            status: latest.scroll_velocity > 60 ? 'elevated' : 'normal',
+                            bars: entries.map(e => e.scroll_velocity || 0)
+                        }
+                    ];
+                } else if (signalId === 'app_switch') {
+                    processedMeasures = [
+                        {
+                            ...config.measures[0],
+                            value: `${(latest.app_switch_rate || 0).toFixed(1)} /min`,
+                            baseline: '2.0 /min',
+                            deviation: '-',
+                            status: 'normal',
+                            bars: entries.map(e => e.app_switch_rate || 0)
+                        }
+                    ];
+                } else if (signalId === 'activity') {
+                     processedMeasures = [
+                        {
+                            ...config.measures[0],
+                            value: latest.data_valid === false ? 'Motion' : 'Stationary',
+                            baseline: '-',
+                            deviation: '-',
+                            status: latest.data_valid === false ? 'elevated' : 'normal',
+                            bars: entries.map(e => e.data_valid === false ? 1 : 0)
+                        }
+                    ];
+                }
+
+                setLiveData({
+                    title: config.title,
+                    status: processedMeasures.some(m => m.status === 'anomalous') ? 'anomalous' : processedMeasures.some(m => m.status === 'elevated') ? 'elevated' : 'normal',
+                    measures: processedMeasures
+                });
+            } else {
+                // If NO data is available in Firebase, build EMPTY placeholders
+                const processedMeasures = config.measures.map(m => ({
+                    ...m, value: `-- ${m.unit}`, baseline: '--', deviation: '-', status: 'pending', bars: Array(10).fill(0), color: '#52525b'
+                }));
+                setLiveData({
+                    title: config.title,
+                    status: 'pending',
+                    measures: processedMeasures
+                });
+            }
+            setLoading(false);
+        });
+
+        return () => unsubscribe();
+    }, [userId, signalId, config]);
+
+    if (!config) {
         return (
-            <div className={`h-screen ${t.bg} flex items-center justify-center`}>
-                <p className={t.textMuted}>Signal not found</p>
+            <div className={`h-screen ${t.bg} flex flex-col font-sans overflow-y-auto hide-scrollbar`}>
+                <BackHeader title="Unknown Signal" />
+                <div className="flex-1 flex items-center justify-center">
+                    <p className={t.textMuted}>Signal not found</p>
+                </div>
             </div>
+        );
+    }
+
+    if (loading || !liveData) {
+        return (
+             <div className={`h-screen ${t.bg} flex flex-col font-sans overflow-y-auto hide-scrollbar`}>
+                <BackHeader title={config.title} />
+                <div className="flex-1 flex flex-col items-center justify-center pt-20">
+                    <Loader2 size={28} className="text-[#7c6bf7] animate-spin" />
+                </div>
+             </div>
         );
     }
 
     return (
         <div className={`h-screen ${t.bg} flex flex-col font-sans overflow-y-auto hide-scrollbar`}>
-            <BackHeader title={signal.title} />
+            <BackHeader title={liveData.title} />
 
             <div className="px-5 pb-10">
                 {/* Signal Status Header */}
                 <div className={`flex items-center justify-between mb-5 animate-fade-in`}>
                     <div className="flex items-center gap-2">
-                        <StatusBadge status={signal.status} />
+                        <StatusBadge status={liveData.status} />
                         <span className={`text-xs ${t.textMuted}`}>
-                            {signal.measures.length} measures tracked
+                            {liveData.measures.length} measures tracked
                         </span>
                     </div>
                     <button
@@ -197,7 +221,7 @@ export function SignalDetail() {
 
                 {/* Measure Cards */}
                 <div className="space-y-4 stagger-children">
-                    {signal.measures.map((measure, i) => {
+                    {liveData.measures.map((measure, i) => {
                         const barData = measure.bars.map((v, idx) => ({
                             val: v,
                             active: idx === measure.bars.length - 1,
@@ -225,6 +249,8 @@ export function SignalDetail() {
                                                 ? `${t.successBg} ${t.successText}`
                                                 : measure.status === 'elevated'
                                                     ? `${t.warningBg} ${t.warningText}`
+                                                    : measure.status === 'pending'
+                                                    ? 'bg-zinc-800 text-zinc-400'
                                                     : `${t.dangerBg} ${t.dangerText}`
                                             }`}>
                                             {measure.deviation}

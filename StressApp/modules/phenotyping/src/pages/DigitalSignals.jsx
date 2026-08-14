@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase';
 import { ref, onValue } from 'firebase/database';
 import { SignalDetailCard } from '../components/SignalDetailCard';
 import { BottomNav } from '../components/BottomNav';
 import { useTheme } from '../context/ThemeContext';
 import { Loader2 } from 'lucide-react';
-import { PHENOTYPING_USER_ID } from './PhenotypingDashboard';
+import { getUserProfile } from '../utils/userStorage';
 
 // Mock data generators for the 2 new signals
 function generateMockBars(count = 10, min = 20, max = 80) {
@@ -16,12 +17,21 @@ function generateMockBars(count = 10, min = 20, max = 80) {
 }
 
 export function DigitalSignals() {
+    const navigate = useNavigate();
     const { t, isDark } = useTheme();
     const [metrics, setMetrics] = useState(null);
     const [loading, setLoading] = useState(true);
-    const userId = PHENOTYPING_USER_ID;
+
+    const profile = getUserProfile();
+    const userId = profile?.userId;
+
+    // Redirect unregistered users back to onboarding
+    useEffect(() => {
+        if (!userId) navigate('/');
+    }, [userId]);
 
     useEffect(() => {
+        if (!userId) return;
         const metricsRef = ref(db, `phenotyping/data_logs/${userId}`);
         const unsubscribe = onValue(metricsRef, (snapshot) => {
             const rawData = snapshot.val();
@@ -68,16 +78,6 @@ export function DigitalSignals() {
                         status: latest.scroll_velocity > 60 ? 'elevated' : 'normal',
                     },
                     {
-                        signalId: 'notification',
-                        title: '🔔 Notification Response',
-                        value: `${Math.round(3 + Math.random() * 15)} min`,
-                        subtext: 'Response delay & ignored count',
-                        colorClass: 'bg-orange-500',
-                        bars: generateMockBars(10, 10, 90),
-                        trend: 'up',
-                        status: 'elevated',
-                    },
-                    {
                         signalId: 'activity',
                         title: '🚶 Activity Context',
                         value: latest.data_valid === false ? 'In motion' : 'Stationary',
@@ -91,13 +91,13 @@ export function DigitalSignals() {
                     }
                 );
             } else {
-                // Fallback mock data when Firebase has no data
+                // Empty state placeholders when Firebase has no data
+                const emptyBars = Array(10).fill({ val: 0, active: false });
                 formattedSignals.push(
-                    { signalId: 'keyboard', title: '⌨️ Keyboard Patterns', value: '126 ms', subtext: 'Typing rhythm & key press duration', colorClass: 'bg-emerald-500', bars: generateMockBars(), trend: 'down', status: 'normal' },
-                    { signalId: 'screen', title: '📱 Screen On/Off Times', value: '14 unlocks', subtext: 'Unlock frequency & session duration', colorClass: 'bg-orange-500', bars: generateMockBars(), trend: 'up', status: 'elevated' },
-                    { signalId: 'scroll', title: '📜 Screen Scrolling', value: '42 px/s', subtext: 'Scroll speed & frequency patterns', colorClass: 'bg-emerald-500', bars: generateMockBars(), trend: null, status: 'normal' },
-                    { signalId: 'notification', title: '🔔 Notification Response', value: '8 min', subtext: 'Response delay & ignored count', colorClass: 'bg-orange-500', bars: generateMockBars(), trend: 'up', status: 'elevated' },
-                    { signalId: 'activity', title: '🚶 Activity Context', value: 'Stationary', subtext: 'Physical activity detection & noise gate', colorClass: 'bg-emerald-500', bars: generateMockBars(10, 60, 95), trend: null, status: 'normal' },
+                    { signalId: 'keyboard', title: '⌨️ Keyboard Patterns', value: '-- ms', subtext: 'Typing rhythm & key press duration', colorClass: 'bg-zinc-600', bars: emptyBars, trend: null, status: 'pending' },
+                    { signalId: 'screen', title: '📱 Screen On/Off Times', value: '-- unlocks', subtext: 'Unlock frequency & session duration', colorClass: 'bg-zinc-600', bars: emptyBars, trend: null, status: 'pending' },
+                    { signalId: 'scroll', title: '📜 Screen Scrolling', value: '-- px/s', subtext: 'Scroll speed & frequency patterns', colorClass: 'bg-zinc-600', bars: emptyBars, trend: null, status: 'pending' },
+                    { signalId: 'activity', title: '🚶 Activity Context', value: '--', subtext: 'Physical activity detection & noise gate', colorClass: 'bg-zinc-600', bars: emptyBars, trend: null, status: 'pending' },
                 );
             }
 
@@ -106,7 +106,10 @@ export function DigitalSignals() {
         });
 
         return () => unsubscribe();
-    }, []);
+    }, [userId]);
+
+    // Guard: while redirect is in progress, render nothing
+    if (!userId) return null;
 
     if (loading) return (
         <div className={`h-screen ${t.bg} flex flex-col items-center justify-center gap-3`}>
@@ -133,7 +136,7 @@ export function DigitalSignals() {
             </div>
 
             <p className={`text-center text-[10px] ${t.textDim} font-bold uppercase tracking-widest py-3`}>
-                5 signals actively monitoring
+                4 signals actively monitoring
             </p>
 
             <BottomNav />

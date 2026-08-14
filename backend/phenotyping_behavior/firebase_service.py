@@ -11,7 +11,7 @@ if _BACKEND_ROOT not in sys.path:
     sys.path.insert(0, _BACKEND_ROOT)
 
 # Import the group's shared credentials and URL
-from common.config import FIREBASE_CRED_FILE, FIREBASE_DB_URL
+from common.config import FIREBASE_CRED_FILE, FIREBASE_DB_URL, FIREBASE_CRED_DICT
 
 # --- RESEARCH NAMESPACE ---
 # This ensures your data is stored under 'phenotyping/' in the database
@@ -25,7 +25,11 @@ def _ref(path):
 def init_firebase():
     """Initializes Firebase using the shared group credentials."""
     if not firebase_admin._apps:
-        cred = credentials.Certificate(FIREBASE_CRED_FILE)
+        if FIREBASE_CRED_DICT:
+            cred = credentials.Certificate(FIREBASE_CRED_DICT)
+        else:
+            cred = credentials.Certificate(FIREBASE_CRED_FILE)
+            
         firebase_admin.initialize_app(cred, {
             'databaseURL': FIREBASE_DB_URL
         })

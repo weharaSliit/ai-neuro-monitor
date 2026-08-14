@@ -12,12 +12,11 @@ export function BottomNav() {
         { icon: Home, label: 'Home', path: '/dashboard' },
         { icon: Activity, label: 'Signals', path: '/signals' },
         { icon: BarChart3, label: 'Analysis', path: '/analysis' },
-        { icon: Sparkles, label: 'Toolkit', path: '/toolkit' },
         { icon: User, label: 'Profile', path: '/profile' },
     ];
 
     return (
-        <div className={`fixed bottom-0 left-0 right-0 ${isDark ? 'glass-dark' : 'glass-light'} border-t ${t.navBorder} px-4 pt-2 pb-2 safe-bottom flex justify-between items-center z-50 max-w-md mx-auto`}>
+        <div className={`fixed bottom-0 left-0 right-0 ${isDark ? 'glass-dark' : 'glass-light'} border-t ${t.navBorder} px-4 md:px-12 pt-2 pb-2 safe-bottom flex justify-between items-center z-50 max-w-5xl mx-auto md:rounded-t-2xl md:shadow-2xl`}>
             {navItems.map((item) => {
                 const isActive = location.pathname === item.path ||
                     (item.path === '/signals' && location.pathname.startsWith('/signal'));
