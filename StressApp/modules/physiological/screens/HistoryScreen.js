@@ -45,11 +45,11 @@ export default function HistoryScreen() {
   const pss4     = history?.pss4     ? Object.entries(history.pss4)     : [];
 
   const stressDist = sessions.reduce((acc, [_, s]) => {
-    if (s.stress_label === 'Normal')     acc.normal++;
-    if (s.stress_label === 'Pre-stress') acc.prestress++;
-    if (s.stress_label === 'Stress')     acc.stress++;
+    if (s.stress_label === 'Normal')      acc.normal++;
+    if (s.stress_label === 'Stress')      acc.stress++;
+    if (s.stress_label === 'High Stress') acc.highStress++;
     return acc;
-  }, { normal: 0, prestress: 0, stress: 0 });
+  }, { normal: 0, stress: 0, highStress: 0 });
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
@@ -104,8 +104,8 @@ export default function HistoryScreen() {
             <Text style={[styles.cardTitle, { color: text }]}>Session Distribution</Text>
             <View style={styles.distRow}>
               <DistBar label="Normal" value={stressDist.normal} total={sessions.length} color="#10b981" dark={isDark} />
-              <DistBar label="Pre-stress" value={stressDist.prestress} total={sessions.length} color="#f59e0b" dark={isDark} />
-              <DistBar label="Stress" value={stressDist.stress} total={sessions.length} color="#ef4444" dark={isDark} />
+              <DistBar label="Stress" value={stressDist.stress} total={sessions.length} color="#f59e0b" dark={isDark} />
+              <DistBar label="High Stress" value={stressDist.highStress} total={sessions.length} color="#ef4444" dark={isDark} />
             </View>
           </View>
         )}
@@ -119,7 +119,7 @@ export default function HistoryScreen() {
             {pss4.slice(-5).reverse().map(([sid, data], i) => {
               const score = data.score || 0;
               const color = score <= 6 ? '#10b981' : score <= 12 ? '#f59e0b' : '#ef4444';
-              const level = score <= 6 ? 'Normal' : score <= 12 ? 'Pre-stress' : 'Stress';
+              const level = score <= 6 ? 'Normal' : score <= 12 ? 'Stress' : 'High Stress';
               return (
                 <View key={sid} style={[styles.pssRow, { borderBottomColor: border }]}>
                   <View style={[styles.pssCircle, { backgroundColor: color + '20', borderColor: color + '60' }]}>
@@ -147,15 +147,15 @@ export default function HistoryScreen() {
           {sessions.length === 0 && !loading && (
             <View style={styles.emptyState}>
               <Text style={styles.emptyEmoji}>🧠</Text>
-              <Text style={[styles.emptyText, { color: muted }]}>No sessions yet. Run a simulation to start.</Text>
+              <Text style={[styles.emptyText, { color: muted }]}>No sessions yet. Wear the ring to start.</Text>
             </View>
           )}
 
           {sessions.slice(-8).reverse().map(([sid, data], i) => {
             const dotColor =
-              data.stress_label === 'Normal'     ? '#10b981' :
-              data.stress_label === 'Pre-stress' ? '#f59e0b' :
-              data.stress_label === 'Stress'     ? '#ef4444' : '#334155';
+              data.stress_label === 'Normal'      ? '#10b981' :
+              data.stress_label === 'Stress'      ? '#f59e0b' :
+              data.stress_label === 'High Stress' ? '#ef4444' : '#334155';
 
             return (
               <View key={sid} style={[styles.sessionRow, { borderBottomColor: border }]}>

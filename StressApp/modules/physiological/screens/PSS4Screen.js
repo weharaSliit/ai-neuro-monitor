@@ -64,7 +64,8 @@ export default function PSS4Screen() {
       setResult(res.data); setSubmitted(true);
     } catch {
       const score = answers.reduce((a, b) => a + b, 0);
-      setResult({ score, level: score <= 6 ? 'Normal' : score <= 12 ? 'Pre-stress' : 'Stress', max_score: 16 });
+      const level = score <= 6 ? 'Normal' : score <= 12 ? 'Stress' : 'High Stress';
+      setResult({ score, level, max_score: 16 });
       setSubmitted(true);
     }
   };
@@ -72,8 +73,8 @@ export default function PSS4Screen() {
   const reset = () => { setAnswers([null,null,null,null]); setSubmitted(false); setResult(null); setActiveQ(0); progressAnim.setValue(0); };
 
   if (submitted && result) {
-    const color = result.level === 'Normal' ? '#10b981' : result.level === 'Pre-stress' ? '#f59e0b' : '#ef4444';
-    const emoji = result.level === 'Normal' ? '😌' : result.level === 'Pre-stress' ? '😰' : '😨';
+    const color = result.level === 'Normal' ? '#10b981' : result.level === 'Stress' ? '#f59e0b' : '#ef4444';
+    const emoji = result.level === 'Normal' ? '😌' : result.level === 'Stress' ? '😰' : '😨';
     const pct   = (result.score / (result.max_score || 16)) * 100;
 
     return (
@@ -94,21 +95,21 @@ export default function PSS4Screen() {
 
             {/* Score bar */}
             <View style={[styles.scoreBar, { backgroundColor: isDark ? '#1e3a5f' : '#e2e8f0' }]}>
-              <View style={[styles.scoreBarNormal,    { width: '37.5%' }]} />
-              <View style={[styles.scoreBarPrestress, { width: '37.5%' }]} />
-              <View style={[styles.scoreBarStress,    { width: '25%'   }]} />
+              <View style={[styles.scoreBarNormal,     { width: '37.5%' }]} />
+              <View style={[styles.scoreBarStress,     { width: '37.5%' }]} />
+              <View style={[styles.scoreBarHighStress, { width: '25%'   }]} />
               <View style={[styles.scoreMarker, { left: `${pct}%`, backgroundColor: color }]} />
             </View>
             <View style={styles.scoreLabels}>
               <Text style={[styles.scoreLabel, { color: '#10b981' }]}>Normal</Text>
-              <Text style={[styles.scoreLabel, { color: '#f59e0b' }]}>Pre-stress</Text>
-              <Text style={[styles.scoreLabel, { color: '#ef4444' }]}>Stress</Text>
+              <Text style={[styles.scoreLabel, { color: '#f59e0b' }]}>Stress</Text>
+              <Text style={[styles.scoreLabel, { color: '#ef4444' }]}>High Stress</Text>
             </View>
 
             <Text style={[styles.resultDesc, { color: muted }]}>
               {result.level === 'Normal' && 'Your perceived stress is within normal range. Continue monitoring daily.'}
-              {result.level === 'Pre-stress' && 'Moderate stress detected. Consider short breaks and relaxation techniques.'}
-              {result.level === 'Stress' && 'High perceived stress. This validates physiological detection — consider stress management.'}
+              {result.level === 'Stress' && 'Moderate stress detected. Consider short breaks and relaxation techniques.'}
+              {result.level === 'High Stress' && 'High perceived stress. This validates physiological detection — consider stress management.'}
             </Text>
 
             {lastSessionId && (
@@ -283,9 +284,9 @@ const styles = StyleSheet.create({
   resultMax:         { fontSize: 18, marginTop: -8, marginBottom: 6 },
   resultLevel:       { fontSize: 26, fontWeight: '900', marginBottom: 16 },
   scoreBar:          { width: '100%', height: 8, borderRadius: 4, overflow: 'hidden', flexDirection: 'row', position: 'relative', marginBottom: 4 },
-  scoreBarNormal:    { height: 8, backgroundColor: '#10b981' },
-  scoreBarPrestress: { height: 8, backgroundColor: '#f59e0b' },
-  scoreBarStress:    { height: 8, backgroundColor: '#ef4444' },
+  scoreBarNormal:     { height: 8, backgroundColor: '#10b981' },
+  scoreBarStress:     { height: 8, backgroundColor: '#f59e0b' },
+  scoreBarHighStress: { height: 8, backgroundColor: '#ef4444' },
   scoreMarker:       { position: 'absolute', top: -3, width: 4, height: 14, borderRadius: 2 },
   scoreLabels:       { flexDirection: 'row', justifyContent: 'space-between', width: '100%', marginBottom: 16 },
   scoreLabel:        { fontSize: 10, fontWeight: '700' },

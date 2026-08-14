@@ -7,9 +7,9 @@ export const COLORS = {
   normal:        '#10b981',
   normalLight:   '#34d399',
   normalGlow:    '#10b98118',
-  prestress:     '#f59e0b',
-  prestressLight:'#fbbf24',
-  prestressGlow: '#f59e0b18',
+  warning:       '#f59e0b',
+  warningLight:  '#fbbf24',
+  warningGlow:   '#f59e0b18',
   stress:        '#ef4444',
   stressLight:   '#f87171',
   stressGlow:    '#ef444418',
@@ -43,6 +43,3 @@ export const COLORS = {
   },
 };
 
-export const STRESS_COLORS = { 0: COLORS.normal, 1: COLORS.prestress, 2: COLORS.stress };
-export const STRESS_LABELS = { 0: 'Normal', 1: 'Pre-Stress', 2: 'Stress' };
-export const STRESS_EMOJI  = { 0: '😌', 1: '😰', 2: '😨' };

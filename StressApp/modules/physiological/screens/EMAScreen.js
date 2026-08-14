@@ -7,7 +7,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import axios from 'axios';
 import { useTheme } from '../config/ThemeContext';
 import { useAppState } from './AppState';
-import { API_BASE, getSimulationUserId } from '../config/config';
+import { API_BASE, REAL_USER_ID } from '../config/config';
 
 function AnimatedCounter({ value, color }) {
   const anim = useRef(new Animated.Value(0)).current;
@@ -22,14 +22,14 @@ function AnimatedCounter({ value, color }) {
 }
 
 export default function EMAScreen() {
-  const { isDark, theme }                             = useTheme();
-  const { lastEmaResult, lastSessionId, selectedSubject } = useAppState();
+  const { isDark, theme }                  = useTheme();
+  const { lastEmaResult, lastSessionId }   = useAppState();
   const [emaData, setEmaData]  = useState(lastEmaResult);
   const [loading, setLoading]  = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const insets   = useSafeAreaInsets();
 
-  const simUserId = getSimulationUserId(selectedSubject);
+  const userId = REAL_USER_ID;
 
   const bg     = isDark ? '#060d1a' : '#f0f9ff';
   const card   = isDark ? '#0f1f35' : '#ffffff';
@@ -46,7 +46,7 @@ export default function EMAScreen() {
       feature: f, old: changes[f].old, new: changes[f].new,
       delta: changes[f].delta, formula: `α × session + (1-α) × previous = new`,
     }));
-    return { success: true, user_id: simUserId, session_id: sessionId,
+    return { success: true, user_id: userId, session_id: sessionId,
       alpha: entry.alpha, n_windows: entry.n_windows ?? null,
       comparison, interpretation: ['Loaded from EMA history.'], updated: true,
       timestamp: entry.timestamp };
@@ -54,7 +54,7 @@ export default function EMAScreen() {
 
   const loadLatestFromHistory = async () => {
     try {
-      const res     = await axios.get(`${API_BASE}/ema/history/${simUserId}`);
+      const res     = await axios.get(`${API_BASE}/ema/history/${userId}`);
       const history = res.data?.ema_history || {};
       const entries = Object.entries(history).map(([sid, entry]) => ({ sid, entry })).filter(x => x.entry);
       if (entries.length === 0) return null;
@@ -83,14 +83,14 @@ export default function EMAScreen() {
       }
     })();
     return () => { mounted = false; };
-  }, [simUserId]);
+  }, [userId]);
 
   const manualRefresh = async () => {
     const sessionToUse = lastSessionId || emaData?.session_id;
     if (!sessionToUse) { Alert.alert('No Session', 'Run a simulation first.'); return; }
     setLoading(true);
     try {
-      const res = await axios.post(`${API_BASE}/ema/update`, { user_id: simUserId, session_id: sessionToUse });
+      const res = await axios.post(`${API_BASE}/ema/update`, { user_id: userId, session_id: sessionToUse });
       setEmaData(res.data);
       Animated.timing(fadeAnim, { toValue: 1, duration: 600, useNativeDriver: true }).start();
     } catch (e) {
@@ -111,7 +111,7 @@ export default function EMAScreen() {
             Run a simulation first. The EMA continual learning update appears here automatically after each session.
           </Text>
           <View style={[styles.emptyBadge, { backgroundColor: '#6366f115', borderColor: '#6366f140' }]}>
-            <Text style={styles.emptyBadgeText}>Watching: {simUserId}</Text>
+            <Text style={styles.emptyBadgeText}>Watching: {userId}</Text>
           </View>
         </View>
       </SafeAreaView>
@@ -132,7 +132,7 @@ export default function EMAScreen() {
             <Text style={[styles.subtitle, { color: '#6366f1' }]}>Novel Contribution N4 — Continual Learning</Text>
           </View>
           <View style={[styles.userBadge, { backgroundColor: '#6366f115', borderColor: '#6366f140' }]}>
-            <Text style={styles.userBadgeText}>{simUserId}</Text>
+            <Text style={styles.userBadgeText}>{userId}</Text>
           </View>
         </View>
 
@@ -184,8 +184,10 @@ export default function EMAScreen() {
           {emaData.n_normal_used !== undefined && (
             <View style={styles.windowsBreakdown}>
               <WindowChip value={emaData.n_normal_used} label="Normal used" color="#10b981" dark={isDark} />
-              <WindowChip value={emaData.n_prestress}   label="Pre-stress excluded" color="#f59e0b" dark={isDark} />
-              <WindowChip value={emaData.n_stress}      label="Stress excluded" color="#ef4444" dark={isDark} />
+              <WindowChip
+                value={emaData.n_windows !== undefined ? emaData.n_windows - emaData.n_normal_used : undefined}
+                label="Stress excluded" color="#ef4444" dark={isDark}
+              />
             </View>
           )}
           {emaData.comparison?.map((item, i) => (
