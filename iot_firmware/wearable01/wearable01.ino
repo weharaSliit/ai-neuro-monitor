@@ -7,9 +7,9 @@
 #include "MAX30105.h"
 #include "heartRate.h"
 
-const char* WIFI_SSID     = "Dialog 4G";      // fill in
-const char* WIFI_PASSWORD = "weha3212002";  // fill in
-const char* MQTT_BROKER   = "192.168.8.100";
+const char* WIFI_SSID     = "Wehara's A07";   // fill in
+const char* WIFI_PASSWORD = "wehara1216";  // fill in
+const char* MQTT_BROKER   = "10.76.255.56";
 const int   MQTT_PORT     = 1883;
 const char* MQTT_TOPIC    = "mindpulse/wearable01/sensors";
 const char* DEVICE_ID     = "wearable01";
