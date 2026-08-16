@@ -191,9 +191,14 @@ def predict():
     actual_fs       = data.get('actual_fs', 50)
 
     # ── Validate inputs ───────────────────────────────────────
-    if len(ibi_array) < 4:
+    # 10, not 4 — matches min_ibi_count in notebook 03's training
+    # windowing (extract_windows_and_features). A window with fewer
+    # beats than training ever considered valid can let a single
+    # missed-beat (doubled interval) skew a small-sample AVNN/MeanHR
+    # average well outside anything the model was trained on.
+    if len(ibi_array) < 10:
         return jsonify({
-            'error': 'ibi_array too short — minimum 4 IBI values',
+            'error': 'ibi_array too short — minimum 10 IBI values',
             'hint':  'Ensure MAX30102 is detecting R-peaks correctly'
         }), 400
 

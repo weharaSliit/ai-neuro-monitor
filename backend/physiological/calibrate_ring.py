@@ -29,16 +29,20 @@ if __package__ is None:
 
 from backend.common.config import N_BASELINE_WIN
 
-MQTT_BROKER = "192.168.8.100"
+MQTT_BROKER = "10.76.255.56"
 MQTT_PORT   = 1883
 MQTT_TOPIC  = "mindpulse/wearable01/sensors"
 
-FLASK_URL   = "http://192.168.8.100:5000/calibrate"
+FLASK_URL   = "http://10.76.255.56:5000/calibrate"
 USER_ID     = "Wehara"
 GSR_CAL     = 2872   # keep in sync with mqtt_bridge.py
 
 WINDOW_SEC = 60
 N_WINDOWS  = N_BASELINE_WIN  # 3
+SETTLE_SEC = 30  # discard this many seconds of data before capturing —
+                 # GSR electrode straps take a bit to reach steady skin
+                 # contact, and capturing that transient into the
+                 # baseline skews it (observed directly during testing)
 
 collected_windows = []
 window_start = time.time()
@@ -53,7 +57,7 @@ def close_window():
         duration = WINDOW_SEC
     actual_fs = max(1, round(len(gsr_buf) / duration))
 
-    if len(ibi_buf) < 4 or len(gsr_buf) < 20 or len(acc_buf) < 10:
+    if len(ibi_buf) < 10 or len(gsr_buf) < 20 or len(acc_buf) < 10:
         print(f"  Window skipped — insufficient data "
               f"(ibi={len(ibi_buf)}, gsr={len(gsr_buf)}, acc={len(acc_buf)}). "
               f"Stay still, keep your finger steady on the sensor.")
@@ -97,7 +101,8 @@ def on_message(client, userdata, msg):
             client.disconnect()
 
 
-print(f"Calibration: sit comfortably and relax for ~{N_WINDOWS * WINDOW_SEC // 60} minute(s).")
+print(f"Calibration: sit comfortably and relax for ~{N_WINDOWS * WINDOW_SEC // 60} minute(s) "
+      f"(plus a {SETTLE_SEC}s settling period first).")
 print("Keep your finger steady on the MAX30102, don't talk or move.")
 print("Starting MQTT calibration listener...\n")
 
@@ -106,6 +111,16 @@ client.on_connect = on_connect
 client.on_message = on_message
 client.connect(MQTT_BROKER, MQTT_PORT, 60)
 client.loop_start()
+
+print(f"Letting the sensor settle for {SETTLE_SEC}s before capturing "
+      f"(electrode contact needs a moment to stabilize)...")
+time.sleep(SETTLE_SEC)
+
+# Discard whatever accumulated during settling and start the real
+# capture window fresh from here.
+ibi_buf, gsr_buf, acc_buf = [], [], []
+window_start = time.time()
+print("Settling done — capturing baseline now.\n")
 
 while len(collected_windows) < N_WINDOWS:
     time.sleep(1)

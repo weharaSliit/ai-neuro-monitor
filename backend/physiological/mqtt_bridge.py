@@ -30,16 +30,21 @@ from backend.physiological.firebase_service import (
     init_firebase, save_device_heartbeat
 )
 
-MQTT_BROKER = "192.168.8.100"
+MQTT_BROKER = "10.76.255.56"
 MQTT_PORT   = 1883
 MQTT_TOPIC  = "mindpulse/wearable01/sensors"
 
-FLASK_URL   = "http://192.168.8.100:5000/predict"
+FLASK_URL   = "http://10.76.255.56:5000/predict"
 USER_ID     = "Wehara"
 GSR_CAL     = 2872   # measured: electrodes off, raw analogRead(GSR_PIN)
 
 WINDOW_SEC           = 60
 HEARTBEAT_MIN_GAP_SEC = 5   # don't hammer Firebase at ~5 msgs/sec
+SETTLE_SEC           = 30  # discard this many seconds of data right after
+                            # startup — GSR electrode straps take a bit to
+                            # reach steady skin contact, and capturing that
+                            # transient into the first live window skews it
+                            # (same reasoning as calibrate_ring.py)
 
 init_firebase()
 
@@ -57,7 +62,7 @@ def send_window():
         duration = WINDOW_SEC
     actual_fs = max(1, round(len(gsr_buf) / duration))
 
-    if len(ibi_buf) < 4 or len(gsr_buf) < 20 or len(acc_buf) < 10:
+    if len(ibi_buf) < 10 or len(gsr_buf) < 20 or len(acc_buf) < 10:
         print(f"[Window {window_idx}] skipped — insufficient data "
               f"(ibi={len(ibi_buf)}, gsr={len(gsr_buf)}, acc={len(acc_buf)})")
     else:
@@ -126,4 +131,22 @@ client.on_message = on_message
 
 print("Starting MQTT -> Flask bridge...")
 client.connect(MQTT_BROKER, MQTT_PORT, 60)
-client.loop_forever()
+client.loop_start()
+
+print(f"Letting the sensor settle for {SETTLE_SEC}s before the first "
+      f"window starts (electrode contact needs a moment to stabilize)...")
+time.sleep(SETTLE_SEC)
+
+# Discard whatever accumulated during settling and start window 0 fresh.
+ibi_buf, gsr_buf, acc_buf = [], [], []
+window_start = time.time()
+window_idx   = 0
+print("Settling done — live predictions starting now.\n")
+
+try:
+    while True:
+        time.sleep(1)
+except KeyboardInterrupt:
+    print("\nStopping bridge...")
+    client.loop_stop()
+    client.disconnect()
