@@ -32,6 +32,15 @@ export function DigitalSignals() {
 
     useEffect(() => {
         if (!userId) return;
+
+        const cached = localStorage.getItem(`cache_digital_signals_${userId}`);
+        if (cached) {
+            try {
+                setMetrics(JSON.parse(cached));
+                setLoading(false);
+            } catch (e) {}
+        }
+
         const metricsRef = ref(db, `phenotyping/data_logs/${userId}`);
         const unsubscribe = onValue(metricsRef, (snapshot) => {
             const rawData = snapshot.val();
@@ -103,6 +112,7 @@ export function DigitalSignals() {
 
             setMetrics(formattedSignals);
             setLoading(false);
+            localStorage.setItem(`cache_digital_signals_${userId}`, JSON.stringify(formattedSignals));
         });
 
         return () => unsubscribe();

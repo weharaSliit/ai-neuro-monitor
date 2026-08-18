@@ -88,16 +88,37 @@ export default function PhenotypingDashboard() {
 
     // ── 1. Live stress score from predictions ──────────────────────────────
     useEffect(() => {
+        // Load from cache first for offline support
+        const cached = localStorage.getItem(`cache_predictions_${userId}`);
+        if (cached) {
+            try {
+                const parsed = JSON.parse(cached);
+                setStressData(parsed.stressData);
+                setPrevScore(parsed.prevScore);
+            } catch (e) { console.error('Cache read error', e); }
+        }
+
         const predictionsRef = query(ref(db, `phenotyping/predictions/${userId}`), limitToLast(2));
         const unsubscribe = onValue(predictionsRef, (snapshot) => {
             const val = snapshot.val();
             if (val) {
                 const entries = Object.values(val);
                 const latest = entries[entries.length - 1];
+                
+                let newPrevScore = null;
                 if (entries.length >= 2) {
-                    setPrevScore(entries[entries.length - 2].stress_score);
+                    newPrevScore = entries[entries.length - 2].stress_score;
                 }
-                setStressData({ score: latest.stress_score, label: latest.label });
+                const newStressData = { score: latest.stress_score, label: latest.label };
+
+                setPrevScore(newPrevScore);
+                setStressData(newStressData);
+
+                // Save to cache for offline support
+                localStorage.setItem(`cache_predictions_${userId}`, JSON.stringify({
+                    stressData: newStressData,
+                    prevScore: newPrevScore
+                }));
             }
         });
         return () => unsubscribe();
@@ -105,6 +126,16 @@ export default function PhenotypingDashboard() {
 
     // ── 2. Live behavioral window + user baselines ─────────────────────────
     useEffect(() => {
+        // Load logs from cache first
+        const cachedLogs = localStorage.getItem(`cache_logs_${userId}`);
+        if (cachedLogs) {
+            try {
+                const parsed = JSON.parse(cachedLogs);
+                setLiveWindow(parsed.liveWindow);
+                setLastUpdated(parsed.lastUpdated);
+            } catch (e) {}
+        }
+
         const logsRef = ref(db, `phenotyping/data_logs/${userId}`);
         const unsubLogs = onValue(logsRef, (snapshot) => {
             const raw = snapshot.val();
@@ -112,14 +143,30 @@ export default function PhenotypingDashboard() {
                 const entries = Object.entries(raw);
                 entries.sort((a, b) => a[0].localeCompare(b[0]));
                 const [latestKey, latestData] = entries[entries.length - 1];
+                
                 setLiveWindow(latestData);
                 setLastUpdated(latestKey);
+
+                localStorage.setItem(`cache_logs_${userId}`, JSON.stringify({
+                    liveWindow: latestData,
+                    lastUpdated: latestKey
+                }));
             }
         });
 
+        // Load baselines from cache first
+        const cachedBaselines = localStorage.getItem(`cache_baselines_${userId}`);
+        if (cachedBaselines) {
+            try { setBaselines(JSON.parse(cachedBaselines)); } catch (e) {}
+        }
+
         const baselinesRef = ref(db, `phenotyping/users/${userId}/baselines`);
         get(baselinesRef).then((snap) => {
-            if (snap.exists()) setBaselines(snap.val());
+            if (snap.exists()) {
+                const val = snap.val();
+                setBaselines(val);
+                localStorage.setItem(`cache_baselines_${userId}`, JSON.stringify(val));
+            }
         });
 
         return () => unsubLogs();
@@ -385,9 +432,7 @@ export default function PhenotypingDashboard() {
                     <div className="grid grid-cols-4 gap-3">
                         {[
                             { emoji: '📝', label: 'EMA Survey', path: '/ema-survey' },
-                            { emoji: '💡', label: 'Log mood', path: '/toolkit' },
                             { emoji: '📊', label: 'History', path: '/analysis' },
-                            { icon: Wind, label: 'Breathe', path: '/toolkit' },
                         ].map((action, i) => (
                             <button
                                 key={i}

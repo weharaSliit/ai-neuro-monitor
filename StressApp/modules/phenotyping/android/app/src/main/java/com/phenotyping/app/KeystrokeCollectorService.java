@@ -10,6 +10,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -42,15 +43,14 @@ public class KeystrokeCollectorService extends AccessibilityService {
     //   Option B (USB tunnel): run once → adb reverse tcp:5001 tcp:5001
     //   then change FLASK_BASE_URL to "http://localhost:5001"
     // -----------------------------------------------------------------------
-    private static final String FLASK_BASE_URL   = "http://192.168.1.6:5001";
+    
+    //private static final String FLASK_BASE_URL   = "http://192.168.1.6:5001";
+    private static final String FLASK_BASE_URL   = "http://127.0.0.1:5001";
     private static final String PREDICT_ENDPOINT = FLASK_BASE_URL + "/behavior/predict";
 
     // Firebase REST — only used for the UI dashboard display
-    private static final String FIREBASE_URL =
-        "https://stress-monitor-c39ee-default-rtdb.asia-southeast1.firebasedatabase.app/phenotyping/metrics/s002.json";
-
-    // Hardcoded for now; replace with your auth system's user ID later
-    private static final String USER_ID = "chathurika_001";
+    private static final String FIREBASE_BASE_URL =
+        "https://stress-monitor-c39ee-default-rtdb.asia-southeast1.firebasedatabase.app/phenotyping/metrics/";
 
     // Upload window — 15 s for demo/testing (change back to 5 * 60 * 1000L for production)
     private static final long UPLOAD_INTERVAL_MS = 15 * 1000L;
@@ -389,6 +389,11 @@ public class KeystrokeCollectorService extends AccessibilityService {
         }
     }
 
+    private String getUserId() {
+        SharedPreferences prefs = getSharedPreferences("CapacitorStorage", Context.MODE_PRIVATE);
+        return prefs.getString("user_id", "anonymous_user");
+    }
+
     // -----------------------------------------------------------------------
     // Flush: compute stats → POST to Flask → secondary write to Firebase UI
     // -----------------------------------------------------------------------
@@ -411,6 +416,7 @@ public class KeystrokeCollectorService extends AccessibilityService {
         final int        unlockSnapshot    = unlockCount;
         final int        appSwitchSnapshot = appSwitchCount;
         final long       elapsed           = Math.max(1, (System.currentTimeMillis() - sessionStartTime) / 60000L);
+        final String     currentUserId     = getUserId();
 
         // T7-A: Snapshot the current activity validity flag at upload time
         final boolean windowDataValid = this.dataValid;
@@ -452,7 +458,7 @@ public class KeystrokeCollectorService extends AccessibilityService {
                 double appSwitchRate   = (double) appSwitchSnapshot / elapsed;
 
                 JSONObject payload = new JSONObject();
-                payload.put("user_id",          USER_ID);
+                payload.put("user_id",           currentUserId);
                 payload.put("dwell_times",       dwellArr);        // approximated
                 payload.put("flight_times",      flightArr);       // real inter-keystroke intervals
                 payload.put("scroll_velocity",   avgScroll);
@@ -473,10 +479,10 @@ public class KeystrokeCollectorService extends AccessibilityService {
                     JSONObject resp = new JSONObject(flaskResponse);
                     String label    = resp.optString("prediction", "Unknown");
                     double severity = resp.optDouble("severity", 0.0);
-                    pushDashboardUpdate(label, severity, unlockSnapshot);
+                    pushDashboardUpdate(currentUserId, label, severity, unlockSnapshot);
                 } else {
                     Log.w(TAG, "⚠️ Flask unreachable — writing raw metrics to Firebase only");
-                    pushRawMetricsToFirebase(flightSnapshot, avgScroll, unlockSnapshot, elapsed);
+                    pushRawMetricsToFirebase(currentUserId, flightSnapshot, avgScroll, unlockSnapshot, elapsed);
                 }
 
             } catch (Exception e) {
@@ -488,7 +494,7 @@ public class KeystrokeCollectorService extends AccessibilityService {
     // -----------------------------------------------------------------------
     // Firebase: write the model's output (label + severity) for the UI
     // -----------------------------------------------------------------------
-    private void pushDashboardUpdate(String label, double severity, int unlocks) {
+    private void pushDashboardUpdate(String userId, String label, double severity, int unlocks) {
         try {
             JSONObject payload = new JSONObject();
             payload.put("stress_score",  severity);
@@ -497,7 +503,8 @@ public class KeystrokeCollectorService extends AccessibilityService {
             payload.put("source",        "flask_ocsvm");
             payload.put("timestamp",     System.currentTimeMillis());
 
-            String result = httpPatch(FIREBASE_URL, payload.toString());
+            String targetUrl = FIREBASE_BASE_URL + userId + ".json";
+            String result = httpPatch(targetUrl, payload.toString());
             Log.d(TAG, "☁️ Dashboard updated: " + label + " (" + severity + ") → " + result);
         } catch (Exception e) {
             Log.e(TAG, "Firebase dashboard update failed", e);
@@ -507,7 +514,7 @@ public class KeystrokeCollectorService extends AccessibilityService {
     // -----------------------------------------------------------------------
     // Firebase fallback: write raw computed metrics when Flask is unreachable
     // -----------------------------------------------------------------------
-    private void pushRawMetricsToFirebase(List<Long> flights, double avgScroll,
+    private void pushRawMetricsToFirebase(String userId, List<Long> flights, double avgScroll,
                                           int unlocks, long elapsedMin) {
         try {
             long avgFlight = flights.isEmpty() ? 0 :
@@ -522,7 +529,8 @@ public class KeystrokeCollectorService extends AccessibilityService {
             payload.put("source",           "raw_accessibility");
             payload.put("timestamp",        System.currentTimeMillis());
 
-            httpPatch(FIREBASE_URL, payload.toString());
+            String targetUrl = FIREBASE_BASE_URL + userId + ".json";
+            httpPatch(targetUrl, payload.toString());
         } catch (Exception e) {
             Log.e(TAG, "Firebase raw fallback failed", e);
         }

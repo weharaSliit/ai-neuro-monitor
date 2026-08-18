@@ -9,9 +9,9 @@ public class BootReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
         if (Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction())) {
-            Log.d("PhenoCare_Sensor", "Phone rebooted. Sensor logic ready for user activation.");
-            // Note: Accessibility Services are automatically restarted by Android
-            // if they were ON before the reboot.
+            Log.d("PhenoCare_Sensor", "Phone rebooted. Rescheduling EMA notifications.");
+            // Re-schedule EMA survey alarms after reboot (AlarmManager clears on reboot)
+            EmaNotificationScheduler.scheduleAll(context);
         }
     }
 }

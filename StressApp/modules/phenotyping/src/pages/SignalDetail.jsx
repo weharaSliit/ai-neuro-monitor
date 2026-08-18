@@ -65,6 +65,18 @@ const SIGNAL_CONFIG = {
                 unit: ''
             }
         ]
+    },
+    screen: {
+        title: '📱 Screen On/Off Times',
+        measures: [
+            {
+                id: 'unlocks',
+                name: 'Unlock Frequency',
+                explanation: 'How often you unlock your phone. High unlock frequency, especially for very short sessions, is a strong behavioral marker for anxiety and checking behaviors.',
+                color: '#f59e0b',
+                unit: 'unlocks'
+            }
+        ]
     }
 };
 
@@ -149,6 +161,17 @@ export function SignalDetail() {
                             deviation: '-',
                             status: latest.data_valid === false ? 'elevated' : 'normal',
                             bars: entries.map(e => e.data_valid === false ? 1 : 0)
+                        }
+                    ];
+                } else if (signalId === 'screen') {
+                    processedMeasures = [
+                        {
+                            ...config.measures[0],
+                            value: `${Math.round(latest.interaction_rate || 0)} unlocks`,
+                            baseline: '5 unlocks',
+                            deviation: '-',
+                            status: (latest.interaction_rate || 0) > 8 ? 'elevated' : 'normal',
+                            bars: entries.map(e => e.interaction_rate || 0)
                         }
                     ];
                 }
