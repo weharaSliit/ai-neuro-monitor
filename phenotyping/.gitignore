@@ -1,0 +1,15 @@
+# ── ALL DATA — never commit (raw, processed, everything) ──────
+data/
+
+# ── OUTPUTS — never commit ────────────────────────────────────
+outputs/
+outputs/**
+outputs/*.csv
+outputs/*.json
+
+# ── PYTHON CACHE ──────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+Thumbs.db

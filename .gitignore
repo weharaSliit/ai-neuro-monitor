@@ -48,3 +48,11 @@ desktop.ini
 
 # Logs
 *.log
+
+# Firebase Secrets & Environment Variables (CRITICAL: Do not commit!)
+serviceAccountKey.json
+.env
+.env.*
+
+# Allow production models to be committed
+!phenotyping/models/stress_engine.pkl
