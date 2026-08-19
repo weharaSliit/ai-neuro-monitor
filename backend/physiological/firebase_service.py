@@ -52,6 +52,31 @@ def create_user(user_id, name):
     return user_id
 
 
+def create_user_with_password(user_id, name, password_hash):
+    """Brand-new account, password included from creation."""
+    ref = _ref(f'users/{user_id}')
+    ref.set({
+        'name':          name,
+        'created_at':    datetime.now().isoformat(),
+        'session_count': 0,
+        'password_hash': password_hash
+    })
+    return user_id
+
+
+def set_password_hash(user_id, password_hash):
+    """
+    Attach/replace ONLY password_hash on an existing user record, via
+    update() rather than set() — never touches name/created_at/
+    session_count, and never touches sibling paths (baselines/,
+    sessions/, predictions/, pss4/, ema_history/ for this user_id).
+    Used both by /register's "claim a legacy passwordless account"
+    path and by migrate_wehara_password.py.
+    """
+    ref = _ref(f'users/{user_id}')
+    ref.update({'password_hash': password_hash})
+
+
 def get_user(user_id):
     ref = _ref(f'users/{user_id}')
     return ref.get()
