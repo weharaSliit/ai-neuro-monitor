@@ -4,9 +4,9 @@ import {
   ScrollView, Alert, Animated
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import axios from 'axios';
 import { useTheme } from '../config/ThemeContext';
-import { API_BASE, USER_ID } from '../config/config';
+import { COLORS } from '../config/theme';
+import api from '../api/client';
 import { useAppState } from './AppState';
 
 const QUESTIONS = [
@@ -34,11 +34,12 @@ export default function PSS4Screen() {
 
   const progressAnim = useRef(new Animated.Value(0)).current;
 
-  const bg     = isDark ? '#060d1a' : '#f0f9ff';
-  const card   = isDark ? '#0f1f35' : '#ffffff';
-  const border = isDark ? '#1e3a5f' : '#e2e8f0';
-  const text   = theme.text;
-  const muted  = theme.textMuted;
+  const bg        = theme.bg;
+  const card      = theme.card;
+  const border    = theme.border;
+  const cardHover = theme.cardHover;
+  const text      = theme.text;
+  const muted     = theme.textMuted;
 
   const answered = answers.filter(a => a !== null).length;
 
@@ -57,8 +58,8 @@ export default function PSS4Screen() {
     if (answers.some(a => a === null)) { Alert.alert('Incomplete', 'Please answer all 4 questions.'); return; }
     const sessionToUse = lastSessionId || 'no_session';
     try {
-      const res = await axios.post(`${API_BASE}/pss4`, {
-        user_id: USER_ID, session_id: sessionToUse,
+      const res = await api.post('/pss4', {
+        session_id: sessionToUse,
         q1: answers[0], q2: answers[1], q3: answers[2], q4: answers[3],
       });
       setResult(res.data); setSubmitted(true);
@@ -73,7 +74,7 @@ export default function PSS4Screen() {
   const reset = () => { setAnswers([null,null,null,null]); setSubmitted(false); setResult(null); setActiveQ(0); progressAnim.setValue(0); };
 
   if (submitted && result) {
-    const color = result.level === 'Normal' ? '#10b981' : result.level === 'Stress' ? '#f59e0b' : '#ef4444';
+    const color = result.level === 'Normal' ? COLORS.normal : result.level === 'Stress' ? COLORS.warning : COLORS.stress;
     const emoji = result.level === 'Normal' ? '😌' : result.level === 'Stress' ? '😰' : '😨';
     const pct   = (result.score / (result.max_score || 16)) * 100;
 
@@ -94,16 +95,16 @@ export default function PSS4Screen() {
             <Text style={[styles.resultLevel, { color }]}>{result.level}</Text>
 
             {/* Score bar */}
-            <View style={[styles.scoreBar, { backgroundColor: isDark ? '#1e3a5f' : '#e2e8f0' }]}>
+            <View style={[styles.scoreBar, { backgroundColor: border }]}>
               <View style={[styles.scoreBarNormal,     { width: '37.5%' }]} />
               <View style={[styles.scoreBarStress,     { width: '37.5%' }]} />
               <View style={[styles.scoreBarHighStress, { width: '25%'   }]} />
               <View style={[styles.scoreMarker, { left: `${pct}%`, backgroundColor: color }]} />
             </View>
             <View style={styles.scoreLabels}>
-              <Text style={[styles.scoreLabel, { color: '#10b981' }]}>Normal</Text>
-              <Text style={[styles.scoreLabel, { color: '#f59e0b' }]}>Stress</Text>
-              <Text style={[styles.scoreLabel, { color: '#ef4444' }]}>High Stress</Text>
+              <Text style={[styles.scoreLabel, { color: COLORS.normal }]}>Normal</Text>
+              <Text style={[styles.scoreLabel, { color: COLORS.warning }]}>Stress</Text>
+              <Text style={[styles.scoreLabel, { color: COLORS.stress }]}>High Stress</Text>
             </View>
 
             <Text style={[styles.resultDesc, { color: muted }]}>
@@ -113,14 +114,14 @@ export default function PSS4Screen() {
             </Text>
 
             {lastSessionId && (
-              <View style={[styles.sessionNote, { backgroundColor: '#6366f115', borderColor: '#6366f130' }]}>
-                <Text style={styles.sessionNoteText}>
+              <View style={[styles.sessionNote, { backgroundColor: COLORS.brand + '15', borderColor: COLORS.brand + '30' }]}>
+                <Text style={[styles.sessionNoteText, { color: COLORS.brandLight }]}>
                   Linked to session: {lastSessionId.slice(0,10)}...
                 </Text>
               </View>
             )}
 
-            <TouchableOpacity style={[styles.resetBtn, { backgroundColor: isDark ? '#162033' : '#f8fafc', borderColor: border }]} onPress={reset}>
+            <TouchableOpacity style={[styles.resetBtn, { backgroundColor: cardHover, borderColor: border }]} onPress={reset}>
               <Text style={[styles.resetBtnText, { color: muted }]}>↺  Take Again</Text>
             </TouchableOpacity>
           </View>
@@ -145,9 +146,9 @@ export default function PSS4Screen() {
         <View style={[styles.progressCard, { backgroundColor: card, borderColor: border }]}>
           <View style={styles.progressHeader}>
             <Text style={[styles.progressLabel, { color: muted }]}>{answered} of 4 answered</Text>
-            <Text style={[styles.progressPct, { color: '#6366f1' }]}>{Math.round((answered / 4) * 100)}%</Text>
+            <Text style={[styles.progressPct, { color: COLORS.brand }]}>{Math.round((answered / 4) * 100)}%</Text>
           </View>
-          <View style={[styles.progressBg, { backgroundColor: isDark ? '#1e3a5f' : '#e2e8f0' }]}>
+          <View style={[styles.progressBg, { backgroundColor: border }]}>
             <Animated.View style={[styles.progressFill, { width: progressWidth }]} />
           </View>
           <View style={styles.dotRow}>
@@ -155,10 +156,10 @@ export default function PSS4Screen() {
               <TouchableOpacity key={i} onPress={() => setActiveQ(i)}>
                 <View style={[styles.progressDot,
                   answers[i] !== null
-                    ? { backgroundColor: '#6366f1', width: 12, height: 12 }
+                    ? { backgroundColor: COLORS.brand, width: 12, height: 12 }
                     : i === activeQ
-                    ? { borderColor: '#6366f1', borderWidth: 2, backgroundColor: 'transparent' }
-                    : { backgroundColor: isDark ? '#1e3a5f' : '#e2e8f0' }
+                    ? { borderColor: COLORS.brand, borderWidth: 2, backgroundColor: 'transparent' }
+                    : { backgroundColor: border }
                 ]} />
               </TouchableOpacity>
             ))}
@@ -169,16 +170,16 @@ export default function PSS4Screen() {
         {QUESTIONS.map((q, qIdx) => (
           <View key={qIdx} style={[
             styles.questionCard,
-            { backgroundColor: card, borderColor: qIdx === activeQ ? '#6366f1' : border },
+            { backgroundColor: card, borderColor: qIdx === activeQ ? COLORS.brand : border },
             qIdx === activeQ && styles.questionCardActive,
           ]}>
             <View style={styles.questionHeader}>
-              <View style={[styles.qNumber, { backgroundColor: qIdx === activeQ ? '#6366f1' : isDark ? '#162033' : '#f8fafc' }]}>
+              <View style={[styles.qNumber, { backgroundColor: qIdx === activeQ ? COLORS.brand : cardHover }]}>
                 <Text style={[styles.qNumberText, { color: qIdx === activeQ ? '#fff' : muted }]}>Q{qIdx + 1}</Text>
               </View>
               {q.reverse && (
-                <View style={[styles.reverseBadge, { backgroundColor: '#10b98120', borderColor: '#10b98140' }]}>
-                  <Text style={styles.reverseText}>Reverse scored</Text>
+                <View style={[styles.reverseBadge, { backgroundColor: COLORS.normal + '20', borderColor: COLORS.normal + '40' }]}>
+                  <Text style={[styles.reverseText, { color: COLORS.normal }]}>Reverse scored</Text>
                 </View>
               )}
             </View>
@@ -190,10 +191,10 @@ export default function PSS4Screen() {
                   key={val}
                   style={[
                     styles.optionBtn,
-                    { backgroundColor: isDark ? '#162033' : '#f8fafc', borderColor: border },
+                    { backgroundColor: cardHover, borderColor: border },
                     answers[qIdx] === val && {
-                      backgroundColor: '#6366f1',
-                      borderColor:     '#6366f1',
+                      backgroundColor: COLORS.brand,
+                      borderColor:     COLORS.brand,
                       transform:       [{ scale: 1.05 }],
                     },
                   ]}
@@ -201,10 +202,10 @@ export default function PSS4Screen() {
                   activeOpacity={0.8}
                 >
                   <Text style={styles.optionEmoji}>{opt.emoji}</Text>
-                  <Text style={[styles.optionVal, { color: answers[qIdx] === val ? '#fff' : '#6366f1' }]}>
+                  <Text style={[styles.optionVal, { color: answers[qIdx] === val ? '#fff' : COLORS.brand }]}>
                     {opt.value}
                   </Text>
-                  <Text style={[styles.optionLabel, { color: answers[qIdx] === val ? '#c7d2fe' : muted }]}>
+                  <Text style={[styles.optionLabel, { color: answers[qIdx] === val ? '#fff' : muted }]}>
                     {opt.label}
                   </Text>
                 </TouchableOpacity>
@@ -215,9 +216,9 @@ export default function PSS4Screen() {
 
         {/* Score preview */}
         {answered > 0 && (
-          <View style={[styles.previewCard, { backgroundColor: '#6366f110', borderColor: '#6366f130' }]}>
+          <View style={[styles.previewCard, { backgroundColor: COLORS.brand + '10', borderColor: COLORS.brand + '30' }]}>
             <Text style={[styles.previewLabel, { color: muted }]}>Current score</Text>
-            <Text style={[styles.previewScore, { color: '#818cf8' }]}>
+            <Text style={[styles.previewScore, { color: COLORS.brandLight }]}>
               {answers.filter(a => a !== null).reduce((s, a) => s + a, 0)}
             </Text>
             <Text style={[styles.previewMax, { color: muted }]}>/ 16</Text>
@@ -225,7 +226,7 @@ export default function PSS4Screen() {
         )}
 
         <TouchableOpacity
-          style={[styles.submitBtn, answered < 4 && { backgroundColor: '#334155' }]}
+          style={[styles.submitBtn, answered < 4 && { backgroundColor: theme.textMuted }]}
           onPress={submit}
           disabled={answered < 4}
           activeOpacity={0.85}
@@ -252,16 +253,16 @@ const styles = StyleSheet.create({
   progressLabel:     { fontSize: 13, fontWeight: '600' },
   progressPct:       { fontSize: 13, fontWeight: '800' },
   progressBg:        { height: 6, borderRadius: 3, overflow: 'hidden', marginBottom: 12 },
-  progressFill:      { height: 6, borderRadius: 3, backgroundColor: '#6366f1' },
+  progressFill:      { height: 6, borderRadius: 3, backgroundColor: COLORS.brand },
   dotRow:            { flexDirection: 'row', gap: 10 },
   progressDot:       { width: 10, height: 10, borderRadius: 5 },
   questionCard:      { borderRadius: 18, borderWidth: 1, padding: 18, marginBottom: 14 },
-  questionCardActive:{ shadowColor: '#6366f1', shadowOpacity: 0.2, shadowRadius: 12, elevation: 4 },
+  questionCardActive:{ shadowColor: COLORS.brand, shadowOpacity: 0.2, shadowRadius: 12, elevation: 4 },
   questionHeader:    { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
   qNumber:           { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   qNumberText:       { fontSize: 12, fontWeight: '800' },
   reverseBadge:      { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1 },
-  reverseText:       { color: '#10b981', fontSize: 10, fontWeight: '700' },
+  reverseText:       { fontSize: 10, fontWeight: '700' },
   questionText:      { fontSize: 14, lineHeight: 22, marginBottom: 14 },
   optionsGrid:       { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   optionBtn:         { width: '18.5%', borderRadius: 12, borderWidth: 1, padding: 8, alignItems: 'center' },
@@ -272,7 +273,7 @@ const styles = StyleSheet.create({
   previewLabel:      { fontSize: 13 },
   previewScore:      { fontSize: 32, fontWeight: '900' },
   previewMax:        { fontSize: 16 },
-  submitBtn:         { backgroundColor: '#6366f1', padding: 18, borderRadius: 16, alignItems: 'center', marginBottom: 16 },
+  submitBtn:         { backgroundColor: COLORS.brand, padding: 18, borderRadius: 16, alignItems: 'center', marginBottom: 16 },
   submitBtnText:     { color: '#fff', fontSize: 16, fontWeight: '800' },
   resultScreen:      { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20 },
   resultCard:        { width: '100%', borderRadius: 24, padding: 28, alignItems: 'center' },
@@ -284,15 +285,15 @@ const styles = StyleSheet.create({
   resultMax:         { fontSize: 18, marginTop: -8, marginBottom: 6 },
   resultLevel:       { fontSize: 26, fontWeight: '900', marginBottom: 16 },
   scoreBar:          { width: '100%', height: 8, borderRadius: 4, overflow: 'hidden', flexDirection: 'row', position: 'relative', marginBottom: 4 },
-  scoreBarNormal:     { height: 8, backgroundColor: '#10b981' },
-  scoreBarStress:     { height: 8, backgroundColor: '#f59e0b' },
-  scoreBarHighStress: { height: 8, backgroundColor: '#ef4444' },
+  scoreBarNormal:     { height: 8, backgroundColor: COLORS.normal },
+  scoreBarStress:     { height: 8, backgroundColor: COLORS.warning },
+  scoreBarHighStress: { height: 8, backgroundColor: COLORS.stress },
   scoreMarker:       { position: 'absolute', top: -3, width: 4, height: 14, borderRadius: 2 },
   scoreLabels:       { flexDirection: 'row', justifyContent: 'space-between', width: '100%', marginBottom: 16 },
   scoreLabel:        { fontSize: 10, fontWeight: '700' },
   resultDesc:        { fontSize: 14, textAlign: 'center', lineHeight: 22, marginBottom: 16 },
   sessionNote:       { borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8, borderWidth: 1, marginBottom: 14 },
-  sessionNoteText:   { color: '#818cf8', fontSize: 11 },
+  sessionNoteText:   { fontSize: 11 },
   resetBtn:          { borderRadius: 12, borderWidth: 1, padding: 14, width: '100%', alignItems: 'center' },
   resetBtnText:      { fontSize: 15, fontWeight: '600' },
 });

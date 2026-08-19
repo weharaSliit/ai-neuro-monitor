@@ -29,22 +29,27 @@ if __package__ is None:
 from backend.physiological.firebase_service import (
     init_firebase, save_device_heartbeat
 )
+from backend.common.auth import generate_token
+from backend.common.config import (
+    MQTT_BROKER, MQTT_PORT, MQTT_TOPIC, GSR_CAL,
+    WINDOW_SEC, SETTLE_SEC
+)
 
-MQTT_BROKER = "10.76.255.56"
-MQTT_PORT   = 1883
-MQTT_TOPIC  = "mindpulse/wearable01/sensors"
+FLASK_URL = f"http://{MQTT_BROKER}:5000/predict"
+USER_ID   = "Wehara"
 
-FLASK_URL   = "http://10.76.255.56:5000/predict"
-USER_ID     = "Wehara"
-GSR_CAL     = 2872   # measured: electrodes off, raw analogRead(GSR_PIN)
+# /predict now requires auth. This script already runs locally with
+# direct access to the Firebase service account (more privileged than
+# any mobile client), so minting its own token for USER_ID is no less
+# trusted than that — no interactive login needed for a local script.
+AUTH_TOKEN = generate_token(USER_ID)
+AUTH_HEADERS = {"Authorization": f"Bearer {AUTH_TOKEN}"}
 
-WINDOW_SEC           = 60
 HEARTBEAT_MIN_GAP_SEC = 5   # don't hammer Firebase at ~5 msgs/sec
-SETTLE_SEC           = 30  # discard this many seconds of data right after
-                            # startup — GSR electrode straps take a bit to
-                            # reach steady skin contact, and capturing that
-                            # transient into the first live window skews it
-                            # (same reasoning as calibrate_ring.py)
+# SETTLE_SEC discards this many seconds of data right after startup —
+# GSR electrode straps take a bit to reach steady skin contact, and
+# capturing that transient into the first live window skews it (same
+# reasoning as calibration_capture.py's settle period).
 
 init_firebase()
 
@@ -77,7 +82,8 @@ def send_window():
             "actual_fs":       actual_fs
         }
         try:
-            resp = requests.post(FLASK_URL, json=payload, timeout=10)
+            resp = requests.post(FLASK_URL, json=payload,
+                                  headers=AUTH_HEADERS, timeout=10)
             print(f"[Window {window_idx}] fs={actual_fs}Hz -> "
                   f"{resp.status_code} {resp.json()}")
         except Exception as e:

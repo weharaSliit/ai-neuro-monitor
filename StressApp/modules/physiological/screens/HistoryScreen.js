@@ -5,35 +5,70 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
-import axios from 'axios';
 import { useTheme } from '../config/ThemeContext';
-import { API_BASE, USER_ID } from '../config/config';
+import { COLORS } from '../config/theme';
+import { useAuth } from '../../../context/AuthContext';
+import api from '../api/client';
 
 export default function HistoryScreen() {
   const { isDark, theme }              = useTheme();
+  const { user }                       = useAuth();
+  const userId                         = user?.userId;
   const [history,  setHistory]         = useState(null);
   const [baseline, setBaseline]        = useState(null);
   const [loading,  setLoading]         = useState(true);
+  const [statusById, setStatusById]    = useState({}); // sid -> {label, trending, windowCount}
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
-  const bg     = isDark ? '#060d1a' : '#f0f9ff';
-  const card   = isDark ? '#0f1f35' : '#ffffff';
-  const border = isDark ? '#1e3a5f' : '#e2e8f0';
+  const bg     = theme.bg;
+  const card   = theme.card;
+  const border = theme.border;
   const text   = theme.text;
   const muted  = theme.textMuted;
 
   useEffect(() => { loadHistory(); }, []);
   useFocusEffect(useCallback(() => { loadHistory(); }, []));
 
+  // Session-level `stress_label` in the /history session metadata is
+  // only ever set when a PSS-4 was submitted (end_session() writes it) —
+  // a plain ring session with no self-report has none. The real
+  // Normal/Stress status has to be derived from the session's own
+  // predictions (majority vote) instead of trusted from that field.
+  const deriveSessionStatus = (predictionsObj) => {
+    const preds = Object.values(predictionsObj || {});
+    if (preds.length === 0) return null;
+    const stressCount = preds.filter(p => p.label === 'Stress').length;
+    return {
+      label: stressCount > preds.length / 2 ? 'Stress' : 'Normal',
+      trending: preds.some(p => p.trending_toward_stress),
+      windowCount: preds.length,
+    };
+  };
+
   const loadHistory = async () => {
+    if (!userId) return;
     setLoading(true);
     try {
       const [h, b] = await Promise.all([
-        axios.get(`${API_BASE}/history/${USER_ID}`),
-        axios.get(`${API_BASE}/baseline/${USER_ID}`),
+        api.get(`/history/${userId}`),
+        api.get(`/baseline/${userId}`),
       ]);
       setHistory(h.data);
       setBaseline(b.data);
+
+      const sessionIds = Object.keys(h.data?.sessions || {});
+      const entries = await Promise.all(
+        sessionIds.map(async (sid) => {
+          try {
+            const s = await api.get(`/history/${userId}/${sid}`);
+            return [sid, deriveSessionStatus(s.data?.predictions)];
+          } catch {
+            return [sid, null];
+          }
+        })
+      );
+      setStatusById(Object.fromEntries(entries));
+
       Animated.timing(fadeAnim, { toValue: 1, duration: 600, useNativeDriver: true }).start();
     } catch (e) {
       console.log('History error:', e.message);
@@ -44,10 +79,10 @@ export default function HistoryScreen() {
   const sessions = history?.sessions ? Object.entries(history.sessions) : [];
   const pss4     = history?.pss4     ? Object.entries(history.pss4)     : [];
 
-  const stressDist = sessions.reduce((acc, [_, s]) => {
-    if (s.stress_label === 'Normal')      acc.normal++;
-    if (s.stress_label === 'Stress')      acc.stress++;
-    if (s.stress_label === 'High Stress') acc.highStress++;
+  const stressDist = sessions.reduce((acc, [sid]) => {
+    const derived = statusById[sid];
+    if (derived?.label === 'Stress') acc.stress++;
+    else if (derived?.label === 'Normal') acc.normal++;
     return acc;
   }, { normal: 0, stress: 0, highStress: 0 });
 
@@ -79,33 +114,34 @@ export default function HistoryScreen() {
 
             <View style={styles.baselineGrid}>
               <BaselineCard
-                icon="💓" label="AVNN" color="#06b6d4"
+                icon="💓" label="AVNN" color={COLORS.hrv}
                 value={baseline.baseline?.AVNN?.mean?.toFixed(1)} unit="ms" dark={isDark}
               />
               <BaselineCard
-                icon="❤️" label="Heart Rate" color="#ef4444"
+                icon="❤️" label="Heart Rate" color={COLORS.stress}
                 value={baseline.baseline?.MeanHR?.mean?.toFixed(1)} unit="bpm" dark={isDark}
               />
               <BaselineCard
-                icon="⚡" label="GSR (SCL)" color="#8b5cf6"
+                icon="⚡" label="GSR (SCL)" color={COLORS.gsr}
                 value={baseline.baseline?.SCL_mean?.mean?.toFixed(3)} unit="μS" dark={isDark}
               />
               <BaselineCard
-                icon="📈" label="SCR Count" color="#10b981"
+                icon="📈" label="SCR Count" color={COLORS.normal}
                 value={baseline.baseline?.SCR_count?.mean?.toFixed(1)} unit="/min" dark={isDark}
               />
             </View>
           </View>
         )}
 
-        {/* Session distribution */}
+        {/* Session distribution — derived from actual predictions
+            (majority label per session), not the PSS-4-only field, since
+            most ring sessions never get a PSS-4 self-report attached. */}
         {sessions.length > 0 && (
           <View style={[styles.card, { backgroundColor: card, borderColor: border }]}>
             <Text style={[styles.cardTitle, { color: text }]}>Session Distribution</Text>
             <View style={styles.distRow}>
-              <DistBar label="Normal" value={stressDist.normal} total={sessions.length} color="#10b981" dark={isDark} />
-              <DistBar label="Stress" value={stressDist.stress} total={sessions.length} color="#f59e0b" dark={isDark} />
-              <DistBar label="High Stress" value={stressDist.highStress} total={sessions.length} color="#ef4444" dark={isDark} />
+              <DistBar label="Normal" value={stressDist.normal} total={sessions.length} color={COLORS.normal} dark={isDark} />
+              <DistBar label="Stress" value={stressDist.stress} total={sessions.length} color={COLORS.stress} dark={isDark} />
             </View>
           </View>
         )}
@@ -118,7 +154,7 @@ export default function HistoryScreen() {
 
             {pss4.slice(-5).reverse().map(([sid, data], i) => {
               const score = data.score || 0;
-              const color = score <= 6 ? '#10b981' : score <= 12 ? '#f59e0b' : '#ef4444';
+              const color = score <= 6 ? COLORS.normal : score <= 12 ? COLORS.warning : COLORS.stress;
               const level = score <= 6 ? 'Normal' : score <= 12 ? 'Stress' : 'High Stress';
               return (
                 <View key={sid} style={[styles.pssRow, { borderBottomColor: border }]}>
@@ -131,7 +167,7 @@ export default function HistoryScreen() {
                       {data.timestamp ? new Date(data.timestamp).toLocaleDateString() : 'Recent'}
                     </Text>
                   </View>
-                  <View style={[styles.pssBarBg, { backgroundColor: isDark ? '#1e3a5f' : '#e2e8f0' }]}>
+                  <View style={[styles.pssBarBg, { backgroundColor: border }]}>
                     <View style={[styles.pssBarFill, { width: `${(score/16)*100}%`, backgroundColor: color }]} />
                   </View>
                 </View>
@@ -152,10 +188,12 @@ export default function HistoryScreen() {
           )}
 
           {sessions.slice(-8).reverse().map(([sid, data], i) => {
-            const dotColor =
-              data.stress_label === 'Normal'      ? '#10b981' :
-              data.stress_label === 'Stress'      ? '#f59e0b' :
-              data.stress_label === 'High Stress' ? '#ef4444' : '#334155';
+            const derived = statusById[sid];
+            const dotColor = derived
+              ? (derived.label === 'Stress'
+                  ? COLORS.stress
+                  : derived.trending ? COLORS.warning : COLORS.normal)
+              : theme.textMuted;
 
             return (
               <View key={sid} style={[styles.sessionRow, { borderBottomColor: border }]}>
@@ -167,7 +205,9 @@ export default function HistoryScreen() {
                     {data.start_time ? new Date(data.start_time).toLocaleString() : 'Recent session'}
                   </Text>
                   <Text style={[styles.sessionWindows, { color: muted }]}>
-                    {data.window_count || 0} windows recorded
+                    {derived
+                      ? `${derived.label}${derived.trending && derived.label !== 'Stress' ? ' (trending)' : ''} · ${derived.windowCount} windows`
+                      : `${data.window_count || 0} windows recorded`}
                   </Text>
                   {data.pss4_score != null && (
                     <View style={styles.sessionPssRow}>
@@ -188,7 +228,7 @@ export default function HistoryScreen() {
           style={[styles.refreshBtn, { backgroundColor: card, borderColor: border }]}
           onPress={loadHistory}
         >
-          <Text style={[styles.refreshText, { color: '#6366f1' }]}>↻  Refresh</Text>
+          <Text style={[styles.refreshText, { color: COLORS.brand }]}>↻  Refresh</Text>
         </TouchableOpacity>
 
         <View style={{ height: 80 }} />
@@ -199,8 +239,8 @@ export default function HistoryScreen() {
 
 function NTag({ label }) {
   return (
-    <View style={[styles.nTag, { backgroundColor: '#6366f115', borderColor: '#6366f140' }]}>
-      <Text style={styles.nTagText}>{label}</Text>
+    <View style={[styles.nTag, { backgroundColor: COLORS.brand + '15', borderColor: COLORS.brand + '40' }]}>
+      <Text style={[styles.nTagText, { color: COLORS.brandLight }]}>{label}</Text>
     </View>
   );
 }
@@ -208,7 +248,7 @@ function NTag({ label }) {
 function BaselineCard({ icon, label, color, value, unit, dark }) {
   return (
     <View style={[styles.baselineCard, {
-      backgroundColor: dark ? '#162033' : '#f8fafc',
+      backgroundColor: dark ? COLORS.dark.cardHover : COLORS.light.cardHover,
       borderColor:     color + '30',
     }]}>
       <View style={[styles.baselineIconCircle, { backgroundColor: color + '20' }]}>
@@ -230,7 +270,7 @@ function DistBar({ label, value, total, color, dark }) {
   const fillWidth = fillAnim.interpolate({ inputRange: [0,1], outputRange: ['0%','100%'] });
   return (
     <View style={styles.distItem}>
-      <View style={[styles.distBarBg, { backgroundColor: dark ? '#1e3a5f' : '#e2e8f0' }]}>
+      <View style={[styles.distBarBg, { backgroundColor: dark ? COLORS.dark.border : COLORS.light.border }]}>
         <Animated.View style={[styles.distBarFill, { width: fillWidth, backgroundColor: color }]} />
       </View>
       <Text style={[styles.distValue, { color }]}>{value}</Text>
@@ -250,19 +290,19 @@ const styles = StyleSheet.create({
   cardSub:           { fontSize: 12, marginBottom: 14 },
   noveltyRow:        { flexDirection: 'row', gap: 6 },
   nTag:              { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1 },
-  nTagText:          { color: '#818cf8', fontSize: 10, fontWeight: '800' },
+  nTagText:          { fontSize: 10, fontWeight: '800' },
   baselineGrid:      { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   baselineCard:      { width: '47%', borderRadius: 14, borderWidth: 1, padding: 14, alignItems: 'center' },
   baselineIconCircle:{ width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
   baselineValue:     { fontSize: 20, fontWeight: '900' },
-  baselineUnit:      { fontSize: 11, color: '#64748b', marginTop: 1 },
-  baselineLabel:     { fontSize: 11, color: '#64748b', marginTop: 4, textAlign: 'center' },
+  baselineUnit:      { fontSize: 11, color: '#9B958A', marginTop: 1 },
+  baselineLabel:     { fontSize: 11, color: '#9B958A', marginTop: 4, textAlign: 'center' },
   distRow:           { gap: 10, marginTop: 10 },
   distItem:          { flexDirection: 'row', alignItems: 'center', gap: 10 },
   distBarBg:         { flex: 1, height: 8, borderRadius: 4, overflow: 'hidden' },
   distBarFill:       { height: 8, borderRadius: 4 },
   distValue:         { width: 24, fontSize: 13, fontWeight: '800', textAlign: 'right' },
-  distLabel:         { width: 70, fontSize: 11, color: '#64748b' },
+  distLabel:         { width: 70, fontSize: 11, color: '#9B958A' },
   pssRow:            { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, borderBottomWidth: 1 },
   pssCircle:         { width: 48, height: 48, borderRadius: 24, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
   pssScore:          { fontSize: 18, fontWeight: '900' },

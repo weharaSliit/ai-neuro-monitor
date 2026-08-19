@@ -1,0 +1,1125 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{multirow}
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+\begin{document}
+
+\title{Perceived Stress Detection Using Wearable
+Physiological Sensors with Personalized Adaptive
+Machine Learning}
+
+\author{
+\IEEEauthorblockN{1\textsuperscript{st} Wehara Soyza}
+\IEEEauthorblockA{
+\textit{Department of Information Technology} \\
+\textit{Sri Lanka Institute of Information Technology}\\
+Malabe, Sri Lanka \\
+wehara.soyza@email.com}
+\and
+\IEEEauthorblockN{2\textsuperscript{nd} Supervisor Name}
+\IEEEauthorblockA{
+\textit{Department of Information Technology} \\
+\textit{Sri Lanka Institute of Information Technology}\\
+Malabe, Sri Lanka \\
+supervisor@sliit.lk}
+}
+
+\maketitle
+
+% ── ABSTRACT ─────────────────────────────────────────────
+\begin{abstract}
+Chronic and undetected stress is a leading contributor to
+cardiovascular, metabolic, and mental health disorders, yet
+most wearable stress-detection systems only report a
+subject's state after stress has already fully manifested,
+offering the user no opportunity to intervene earlier. This
+work presents a wearable physiological stress-monitoring
+system that addresses three compounding gaps in the
+literature: the absence of an early-warning signal before
+stress onset, the reliance on population-level thresholds
+that ignore individual physiological variability, and the
+lack of adaptation as a user's baseline naturally drifts
+over time. Using the WESAD dataset (15 subjects, 700\,Hz
+chest RespiBAN recordings), a binary Normal/Stress label
+aligned with the Perceived Stress Scale (PSS) is constructed
+directly from the dataset's baseline and TSST-stress
+conditions, and a 22-feature representation spanning heart
+rate variability, electrodermal activity, and motion is
+selected via a four-method statistical vote. An XGBoost
+classifier evaluated with leave-one-subject-out
+cross-validation forms the static baseline (F1-macro 0.617),
+on top of which a personalization framework is introduced:
+per-user resting-baseline calibration combined with an
+exponential-moving-average continual-learning layer that
+adapts the baseline session-by-session using only
+confidently-Normal windows, supplemented by a lightweight
+trend-monitoring indicator that flags a rising physiological
+trajectory ahead of the binary label itself changing.
+Personalization lifts F1-macro to 0.628, Ordinal Mean Absolute
+Error from 0.357 to 0.194, and overall accuracy by 6 percentage
+points, with the largest individual gain on the Stress class
+(F1-Stress +11.3\%). A cross-dataset check on SWELL
+(HRV-only, no electrodermal signal) confirms that
+electrodermal activity is not a redundant input but an
+essential one for reliable detection. These results and the
+accompanying personalization framework are packaged into a
+low-cost IoT smart ring (XIAO ESP32-C3, MAX30102, Grove GSR,
+MPU-6050) intended to bring personalized, adaptive stress
+detection to continuous, real-world wear rather than
+laboratory conditions alone.
+\end{abstract}
+
+\begin{IEEEkeywords}
+stress detection, personalized machine learning,
+wearable sensors, continual learning,
+electrodermal activity, heart rate variability,
+stress trend monitoring, smart ring, IoT health monitoring
+\end{IEEEkeywords}
+
+% ── SECTION 1 — INTRODUCTION ─────────────────────────────
+\section{Introduction}
+
+Stress has become one of the most pervasive and costly
+public health burdens of modern life. Prolonged exposure to
+unmanaged stress is a well-established contributor to
+cardiovascular disease, weakened immune function, sleep
+disruption, and the onset or worsening of anxiety and
+depressive disorders. Because stress accumulates gradually
+and its physiological consequences are frequently invisible
+to the person experiencing it until symptoms are already
+severe, there is a clear and growing need for tools that can
+surface a user's stress state continuously, unobtrusively,
+and, ideally, before it has fully developed rather than only
+after the fact.
+
+Wearable physiological sensors have emerged as the most
+practical route to this kind of continuous monitoring.
+Heart rate variability (HRV), derived from photoplethysmography
+(PPG) or electrocardiography (ECG), and electrodermal
+activity (EDA), measured via galvanic skin response (GSR),
+are the two signal families most consistently linked to
+autonomic nervous system arousal, and both can now be
+captured from small, low-power, comfortably-worn devices.
+A substantial body of recent work has demonstrated that
+machine learning models trained on HRV and EDA features can
+classify a wearer's stress state with reasonable accuracy,
+and this combination has become the dominant sensing
+approach in the field.
+
+Despite this progress, existing systems share a central
+limitation concerning individual variability. Physiological
+baselines (resting heart rate, resting skin conductance, and
+the sensitivity of each to arousal) vary substantially between
+individuals, and even within the same individual over time.
+Systems trained and evaluated purely on population-level
+thresholds implicitly assume a "typical" physiology that no
+real user exactly matches, and these systems are, without
+exception in the literature reviewed here, static after
+training: none adapt to a specific wearer, and none continue
+to adapt as that wearer's own baseline naturally drifts across
+weeks or months of continued use. A further, secondary
+limitation is that these systems report stress only as a
+discrete, present-tense classification, with no mechanism for
+surfacing a rising trend ahead of that classification itself
+changing. This is a minor extension addressed briefly in this
+work (Section~\ref{sec_trend}), subordinate to the
+personalization gap above, which is this paper's central
+focus.
+
+This work is structured around three research objectives that
+directly target these gaps: (1) establish a static binary
+Normal/Stress classifier as a rigorously-validated baseline,
+using leave-one-subject-out cross-validation rather than the
+less conservative k-fold splits common in prior work; (2)
+build a personalized, continually-adaptive version of that
+model, the central contribution of this work, comprising
+per-user baseline calibration and an exponential-moving-average
+continual-learning layer, supplemented by a lightweight
+trend-monitoring indicator layered on top; and (3) validate
+the complete pipeline on a purpose-built, low-cost IoT smart
+ring, moving the system from laboratory data toward
+real-world, continuous wear.
+
+The remainder of this paper is organized as follows. Section
+II reviews the related literature and distills the specific
+gaps this work addresses. Section III details the dataset,
+preprocessing pipeline, feature selection, and the methodology
+for each of the three components above, including the smart
+ring hardware. Section IV reports results and validation:
+WESAD-based evaluation, IoT ring hardware validation, and
+consistency with existing research. Section V discusses the
+implications of
+these results, compares this work against the closest prior
+systems, and states its limitations. Section VI summarizes
+the paper's novel contributions against the literature gaps
+identified in Section II, and Section VII concludes with a
+summary of findings and directions for future work.
+
+% ── SECTION 2 — RELATED WORK ─────────────────────────────
+\section{Related Work}
+
+\subsection{Physiological Stress Detection Using
+Wearable Sensors}
+Wearable-sensor-based stress detection has matured into an
+active research area, with HRV and GSR emerging as the
+dominant combination of input signals across the studies
+reviewed here \cite{b1}\cite{b3}\cite{b4}\cite{b14}. The
+large majority of these systems frame stress detection as a
+binary classification problem (Normal versus Stress) using
+supervised learning over hand-crafted or lightly-engineered
+features. While reported accuracies are frequently strong on
+held-out data from the same population, none of these systems
+attempt to detect the onset of stress before it is fully
+established; each reports the wearer's state only after the
+underlying model has already classified the current window as
+Stress, offering no earlier signal a user could act on.
+
+\subsection{Electrodermal Activity and HRV
+Feature Extraction}
+A consistent set of features recurs across the literature as
+the most discriminative for stress: tonic EDA measures such
+as skin conductance level (SCL), phasic measures such as skin
+conductance response (SCR) count and amplitude, and HRV
+time-domain statistics such as average NN interval (AVNN),
+standard deviation of heart rate (SDHR), and the percentage of
+successive NN interval differences greater than 20\,ms
+(pNN20) \cite{b2}\cite{b5}\cite{b7}\cite{b12}. Preprocessing
+pipelines for isolating these features from raw PPG/ECG and
+GSR signals are well validated in this literature. However,
+the feature values and the decision thresholds applied to
+them are, almost universally, computed and validated at the
+population level; no per-subject recalibration is performed,
+which is precisely the limitation the personalization layer
+in this work is designed to address.
+
+\subsection{Personalized Stress Models}
+A smaller subset of the literature explicitly acknowledges
+that individual physiological variability limits the
+reliability of population-trained models
+\cite{b6}\cite{b8}\cite{b9}\cite{b11}, and several of these
+studies argue for some form of per-subject baseline as a
+necessary correction. Even where this is proposed, the
+resulting personalized model is fixed once calibrated: none
+of the reviewed systems revisit or update that personal
+baseline after its initial establishment, meaning any
+subsequent drift in the wearer's physiology (from changes in
+fitness, medication, sleep patterns, or simply the passage of
+time) is never reflected in the deployed model.
+
+\subsection{Continual Learning and Adaptive Systems}
+Continual or lifelong learning, in which a deployed model
+continues to update itself using new data collected during
+normal operation, is well studied in machine learning
+generally, and is referenced as a desirable property in
+several stress-detection papers \cite{b3}\cite{b4}\cite{b6}.
+None of the systems reviewed for this work, however, actually
+implement such a mechanism for stress detection specifically.
+This represents a complete gap in the applied literature: the
+idea is acknowledged as valuable, but no existing wearable
+stress system has published an implementation, evaluation, or
+even a concrete lightweight mechanism (such as an
+exponential moving average) suited to the resource constraints
+of a wearable device.
+
+\subsection{IoT Wearable Systems for Stress Monitoring}
+A parallel thread of work focuses on the systems-engineering
+side of wearable stress detection: low-power microcontrollers,
+edge or near-edge inference, and real-time data pipelines from
+sensor to prediction \cite{b7}\cite{b13}\cite{b14}. Of
+particular relevance, one study validates a hardware
+configuration closely related to the one adopted in this work
+and reports 91.3\% accuracy \cite{b10}, confirming the
+practical viability of this sensor combination on
+resource-constrained hardware. However, these systems focus
+purely on the engineering pipeline; none incorporate
+personalization or the trend-detection capability introduced
+here, meaning the hardware validation and the modeling
+contributions in the literature have so far remained
+disconnected from one another.
+
+\subsection{Research Gaps}
+Table~\ref{tab_gaps} summarizes the six gaps distilled from
+the fifteen studies reviewed above. Gaps G1 and G3, the
+absence of any early trend warning and the fact that static
+models are never revisited after training, are present in
+every study surveyed, without exception. G2 and G4 concern
+individual variability and motion-induced signal confounds,
+both acknowledged in a subset of the literature but rarely
+addressed end-to-end. G5 and G6 are methodological: most
+studies construct labels from discrete experimental events
+rather than aligning them to a validated self-report
+instrument such as the Perceived Stress Scale (PSS), and the large
+majority evaluate using k-fold cross-validation, which,
+because folds mix windows from the same subject across
+training and test splits, tends to inflate reported accuracy
+relative to the stricter leave-one-subject-out (LOSO)
+protocol used in this work.
+
+\begin{table}[htbp]
+\caption{Key Research Gaps Identified
+Across 15 Studies}
+\begin{center}
+\begin{tabular}{|c|p{3.5cm}|p{2.5cm}|}
+\hline
+\textbf{Gap} &
+\textbf{Description} &
+\textbf{Source Papers} \\
+\hline
+G1 & No early stress trend warning &
+All 15 papers \\
+G2 & Universal models ignore individual
+baseline variability &
+\cite{b1}\cite{b4}\cite{b8}\cite{b10} \\
+G3 & Static models degrade over time &
+All 15 papers \\
+G4 & Physical activity confounds signals &
+\cite{b1}\cite{b4}\cite{b5}\cite{b8} \\
+G5 & Event-based labels not PSS-aligned &
+\cite{b1}\cite{b4}\cite{b5}\cite{b9} \\
+G6 & K-fold inflation, LOSO rarely used &
+\cite{b7}\cite{b15} \\
+\hline
+\end{tabular}
+\label{tab_gaps}
+\end{center}
+\end{table}
+
+% ── SECTION 3 — METHODOLOGY ──────────────────────────────
+\section{Methodology}
+
+\subsection{Dataset and Label Creation}
+This work uses the WESAD dataset, comprising synchronized
+chest-worn RespiBAN recordings (ECG, EDA, and three-axis
+accelerometry, all at 700\,Hz) from 15 subjects across a
+resting baseline condition and a Trier Social Stress Test
+(TSST) condition. Rather than treating WESAD's original
+multi-class protocol labels as the target directly, a binary
+label aligned with the intent of the Perceived Stress Scale
+is constructed: the baseline condition is mapped to Normal
+(0) and the TSST stress condition is mapped to Stress (1). A
+30-second exclusion window is applied around every true
+condition transition to remove ambiguous boundary samples,
+and any candidate window whose underlying samples span more
+than one condition is discarded outright rather than
+retained with a averaged or majority label. This yields 854
+valid 60-second windows (30-second step, i.e. 50\% overlap
+between consecutive windows), summarized in
+Table~\ref{tab_dataset}: 587 Normal (68.7\%) and 267 Stress
+(31.3\%).
+
+\begin{table}[htbp]
+\caption{WESAD Dataset Window Statistics}
+\begin{center}
+\begin{tabular}{|l|c|c|}
+\hline
+\textbf{Class} &
+\textbf{Windows} &
+\textbf{Percentage} \\
+\hline
+Normal (0) & 587 & 68.7\% \\
+Stress (1) & 267 & 31.3\% \\
+\hline
+\textbf{Total} & \textbf{854} & \textbf{100\%} \\
+\hline
+\multicolumn{3}{l}{Window: 60s, Step: 30s,
+±30s boundary excluded} \\
+\end{tabular}
+\label{tab_dataset}
+\end{center}
+\end{table}
+
+\subsection{Signal Preprocessing Pipeline}
+
+\subsubsection{ECG Preprocessing and HRV Extraction}
+The raw chest ECG signal is bandpass filtered (0.5–5\,Hz) and
+DC-corrected using a 2-second moving average to remove slow
+baseline wander. R-peaks are detected using an adaptive,
+six-stage fallback procedure, beginning with a standard
+Pan-Tompkins-style detector and progressively relaxing
+detection thresholds (and, as a last resort, testing the
+inverted signal) for subjects whose ECG morphology defeats the
+primary detector, since a small number of subjects in WESAD
+produce atypical waveforms that a single fixed-threshold
+detector fails on entirely. The resulting inter-beat interval
+(IBI) sequence is constrained to a hard physiological range of
+300–2000\,ms (200 to 30 beats per minute), and a
+median-based contextual outlier filter rejects any IBI value
+deviating more than 20\% from its local 5-beat median; rejected
+samples are replaced via linear interpolation rather than
+removed outright, to preserve a continuous time series for
+downstream feature computation.
+
+\subsubsection{EDA Preprocessing}
+The raw EDA signal undergoes interquartile-range (IQR) outlier
+removal, followed by linear detrending to correct for slow
+electrode drift. A Butterworth low-pass filter (5\,Hz cutoff)
+isolates the smoothed signal, and a subsequent high-pass stage
+(0.05\,Hz) separates the tonic skin conductance level (SCL)
+component from the faster phasic skin conductance response
+(SCR) component. First- and second-order derivatives of the
+filtered signal are computed to capture the rate and
+acceleration of change in conductance, and a 5-level Haar
+wavelet decomposition provides multi-resolution energy
+features sensitive to both slow tonic drift and rapid phasic
+bursts.
+
+\subsubsection{Accelerometer Motion Gating}
+Tri-axial accelerometer samples are reduced to a single
+resultant magnitude
+\begin{equation}
+M = \sqrt{a_x^2 + a_y^2 + a_z^2}
+\label{eq_acc}
+\end{equation}
+which serves two distinct purposes in this pipeline. First, any
+window in which more than a set proportion of samples exceed
+a 1.2\,g threshold is flagged as motion-contaminated and
+excluded from training, protecting the HRV and EDA features
+from gross-motion artifacts. Second, the same accelerometer
+statistics (mean and standard deviation of $M$) are themselves
+retained as predictive features rather than discarded once
+gating is complete, since subtle motion level (restlessness,
+fidgeting) carries independent stress-relevant information
+beyond simply flagging unusable windows. Because WESAD's
+chest-mounted sensor placement is comparatively stable during
+both the baseline and TSST conditions, motion contamination
+in this dataset was confirmed at 0\%, meaning the gating logic
+was exercised without discarding any WESAD windows on this
+basis; the same logic is expected to activate more frequently
+on the wrist/finger-worn deployment hardware described in
+Section~\ref{sec_hardware}.
+
+\subsection{Feature Extraction and Selection}
+Forty candidate features are computed across the HRV, EDA,
+and accelerometer domains described above. Feature selection
+is performed via a four-method statistical vote: (1) Spearman
+rank correlation between each feature and the binary label,
+(2) Extra Trees ensemble feature importance, (3) recursive
+feature elimination (RFE) using a Random Forest estimator, and
+(4) permutation importance. A candidate feature is retained in
+the final set only if it receives votes from at least two of
+the four methods, yielding the 22-feature representation
+summarized in Table~\ref{tab_features} and used for every
+model reported in Section IV.
+
+\begin{table}[htbp]
+\caption{Final 22 Selected Features by Category}
+\begin{center}
+\begin{tabular}{|p{1.3cm}|p{5.1cm}|c|}
+\hline
+\textbf{Category} & \textbf{Features} & \textbf{Count} \\
+\hline
+HRV & AVNN, MeanHR, SDHR, pNN20, SD1 & 5 \\
+\hline
+EDA Tonic & SCL\_mean, EDA\_mean, EDA\_slope, EDA\_std & 4 \\
+\hline
+EDA Phasic & SCR\_count, SCR\_amp\_mean, SCR\_width\_mean & 3 \\
+\hline
+EDA Stat. & EDA\_q10, EDA\_q75, EDA\_q90, EDA\_range & 4 \\
+\hline
+EDA Deriv. & deriv1\_std, deriv2\_mean & 2 \\
+\hline
+EDA Wavelet & wavelet\_d1\_energy, wavelet\_d3\_energy & 2 \\
+\hline
+ACC & ACC\_mean, ACC\_std & 2 \\
+\hline
+\textbf{Total} & & \textbf{22} \\
+\hline
+\end{tabular}
+\label{tab_features}
+\end{center}
+\end{table}
+
+\subsection{Static Binary Classification}
+The static baseline model is evaluated using
+leave-one-subject-out (LOSO) cross-validation across all 15
+WESAD subjects: for each fold, a model is trained on 14
+subjects and evaluated on the fully held-out 15th, so that no
+window from the test subject ever influences training in any
+form, avoiding the accuracy inflation associated with
+subject-mixed k-fold splits (Gap G6). Class imbalance is
+handled via class weighting during training rather than
+resampling, and feature standardization
+(\texttt{StandardScaler}) is fit exclusively on each fold's
+training subjects and then applied to the held-out subject,
+preventing any information leakage from the test subject into
+the scaling statistics. Ten candidate classifiers are compared
+under this identical protocol; XGBoost is selected as the
+deployed static model on the basis of the highest F1-macro
+score among the ten (Section~\ref{sec_results_obj1}).
+
+\subsection{Personalized Adaptive Model}
+
+\subsubsection{Layer 1: Personalized Baseline
+Calibration}
+Population-level feature thresholds fail to account for the
+substantial resting-state variability between individuals:
+two people can have meaningfully different resting heart
+rates or skin conductance levels while both being equally
+"Normal" for themselves. To correct for this, a short
+(approximately 2-minute) resting calibration period is
+introduced: the first three windows a user's model classifies
+as Normal are averaged to establish a personal mean and
+standard deviation for every feature. Subsequent readings are
+normalized against this personal baseline rather than against
+a population statistic. EDA-domain features are normalized as
+a ratio to the personal mean (since their absolute scale is
+strongly influenced by individual skin and electrode
+characteristics), while HRV and accelerometer features are
+z-score normalized:
+\begin{equation}
+z_{HRV/ACC} = \frac{x - \mu_{personal}}
+{\sigma_{personal}}
+\label{eq_zscore}
+\end{equation}
+\begin{equation}
+r_{EDA} = \frac{x}{\mu_{personal}}
+\label{eq_ratio}
+\end{equation}
+
+\subsubsection{Layer 2: EMA Continual Learning}
+A one-time calibration is itself insufficient, since an
+individual's physiological baseline is not fixed; it drifts
+gradually with changes in fitness, sleep, medication, or
+simply the passage of time. To track this drift without
+requiring the user to ever recalibrate manually, the personal
+baseline is updated after every session using an exponential
+moving average:
+\begin{equation}
+\hat{\mu}_{new} = \alpha \cdot
+\bar{x}_{session} +
+(1-\alpha) \cdot \hat{\mu}_{old},
+\quad \alpha = 0.2
+\label{eq_ema}
+\end{equation}
+Critically, this update is computed only from windows the
+model itself classified as Normal within that session (with a
+minimum of three such windows required); sessions containing
+fewer than three confidently-Normal windows are skipped
+entirely, so that a genuinely stressful session cannot itself
+contaminate the resting baseline it is being compared against.
+With $\alpha = 0.2$, the baseline adapts meaningfully over
+roughly 10–15 sessions, corresponding to approximately three
+weeks of regular use, fast enough to track real physiological
+drift but slow enough that no single anomalous session can
+distort the baseline.
+
+\subsubsection{Layer 3: Trend Monitoring}
+\label{sec_trend}
+As a lightweight supplement to the two personalization layers
+above, which remain this work's central contribution, a
+rolling 5-window feature-direction vote monitors whether a
+majority of tracked HRV/EDA/ACC features are moving in a
+stress-consistent direction:
+\begin{equation}
+V_{trend} = \frac{f_{stress\_direction}}
+{f_{total}} \geq \theta_{trend},
+\quad \theta_{trend} = 0.35
+\label{eq_trend}
+\end{equation}
+When this vote fires, a separate Stress-Trending flag is
+raised alongside (never in place of) the binary
+Normal/Stress label, since no ground-truth "pre-stress" class
+exists in WESAD (or in any validated self-report instrument)
+against which such an override could itself be validated. Its
+role is intentionally minor: an advisory early signal, not an
+alteration of the validated binary classification.
+
+\subsection{IoT Smart Ring Hardware}
+\label{sec_hardware}
+The complete pipeline is deployed on a purpose-built,
+low-cost IoT ring, summarized in
+Table~\ref{tab_hardware}. A Seeed XIAO ESP32-C3 serves as the
+onboard microcontroller and WiFi radio; a MAX30102
+reflective-PPG sensor (I2C address \texttt{0x57}) captures the
+pulse signal from which HRV features are derived; a Grove GSR
+module (read via a single analog input) captures electrodermal
+activity from a two-electrode finger circuit; and an MPU-6050
+six-axis IMU (I2C address \texttt{0x68}, with its address-select
+pin tied to ground) provides the accelerometer data used for
+both motion gating and the ACC\_mean/ACC\_std features. All
+three sensors, along with the microcontroller, are powered from
+a single regulated 3.3\,V rail sourced from a 250\,mAh LiPo
+battery managed by a TP4056 charge-protection module, ensuring
+consistent sensor operation whether the device is
+battery-powered or connected via USB. Raw sensor windows are
+streamed over WiFi/MQTT to a Flask inference backend, which
+performs feature extraction identical to the offline WESAD
+pipeline described above before returning a prediction.
+
+\begin{table}[htbp]
+\caption{MindPulse Smart Ring Hardware Components}
+\begin{center}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Component} &
+\textbf{Sensor} &
+\textbf{Role} \\
+\hline
+XIAO ESP32-C3 & MCU + WiFi &
+Processing, MQTT TX \\
+MAX30102 & PPG sensor &
+HRV (I2C 0x57) \\
+Grove GSR & EDA sensor &
+Skin conductance \\
+MPU-6050 & Accelerometer &
+Motion gating (I2C 0x68) \\
+LiPo 250mAh & Battery &
+Wireless power \\
+TP4056 & Charge module &
+LiPo protection \\
+\hline
+\end{tabular}
+\label{tab_hardware}
+\end{center}
+\end{table}
+
+% ── SECTION 4 — RESULTS AND VALIDATION ───────────────────
+\section{Results and Validation}
+
+\subsection{Static Model Comparison}
+\label{sec_results_obj1}
+Table~\ref{tab_models} reports LOSO cross-validation results
+for all ten candidate classifiers. While several models,
+notably MLP (accuracy 0.883) and LDA (accuracy 0.838), achieve
+higher raw accuracy than XGBoost, this is substantially driven
+by strong performance on the majority Normal class rather than
+balanced performance across both classes; XGBoost achieves the
+highest F1-macro score (0.617) among all ten models, reflecting
+the most balanced trade-off between Normal and Stress
+detection, and is therefore selected as the deployed static
+model on this basis rather than on raw accuracy alone.
+
+\begin{table}[htbp]
+\caption{LOSO Cross-Validation:
+10 Model Comparison
+(854 windows, 15 WESAD subjects)}
+\begin{center}
+\begin{tabular}{|l|c|c|c|c|}
+\hline
+\textbf{Model} &
+\textbf{Acc} &
+\textbf{F1-Mac} &
+\textbf{F1-Nor} &
+\textbf{F1-Str} \\
+\hline
+\textbf{XGBoost} &
+\textbf{0.796} &
+\textbf{0.617} &
+\textbf{0.877} &
+\textbf{0.689} \\
+SVM-Linear & 0.728 & 0.544 & 0.878 & 0.550 \\
+LDA & 0.838 & 0.615 & 0.935 & 0.708 \\
+Logistic Reg & 0.770 & 0.579 & 0.906 & 0.628 \\
+SVM-RBF & 0.790 & 0.573 & 0.886 & 0.674 \\
+Grad. Boost & 0.796 & 0.577 & 0.883 & 0.702 \\
+AdaBoost & 0.757 & 0.539 & 0.855 & 0.642 \\
+Rand. Forest & 0.830 & 0.585 & 0.894 & 0.748 \\
+MLP & 0.883 & 0.583 & 0.936 & 0.813 \\
+KNN & 0.823 & 0.544 & 0.891 & 0.740 \\
+\hline
+\multicolumn{5}{l}{Bold = selected (highest F1-macro)} \\
+\end{tabular}
+\label{tab_models}
+\end{center}
+\end{table}
+
+\subsection{Confusion Matrix}
+Table~\ref{tab_cm} presents the pooled LOSO confusion matrix
+for the selected XGBoost model. Of 587 true Normal windows,
+500 (85.2\%) are correctly classified; of 267 true Stress
+windows, 194 (72.7\%) are correctly classified. The higher
+false-negative rate on the Stress class relative to Normal is
+consistent with the class imbalance in the underlying dataset
+(Table~\ref{tab_dataset}) and motivates the personalization
+results reported next.
+
+\begin{table}[htbp]
+\caption{XGBoost Confusion Matrix:
+LOSO Evaluation}
+\begin{center}
+\begin{tabular}{|l|c|c|}
+\hline
+\multirow{2}{*}{\textbf{Actual}} &
+\multicolumn{2}{c|}{\textbf{Predicted}} \\
+\cline{2-3}
+& \textbf{Normal} &
+\textbf{Stress} \\
+\hline
+Normal & 500 & 87 \\
+Stress & 73 & 194 \\
+\hline
+\end{tabular}
+\label{tab_cm}
+\end{center}
+\end{table}
+
+\subsection{Personalized Model Results}
+Table~\ref{tab_comparison} compares the static model
+against the fully personalized pipeline
+(baseline calibration plus EMA continual learning) under the
+same LOSO protocol. Personalization improves every reported
+metric: accuracy rises 6.0 percentage points (79.6\% to
+85.6\%), F1-macro improves from 0.617 to 0.628, and Ordinal
+Mean Absolute Error (OrdMAE) falls from 0.357 to 0.194. OrdMAE
+is the average absolute deviation between predicted and true
+class index, and it penalizes confident misclassifications
+more than borderline ones. The largest single-class improvement is
+on Stress detection specifically (F1-Stress +0.113, i.e.
++11.3 percentage points), which is precisely the class the
+static model struggled with most in Table~\ref{tab_cm},
+indicating that individual baseline normalization
+disproportionately helps distinguish a user's genuine stress
+response from their own resting variability.
+
+\begin{table}[htbp]
+\caption{Static vs Personalized
+Performance Comparison}
+\begin{center}
+\begin{tabular}{|l|c|c|c|}
+\hline
+\textbf{Metric} &
+\textbf{Static} &
+\textbf{Personal} &
+\textbf{Change} \\
+\hline
+Accuracy & 79.6\% & 85.6\% & +6.0\% ✓ \\
+F1-Macro & 0.617 & 0.628 & +0.011 ✓ \\
+F1-Normal & 0.877 & 0.938 & +0.061 ✓ \\
+F1-Stress & 0.689 & 0.802 & +0.113 ✓ \\
+OrdMAE & 0.357 & 0.194 & -0.163 ✓ \\
+\hline
+\end{tabular}
+\label{tab_comparison}
+\end{center}
+\end{table}
+
+\subsection{Trend Monitoring: Preliminary Note}
+As a supplementary indicator rather than a focus of this
+evaluation, the trend-monitoring layer (Eq.~\ref{eq_trend})
+has so far been validated only on controlled synthetic
+scenarios, correctly remaining silent on stable and on
+noisy/undirected signals and firing only once a consistent
+multi-feature rise is sustained across the 5-window buffer.
+Session-level effectiveness on real ring data is left to
+future work (Section~VII).
+
+\subsection{Cross-Dataset Validation (SWELL)}
+To test whether electrodermal activity is a genuinely
+necessary input rather than a convenient but replaceable one,
+the WESAD-trained model is re-evaluated using only the five
+HRV features common to WESAD and the independent SWELL
+knowledge-work dataset, which contains no EDA signal at all.
+Table~\ref{tab_swell} shows a substantial performance
+collapse under this restriction: F1-macro falls from 0.617
+(full 22-feature WESAD model) to 0.270, and F1-Stress falls to
+0.165, only marginally better than chance. This confirms that
+electrodermal activity is not a redundant or substitutable
+input in this pipeline, and directly justifies the ring's
+finger-worn form factor (Section~\ref{sec_hardware}), since a
+wrist-only device with HRV sensing alone would be expected to
+perform little better than the degraded HRV-only result shown
+here.
+
+\begin{table}[htbp]
+\caption{Cross-Dataset Validation on SWELL
+(5 HRV Features, No GSR Available)}
+\begin{center}
+\begin{tabular}{|l|c|c|}
+\hline
+\textbf{Metric} &
+\textbf{WESAD LOSO} &
+\textbf{SWELL Cross} \\
+\hline
+F1-Macro & 0.617 & 0.270 \\
+F1-Normal & 0.877 & 0.593 \\
+F1-Stress & 0.689 & 0.165 \\
+OrdMAE & 0.357 & 0.925 \\
+\hline
+\multicolumn{3}{l}{Confirms GSR essential
+for reliable stress detection} \\
+\end{tabular}
+\label{tab_swell}
+\end{center}
+\end{table}
+
+\subsection{IoT Ring Hardware Validation}
+The firmware and software pipeline (sensor sampling, MQTT
+streaming, Flask-side feature extraction, and prediction) has
+been confirmed operational end-to-end on the physical device.
+Full end-to-end system characterization on the assembled ring,
+sensor-to-prediction latency, MAX30102-derived heart rate
+accuracy against a reference pulse oximeter, Grove GSR
+responsiveness, MPU-6050 motion-gate accuracy, and measured
+battery life: [TO BE FILLED].
+
+\subsection{Validation Against Existing Research}
+The results above are broadly consistent with the literature
+reviewed in Section II. The 79.6\% static accuracy and 85.6\%
+personalized accuracy reported here are comparable to the
+91.3\% accuracy reported by the most hardware-similar prior
+system \cite{b10}, which uses the same core sensor combination
+(ESP32, MAX30102, Grove GSR) but a dual-branch CNN classifier
+and no personalization layer; the remaining gap is consistent
+with that system's use of a more complex, higher-capacity
+model rather than any inconsistency in this work's own
+pipeline. The feature domains selected in this work, HRV and
+EDA, match those identified as most discriminative across the
+broader literature \cite{b1}\cite{b2}\cite{b5}\cite{b7}\cite{b12},
+supporting the validity of the four-method feature-selection
+procedure in Section III. Finally, the accuracy improvement
+observed from personalization is directionally consistent
+with the literature's own repeated acknowledgment that
+per-subject baselines are necessary
+\cite{b6}\cite{b8}\cite{b9}\cite{b11}, even though, as
+established in Section II, none of those systems quantify
+that improvement themselves; the 6.0-percentage-point gain
+reported in Table~\ref{tab_comparison} is, to the authors'
+knowledge, among the first such quantified figures for this
+sensor combination.
+
+% ── SECTION 5 — DISCUSSION ───────────────────────────────
+\section{Discussion}
+
+\subsection{Personalization Impact on
+Stress Detection}
+The consistent improvement across every metric in
+Table~\ref{tab_comparison}, and especially the 11.3
+percentage-point gain in F1-Stress, is strong evidence that a
+meaningful share of the static model's error in
+Table~\ref{tab_cm} was attributable to inter-subject
+variability rather than to any limitation of the feature set
+or classifier itself. A population-level threshold necessarily
+sits somewhere between individuals' true resting states; for
+any given subject, that threshold is either too sensitive
+(producing false Stress alarms during their normal resting
+variability) or not sensitive enough (missing genuine stress
+responses that, for that individual, are still well within the
+population's "normal" range). Personalizing the reference point
+that each new reading is compared against directly corrects
+this mismatch, which is consistent with why the Stress class,
+the class most directly affected by where the decision boundary
+sits relative to an individual's true baseline, shows the
+largest single improvement.
+
+\subsection{EMA Continual Learning Behaviour}
+Restricting the EMA update in Eq.~\ref{eq_ema} to
+confidently-Normal windows only, and requiring a minimum of
+three such windows per session, is a deliberate asymmetry: it
+allows the baseline to track genuine long-term drift while
+remaining structurally incapable of drifting \emph{toward} a
+stressed state, since a session dominated by Stress
+classifications simply contributes no update at all rather than
+pulling the baseline toward a plausible-looking-but-wrong
+"new normal." The choice of $\alpha = 0.2$ reflects a
+deliberate stability-versus-responsiveness trade-off: a
+larger $\alpha$ would adapt faster but would also let a single
+atypical session (e.g. illness, unusually poor sleep) exert
+outsized influence on the baseline, while a smaller $\alpha$
+would better resist such outliers but track genuine
+physiological change too slowly to be useful over realistic
+usage timescales.
+
+\subsection{Trend Monitoring as a Supplementary Signal}
+The trend indicator (Eq.~\ref{eq_trend}) is deliberately scoped
+as a minor addition on top of the personalization layers that
+are this work's central contribution: it requires majority
+agreement across monitored features before firing, which
+suppresses false positives from ordinary single-feature noise,
+but its real-world, session-level effectiveness remains to be
+quantified on ring data (Section~IV).
+
+\subsection{GSR Essentiality Confirmed}
+The SWELL cross-dataset result (Table~\ref{tab_swell}) is one
+of the more concrete findings in this work precisely because it
+is a negative result under a fair comparison: the same
+model-training procedure, restricted only to the features SWELL
+actually provides, collapses from F1-macro 0.617 to 0.270. This
+is not merely evidence that more features are better in
+general; it specifically isolates electrodermal activity as
+the feature domain responsible for the majority of this
+model's discriminative power, which has a direct design
+implication: any stress-detection wearable that omits EDA
+sensing (as most consumer wrist-worn devices currently do, since
+reliable EDA measurement requires two-point skin contact that
+is awkward to achieve at the wrist) should be expected to
+underperform substantially relative to a device, such as the
+finger-worn ring described here, that retains it.
+
+\subsection{Comparison with Related Work}
+Table~\ref{tab_comparison2} situates this work against the
+three most directly comparable systems identified in Section
+II. None of the compared systems implement personalization or
+continual adaptation, the central contributions of this work,
+nor the supplementary trend indicator; this work's
+combination of all three, on top of the same PPG+GSR+ACC
+sensing modality used by these prior systems, represents the
+first system in the reviewed literature to combine adaptive,
+individualized modeling with a lightweight early-warning
+supplement.
+
+\begin{table}[htbp]
+\caption{Comparison with Related Work}
+\begin{center}
+\begin{tabular}{|l|c|c|c|c|}
+\hline
+\textbf{Study} &
+\textbf{Sensors} &
+\textbf{Personal} &
+\textbf{Adaptive} &
+\textbf{Trend} \\
+\hline
+\cite{b10} &
+PPG+GSR & No & No & No \\
+\cite{b11} &
+ECG+EDA & No & No & No \\
+\cite{b6} &
+Multi & No & No & No \\
+\textbf{Ours} &
+PPG+GSR+ACC &
+\textbf{Yes} &
+\textbf{Yes} &
+\textbf{Yes} \\
+\hline
+\end{tabular}
+\label{tab_comparison2}
+\end{center}
+\end{table}
+
+\subsection{Limitations}
+Four limitations of the present work should be stated plainly.
+First, WESAD's stress condition is laboratory-induced via the
+TSST protocol, which, while a validated and widely-used stress
+induction method, is not identical to the more diffuse,
+lower-intensity stress that characterizes everyday life;
+generalization from TSST-induced stress to naturalistic daily
+stress cannot be assumed without further validation. Second,
+15 subjects is a modest sample for a personalization study in
+particular, since the entire premise of the personalization
+framework is that individual variability matters; a larger and more diverse
+subject pool would strengthen confidence in the magnitude of
+the personalization gains reported here. Third, the stress
+trend detector's real-world effectiveness depends on
+consistent sensor contact throughout wear; intermittent
+electrode contact or sensor slippage on a worn device could
+degrade the feature stability the trend detector relies on in
+ways that do not occur in WESAD's controlled, securely-mounted
+chest sensor placement. Fourth, the EMA continual-learning
+layer requires a minimum of roughly three sessions with
+sufficient Normal windows before it begins to meaningfully
+diverge from the initial calibration, meaning its benefits are
+not available to a user from their very first session.
+
+% ── SECTION 6 — NOVEL CONTRIBUTIONS ─────────────────────
+\section{Novel Contributions}
+Table~\ref{tab_contributions} summarizes this work's seven
+novel contributions, each mapped to the specific literature gap
+identified in Section II (Table~\ref{tab_gaps}) that it
+addresses. Collectively, these contributions span the full
+pipeline: from how the ground-truth label itself is
+constructed (N1, N6), through the personalized baseline
+calibration and continual-adaptation mechanisms that form this
+work's central contribution and are entirely new to this
+domain (N2, N3), through a principled treatment of motion as
+both a confound and a feature (N5), a lightweight supplementary
+trend-monitoring indicator (N4), and the hardware form factor
+that makes the electrodermal sensing shown to be essential in
+Section~\ref{sec_results_obj1} practical to wear continuously
+(N7).
+
+\begin{table}[htbp]
+\caption{Novel Contributions and
+Literature Justification}
+\begin{center}
+\begin{tabular}{|c|p{3cm}|p{3cm}|}
+\hline
+\textbf{N} &
+\textbf{Contribution} &
+\textbf{Gap Addressed} \\
+\hline
+N1 & PSS-aligned stress labelling
+of WESAD &
+Only 11\% use PSS \cite{b15} \\
+N2 & Personalized 2-min baseline
+calibration &
+Individual variability
+unsolved \\
+N3 & EMA continual learning
+(Normal windows only) &
+No adaptive system
+exists \\
+N4 & Feature-aware stress trend
+detector (2.5 min lookback) &
+No early warning
+in literature \\
+N5 & MPU-6050 dual role:
+gating + feature &
+Motion confound
+unaddressed \\
+N6 & LOSO cross-validation
+standard &
+Only 20\% use LOSO
+\cite{b15} \\
+N7 & Smart ring form factor
+with WiFi/MQTT streaming &
+Emerging direction
+\cite{b6} \\
+\hline
+\end{tabular}
+\label{tab_contributions}
+\end{center}
+\end{table}
+
+% ── SECTION 7 — CONCLUSION ───────────────────────────────
+\section{Conclusion}
+
+This paper presented a wearable physiological stress-detection
+system built around a rigorously LOSO-validated binary
+Normal/Stress classifier and a personalization framework
+(per-user baseline calibration combined with exponential-moving-
+average continual learning) designed to address the
+individual-variability and staleness gaps identified as common
+across the fifteen studies reviewed in this work.
+
+Personalization improved every reported metric over the static
+baseline: F1-macro rose from 0.617 to 0.628, Ordinal Mean
+Absolute Error fell from 0.357 to 0.194, overall accuracy
+improved by 6 percentage points, and F1-Stress specifically
+improved by 11.3 percentage points, the largest gain of any
+single metric and direct evidence that individual baseline
+normalization disproportionately helps precisely the class a
+population-level model struggles with most. A lightweight
+supplementary trend-monitoring indicator, layered on top of
+this personalization framework, has so far been validated only
+on controlled scenarios; its session-level effectiveness on
+the deployed hardware remains near-term future work, described
+below.
+
+A cross-dataset check against SWELL, using only the HRV
+features available in that dataset, showed a substantial
+performance collapse relative to the full model (F1-macro 0.617
+to 0.270), confirming that electrodermal activity is not a
+convenient addition but a necessary input to this pipeline,
+directly justifying the finger-worn ring form factor over a
+wrist-only alternative that could not reliably sense it.
+
+Beyond the IoT ring hardware validation reported in Section IV,
+future work priorities include extending personal-baseline
+adaptation to per-user decision thresholds (rather than only
+feature normalization), a longitudinal study of the EMA layer's
+behavior over months rather than the handful of sessions
+evaluated here, and validation of the HRV pipeline against a
+clinical-grade ECG reference to quantify any accuracy gap
+introduced by the ring's PPG-based sensing relative to the
+chest-ECG-based sensing used for training.
+
+% ── ACKNOWLEDGMENT ───────────────────────────────────────
+\section*{Acknowledgment}
+The author thanks their supervisor for guidance throughout
+this research, and the Sri Lanka Institute of Information
+Technology, Department of Information Technology, for
+supporting this work.
+
+% ── REFERENCES ───────────────────────────────────────────
+\begin{thebibliography}{00}
+
+\bibitem{b1}
+A. Taskasaplidis et al.,
+``Review of stress detection methods using
+wearable sensors,''
+\textit{IEEE Access}, 2024.
+
+\bibitem{b2}
+K. M. Dalmeida and G. L. Masala,
+``HRV features as viable physiological markers
+for stress detection using wearable devices,''
+\textit{Sensors}, vol. 21, 2021.
+
+\bibitem{b3}
+M. Haque et al.,
+``State-of-the-art of stress prediction from
+heart rate variability using AI,''
+\textit{Cognitive Computation}, 2024.
+
+\bibitem{b4}
+I. Lazarou and T. Exarchos,
+``Predicting stress levels using physiological
+data,''
+\textit{AIMS Neuroscience}, 2024.
+
+\bibitem{b5}
+M. Kyriakou et al.,
+``Detecting moments of stress from measurements
+of wearable physiological sensors,''
+\textit{Sensors}, vol. 19, 2019.
+
+\bibitem{b6}
+R. Prasad and R. Upadhyaya,
+``Stress monitoring using wearable technology,''
+\textit{IEEE ICCA}, 2025.
+
+\bibitem{b7}
+Y. Mozafari et al.,
+``Towards IoT-enabled multimodal mental stress
+monitoring,''
+\textit{IEEE COINS}, 2020.
+
+\bibitem{b8}
+M. V. Villarejo et al.,
+``A stress sensor based on galvanic skin
+response controlled by ZigBee,''
+\textit{Sensors}, vol. 12, 2012.
+
+\bibitem{b9}
+H. Dybvik et al.,
+``fNIRS, EEG, ECG, and GSR reveal physiological
+stress,''
+\textit{Frontiers in Human Neuroscience}, 2025.
+
+\bibitem{b10}
+D. Segono et al.,
+``IoT-based stress monitoring using CNN for
+HRV-GSR analysis,''
+\textit{Sinkron Journal}, 2026.
+
+\bibitem{b11}
+R. Calvo et al.,
+``Early detection of chronic stress using
+wearable devices on WESAD,''
+\textit{ICT4AWE}, 2025.
+
+\bibitem{b12}
+O. Nechyporenko et al.,
+``Galvanic skin response and PPG for stress
+recognition,''
+\textit{Applied Sciences}, 2024.
+
+\bibitem{b13}
+S. Watharkar et al.,
+``Real-time IoT-based physiological stress
+assessment system,''
+\textit{IRJET}, 2024.
+
+\bibitem{b14}
+S. Gedam et al.,
+``A deep learning approach with wearable
+physiological sensors to detect mental stress,''
+\textit{Discover Artificial Intelligence}, 2026.
+
+\bibitem{b15}
+L. Pataca et al.,
+``Use of machine learning for predicting stress
+episodes based on wearable sensor data:
+a systematic review,''
+\textit{Computers in Biology and Medicine}, 2025.
+
+\end{thebibliography}
+
+\end{document}

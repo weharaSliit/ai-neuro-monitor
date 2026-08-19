@@ -3,6 +3,9 @@
 # ============================================================
 
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Paths
 BASE_PATH = r"C:\Users\weha1\OneDrive\Documents\ResearchCode\ai-neuro-monitor"
@@ -49,10 +52,35 @@ FIREBASE_DB_URL = "https://stress-monitor-c39ee-default-rtdb.asia-southeast1.fir
 # (e.g. physiological/users, physiological/sessions, ...).
 FIREBASE_NAMESPACE = "physiological"
 
+# Auth — signs/verifies login tokens (backend/common/auth.py). Set
+# STRESSAPP_SECRET_KEY in backend/.env (gitignored) for anything beyond
+# local dev; the fallback below is intentionally obvious/insecure so it's
+# never mistaken for a real deployment secret.
+SECRET_KEY = os.environ.get(
+    "STRESSAPP_SECRET_KEY", "dev-only-insecure-key-change-me"
+)
+AUTH_TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 30  # 30 days
+
 
 #  App settings
 N_BASELINE_WIN    = 3    # windows for personal baseline
 EMA_ALPHA         = 0.2  # EMA learning rate
+
+# Ring / MQTT — single source of truth. Previously duplicated as literals
+# across calibrate_ring.py and mqtt_bridge.py, which meant every network
+# change (switching WiFi networks, re-measuring GSR_CAL) required editing
+# multiple files and kept getting missed in one of them. Update here only.
+MQTT_BROKER = os.environ.get("STRESSAPP_MQTT_BROKER", "10.76.255.56")
+MQTT_PORT   = 1883
+MQTT_TOPIC  = "mindpulse/wearable01/sensors"
+GSR_CAL     = 2872   # measured: electrodes off, raw analogRead(GSR_PIN)
+
+WINDOW_SEC = 60
+SETTLE_SEC = 30  # discard this many seconds of data right after startup/
+                 # before calibration capture — GSR electrode straps take
+                 # a bit to reach steady skin contact, and capturing that
+                 # transient skews whatever uses the data (observed
+                 # directly during testing)
 
 # Stress labels — binary (Normal/Stress). WESAD's old "pre-stress"
 # was a synthetic transition-window label with no real ground truth
