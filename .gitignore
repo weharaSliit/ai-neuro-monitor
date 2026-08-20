@@ -56,3 +56,8 @@ serviceAccountKey.json
 
 # Allow production models to be committed
 !phenotyping/models/stress_engine.pkl
+
+# Physiological backend model — needed by teammates for integration
+!physiological_signals/saved_models/best_model_obj1_v2.pkl
+!physiological_signals/saved_models/scaler_obj1_v2.pkl
+!physiological_signals/saved_models/feature_cols_obj1_v2.pkl
