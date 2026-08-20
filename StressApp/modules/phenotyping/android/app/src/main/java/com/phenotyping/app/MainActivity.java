@@ -13,6 +13,8 @@ import androidx.core.content.ContextCompat;
 
 import com.getcapacitor.BridgeActivity;
 
+import android.content.Intent;
+
 /**
  * MainActivity — Capacitor entry point.
  *
@@ -39,6 +41,32 @@ public class MainActivity extends BridgeActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         requestActivityRecognitionPermission();
+        requestPostNotificationsPermission();
+        // Schedule daily SISS (20:00) and weekly PSS-4 (Sunday 19:00) reminders
+        EmaNotificationScheduler.scheduleAll(this);
+        handleNotificationIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        handleNotificationIntent(intent);
+    }
+
+    private void handleNotificationIntent(Intent intent) {
+        if (intent != null && intent.hasExtra("navigate_to")) {
+            String page = intent.getStringExtra("navigate_to");
+            String tab = intent.getStringExtra("ema_tab");
+            if (tab == null) tab = "siss";
+            String targetTab = tab;
+            Log.d(TAG, "Notification tapped! Navigating to: " + page + " tab: " + targetTab);
+            if (bridge != null && bridge.getWebView() != null) {
+                bridge.getWebView().post(() -> {
+                    String js = "window.location.assign('/" + page + "?tab=" + targetTab + "');";
+                    bridge.getWebView().evaluateJavascript(js, null);
+                });
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -80,6 +108,23 @@ public class MainActivity extends BridgeActivity {
             new String[]{ permission },
             REQ_ACTIVITY
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // POST_NOTIFICATIONS permission (Android 13 / API 33+)
+    // -----------------------------------------------------------------------
+    private void requestPostNotificationsPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            String perm = Manifest.permission.POST_NOTIFICATIONS;
+            if (ContextCompat.checkSelfPermission(this, perm)
+                    != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(
+                    this,
+                    new String[]{ perm },
+                    1002
+                );
+            }
+        }
     }
 
     // -----------------------------------------------------------------------

@@ -1,5 +1,6 @@
 import { db } from '../firebase';
 import { ref, set } from 'firebase/database';
+import { Preferences } from '@capacitor/preferences';
 
 const USER_STORAGE_KEY = 'phenocare_user_profile';
 
@@ -90,6 +91,13 @@ export async function saveUserProfile(profileData) {
 
         // 1. Persist to localStorage (survives browser restarts)
         localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(profile));
+
+        // 1b. Persist to Capacitor Preferences (accessible by Android native code)
+        try {
+            await Preferences.set({ key: 'user_id', value: userId });
+        } catch (err) {
+            console.warn('[UserStorage] Could not save to Capacitor preferences:', err);
+        }
 
         // 2. Sync to Firebase: each user has their own isolated path by UUID
         //    e.g., phenotyping/users/3f2504e0-4f89-11d3-9a0c-0305e82c3301

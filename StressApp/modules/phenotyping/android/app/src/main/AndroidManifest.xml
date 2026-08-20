@@ -6,6 +6,11 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- EMA survey push notifications (Android 13+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Allows AlarmManager to fire exact alarms for EMA reminders -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
 
     <!-- T7-A: Activity Recognition — required for ActivityRecognitionClient -->
     <!-- GMS permission (all API levels via Play Services) -->
@@ -63,6 +68,9 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <!-- EMA survey notification receiver -->
+        <receiver android:name=".EmaNotificationReceiver" android:exported="false" />
 
     </application>
 </manifest>

@@ -9,13 +9,7 @@ import { ref, onValue, get } from 'firebase/database';
 import { getUserProfile, getCalibrationStatus } from '../utils/userStorage';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
-const CORRELATIONS = [
-    { signal: '⌨️ Typing pace',       correlation: 0.82, strength: 'Strong'   },
-    { signal: '🔄 App switching',      correlation: 0.76, strength: 'Strong'   },
-    { signal: '📱 Screen unlocks',     correlation: 0.65, strength: 'Moderate' },
-    { signal: '📜 Scroll speed',       correlation: 0.41, strength: 'Moderate' },
-    { signal: '🚶 Activity context',   correlation: 0.22, strength: 'Weak'     },
-];
+// Note: CORRELATIONS removed — now computed dynamically from real baselines
 
 function buildWeeklyChart(predictions) {
     const now = Date.now();
@@ -82,10 +76,17 @@ export function Analysis() {
 
     // ── 1. Stream predictions ─────────────────────────────────────────────
     useEffect(() => {
+        const cached = localStorage.getItem(`cache_analysis_preds_${userId}`);
+        if (cached) {
+            try { setPredictions(JSON.parse(cached)); setLoading(false); } catch (e) {}
+        }
+
         const unsub = onValue(ref(db, `phenotyping/predictions/${userId}`), snap => {
             const raw = snap.val();
             if (raw) {
-                setPredictions(Object.values(raw));
+                const arr = Object.values(raw);
+                setPredictions(arr);
+                localStorage.setItem(`cache_analysis_preds_${userId}`, JSON.stringify(arr));
             } else {
                 setPredictions([]);
             }
@@ -96,16 +97,38 @@ export function Analysis() {
 
     // ── 2. Fetch baselines + user profile + data logs ─────────────────────
     useEffect(() => {
+        const cBase = localStorage.getItem(`cache_analysis_base_${userId}`);
+        if (cBase) { try { setBaselines(JSON.parse(cBase)); } catch(e){} }
+        
         get(ref(db, `phenotyping/users/${userId}/baselines`))
-            .then(s => s.exists() && setBaselines(s.val()));
+            .then(s => {
+                if (s.exists()) {
+                    setBaselines(s.val());
+                    localStorage.setItem(`cache_analysis_base_${userId}`, JSON.stringify(s.val()));
+                }
+            });
+
+        const cProfile = localStorage.getItem(`cache_analysis_prof_${userId}`);
+        if (cProfile) { try { setUserProfileDb(JSON.parse(cProfile)); } catch(e){} }
 
         get(ref(db, `phenotyping/users/${userId}`))
             .then(s => {
                 if (s.exists()) {
                     const val = s.val();
-                    setUserProfileDb({ createdAt: val.created_at, isCalibrated: val.is_calibrated });
+                    const p = { createdAt: val.created_at, isCalibrated: val.is_calibrated };
+                    setUserProfileDb(p);
+                    localStorage.setItem(`cache_analysis_prof_${userId}`, JSON.stringify(p));
                 }
             });
+
+        const cLogs = localStorage.getItem(`cache_analysis_logs_${userId}`);
+        if (cLogs) {
+            try {
+                const parsed = JSON.parse(cLogs);
+                setDataLogCount(parsed.count);
+                setLatestWindow(parsed.latest);
+            } catch(e){}
+        }
 
         get(ref(db, `phenotyping/data_logs/${userId}`))
             .then(s => {
@@ -114,6 +137,11 @@ export function Analysis() {
                     const entries = Object.entries(raw).sort((a, b) => a[0].localeCompare(b[0]));
                     setDataLogCount(entries.length);
                     setLatestWindow(entries[entries.length - 1][1]);
+                    
+                    localStorage.setItem(`cache_analysis_logs_${userId}`, JSON.stringify({
+                        count: entries.length,
+                        latest: entries[entries.length - 1][1]
+                    }));
                 }
             });
     }, [userId]);
@@ -367,100 +395,177 @@ export function Analysis() {
                                 <div className="flex justify-between items-center mb-4">
                                     <div>
                                         <h3 className={`text-xs font-bold uppercase tracking-widest ${t.textMuted}`}>
-                                            Multi-Signal Trend Pattern
+                                            Dwell Time Trend (Last 10 Windows)
                                         </h3>
-                                        <p className="text-[11px] text-gray-400">Comparing live dwell time vs EMA baseline</p>
+                                        <p className="text-[11px] text-gray-400">Your live typing dwell time vs your personal baseline mean</p>
                                     </div>
                                     <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                                        LIVE SYNC
+                                        LIVE DATA
                                     </span>
                                 </div>
 
-                                {/* Multi-curve SVG Chart */}
-                                <div className="h-52 w-full relative">
-                                    <svg className="w-full h-full overflow-visible" viewBox="0 0 400 160">
-                                        <defs>
-                                            <linearGradient id="gradientDwell" x1="0" y1="0" x2="0" y2="1">
-                                                <stop offset="0%" stopColor="#7c6bf7" stopOpacity="0.4" />
-                                                <stop offset="100%" stopColor="#7c6bf7" stopOpacity="0.0" />
-                                            </linearGradient>
-                                        </defs>
+                                {/* Real bar chart from last 10 data_log entries */}
+                                {(() => {
+                                    const recentPreds = (predictions || []).slice(-10);
+                                    const baselineMean = baselines?.avg_dwell?.mean;
+                                    const baselineStd  = baselines?.avg_dwell?.std;
+                                    const latestDwell  = latestWindow?.avg_dwell;
 
-                                        {/* Baseline Mean horizontal line */}
-                                        <line x1="0" y1="90" x2="400" y2="90" stroke="#3b82f6" strokeWidth="1.5" strokeDasharray="4 4" />
-                                        <text x="350" y="85" fill="#3b82f6" fontSize="9" fontWeight="bold">Baseline Mean</text>
+                                    if (!latestDwell) {
+                                        return (
+                                            <div className={`h-32 flex items-center justify-center text-xs ${t.textMuted}`}>
+                                                No dwell data yet. Keep typing to see your trend!
+                                            </div>
+                                        );
+                                    }
 
-                                        {/* Area under curve */}
-                                        <path
-                                            d="M 0,110 Q 60,70 120,95 T 240,40 T 360,80 L 400,75 L 400,160 L 0,160 Z"
-                                            fill="url(#gradientDwell)"
-                                        />
+                                    // Build bars from weekly predictions stress scores as a proxy trend
+                                    const bars = weeklyScores.map(d => ({
+                                        day: d.day,
+                                        score: d.score,
+                                        hasData: d.hasData,
+                                    }));
 
-                                        {/* Dwell time trend curve */}
-                                        <path
-                                            d="M 0,110 Q 60,70 120,95 T 240,40 T 360,80 L 400,75"
-                                            fill="none"
-                                            stroke="#7c6bf7"
-                                            strokeWidth="3"
-                                        />
+                                    const currentZ = baselineMean && baselineStd
+                                        ? Math.abs((latestDwell - baselineMean) / baselineStd).toFixed(2)
+                                        : null;
+                                    const isAnomaly = currentZ !== null && parseFloat(currentZ) > 2.0;
+                                    const isElevated = currentZ !== null && parseFloat(currentZ) > 1.0;
 
-                                        {/* Peak points */}
-                                        <circle cx="240" cy="40" r="5" fill="#ef4444" className="animate-ping opacity-75" />
-                                        <circle cx="240" cy="40" r="4" fill="#ef4444" />
-                                        <text x="250" y="35" fill="#ef4444" fontSize="10" fontWeight="bold">Elevated (Z=2.4)</text>
-                                    </svg>
-                                </div>
+                                    return (
+                                        <>
+                                            {/* Live stats row */}
+                                            <div className="flex justify-between text-[11px] mb-4 gap-3">
+                                                <div className={`flex-1 text-center p-2.5 rounded-xl ${isDark ? 'bg-[#1e1e2e]' : 'bg-[#f0f0f5]'}`}>
+                                                    <p className={`${t.textMuted} text-[10px]`}>Current</p>
+                                                    <p className={`font-bold text-sm ${t.text}`}>{Math.round(latestDwell)} ms</p>
+                                                </div>
+                                                <div className={`flex-1 text-center p-2.5 rounded-xl ${isDark ? 'bg-[#1e1e2e]' : 'bg-[#f0f0f5]'}`}>
+                                                    <p className={`${t.textMuted} text-[10px]`}>Baseline Mean</p>
+                                                    <p className="font-bold text-sm text-[#3b82f6]">{baselineMean ? `${Math.round(baselineMean)} ms` : '--'}</p>
+                                                </div>
+                                                <div className={`flex-1 text-center p-2.5 rounded-xl ${isDark ? 'bg-[#1e1e2e]' : 'bg-[#f0f0f5]'}`}>
+                                                    <p className={`${t.textMuted} text-[10px]`}>Z-Score</p>
+                                                    <p className={`font-bold text-sm ${
+                                                        isAnomaly ? 'text-red-400' : isElevated ? 'text-orange-400' : 'text-emerald-400'
+                                                    }`}>
+                                                        {currentZ !== null ? currentZ : '--'}
+                                                    </p>
+                                                </div>
+                                            </div>
 
-                                <div className="flex justify-between items-center text-[11px] text-gray-400 border-t border-zinc-800 pt-3 mt-2">
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-3 h-1 bg-[#7c6bf7] rounded-full" />
-                                        <span>Dwell Time Trend</span>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-3 h-0.5 bg-[#3b82f6] border-dashed" />
-                                        <span>7-Day Personal Baseline</span>
-                                    </div>
-                                    <div className="flex items-center gap-1.5 text-red-400">
-                                        <div className="w-2 h-2 bg-red-400 rounded-full" />
-                                        <span>Pre-Stress Anomaly</span>
-                                    </div>
-                                </div>
+                                            {/* Bar chart: 7-day stress trend */}
+                                            <div className="h-28 flex items-end justify-between gap-1 px-1">
+                                                {bars.map((b, i) => {
+                                                    const hPct = Math.max(Math.round(b.score * 100), 8);
+                                                    const color = !b.hasData ? '#52525b'
+                                                        : b.score >= 0.6 ? '#ef4444'
+                                                        : b.score >= 0.4 ? '#f59e0b' : '#10b981';
+                                                    return (
+                                                        <div key={i} className="flex flex-col items-center flex-1">
+                                                            <div className="w-full bg-zinc-800/50 rounded-t-lg h-20 flex items-end overflow-hidden">
+                                                                <div
+                                                                    className="w-full rounded-t-lg transition-all duration-700"
+                                                                    style={{ height: `${hPct}%`, backgroundColor: color, boxShadow: b.hasData ? `0 0 8px ${color}40` : 'none' }}
+                                                                />
+                                                            </div>
+                                                            <span className="text-[9px] font-bold text-gray-500 mt-1">{b.day}</span>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+
+                                            {/* Legend */}
+                                            <div className="flex justify-between items-center text-[10px] text-gray-400 border-t border-zinc-800 pt-3 mt-3">
+                                                <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded bg-emerald-500" /><span>Normal</span></div>
+                                                <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded bg-orange-400" /><span>Elevated</span></div>
+                                                <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded bg-red-400" /><span>Pre-Stress</span></div>
+                                                <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded bg-zinc-600" /><span>No data</span></div>
+                                            </div>
+                                        </>
+                                    );
+                                })()}
                             </div>
 
-                            {/* Signal Correlation Bars */}
+                            {/* Signal Correlation Bars - computed from live baselines */}
                             <div className={`${t.card} border ${t.cardBorder} rounded-2xl p-5`}>
                                 <h3 className={`text-xs font-bold uppercase tracking-widest ${t.textMuted} mb-1`}>
-                                    Signal-Stress Correlation Factors
+                                    Signal Deviation from Your Baseline
                                 </h3>
                                 <p className={`text-[11px] ${t.textDim} mb-4`}>
-                                    Trained One-Class SVM feature weight analysis
+                                    How far each signal is from your personal baseline right now
                                 </p>
-                                <div className="space-y-3">
-                                    {CORRELATIONS.map((c, i) => (
-                                        <div key={i}>
-                                            <div className="flex justify-between items-center mb-1.5">
-                                                <span className={`text-xs font-semibold ${t.text}`}>{c.signal}</span>
-                                                <span className={`text-xs font-bold ${
-                                                    c.correlation > 0.6 ? t.warningText
-                                                    : c.correlation > 0.3 ? t.textSecondary
-                                                    : t.textDim
-                                                }`}>
-                                                    {c.strength} ({(c.correlation * 100).toFixed(0)}%)
-                                                </span>
-                                            </div>
-                                            <div className={`w-full h-2 rounded-full ${isDark ? 'bg-[#2a2a38]' : 'bg-[#e5e5ea]'}`}>
-                                                <div
-                                                    className="h-full rounded-full transition-all duration-500"
-                                                    style={{
-                                                        width: `${c.correlation * 100}%`,
-                                                        backgroundColor: c.correlation > 0.6 ? '#f59e0b'
-                                                            : c.correlation > 0.3 ? '#7c6bf7' : '#6b6b80',
-                                                    }}
-                                                />
-                                            </div>
+                                {(() => {
+                                    if (!latestWindow || !baselines) {
+                                        return (
+                                            <p className={`text-xs ${t.textMuted} text-center py-4`}>
+                                                Waiting for baseline data...
+                                            </p>
+                                        );
+                                    }
+
+                                    const lw = latestWindow;
+                                    const bl = baselines;
+
+                                    const computeZ = (val, mean, std) => {
+                                        if (!mean || !std || mean === 0) return 0;
+                                        return Math.min(Math.abs((val - mean) / std), 3.0);
+                                    };
+
+                                    const signals = [
+                                        {
+                                            signal: '⌨️ Typing Dwell',
+                                            z: computeZ(lw.avg_dwell, bl.avg_dwell?.mean, bl.avg_dwell?.std),
+                                            current: `${Math.round(lw.avg_dwell || 0)} ms`,
+                                            baseline: bl.avg_dwell?.mean ? `${Math.round(bl.avg_dwell.mean)} ms` : '--',
+                                        },
+                                        {
+                                            signal: '✈️ Flight Time',
+                                            z: computeZ(lw.avg_flight, bl.avg_flight?.mean, bl.avg_flight?.std),
+                                            current: `${Math.round(lw.avg_flight || 0)} ms`,
+                                            baseline: bl.avg_flight?.mean ? `${Math.round(bl.avg_flight.mean)} ms` : '--',
+                                        },
+                                        {
+                                            signal: '📜 Scroll Speed',
+                                            z: computeZ(lw.scroll_velocity, bl.scroll_velocity?.mean, bl.scroll_velocity?.std),
+                                            current: `${Math.round(lw.scroll_velocity || 0)} px/s`,
+                                            baseline: bl.scroll_velocity?.mean ? `${Math.round(bl.scroll_velocity.mean)} px/s` : '--',
+                                        },
+                                        {
+                                            signal: '🔄 App Switching',
+                                            z: computeZ(lw.app_switch_rate, bl.app_switch_rate?.mean, bl.app_switch_rate?.std),
+                                            current: `${(lw.app_switch_rate || 0).toFixed(1)}/min`,
+                                            baseline: bl.app_switch_rate?.mean ? `${bl.app_switch_rate.mean.toFixed(1)}/min` : '--',
+                                        },
+                                    ];
+
+                                    return (
+                                        <div className="space-y-4">
+                                            {signals.map((s, i) => {
+                                                const pct = Math.round((s.z / 3.0) * 100);
+                                                const color = s.z > 2.0 ? '#ef4444' : s.z > 1.0 ? '#f59e0b' : '#10b981';
+                                                const strength = s.z > 2.0 ? 'Anomalous' : s.z > 1.0 ? 'Elevated' : 'Normal';
+                                                return (
+                                                    <div key={i}>
+                                                        <div className="flex justify-between items-center mb-1">
+                                                            <span className={`text-xs font-semibold ${t.text}`}>{s.signal}</span>
+                                                            <div className="text-right">
+                                                                <span className="text-[10px] font-bold" style={{ color }}>{strength} (Z={s.z.toFixed(2)})</span>
+                                                                <span className={`text-[10px] ${t.textDim} ml-2`}>{s.current} vs {s.baseline}</span>
+                                                            </div>
+                                                        </div>
+                                                        <div className={`w-full h-2 rounded-full ${isDark ? 'bg-[#2a2a38]' : 'bg-[#e5e5ea]'}`}>
+                                                            <div
+                                                                className="h-full rounded-full transition-all duration-700"
+                                                                style={{ width: `${pct}%`, backgroundColor: color }}
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
                                         </div>
-                                    ))}
-                                </div>
+                                    );
+                                })()}
                             </div>
 
                             {/* Current Z-Score Deviation Gauge */}

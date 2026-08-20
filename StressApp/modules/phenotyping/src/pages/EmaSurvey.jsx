@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
-    ChevronLeft, CheckCircle2, AlertCircle, Heart, Zap, Sparkles, Send
+    ChevronLeft, CheckCircle2, Heart, Zap, Sparkles, Send, Edit3, Clock, Calendar, RefreshCw
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { getUserProfile } from '../utils/userStorage';
@@ -41,17 +41,74 @@ const LIKERT_OPTIONS = [
 
 export function EmaSurvey() {
     const navigate = useNavigate();
+    const location = useLocation();
     const { t } = useTheme();
 
-    // All useState hooks must come before any early return
     const [tab, setTab] = useState('siss'); // 'siss' (Quick Check) or 'pss4' (Weekly Survey)
     const [sissScore, setSissScore] = useState(3);
+    const [lastSiss, setLastSiss] = useState(null);
+
     const [pssAnswers, setPssAnswers] = useState({ 0: 2, 1: 2, 2: 2, 3: 2 });
+    const [pss4SavedData, setPss4SavedData] = useState(null);
+    const [isEditingPss4, setIsEditingPss4] = useState(true);
+
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [submitSuccess, setSubmitSuccess] = useState(null);
+    const [pss4NextDate, setPss4NextDate] = useState('');
 
     const profile = getUserProfile();
     const USER_ID = profile?.userId;
+
+    // Read tab parameter from URL if opened via push notification (e.g. /ema-survey?tab=pss4)
+    useEffect(() => {
+        const params = new URLSearchParams(location.search);
+        const urlTab = params.get('tab');
+        if (urlTab === 'pss4' || urlTab === 'siss') {
+            setTab(urlTab);
+        }
+    }, [location.search]);
+
+    // Load SISS and PSS-4 local history on mount
+    useEffect(() => {
+        if (!USER_ID) return;
+
+        // Load SISS last check-in
+        const savedSiss = localStorage.getItem(`siss_last_checkin_${USER_ID}`);
+        if (savedSiss) {
+            try {
+                setLastSiss(JSON.parse(savedSiss));
+            } catch (e) {
+                console.error("Failed to parse SISS history", e);
+            }
+        }
+
+        // Calculate current week number
+        const now = new Date();
+        const startOfYear = new Date(now.getFullYear(), 0, 1);
+        const currentWeekNum = Math.ceil(((now - startOfYear) / 86400000 + startOfYear.getDay() + 1) / 7);
+
+        // Calculate next Sunday date string
+        const nextSun = new Date();
+        nextSun.setDate(nextSun.getDate() + (7 - nextSun.getDay()));
+        setPss4NextDate(nextSun.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }));
+
+        // Load PSS-4 saved data for current week
+        const savedPss4 = localStorage.getItem(`pss4_saved_data_${USER_ID}`);
+        if (savedPss4) {
+            try {
+                const parsed = JSON.parse(savedPss4);
+                if (parsed.weekNum === currentWeekNum) {
+                    setPss4SavedData(parsed);
+                    if (parsed.answers) {
+                        setPssAnswers(parsed.answers);
+                    }
+                    setIsEditingPss4(false); // Show completed summary card by default if already submitted this week
+                }
+            } catch (e) {
+                console.error("Failed to parse PSS-4 saved data", e);
+            }
+        }
+    }, [USER_ID]);
 
     // Redirect unregistered users back to onboarding
     useEffect(() => {
@@ -64,6 +121,8 @@ export function EmaSurvey() {
     const handleSissSubmit = async () => {
         setIsSubmitting(true);
         setSubmitSuccess(null);
+        const nowIso = new Date().toISOString();
+
         try {
             const response = await fetch(`${FLASK_BASE_URL}/behavior/label`, {
                 method: 'POST',
@@ -72,11 +131,14 @@ export function EmaSurvey() {
                     user_id: USER_ID,
                     type: 'siss',
                     score: sissScore,
-                    timestamp: new Date().toISOString()
+                    timestamp: nowIso
                 })
             });
             const data = await response.json();
             if (response.ok) {
+                const checkinObj = { score: sissScore, timestamp: nowIso };
+                localStorage.setItem(`siss_last_checkin_${USER_ID}`, JSON.stringify(checkinObj));
+                setLastSiss(checkinObj);
                 setSubmitSuccess("SISS Micro-Check Saved!");
                 setTimeout(() => navigate('/dashboard'), 1200);
             } else {
@@ -84,6 +146,9 @@ export function EmaSurvey() {
             }
         } catch (err) {
             console.error("Submission Error:", err);
+            const checkinObj = { score: sissScore, timestamp: nowIso };
+            localStorage.setItem(`siss_last_checkin_${USER_ID}`, JSON.stringify(checkinObj));
+            setLastSiss(checkinObj);
             setSubmitSuccess("Saved locally (Offline Mode)");
             setTimeout(() => navigate('/dashboard'), 1200);
         } finally {
@@ -102,6 +167,18 @@ export function EmaSurvey() {
             totalScore += q.reverse ? (4 - raw) : raw;
         });
 
+        const now = new Date();
+        const startOfYear = new Date(now.getFullYear(), 0, 1);
+        const currentWeekNum = Math.ceil(((now - startOfYear) / 86400000 + startOfYear.getDay() + 1) / 7);
+        const nowIso = now.toISOString();
+
+        const pssDataObj = {
+            score: totalScore,
+            answers: pssAnswers,
+            timestamp: nowIso,
+            weekNum: currentWeekNum
+        };
+
         try {
             const response = await fetch(`${FLASK_BASE_URL}/behavior/label`, {
                 method: 'POST',
@@ -110,23 +187,39 @@ export function EmaSurvey() {
                     user_id: USER_ID,
                     type: 'pss4',
                     score: totalScore,
-                    timestamp: new Date().toISOString()
+                    timestamp: nowIso
                 })
             });
             const data = await response.json();
             if (response.ok) {
-                setSubmitSuccess(`PSS-4 Survey Saved! Score: ${totalScore}/16`);
+                localStorage.setItem(`pss4_saved_data_${USER_ID}`, JSON.stringify(pssDataObj));
+                localStorage.setItem(`pss4_last_week_${USER_ID}`, currentWeekNum.toString());
+                setPss4SavedData(pssDataObj);
+                setIsEditingPss4(false);
+
+                setSubmitSuccess(`PSS-4 Survey Saved! Score: ${totalScore}/16 — Thank you!`);
                 setTimeout(() => navigate('/dashboard'), 1500);
             } else {
                 setSubmitSuccess(`Error: ${data.reason || 'Failed'}`);
             }
         } catch (err) {
             console.error("Submission Error:", err);
+            localStorage.setItem(`pss4_saved_data_${USER_ID}`, JSON.stringify(pssDataObj));
+            localStorage.setItem(`pss4_last_week_${USER_ID}`, currentWeekNum.toString());
+            setPss4SavedData(pssDataObj);
+            setIsEditingPss4(false);
+
             setSubmitSuccess(`Saved locally (Score: ${totalScore}/16)`);
             setTimeout(() => navigate('/dashboard'), 1500);
         } finally {
             setIsSubmitting(false);
         }
+    };
+
+    const getStressCategory = (score) => {
+        if (score <= 5) return { label: 'Low Stress', color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/30' };
+        if (score <= 11) return { label: 'Moderate Stress', color: 'text-amber-400', bg: 'bg-amber-500/10 border-amber-500/30' };
+        return { label: 'High Stress', color: 'text-rose-400', bg: 'bg-rose-500/10 border-rose-500/30' };
     };
 
     return (
@@ -190,8 +283,18 @@ export function EmaSurvey() {
                         <div className="space-y-2 text-center">
                             <span className="text-xs uppercase tracking-wider text-rose-400 font-bold">Single-Item Scale</span>
                             <h2 className="text-lg font-semibold text-white">How stressed do you feel right now?</h2>
-                            <p className="text-xs text-white/50">Slide or tap to select your current felt stress level.</p>
+                            <p className="text-xs text-white/50">Slide or tap to log your momentary stress level anytime.</p>
                         </div>
+
+                        {lastSiss && (
+                            <div className="p-3 rounded-xl bg-white/5 border border-white/10 flex items-center justify-between text-xs text-white/70">
+                                <div className="flex items-center gap-2">
+                                    <Clock className="w-4 h-4 text-rose-400" />
+                                    <span>Last Check-In: {new Date(lastSiss.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                </div>
+                                <span className="font-bold text-rose-300">Score: {lastSiss.score}/5</span>
+                            </div>
+                        )}
 
                         <div className="space-y-4">
                             <div className="flex justify-between items-center px-2">
@@ -239,43 +342,104 @@ export function EmaSurvey() {
                 ) : (
                     /* PSS-4 4-Item Survey */
                     <div className="space-y-5">
-                        <div className="bg-white/5 p-4 rounded-2xl border border-white/10 space-y-1">
-                            <h2 className="text-sm font-semibold text-white">PSS-4 Perceived Stress Survey</h2>
-                            <p className="text-xs text-white/50">Answer all 4 items based on feelings over the last week.</p>
-                        </div>
-
-                        {PSS4_QUESTIONS.map((q, idx) => (
-                            <div key={q.id} className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
-                                <p className="text-xs font-medium text-white/90 leading-relaxed">
-                                    <span className="text-indigo-400 font-bold mr-1.5">Q{idx + 1}.</span>
-                                    {q.question}
-                                </p>
-                                <div className="grid grid-cols-5 gap-1">
-                                    {LIKERT_OPTIONS.map((opt) => (
-                                        <button
-                                            key={opt.value}
-                                            onClick={() => setPssAnswers({ ...pssAnswers, [idx]: opt.value })}
-                                            className={`py-2 px-1 rounded-lg text-[10px] font-medium leading-tight text-center transition-all ${
-                                                pssAnswers[idx] === opt.value
-                                                    ? 'bg-indigo-500 text-white font-bold shadow-md shadow-indigo-500/30'
-                                                    : 'bg-white/5 text-white/60 hover:bg-white/10'
-                                            }`}
-                                        >
-                                            {opt.label}
-                                        </button>
-                                    ))}
+                        {pss4SavedData && !isEditingPss4 ? (
+                            /* Weekly PSS-4 Completed Summary Card */
+                            <div className="space-y-5 bg-white/5 p-5 rounded-2xl border border-white/10">
+                                <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                                    <div className="flex items-center gap-2">
+                                        <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                                        <span className="text-sm font-bold text-white">This Week's PSS-4 Survey Completed</span>
+                                    </div>
+                                    <span className="text-[10px] text-emerald-400 font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30">
+                                        Submitted
+                                    </span>
                                 </div>
-                            </div>
-                        ))}
 
-                        <button
-                            onClick={handlePss4Submit}
-                            disabled={isSubmitting}
-                            className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold text-sm flex items-center justify-center gap-2 hover:opacity-90 transition-opacity shadow-lg shadow-indigo-500/20 disabled:opacity-50"
-                        >
-                            <Send className="w-4 h-4" />
-                            {isSubmitting ? "Saving..." : "Submit PSS-4 Survey"}
-                        </button>
+                                <div className={`p-4 rounded-xl border ${getStressCategory(pss4SavedData.score).bg} flex items-center justify-between`}>
+                                    <div>
+                                        <p className="text-xs text-white/60">Perceived Stress Score</p>
+                                        <p className={`text-xl font-black ${getStressCategory(pss4SavedData.score).color}`}>
+                                            {pss4SavedData.score} <span className="text-xs font-normal text-white/50">/ 16</span>
+                                        </p>
+                                    </div>
+                                    <div className="text-right">
+                                        <span className={`text-xs font-bold ${getStressCategory(pss4SavedData.score).color}`}>
+                                            {getStressCategory(pss4SavedData.score).label}
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <div className="space-y-2 text-xs text-white/60">
+                                    <div className="flex items-center justify-between">
+                                        <span className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5 text-indigo-400" /> Last Updated:</span>
+                                        <span className="text-white/80">{new Date(pss4SavedData.timestamp).toLocaleDateString()} {new Date(pss4SavedData.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                    </div>
+                                    <div className="flex items-center justify-between">
+                                        <span className="flex items-center gap-1.5"><Calendar className="w-3.5 h-3.5 text-indigo-400" /> Next Scheduled Reminder:</span>
+                                        <span className="text-white/80">{pss4NextDate || 'Next Sunday 7:00 PM'}</span>
+                                    </div>
+                                </div>
+
+                                <button
+                                    onClick={() => setIsEditingPss4(true)}
+                                    className="w-full py-3 px-4 rounded-xl bg-white/10 hover:bg-white/15 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all border border-white/10"
+                                >
+                                    <Edit3 className="w-4 h-4 text-indigo-400" />
+                                    Edit / Re-submit Weekly Answers
+                                </button>
+                            </div>
+                        ) : (
+                            /* PSS-4 Question Form */
+                            <div className="space-y-5">
+                                <div className="bg-white/5 p-4 rounded-2xl border border-white/10 flex items-center justify-between">
+                                    <div>
+                                        <h2 className="text-sm font-semibold text-white">PSS-4 Perceived Stress Survey</h2>
+                                        <p className="text-xs text-white/50">Answer all 4 items based on feelings over the last week.</p>
+                                    </div>
+                                    {pss4SavedData && (
+                                        <button
+                                            onClick={() => setIsEditingPss4(false)}
+                                            className="text-xs text-white/60 hover:text-white flex items-center gap-1 bg-white/5 px-2.5 py-1 rounded-lg border border-white/10"
+                                        >
+                                            <RotateCcw className="w-3 h-3" /> Cancel Edit
+                                        </button>
+                                    )}
+                                </div>
+
+                                {PSS4_QUESTIONS.map((q, idx) => (
+                                    <div key={q.id} className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
+                                        <p className="text-xs font-medium text-white/90 leading-relaxed">
+                                            <span className="text-indigo-400 font-bold mr-1.5">Q{idx + 1}.</span>
+                                            {q.question}
+                                        </p>
+                                        <div className="grid grid-cols-5 gap-1">
+                                            {LIKERT_OPTIONS.map((opt) => (
+                                                <button
+                                                    key={opt.value}
+                                                    onClick={() => setPssAnswers({ ...pssAnswers, [idx]: opt.value })}
+                                                    className={`py-2 px-1 rounded-lg text-[10px] font-medium leading-tight text-center transition-all ${
+                                                        pssAnswers[idx] === opt.value
+                                                            ? 'bg-indigo-500 text-white font-bold shadow-md shadow-indigo-500/30'
+                                                            : 'bg-white/5 text-white/60 hover:bg-white/10'
+                                                    }`}
+                                                >
+                                                    {opt.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ))}
+
+                                <button
+                                    onClick={handlePss4Submit}
+                                    disabled={isSubmitting}
+                                    className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold text-sm flex items-center justify-center gap-2 hover:opacity-90 transition-opacity shadow-lg shadow-indigo-500/20 disabled:opacity-50"
+                                >
+                                    <Send className="w-4 h-4" />
+                                    {isSubmitting ? "Saving..." : pss4SavedData ? "Update PSS-4 Survey" : "Submit PSS-4 Survey"}
+                                </button>
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
