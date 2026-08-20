@@ -5,13 +5,21 @@
 # only deployment target.
 # ============================================================
 
+import sys
+
+# Windows consoles default to the cp1252 codepage, which can't encode the
+# checkmark/arrow characters used in this backend's startup log lines and
+# crashes the process with UnicodeEncodeError before Flask ever starts.
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 from flask import Flask, jsonify, request, g
 from flask_cors import CORS
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 import numpy as np
 import re
-import sys
 import threading
 from pathlib import Path
 from firebase_admin import db
