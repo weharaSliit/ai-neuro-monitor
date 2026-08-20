@@ -5,6 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 
 import MainHomeScreen from './screens/mainHomeScreen';
 import PhysiologicalNavigator from './modules/physiological/PhysiologicalNavigator';
+import FusionSessionScreen from './modules/fusion/screens/FusionSessionScreen';
 import { AppContext } from './modules/physiological/screens/AppState';
 import { ThemeProvider } from './modules/physiological/config/ThemeContext';
 
@@ -27,6 +28,7 @@ export default function App() {
           <Stack.Navigator screenOptions={{ headerShown: false }}>
             <Stack.Screen name="Home"          component={MainHomeScreen} />
             <Stack.Screen name="Physiological" component={PhysiologicalNavigator} />
+            <Stack.Screen name="Fusion"        component={FusionSessionScreen} />
           </Stack.Navigator>
         </NavigationContainer>
       </AppContext.Provider>

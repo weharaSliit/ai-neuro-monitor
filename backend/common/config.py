@@ -31,23 +31,23 @@ MODEL_FILE    = os.path.join(MODELS_PATH, "best_model_obj1_v2.pkl")
 SCALER_FILE   = os.path.join(MODELS_PATH, "scaler_obj1_v2.pkl")
 FEATURES_FILE = os.path.join(MODELS_PATH, "feature_cols_obj1_v2.pkl")
 
-# Firebase
-_CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
-FIREBASE_CRED_FILE = os.path.join(_CONFIG_DIR, "serviceAccountKey.json")
-
-# Support for cloud hosting: load credentials from environment variable if it exists
-FIREBASE_CRED_DICT = None
-if "FIREBASE_CRED_JSON" in os.environ:
-    try:
-        FIREBASE_CRED_DICT = json.loads(os.environ["FIREBASE_CRED_JSON"])
-    except Exception as e:
-        print(f"Warning: Failed to parse FIREBASE_CRED_JSON env var: {e}")
-
-FIREBASE_DB_URL = "https://stress-monitor-c39ee-default-rtdb.asia-southeast1.firebasedatabase.app/"
+# Firebase -- see backend/common/firebase_config.py for the full,
+# documented single source of truth (every module's RTDB namespace, the
+# Firestore collection name, credential resolution). Re-exported here
+# under their original names so existing `from backend.common.config
+# import FIREBASE_...` / `from common.config import FIREBASE_...` calls
+# across physiological/ and phenotyping_behavior/ keep working unchanged.
+from .firebase_config import (  # noqa: E402
+    FIREBASE_CRED_DICT,
+    FIREBASE_CRED_FILE,
+    FIREBASE_DB_URL,
+    FIRESTORE_FUSION_COLLECTION,
+    RTDB_NAMESPACES,
+)
 
 # Prefix all Firebase Realtime Database paths under this namespace
 # (e.g. physiological/users, physiological/sessions, ...).
-FIREBASE_NAMESPACE = "physiological"
+FIREBASE_NAMESPACE = RTDB_NAMESPACES["physiological"]
 
 
 #  App settings

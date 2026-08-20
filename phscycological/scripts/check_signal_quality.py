@@ -32,13 +32,16 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'src'))
+if __package__ is None:
+    # Add project root to path to allow sibling imports (backend.*)
+    repo_root = Path(__file__).resolve().parents[2]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
 
-from realtime.pipeline import preprocess_block  # noqa: E402
-from realtime.mqtt_client import RawSample  # noqa: E402
-from realtime.quality_gate import TrustedIoTEEGValidator  # noqa: E402
-from realtime.resample import SOURCE_FS  # noqa: E402
+from backend.psychological.realtime.pipeline import preprocess_block  # noqa: E402
+from backend.psychological.realtime.mqtt_client import RawSample  # noqa: E402
+from backend.psychological.realtime.quality_gate import TrustedIoTEEGValidator  # noqa: E402
+from backend.psychological.realtime.resample import SOURCE_FS  # noqa: E402
 
 COLUMN_ALIASES = {
     'ch1': ['ch1_code', 'ch1t7', 'ch1', 't7', 'eeg1'],

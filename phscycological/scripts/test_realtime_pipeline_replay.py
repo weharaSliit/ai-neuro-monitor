@@ -43,9 +43,13 @@ def microvolts_to_code(uv: np.ndarray, gain: float = GAIN, vref: float = VREF_VO
 
 
 def trial_to_raw_samples(trial, chan_idx) -> list[RawSample]:
-    raw = load_trial_data(trial, source='filtered')
-    referenced = common_average_reference(raw)  # matches training-time preprocessing
-    selected = referenced[chan_idx, :]  # (2, 3200) at 128Hz
+    raw_32chan = load_trial_data(trial, source='filtered')
+    # The deployed model is bipolar-only (T7-T8) and reference-agnostic.
+    # To test it correctly, we must NOT apply a 32-channel Common Average
+    # Reference (CAR), as the live 2-electrode hardware cannot compute it.
+    # This test must replicate the live hardware's input as closely as possible,
+    # where the bipolar difference T7-T8 is computed from non-CAR signals.
+    selected = raw_32chan[chan_idx, :]  # (2, 3200) at 128Hz
 
     upsampled = resample_poly(selected, 250, 128, axis=-1)  # -> ~250Hz, simulating raw hardware rate
     codes = microvolts_to_code(upsampled)

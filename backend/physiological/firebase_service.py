@@ -4,16 +4,15 @@
 # ============================================================
 
 import firebase_admin
-from firebase_admin import credentials, db
+from firebase_admin import db
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timezone
 from backend.common.config import (
-    FIREBASE_CRED_FILE,
-    FIREBASE_DB_URL,
     FIREBASE_NAMESPACE,
     MIN_CONFIDENCE_FOR_RETRAIN,
     MIN_SIGNAL_QUALITY_FOR_RETRAIN,
 )
+from backend.common.firebase_config import FIRESTORE_FUSION_COLLECTION, init_firebase_app
 
 def _ref(path):
     """Return a Firebase reference under the configured namespace."""
@@ -31,13 +30,12 @@ def _global_ref(path):
     return db.reference(str(path).lstrip('/'))
 
 
-#  Initialize Firebase 
+#  Initialize Firebase
 def init_firebase():
-    if not firebase_admin._apps:
-        cred = credentials.Certificate(FIREBASE_CRED_FILE)
-        firebase_admin.initialize_app(cred, {
-            'databaseURL': FIREBASE_DB_URL
-        })
+    # Shared helper (backend/common/firebase_config.py) -- also handles the
+    # FIREBASE_CRED_JSON env-var path (cloud hosting) this module's own
+    # inline init previously skipped.
+    init_firebase_app()
     print("Firebase initialized ✓")
 
 
@@ -209,6 +207,14 @@ def save_fusion_signal(user_id, session_id, window_idx,
     combine with other modalities — no raw features or retrain
     metadata, those stay physiological-module-internal in
     prediction_quality/.
+
+    NOTE: this writes to Realtime Database (fusion_engine/{user_id}/
+    {session_id}, auto-keyed push()), a DIFFERENT product from Cloud
+    Firestore's `fusion_engine` collection that
+    `fushion engin/fusion_engin.py::load_fusion_records()` actually
+    reads (db.collection("fusion_engine"), via firebase_admin.firestore)
+    -- kept as-is for whatever already reads this RTDB path; see
+    save_fusion_engine_firestore() below for the Firestore-side bridge.
     """
     ref = _global_ref(f'fusion_engine/{user_id}/{session_id}')
     ref.push({
@@ -222,6 +228,197 @@ def save_fusion_signal(user_id, session_id, window_idx,
         'label':                   label,
         'trending_toward_stress':  bool(trending_toward_stress),
     })
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  CLOUD FIRESTORE `fusion_engine` COLLECTION BRIDGE
+#  (separate product from save_fusion_signal()'s RTDB write above --
+#  this is what fushion engin/fusion_engin.py actually reads. Mirrors
+#  the EEG-side bridge added in
+#  psychological/src/realtime/firebase_sync.py::FusionEngineSync,
+#  using the SAME deterministic doc id convention -- {session_id}_
+#  {window} via .set(doc, merge=True) -- so an EEG and an HRV/GSR
+#  window sharing the same session_id and window index merge into ONE
+#  Firestore document instead of two separate rows. This only actually
+#  happens if both sides are run with a shared session_id convention,
+#  which is a cross-module coordination detail neither side enforces
+#  today -- if session ids differ, this still works correctly on its
+#  own (each side's rows just carry only that modality's columns, and
+#  fusion_engin.py's handle_missing_values() already treats a missing
+#  modality as "unknown", not as an error).
+# ═══════════════════════════════════════════════════════════════════
+
+# LOSO accuracy of the deployed binary (Normal/Stress) XGBoost model,
+# from physiological_signals/notebooks/05_model_training.ipynb's own
+# reported run (913 WESAD windows, Normal=587/Stress=326) -- fixed
+# per-model context written on every row, NOT computed per-window
+# (same rationale as psychological/'s MODEL_ACCURACY_AUC: no live
+# ground truth to score each individual window's accuracy against).
+MODEL_ACC_HRV_GSR = 0.851
+
+_firestore_client_cache = None
+
+
+def _firestore_client():
+    """Lazily creates a Cloud Firestore client on the already-initialized
+    firebase_admin app (init_firebase() sets that app up for Realtime
+    Database; the same service-account credential covers Firestore too,
+    no separate init needed)."""
+    global _firestore_client_cache
+    if _firestore_client_cache is None:
+        from firebase_admin import firestore
+        _firestore_client_cache = firestore.client()
+    return _firestore_client_cache
+
+
+def _hrv_gsr_fusion_fields(user_id, session_id, window_idx,
+                           confidence, signal_quality,
+                           prob_normal, prob_stress,
+                           label, trending_toward_stress):
+    """Shared field-mapping for the HRV/GSR side of the fusion schema --
+    used by BOTH save_fusion_engine_firestore() (Cloud Firestore) and
+    save_fusion_en_rtdb() (Realtime Database) below, so the two storage
+    backends can never drift apart on field names/values. `prob_stress`
+    (not prob_normal) maps to prob_hrv_gsr, matching fusion_engin.py's
+    convention of prob_{modality} = P(stress) per modality.
+
+    UTC, not naive local time -- fusion_engin.py's synchronize_timestamps()
+    parses timestamps with utc=True, which silently treats a naive
+    timestamp as if it already were UTC. On a UTC+5:30 machine (verified
+    during this integration's testing) that mislabeled every HRV/GSR row's
+    timestamp ~5.5h ahead of the EEG side's correctly-UTC one, which
+    flag_stale_predictions' row_max reference then read as the EEG row
+    being stale.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    return {
+        'user_id':                 user_id,
+        'session_id':              session_id,
+        'window':                  window_idx,
+        'timestamp':               now_iso,
+        'timestamp_hrv_gsr':       now_iso,
+        'prob_hrv_gsr':            float(prob_stress),
+        'conf_hrv_gsr':            float(confidence),
+        'model_acc_hrv_gsr':       MODEL_ACC_HRV_GSR,
+        'signal_quality_hrv_gsr':  float(signal_quality),
+        'stress_label_hrv_gsr':    label,
+        'trending_toward_stress_hrv_gsr': bool(trending_toward_stress),
+    }
+
+
+def save_fusion_engine_firestore(user_id, session_id, window_idx,
+                                 confidence, signal_quality,
+                                 prob_normal, prob_stress,
+                                 label, trending_toward_stress):
+    """Writes one document to Firestore's fusion_engine collection using
+    fusion_engin.py's expected column names for the "hrv_gsr" modality --
+    see _hrv_gsr_fusion_fields() for the field mapping.
+
+    Failure here is logged and swallowed, not raised -- a Firestore
+    hiccup must never break the live /predict response the ring is
+    waiting on.
+    """
+    doc_id = f'{session_id}_{window_idx}'
+    doc = _hrv_gsr_fusion_fields(user_id, session_id, window_idx, confidence, signal_quality,
+                                 prob_normal, prob_stress, label, trending_toward_stress)
+    try:
+        _firestore_client().collection(FIRESTORE_FUSION_COLLECTION).document(doc_id).set(doc, merge=True)
+    except Exception as e:  # noqa: BLE001 -- one failed write shouldn't break /predict
+        print(f'[firestore] WARNING: fusion_engine write failed for {doc_id}: {e}')
+
+
+def label_session_ground_truth_firestore(session_id, pss4_score):
+    """Back-fills `ground_truth_stress` onto every already-written
+    Firestore fusion_engine document for this session, from the
+    session's real PSS-4 (Perceived Stress Scale, 4-item) self-report --
+    a genuine, validated ground-truth instrument, not another
+    modality's own prediction. This is the label
+    fusion_engin.py::fit_logistic_meta_model() has been refusing to fit
+    without (it explicitly rejects fitting against stress_label_{m}
+    columns because those are each modality's OWN prediction).
+
+    Binary split matches end_session()'s existing PSS-4 banding
+    (score<=6 Normal, >6 Stress/High Stress) collapsed to 0/1 --
+    session-level, applied to every window in the session since PSS-4
+    is only collected once, at session end, not per-window.
+
+    Only reachable once a session actually has fusion_engine rows for
+    this session_id (i.e. at least one /predict call happened first);
+    a PSS-4 submitted for a session with no prior predictions simply
+    updates zero documents, which is expected, not an error.
+    """
+    ground_truth_stress = int(pss4_score > 6)
+    try:
+        docs = _firestore_client().collection(FIRESTORE_FUSION_COLLECTION) \
+            .where('session_id', '==', session_id).stream()
+        n_updated = 0
+        for doc in docs:
+            doc.reference.set({
+                'ground_truth_stress': ground_truth_stress,
+                'ground_truth_pss4_score': pss4_score,
+            }, merge=True)
+            n_updated += 1
+        print(f'[firestore] ground_truth_stress={ground_truth_stress} '
+              f'(PSS-4={pss4_score}) backfilled onto {n_updated} fusion_engine row(s) '
+              f'for session_id={session_id}')
+    except Exception as e:  # noqa: BLE001 -- one failed backfill shouldn't break /pss4
+        print(f'[firestore] WARNING: ground-truth backfill failed for session_id={session_id}: {e}')
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  RTDB `fusion_en` MIRROR
+#  Same merged fusion schema as the Firestore bridge above, written to
+#  Realtime Database instead -- for RTDB-only readers (StressApp's
+#  mobile client uses `firebase/database`, not Firestore, and has no
+#  path to read the Firestore collection today). Path:
+#  fusion_en/{session_id}/{window_idx}, matching the EEG side's
+#  FirebaseSync convention (root_path/{session_id}/{window}), NOT
+#  namespaced under 'physiological' -- _global_ref, same reasoning as
+#  save_fusion_signal()'s existing fusion_engine/ RTDB write.
+#
+#  NO CHANGE NEEDED HERE once the ring hardware is available -- this is
+#  called from the same /predict codepath real hardware already hits
+#  (see app.py); only the request source (curl/synthetic vs. a real
+#  MQTT-fed ring) differs.
+# ═══════════════════════════════════════════════════════════════════
+
+def save_fusion_en_rtdb(user_id, session_id, window_idx,
+                        confidence, signal_quality,
+                        prob_normal, prob_stress,
+                        label, trending_toward_stress):
+    """RTDB counterpart to save_fusion_engine_firestore() -- same fields
+    (via the shared _hrv_gsr_fusion_fields() helper), written to
+    fusion_en/{session_id}/{window_idx} instead of a Firestore document.
+    update() (not set()) so an EEG write to the same path (see
+    psychological/src/realtime/firebase_sync.py's FirebaseSync pushing to
+    root_path='fusion_en') merges into the same child rather than
+    clobbering it -- RTDB's analogue of Firestore's set(doc, merge=True).
+    """
+    fields = _hrv_gsr_fusion_fields(user_id, session_id, window_idx, confidence, signal_quality,
+                                    prob_normal, prob_stress, label, trending_toward_stress)
+    try:
+        _global_ref(f'fusion_en/{session_id}/{window_idx}').update(fields)
+    except Exception as e:  # noqa: BLE001 -- one failed write shouldn't break /predict
+        print(f'[firebase] WARNING: fusion_en write failed for {session_id}/{window_idx}: {e}')
+
+
+def label_session_ground_truth_rtdb(session_id, pss4_score):
+    """RTDB counterpart to label_session_ground_truth_firestore() --
+    backfills ground_truth_stress onto every already-written
+    fusion_en/{session_id}/* child for this session."""
+    ground_truth_stress = int(pss4_score > 6)
+    try:
+        children = _global_ref(f'fusion_en/{session_id}').get() or {}
+        for window_key in children:
+            _global_ref(f'fusion_en/{session_id}/{window_key}').update({
+                'ground_truth_stress': ground_truth_stress,
+                'ground_truth_pss4_score': pss4_score,
+            })
+        print(f'[firebase] ground_truth_stress={ground_truth_stress} '
+              f'(PSS-4={pss4_score}) backfilled onto {len(children)} fusion_en row(s) '
+              f'for session_id={session_id}')
+    except Exception as e:  # noqa: BLE001 -- one failed backfill shouldn't break /pss4
+        print(f'[firebase] WARNING: fusion_en ground-truth backfill failed for session_id={session_id}: {e}')
 
 
 # Device connectivity (written by mqtt_bridge.py on every message,

@@ -218,6 +218,41 @@ export default function MainHomeScreen({ navigation }) {
               ))}
             </View>
 
+            <View style={[hStyles.modelCard, { backgroundColor: t.surface, borderColor: t.border }]}>
+              <View style={hStyles.cardTopRow}>
+                <View style={[hStyles.activeDot, { backgroundColor: COLORS.gsr }]} />
+                <Text style={[hStyles.cardTopLabel, { color: t.textSub }]}>
+                  Psychological Component
+                </Text>
+              </View>
+
+              <Text style={[hStyles.modelTitle, { color: t.text }]}>
+                EEG Task Score{'\n'}Cognitive Load Model
+              </Text>
+              <Text style={[hStyles.cardDesc, { color: t.textMuted }]}>
+                T7/T8 EEG blocks estimate task-state intensity for fusion, separating mental workload signals from the final stress label.
+              </Text>
+
+              <View style={hStyles.statsRow}>
+                <StatBlock value="25s"  label="Blocks"   color={COLORS.gsr}     isDark={isDark} />
+                <StatBlock value="T7/T8" label="Channels" color={COLORS.acc}     isDark={isDark} />
+                <StatBlock value="0.706" label="AUC"      color={COLORS.warning} isDark={isDark} />
+              </View>
+
+              <View style={[hStyles.stressStrip, hStyles.taskStrip, { backgroundColor: t.card, borderColor: t.border }]}>
+                {[
+                  { label: 'Low Load',  color: COLORS.normal,  emoji: '🟢' },
+                  { label: 'Rising',    color: COLORS.warning, emoji: '🟡' },
+                  { label: 'High Load', color: COLORS.stress,  emoji: '🔴' },
+                ].map((s, i) => (
+                  <View key={i} style={[hStyles.stressItem, i < 2 && { borderRightColor: t.border, borderRightWidth: 1 }]}>
+                    <Text style={{ fontSize: 18 }}>{s.emoji}</Text>
+                    <Text style={[hStyles.stressLabel, { color: s.color }]}>{s.label}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+
             {/* CTA */}
             <TouchableOpacity
               style={[hStyles.enterBtn, { backgroundColor: COLORS.brand }]}
@@ -226,6 +261,15 @@ export default function MainHomeScreen({ navigation }) {
             >
               <Text style={hStyles.enterBtnText}>Enter MindPulse</Text>
               <Text style={[hStyles.enterArrow, { color: COLORS.brandLight }]}>→</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[hStyles.enterBtn, hStyles.fusionBtn, { borderColor: COLORS.hrv }]}
+              onPress={() => navigation.navigate('Fusion')}
+              activeOpacity={0.87}
+            >
+              <Text style={[hStyles.enterBtnText, { color: COLORS.hrv }]}>Live Fusion Session</Text>
+              <Text style={[hStyles.enterArrow, { color: COLORS.hrv }]}>→</Text>
             </TouchableOpacity>
           </View>
 
@@ -259,15 +303,19 @@ const hStyles = StyleSheet.create({
   activeDot:     { width: 8, height: 8, borderRadius: 4 },
   cardTopLabel:  { fontSize: 12, fontWeight: '600', letterSpacing: 0.5 },
   cardTitle:     { fontSize: 22, fontWeight: '900', lineHeight: 30, marginBottom: 8 },
+  modelCard:     { borderRadius: 18, padding: 16, borderWidth: 1, marginBottom: 18 },
+  modelTitle:    { fontSize: 19, fontWeight: '900', lineHeight: 26, marginBottom: 8 },
   cardDesc:      { fontSize: 13, lineHeight: 20, marginBottom: 18 },
   statsRow:      { flexDirection: 'row', gap: 10, marginBottom: 16 },
   statBlock:     { flex: 1, alignItems: 'center', padding: 12, borderRadius: 14, borderWidth: 1 },
   statValue:     { fontSize: 18, fontWeight: '900' },
   statLabel:     { fontSize: 10, color: '#64748b', marginTop: 3, fontWeight: '600' },
   stressStrip:   { flexDirection: 'row', borderRadius: 14, borderWidth: 1, marginBottom: 18, overflow: 'hidden' },
+  taskStrip:     { marginBottom: 0 },
   stressItem:    { flex: 1, alignItems: 'center', paddingVertical: 12, gap: 4 },
   stressLabel:   { fontSize: 10, fontWeight: '800' },
   enterBtn:      { borderRadius: 16, padding: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
+  fusionBtn:     { marginTop: 10, backgroundColor: 'transparent', borderWidth: 1 },
   enterBtnText:  { color: '#fff', fontSize: 17, fontWeight: '800' },
   enterArrow:    { fontSize: 20, fontWeight: '700' },
   bottomNote:    { fontSize: 12, marginTop: 4 },

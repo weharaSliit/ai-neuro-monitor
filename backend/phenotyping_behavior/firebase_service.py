@@ -1,5 +1,4 @@
-import firebase_admin
-from firebase_admin import credentials, db
+from firebase_admin import db
 from datetime import datetime
 import os
 import sys
@@ -10,12 +9,15 @@ _BACKEND_ROOT = os.path.abspath(os.path.join(_CURRENT_DIR, ".."))
 if _BACKEND_ROOT not in sys.path:
     sys.path.insert(0, _BACKEND_ROOT)
 
-# Import the group's shared credentials and URL
-from common.config import FIREBASE_CRED_FILE, FIREBASE_DB_URL, FIREBASE_CRED_DICT
+# Single source of truth for every module's RTDB namespace / credential /
+# Firestore collection name -- see common/firebase_config.py.
+from common.firebase_config import RTDB_NAMESPACES, init_firebase_app
 
 # --- RESEARCH NAMESPACE ---
-# This ensures your data is stored under 'phenotyping/' in the database
-NAMESPACE = "phenotyping"
+# This ensures your data is stored under 'phenotyping/' in the database --
+# read from the shared registry (was a locally hardcoded literal) so this
+# stays in sync if the registry's key for this module ever changes.
+NAMESPACE = RTDB_NAMESPACES["phenotyping_behavior"]
 
 def _ref(path):
     """Helper to return a Firebase reference under your namespace."""
@@ -24,15 +26,7 @@ def _ref(path):
 
 def init_firebase():
     """Initializes Firebase using the shared group credentials."""
-    if not firebase_admin._apps:
-        if FIREBASE_CRED_DICT:
-            cred = credentials.Certificate(FIREBASE_CRED_DICT)
-        else:
-            cred = credentials.Certificate(FIREBASE_CRED_FILE)
-            
-        firebase_admin.initialize_app(cred, {
-            'databaseURL': FIREBASE_DB_URL
-        })
+    init_firebase_app()
     print(f"[OK] Firebase initialized for {NAMESPACE}")
 
 # --- USER & BASELINE OPERATIONS (Objective 2) ---

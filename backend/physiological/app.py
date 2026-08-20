@@ -31,6 +31,10 @@ from backend.physiological.firebase_service import (
     save_ema_update, _ref,
     save_prediction_quality,
     save_fusion_signal,
+    save_fusion_engine_firestore,
+    label_session_ground_truth_firestore,
+    save_fusion_en_rtdb,
+    label_session_ground_truth_rtdb,
     get_device_status
 )
 from backend.physiological.predictor import (
@@ -289,6 +293,24 @@ def predict():
         result['prob_normal'], result['prob_stress'],
         result['label'], result['trending_toward_stress']
     )
+    # Cloud Firestore fusion_engine bridge -- what fushion engin/fusion_engin.py
+    # actually reads (save_fusion_signal above writes RTDB only, a different
+    # product); see firebase_service.save_fusion_engine_firestore()'s docstring.
+    save_fusion_engine_firestore(
+        user_id, session_id, window_idx,
+        result['confidence'], signal_quality,
+        result['prob_normal'], result['prob_stress'],
+        result['label'], result['trending_toward_stress']
+    )
+    # RTDB mirror of the same fusion data (fusion_en/{session_id}/{window_idx}) --
+    # for RTDB-only readers (StressApp mobile client) that can't reach Firestore.
+    # No change needed here once ring hardware is live -- same /predict codepath.
+    save_fusion_en_rtdb(
+        user_id, session_id, window_idx,
+        result['confidence'], signal_quality,
+        result['prob_normal'], result['prob_stress'],
+        result['label'], result['trending_toward_stress']
+    )
 
     return jsonify({
         'prediction':             result['prediction'],
@@ -329,6 +351,11 @@ def submit_pss4():
     q4 = int(data.get('q4', 0))
 
     score = save_pss4(user_id, session_id, q1, q2, q3, q4)
+    # Backfill this session's real PSS-4 self-report onto every fusion_engine
+    # Firestore row already written for it -- the genuine ground-truth label
+    # fusion_engin.py's meta-model needs and has had nothing to fit against.
+    label_session_ground_truth_firestore(session_id, score)
+    label_session_ground_truth_rtdb(session_id, score)
 
     level = (
         'Normal' if score <= 6 else

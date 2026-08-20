@@ -35,12 +35,12 @@ from sam40.train import MODELS, feature_columns, loso_evaluate, summarize  # noq
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--features', default=str(ROOT / 'results' / 'features_T7-T8_4.0s.csv'))
+    parser.add_argument('--features', default=str(ROOT / 'results' / 'features_bipolar_only_25s_block.csv'))
     parser.add_argument('--label', default='label_task',
                          help="label_task is the only SAM40 label with real LOSO signal above "
                               "chance for T7/T8 (see results/SESSION_SUMMARY.md) -- label_rating "
                               "is near-chance even with all 32 channels.")
-    parser.add_argument('--out-dir', default=str(ROOT / 'results' / 'models'))
+    parser.add_argument('--out-dir', default=str(ROOT / 'results' / 'models_25s_block_bipolar_only'))
     args = parser.parse_args()
 
     df = pd.read_csv(args.features)
@@ -79,8 +79,8 @@ def main():
         'feature_columns': cols,
         'label_col': args.label,
         'channels': sorted({c.split('_')[0] for c in cols if not c.startswith('asym_')}),
-        'window_sec_note': 'trained on 4.0s windows, 50% overlap, 128Hz SAM40 filtered_data -- '
-                            'inference input must use the same windowing/preprocessing',
+        'window_sec_note': 'trained on 25.0s blocks (one per trial), 128Hz SAM40 filtered_data -- '
+                           'inference input must use the same windowing/preprocessing',
         'loso_balanced_accuracy': float(best.balanced_accuracy),
         'loso_roc_auc': float(best.roc_auc),
         'loso_accuracy': float(best.accuracy),

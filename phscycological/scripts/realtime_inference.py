@@ -60,6 +60,21 @@ SECURITY: --firebase-cred must point OUTSIDE this repository (e.g. ~/.secrets/).
 It can also be set via the FIREBASE_CREDENTIALS environment variable instead
 of a CLI flag. Never place a service-account key inside the project directory
 -- see src/realtime/firebase_sync.py's module docstring.
+
+Optional: also push each block to Cloud Firestore's `fusion_engine`
+collection (a separate product from the RTDB above; this is what
+`fushion engin/fusion_engin.py` reads for EEG+HRV/GSR+behavioral fusion).
+Reuses --firebase-cred (one service account covers both RTDB and
+Firestore); add --fusion-firestore to turn it on:
+    python3 scripts/realtime_inference.py --broker 192.168.1.2 \\
+        --firebase-cred ~/.secrets/stress-monitor-firebase.json \\
+        --fusion-firestore
+Writes prob_eeg/conf_eeg/model_acc_eeg/signal_quality_eeg/stress_label_eeg
+-- naming required by fusion_engin.py's schema, but the value is this
+project's task_state_score (cognitive load), not validated stress; see
+results/CURRENT_SYSTEM.md Section 1 and firebase_sync.py's
+make_fusion_engine_document() docstring for why. An honestly-named
+task_state_score_eeg duplicate is written alongside it.
 """
 
 import argparse
@@ -75,7 +90,9 @@ import numpy as np
 
 from realtime.adc import code_to_microvolts, microvolts_to_code  # noqa: E402
 from realtime.csv_logger import CsvLogger, RAW_FIELDS, log_raw_block  # noqa: E402
-from realtime.firebase_sync import FirebaseSync, make_eeg_output_record  # noqa: E402
+from realtime.firebase_sync import (  # noqa: E402
+    FirebaseSync, FusionEngineSync, make_eeg_output_record, make_fusion_engine_document,
+)
 from realtime.mqtt_client import RawSample, RawSampleBuffer, make_client  # noqa: E402
 from realtime.pipeline import BLOCK_SAMPLES_RAW, BLOCK_SEC, RealtimeInference, preprocess_block  # noqa: E402
 from realtime.resample import SOURCE_FS, TARGET_FS  # noqa: E402
@@ -196,9 +213,27 @@ def main():
                          help='Firebase Realtime Database URL. Defaults to $FIREBASE_DB_URL.')
     parser.add_argument('--firebase-session-id', default=None,
                          help='Session key under --firebase-path in the RTDB. Default: timestamp.')
-    parser.add_argument('--firebase-path', default='phsycological',
+    parser.add_argument('--firebase-path', default='psychological',
                          help='RTDB root path each session is written under, as {path}/{session_id}/{window}. '
-                              'Default: phsycological.')
+                              'Default: psychological.')
+    parser.add_argument('--fusion-firestore', action='store_true',
+                         help='Also push each block to Cloud Firestore\'s fusion_engine collection '
+                              '(consumed by fushion engin/fusion_engin.py). Requires --firebase-cred '
+                              '(same service account works for both RTDB and Firestore); does NOT '
+                              'require --firebase-db-url, since Firestore is a separate product from RTDB.')
+    parser.add_argument('--fusion-en-rtdb', action='store_true',
+                         help='Also push each block to Realtime Database at fusion_en/{session_id}/{window} '
+                              '-- same merged schema as --fusion-firestore (prob_eeg, conf_eeg, ...), but in '
+                              'RTDB so RTDB-only readers (StressApp mobile client, any RTDB-only dashboard) '
+                              'can see fused-ready data without needing Firestore access. Requires both '
+                              '--firebase-cred and --firebase-db-url (same as the plain --firebase-path sync '
+                              'above). NO CHANGE NEEDED HERE once EEG hardware issues are resolved -- this '
+                              'runs through the exact same live MQTT -> RealtimeInference -> push path as '
+                              '--firebase-path already does; only scripts/synthetic_live_inference.py and '
+                              'fushion engin/test_synthetic_fusion_e2e.py currently exercise it with synthetic '
+                              'blocks because of the hardware faults documented in generate_synthetic_eeg.py '
+                              '(CH2 railed/noisy electrode, etc.) -- point real hardware at this same CLI flag '
+                              'once those are fixed, nothing in this file changes.')
     parser.add_argument('--mirror-ch1-to-ch2', action='store_true',
                          help='CH2 HARDWARE WORKAROUND: overwrite CH2 with a copy of CH1 on every sample. '
                               'Only use this if CH2 is a known-bad channel and you specifically need a '
@@ -259,6 +294,21 @@ def main():
     elif args.firebase_cred or args.firebase_db_url:
         raise SystemExit('Both --firebase-cred and --firebase-db-url are required to enable Firebase sync '
                           '(only one was given).')
+
+    fusion_sync = None
+    if args.fusion_firestore:
+        if not args.firebase_cred:
+            raise SystemExit('--fusion-firestore requires --firebase-cred (or $FIREBASE_CREDENTIALS).')
+        fusion_sync = FusionEngineSync(args.firebase_cred, session_id=args.firebase_session_id)
+
+    # RTDB mirror of the same fusion schema, for RTDB-only readers (see --fusion-en-rtdb help
+    # text above for why this exists alongside --fusion-firestore rather than replacing it).
+    fusion_en_rtdb = None
+    if args.fusion_en_rtdb:
+        if not (args.firebase_cred and args.firebase_db_url):
+            raise SystemExit('--fusion-en-rtdb requires both --firebase-cred and --firebase-db-url.')
+        fusion_en_rtdb = FirebaseSync(args.firebase_cred, args.firebase_db_url,
+                                       session_id=args.firebase_session_id, root_path='fusion_en')
     model_version = f'{Path(args.model_dir).name}'
     score_history: list[float | None] = []
 
@@ -358,13 +408,20 @@ def main():
                     score_history.append(result.get('calibrated_p'))
                 else:
                     score_history.append(None)
-                if firebase is not None:
+                if firebase is not None or fusion_sync is not None or fusion_en_rtdb is not None:
                     record = make_eeg_output_record(
                         result, window_sec=BLOCK_SEC, model_version=model_version,
                         feature_set='bipolar_only_v1' if 'bipolar_only' in args.model_dir else 'car_v1',
                         history_scores=score_history,
                     )
-                    firebase.push(record)
+                    if firebase is not None:
+                        firebase.push(record)
+                    if fusion_sync is not None:
+                        fusion_sync.push(record)
+                    if fusion_en_rtdb is not None:
+                        # Same merged-schema document as fusion_sync (Firestore) above, just
+                        # written to RTDB instead -- see --fusion-en-rtdb's help text.
+                        fusion_en_rtdb.push(make_fusion_engine_document(record, session_id=fusion_en_rtdb.session_id))
 
                 band = result.get('session_band')
                 if band == 'SETUP_FAILURE':
