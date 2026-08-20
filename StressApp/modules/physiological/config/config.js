@@ -9,10 +9,7 @@
 // longer a simulation counterpart to disambiguate from.
 // ============================================================
 
-export const API_BASE     = 'http://192.168.8.100:5000';
-export const USER_ID      = 'Wehara';
-export const REAL_USER_ID = 'Wehara';
-export const USER_NAME    = 'Wehara';
+export const API_BASE     = 'http://10.76.255.56:5000';
 export const DEVICE_ID    = 'wearable01';
 
 export const STRESS_COLORS = {

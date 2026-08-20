@@ -5,10 +5,14 @@
 # only deployment target.
 # ============================================================
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, g
 from flask_cors import CORS
+from functools import wraps
+from werkzeug.security import generate_password_hash, check_password_hash
 import numpy as np
+import re
 import sys
+import threading
 from pathlib import Path
 from firebase_admin import db
 
@@ -21,10 +25,12 @@ from backend.common.config import (
     STRESS_COLORS,
     EMA_ALPHA, N_BASELINE_WIN
 )
+from backend.common.auth import generate_token, verify_token
 from backend.physiological.firebase_service import (
     init_firebase,
-    create_user, list_users,
-    save_baseline, load_baseline, baseline_exists,
+    create_user, get_user, list_users,
+    create_user_with_password, set_password_hash,
+    save_baseline, load_baseline,
     save_prediction, get_session_predictions,
     get_recent_sessions,
     save_pss4, get_pss4_history,
@@ -39,11 +45,13 @@ from backend.physiological.firebase_service import (
 )
 from backend.physiological.predictor import (
     predict_window, predict_raw,
-    compute_baseline, update_baseline_ema,
     feature_cols, StressStateMachine
 )
 from backend.physiological.extract_features import (
     extract_features, compute_signal_quality
+)
+from backend.physiological.calibration_capture import (
+    save_calibration_windows, run_calibration_capture
 )
 
 app = Flask(__name__)
@@ -51,6 +59,34 @@ CORS(app)
 init_firebase()
 
 ring_sessions = {}  # per-user state machines, kept warm across windows
+
+# In-memory progress state for the live in-app calibration trigger —
+# {user_id: {'status': 'idle'|'settling'|'capturing'|'done'|'error', ...}}.
+# A plain dict is enough here: single local Flask instance, not a
+# multi-server deployment. Populated/read by /calibrate/start and
+# /calibrate/status below.
+_calibration_sessions = {}
+
+USER_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{3,30}$')
+
+
+def require_auth(view_func):
+    """Verifies Authorization: Bearer <token>, sets g.user_id. Every
+    user-scoped route below derives user_id from g.user_id rather than
+    trusting whatever the client puts in the request body/path — the
+    request path's own user_id (where routes still take one) is only
+    used as an ownership check, never as the source of truth."""
+    @wraps(view_func)
+    def wrapper(*args, **kwargs):
+        header = request.headers.get('Authorization', '')
+        if not header.startswith('Bearer '):
+            return jsonify({'error': 'Missing or malformed Authorization header'}), 401
+        user_id = verify_token(header[len('Bearer '):].strip())
+        if user_id is None:
+            return jsonify({'error': 'Invalid or expired token'}), 401
+        g.user_id = user_id
+        return view_func(*args, **kwargs)
+    return wrapper
 
 
 @app.route('/health', methods=['GET'])
@@ -63,22 +99,68 @@ def health():
     })
 
 
-@app.route('/users', methods=['GET'])
-def get_users():
-    return jsonify({'users': list_users()})
+@app.route('/register', methods=['POST'])
+def register():
+    data     = request.json or {}
+    user_id  = (data.get('user_id') or '').strip()
+    password = data.get('password') or ''
+    name     = (data.get('name') or user_id).strip()
 
+    if not USER_ID_PATTERN.match(user_id):
+        return jsonify({
+            'error': 'user_id must be 3-30 characters: letters, numbers, _ or -'
+        }), 400
+    if len(password) < 6:
+        return jsonify({'error': 'Password must be at least 6 characters'}), 400
 
-@app.route('/users', methods=['POST'])
-def create_new_user():
-    data    = request.json
-    user_id = data.get('user_id', 'user_001')
-    name    = data.get('name', 'User')
-    create_user(user_id, name)
+    existing = get_user(user_id)
+    if existing and existing.get('password_hash'):
+        return jsonify({'error': 'Username already taken'}), 409
+
+    password_hash = generate_password_hash(password)
+    if existing is None:
+        create_user_with_password(user_id, name, password_hash)
+    else:
+        # Legacy passwordless record (e.g. pre-auth test users) —
+        # claim it in place, only password_hash changes.
+        set_password_hash(user_id, password_hash)
+
     return jsonify({
         'success': True,
         'user_id': user_id,
-        'name':    name
+        'name':    name,
+        'token':   generate_token(user_id)
+    }), 201
+
+
+@app.route('/login', methods=['POST'])
+def login():
+    data     = request.json or {}
+    user_id  = (data.get('user_id') or '').strip()
+    password = data.get('password') or ''
+
+    user = get_user(user_id)
+    if not user or 'password_hash' not in user or \
+            not check_password_hash(user['password_hash'], password):
+        # Same generic message either way — don't leak which field was wrong.
+        return jsonify({'error': 'Invalid username or password'}), 401
+
+    return jsonify({
+        'success': True,
+        'user_id': user_id,
+        'name':    user.get('name', user_id),
+        'token':   generate_token(user_id)
     })
+
+
+@app.route('/users', methods=['GET'])
+@require_auth
+def get_users():
+    users = {
+        uid: {k: v for k, v in record.items() if k != 'password_hash'}
+        for uid, record in list_users().items()
+    }
+    return jsonify({'users': users})
 
 
 # ── /calibrate — real-ring baseline capture ───────────────────
@@ -95,58 +177,72 @@ def create_new_user():
 #     ]
 #   }
 @app.route('/calibrate', methods=['POST'])
+@require_auth
 def calibrate():
-    data    = request.json
-    user_id = data.get('user_id', 'Wehara')
+    data = request.json
+    user_id = g.user_id
     raw_windows = data.get('windows', [])
 
-    if len(raw_windows) == 0:
-        return jsonify({'error': 'No windows provided'}), 400
+    try:
+        result = save_calibration_windows(user_id, raw_windows)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({
+            'error':   'Feature extraction failed',
+            'details': str(e)
+        }), 500
 
-    feature_rows = []
-    for i, w in enumerate(raw_windows):
-        try:
-            features_2d, motion_rejected, feat_dict = extract_features(
-                w.get('ibi_array', []),
-                w.get('gsr_adc_array', []),
-                w.get('acc_array', []),
-                w.get('gsr_calibration', 2048),
-                actual_fs=w.get('actual_fs', 50)
-            )
-        except Exception as e:
-            return jsonify({
-                'error':   f'Feature extraction failed on window {i}',
-                'details': str(e)
-            }), 500
+    return jsonify(result)
 
-        if motion_rejected:
-            return jsonify({
-                'error': f'Window {i} rejected for movement — '
-                         f'sit still for the whole calibration period'
-            }), 400
 
-        feature_rows.append(features_2d[0])
+# ── /calibrate/start, /calibrate/status — live in-app calibration ──
+# The ring only streams sensor data to Mosquitto over MQTT — the phone
+# never receives it directly, so it can't assemble a /calibrate request
+# itself. These two routes let the PHONE trigger a calibration capture
+# that runs server-side (Flask already has MQTT/network access), and
+# poll for progress instead.
+@app.route('/calibrate/start', methods=['POST'])
+@require_auth
+def calibrate_start():
+    user_id = g.user_id
+    current = _calibration_sessions.get(user_id)
+    if current and current.get('status') in ('settling', 'capturing', 'saving'):
+        return jsonify({'error': 'Calibration already in progress'}), 409
 
-    windows_array = np.array(feature_rows)
-    b_mean, b_std = compute_baseline(windows_array)
+    _calibration_sessions[user_id] = {
+        'status': 'settling', 'window_idx': 0, 'n_windows': N_BASELINE_WIN
+    }
 
-    if baseline_exists(user_id):
-        old_mean, old_std = load_baseline(user_id, feature_cols)
-        if old_mean is not None:
-            b_mean, b_std = update_baseline_ema(old_mean, old_std, b_mean, b_std)
+    def on_progress(status, extra):
+        entry = {'status': status, 'n_windows': N_BASELINE_WIN}
+        if status == 'window_captured':
+            entry['status'] = 'capturing'
+            entry['window_idx'] = extra['window_idx']
+        elif status == 'window_skipped':
+            entry['status'] = 'capturing'
+            entry['window_idx'] = _calibration_sessions.get(
+                user_id, {}
+            ).get('window_idx', 0)
+        elif status == 'error':
+            entry['error'] = extra.get('message', 'Unknown error')
+        else:
+            entry.update(extra)
+            entry['status'] = status
+        _calibration_sessions[user_id] = entry
 
-    save_baseline(user_id, b_mean, b_std, feature_cols)
+    def worker():
+        run_calibration_capture(user_id, on_progress=on_progress)
 
-    return jsonify({
-        'success':      True,
-        'user_id':      user_id,
-        'baseline_set': True,
-        'n_windows':    len(windows_array),
-        'sample_values': {
-            'AVNN_mean':     float(b_mean[0]),
-            'SCL_mean_mean': float(b_mean[feature_cols.index('SCL_mean')])
-        }
-    })
+    threading.Thread(target=worker, daemon=True).start()
+    return jsonify({'status': 'started'})
+
+
+@app.route('/calibrate/status', methods=['GET'])
+@require_auth
+def calibrate_status():
+    state = _calibration_sessions.get(g.user_id, {'status': 'idle'})
+    return jsonify(state)
 
 
 # ── /predict — real-ring binary prediction ─────────────────────
@@ -181,11 +277,12 @@ def calibrate():
 # prediction go to predictions/, and only probability/confidence/
 # signal_quality go to the separate prediction_quality/ table.
 @app.route('/predict', methods=['POST'])
+@require_auth
 def predict():
     data = request.json
 
     # ── Parse request ─────────────────────────────────────────
-    user_id         = data.get('user_id', 'Wehara')
+    user_id         = g.user_id
     session_id      = data.get('session_id', 'session_001')
     window_idx      = data.get('window_idx', 0)
     ibi_array       = data.get('ibi_array', [])
@@ -341,9 +438,10 @@ def device_status(device_id):
 
 
 @app.route('/pss4', methods=['POST'])
+@require_auth
 def submit_pss4():
     data       = request.json
-    user_id    = data.get('user_id', 'user_001')
+    user_id    = g.user_id
     session_id = data.get('session_id', 'session_001')
     q1 = int(data.get('q1', 0))
     q2 = int(data.get('q2', 0))
@@ -372,7 +470,10 @@ def submit_pss4():
 
 
 @app.route('/history/<user_id>', methods=['GET'])
+@require_auth
 def get_history(user_id):
+    if user_id != g.user_id:
+        return jsonify({'error': 'Forbidden — token does not match requested user'}), 403
     return jsonify({
         'user_id':  user_id,
         'sessions': get_recent_sessions(user_id, limit=10),
@@ -382,7 +483,10 @@ def get_history(user_id):
 
 @app.route('/history/<user_id>/<session_id>',
            methods=['GET'])
+@require_auth
 def get_session_detail(user_id, session_id):
+    if user_id != g.user_id:
+        return jsonify({'error': 'Forbidden — token does not match requested user'}), 403
     return jsonify({
         'user_id':     user_id,
         'session_id':  session_id,
@@ -393,7 +497,10 @@ def get_session_detail(user_id, session_id):
 
 
 @app.route('/baseline/<user_id>', methods=['GET'])
+@require_auth
 def get_baseline(user_id):
+    if user_id != g.user_id:
+        return jsonify({'error': 'Forbidden — token does not match requested user'}), 403
     b_mean, b_std = load_baseline(user_id, feature_cols)
 
     if b_mean is None:
@@ -413,6 +520,7 @@ def get_baseline(user_id):
 
 
 @app.route('/ema/update', methods=['POST'])
+@require_auth
 def ema_update():
     from backend.physiological.ema_service import (
         compute_session_mean,
@@ -422,7 +530,7 @@ def ema_update():
     )
 
     data       = request.get_json(silent=True) or {}
-    user_id    = data.get('user_id', 'Wehara')
+    user_id    = g.user_id
     session_id = data.get('session_id', '')
 
     old_mean, old_std = load_baseline(user_id, feature_cols)
@@ -537,7 +645,10 @@ def ema_update():
 
 
 @app.route('/ema/history/<user_id>', methods=['GET'])
+@require_auth
 def get_ema_history(user_id):
+    if user_id != g.user_id:
+        return jsonify({'error': 'Forbidden — token does not match requested user'}), 403
     ref  = _ref(f'ema_history/{user_id}')
     data = ref.get() or {}
     return jsonify({
@@ -553,7 +664,12 @@ if __name__ == '__main__':
     print(f"Model: XGBoost binary (Normal/Stress), {len(feature_cols)} features")
     print(f"Endpoints:")
     print(f"  GET  /health")
-    print(f"  POST /calibrate         ← real-ring baseline capture")
+    print(f"  POST /register          ← create account")
+    print(f"  POST /login             ← issue auth token")
+    print(f"  GET  /users              (auth required)")
+    print(f"  POST /calibrate         ← real-ring baseline capture (auth required)")
+    print(f"  POST /calibrate/start    (auth required) — live in-app capture trigger")
+    print(f"  GET  /calibrate/status   (auth required) — poll capture progress")
     print(f"  POST /predict           ← binary (Normal/Stress) + trend")
     print(f"  GET  /devices/<device_id>/status")
     print(f"  POST /pss4")
@@ -565,5 +681,10 @@ if __name__ == '__main__':
     app.run(
         host='0.0.0.0',
         port=5000,
-        debug=True
+        debug=True,
+        threaded=True  # required — /calibrate/start runs a background
+                       # capture thread; without this, that request (and
+                       # the several-minute capture behind it) would block
+                       # every other request, including /calibrate/status
+                       # polling the app needs to show live progress.
     )
