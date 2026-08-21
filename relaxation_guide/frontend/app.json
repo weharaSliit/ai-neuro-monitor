@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "name": "Calm AI",
+    "slug": "calm-ai-stress",
+    "version": "3.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true
+    }
+  }
+}
