@@ -7,7 +7,6 @@
 
 from flask import Flask, jsonify, request, g
 from flask_cors import CORS
-from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 import numpy as np
 import re
@@ -25,7 +24,7 @@ from backend.common.config import (
     STRESS_COLORS,
     EMA_ALPHA, N_BASELINE_WIN
 )
-from backend.common.auth import generate_token, verify_token
+from backend.common.auth import generate_token, require_auth
 from backend.physiological.firebase_service import (
     init_firebase,
     create_user, get_user, list_users,
@@ -69,24 +68,10 @@ _calibration_sessions = {}
 
 USER_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{3,30}$')
 
-
-def require_auth(view_func):
-    """Verifies Authorization: Bearer <token>, sets g.user_id. Every
-    user-scoped route below derives user_id from g.user_id rather than
-    trusting whatever the client puts in the request body/path — the
-    request path's own user_id (where routes still take one) is only
-    used as an ownership check, never as the source of truth."""
-    @wraps(view_func)
-    def wrapper(*args, **kwargs):
-        header = request.headers.get('Authorization', '')
-        if not header.startswith('Bearer '):
-            return jsonify({'error': 'Missing or malformed Authorization header'}), 401
-        user_id = verify_token(header[len('Bearer '):].strip())
-        if user_id is None:
-            return jsonify({'error': 'Invalid or expired token'}), 401
-        g.user_id = user_id
-        return view_func(*args, **kwargs)
-    return wrapper
+# require_auth itself now lives in backend/common/auth.py — every backend
+# module verifies the same Bearer token against the same SECRET_KEY, so one
+# StressApp login (issued below by /login) works across physiological/,
+# phenotyping_behavior/, and psychological/ alike.
 
 
 @app.route('/health', methods=['GET'])
@@ -680,7 +665,7 @@ if __name__ == '__main__':
     print("=" * 50)
     app.run(
         host='0.0.0.0',
-        port=5000,
+        port=5050,
         debug=True,
         threaded=True  # required — /calibrate/start runs a background
                        # capture thread; without this, that request (and

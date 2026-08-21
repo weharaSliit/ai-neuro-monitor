@@ -1,17 +1,14 @@
 from firebase_admin import db
 from datetime import datetime
-import os
-import sys
-
-# Ensure the backend root is in the path so we can import from common
-_CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-_BACKEND_ROOT = os.path.abspath(os.path.join(_CURRENT_DIR, ".."))
-if _BACKEND_ROOT not in sys.path:
-    sys.path.insert(0, _BACKEND_ROOT)
 
 # Single source of truth for every module's RTDB namespace / credential /
-# Firestore collection name -- see common/firebase_config.py.
-from common.firebase_config import RTDB_NAMESPACES, init_firebase_app
+# Firestore collection name -- see backend/common/firebase_config.py.
+# Imported as backend.common.* (not a bare `common.*`/sys.path hack) so this
+# resolves to the SAME module object physiological/ and psychological/ use --
+# a separate top-level `common` package would double-import the file under a
+# different identity and silently diverge (e.g. two firebase_admin app
+# singletons instead of one shared one).
+from backend.common.firebase_config import RTDB_NAMESPACES, init_firebase_app
 
 # --- RESEARCH NAMESPACE ---
 # This ensures your data is stored under 'phenotyping/' in the database --

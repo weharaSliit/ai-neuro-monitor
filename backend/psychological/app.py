@@ -20,12 +20,16 @@
 # hardware; the bipolar model is reference-agnostic by construction).
 # ============================================================
 
+import re
 from pathlib import Path
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
+from backend.common.auth import require_auth
 from backend.psychological.firebase_service import EegFirebaseSession
+from backend.psychological.realtime.adc import code_to_microvolts
+from backend.psychological.realtime.csv_logger import CsvLogger, RAW_FIELDS, log_raw_block
 from backend.psychological.realtime.firebase_sync import make_eeg_output_record
 from backend.psychological.realtime.mqtt_client import RawSample
 from backend.psychological.realtime.pipeline import BLOCK_SEC, RealtimeInference
@@ -36,7 +40,24 @@ CORS(app)
 MODEL_DIR = Path(__file__).resolve().parent / "models"
 MODEL_VERSION = "bipolar_only_v1"
 
-eeg_sessions = {}  # session_id -> {'engine': RealtimeInference, 'firebase': EegFirebaseSession, 'score_history': [...]}
+# Raw EEG samples are logged here per session, independent of Firebase --
+# EegFirebaseSession.push_raw() no-ops without $FIREBASE_CREDENTIALS (see its
+# docstring), so this is the one raw-data path that's guaranteed to work
+# even with cloud sync off entirely. Same RAW_FIELDS shape as the standalone
+# phscycological/scripts/realtime_inference.py CLI's --log-raw-csv, via the
+# same CsvLogger/log_raw_block (realtime/csv_logger.py) -- not a second copy.
+RAW_CSV_DIR = Path(__file__).resolve().parent / "logs"
+RAW_CSV_DIR.mkdir(exist_ok=True)
+_UNSAFE_FILENAME_CHARS = re.compile(r'[^A-Za-z0-9_-]')
+
+
+def _raw_csv_path(session_id: str) -> Path:
+    safe_id = _UNSAFE_FILENAME_CHARS.sub('_', session_id)
+    return RAW_CSV_DIR / f"{safe_id}_raw.csv"
+
+
+eeg_sessions = {}  # session_id -> {'engine': RealtimeInference, 'firebase': EegFirebaseSession,
+                   #                'csv_logger': CsvLogger, 'score_history': [...]}
 
 
 def _samples_from_payload(data: dict) -> list[RawSample]:
@@ -58,6 +79,21 @@ def _samples_from_payload(data: dict) -> list[RawSample]:
         RawSample(millis=int(m), ch1_code=int(c1), ch2_code=int(c2))
         for m, c1, c2 in zip(millis, ch1, ch2)
     ]
+
+
+def _raw_signal_record(window: int, samples: list[RawSample]) -> dict:
+    """One record per block: raw ADC codes + decoded uV, same RAW_FIELDS
+    shape as realtime/csv_logger.py's local CSV logging -- see
+    EegFirebaseSession.push_raw()'s docstring for why this is a sibling
+    RTDB path rather than nested into the derived-output record."""
+    return {
+        "window": window,
+        "millis": [s.millis for s in samples],
+        "ch1_code": [s.ch1_code for s in samples],
+        "ch2_code": [s.ch2_code for s in samples],
+        "ch1_uv": [round(code_to_microvolts(s.ch1_code), 3) for s in samples],
+        "ch2_uv": [round(code_to_microvolts(s.ch2_code), 3) for s in samples],
+    }
 
 
 @app.route("/health", methods=["GET"])
@@ -85,6 +121,7 @@ def health():
 #     ]
 #   }
 @app.route("/calibrate", methods=["POST"])
+@require_auth
 def calibrate():
     data = request.json or {}
     session_id = data.get("session_id", "session_001")
@@ -93,16 +130,34 @@ def calibrate():
     if not blocks:
         return jsonify({"error": "No blocks provided"}), 400
 
+    # Re-calibrating an already-active session_id would otherwise leak the
+    # previous attempt's open CSV file handle -- close it before replacing.
+    existing = eeg_sessions.get(session_id)
+    if existing is not None:
+        existing["csv_logger"].close()
+
+    # Created here (not after calibration succeeds) so raw signal from
+    # calibration blocks is stored too -- signal storage shouldn't depend on
+    # whether calibration happened to pass; reused below as this session's
+    # firebase/csv handles rather than constructing second instances.
+    firebase = EegFirebaseSession(session_id)
+    csv_logger = CsvLogger(str(_raw_csv_path(session_id)), RAW_FIELDS)
+
     engine = RealtimeInference(MODEL_DIR)
     for i, block in enumerate(blocks):
         try:
             samples = _samples_from_payload(block)
         except ValueError as e:
             return jsonify({"error": f"block {i}: {e}"}), 400
+        firebase.push_raw(_raw_signal_record(i, samples))
+        log_raw_block(csv_logger, samples)
         engine.calibrate_block(samples)
 
     outcome = engine.finalize_calibration(allow_degraded=bool(data.get("allow_degraded", False)))
     if outcome["status"] == "failed":
+        # Never stored into eeg_sessions, so nothing else will ever close this --
+        # close it here or the file handle (and its partial CSV) just leaks.
+        csv_logger.close()
         return (
             jsonify(
                 {
@@ -118,7 +173,8 @@ def calibrate():
 
     eeg_sessions[session_id] = {
         "engine": engine,
-        "firebase": EegFirebaseSession(session_id),
+        "firebase": firebase,
+        "csv_logger": csv_logger,
         "score_history": [],
     }
     return jsonify({"success": True, "session_id": session_id, **outcome})
@@ -132,6 +188,7 @@ def calibrate():
 #     "millis": [...], "ch1_code": [...], "ch2_code": [...]
 #   }
 @app.route("/predict", methods=["POST"])
+@require_auth
 def predict():
     data = request.json or {}
     session_id = data.get("session_id", "session_001")
@@ -147,6 +204,8 @@ def predict():
     state = eeg_sessions[session_id]
     result = state["engine"].infer_block(samples)
     state["score_history"].append(result.get("calibrated_p") if not result.get("skipped") else None)
+    state["firebase"].push_raw(_raw_signal_record(result.get("window"), samples))
+    log_raw_block(state["csv_logger"], samples)
 
     record = make_eeg_output_record(
         result,
@@ -176,9 +235,12 @@ def predict():
 
 
 @app.route("/sessions/<session_id>", methods=["DELETE"])
+@require_auth
 def end_session(session_id):
-    existed = eeg_sessions.pop(session_id, None) is not None
-    return jsonify({"success": True, "session_id": session_id, "existed": existed})
+    state = eeg_sessions.pop(session_id, None)
+    if state is not None:
+        state["csv_logger"].close()
+    return jsonify({"success": True, "session_id": session_id, "existed": state is not None})
 
 
 if __name__ == "__main__":

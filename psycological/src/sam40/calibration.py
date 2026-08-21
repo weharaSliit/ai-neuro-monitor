@@ -20,6 +20,8 @@ grouping is respected at every level:
     (the calibrator never sees test_subject's data, at any level)
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
@@ -139,11 +141,25 @@ def summarize_calibration(y_true: np.ndarray, scores: np.ndarray) -> dict:
     y_pred = (scores > 0.5).astype(int)
     slope, intercept = calibration_slope_intercept(y_true, scores)
     single_class = len(np.unique(y_true)) < 2
+    # balanced_accuracy_score has no zero_division param (unlike f1/precision/
+    # recall below, which already suppress the analogous warning via
+    # zero_division=0) -- on the SAME single/degenerate-class small-fold
+    # subsets AUC/log-loss are NaN'd out for above, it warns instead of
+    # erroring: it still returns a valid score (mean of whichever per-class
+    # recalls aren't NaN), just noisily. Known, already-handled edge case at
+    # this per-subject/per-task fold granularity (see callers in
+    # calibrate_model.py) -- not silencing anything unexpected.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            'ignore', message='y_pred contains classes not in y_true', category=UserWarning)
+        warnings.filterwarnings(
+            'ignore', message="A single label was found in 'y_true' and 'y_pred'", category=UserWarning)
+        balanced_accuracy = balanced_accuracy_score(y_true, y_pred)
     return {
         # NaN (not 0.5/crash) when y_true is single-class (e.g. an all-Relax subset) --
         # AUC/log-loss are undefined there, not just hard to compute.
         'roc_auc': float('nan') if single_class else roc_auc_score(y_true, scores),
-        'balanced_accuracy': balanced_accuracy_score(y_true, y_pred),
+        'balanced_accuracy': balanced_accuracy,
         'f1': f1_score(y_true, y_pred, zero_division=0),
         'precision': precision_score(y_true, y_pred, zero_division=0),
         'recall': recall_score(y_true, y_pred, zero_division=0),

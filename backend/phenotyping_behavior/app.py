@@ -1,26 +1,31 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 import numpy as np
 import sys
-import os
 from pathlib import Path
 
-# --- MODULE PATH FIX ---
+# Lets this run directly (`python app.py`) as well as via `python -m
+# backend.phenotyping_behavior.app` -- the latter is how physiological/ and
+# psychological/ are run, and importing as backend.phenotyping_behavior.*
+# below (not a bare `from firebase_service import ...`) keeps this module on
+# the same backend.common.* singletons those two share (see
+# firebase_service.py's comment on why the bare form is a real bug, not
+# just a style choice).
 if __package__ is None:
     repo_root = Path(__file__).resolve().parents[2]
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
-# Import your local services
-from firebase_service import (
+from backend.phenotyping_behavior.firebase_service import (
     init_firebase, save_behavioral_window, get_user_baselines,
     save_stress_prediction, save_validation_label,
     get_latest_stress_prediction,             # T7-B: neuroadaptive bridge
     get_calibration_windows,                  # Objective 2: 7-day baseline
     set_user_calibration_status, create_user_profile
 )
-from predictor import predictor
-from ema_service import update_personalized_baseline
+from backend.phenotyping_behavior.predictor import predictor
+from backend.phenotyping_behavior.ema_service import update_personalized_baseline
+from backend.common.auth import require_auth
 
 app = Flask(__name__)
 CORS(app)
@@ -29,14 +34,15 @@ CORS(app)
 init_firebase()
 
 @app.route('/behavior/predict', methods=['POST'])
+@require_auth
 def predict_behavioral_stress():
     """
     Endpoint for Objective 3: Real-time Behavioral Inference.
     Handles Category A Features (Dwell, Flight, Interaction).
     """
     data = request.json
-    user_id = data.get('user_id')
-    
+    user_id = g.user_id
+
     # 1. Aggregation Logic (Custom Keyboard Data)
     # The phone sends raw arrays of timing; we calculate window stats here
     raw_dwells = data.get('dwell_times', [])
@@ -85,13 +91,14 @@ def predict_behavioral_stress():
     })
 
 @app.route('/behavior/label', methods=['POST'])
+@require_auth
 def submit_label():
     """
     Endpoint for Ground Truth Collection (Validation).
     Receives PSS-4 or SISS scores.
     """
     data = request.json
-    user_id = data.get('user_id')
+    user_id = g.user_id
     label_type = data.get('type') # 'pss4' or 'siss'
     score = data.get('score')
     
@@ -100,6 +107,7 @@ def submit_label():
  
  
 @app.route('/behavior/stress-summary', methods=['GET'])
+@require_auth
 def stress_summary():
     """
     T7-B: Neuroadaptive Integration Bridge.
@@ -110,7 +118,9 @@ def stress_summary():
     Neuroadaptive Guidance module (T7 on the WBS).
 
     Usage:
-        GET /behavior/stress-summary?user_id=chathurika_001
+        GET /behavior/stress-summary
+        (user identified by the Authorization: Bearer <token> header, not a
+        query param -- see require_auth in backend/common/auth.py)
 
     Response (stress detected):
         {
@@ -128,9 +138,7 @@ def stress_summary():
     Response (no data yet):
         { "user_id": "...", "stress_level": "unknown", "trigger_guidance": false }
     """
-    user_id = request.args.get('user_id')
-    if not user_id:
-        return jsonify({"error": "user_id query param required"}), 400
+    user_id = g.user_id
 
     latest = get_latest_stress_prediction(user_id)
 
@@ -177,6 +185,7 @@ def stress_summary():
     })
 
 @app.route('/behavior/calibrate', methods=['POST'])
+@require_auth
 def calibrate_baseline():
     """
     Objective 2: Automatic 7-Day Baseline Initializer.
@@ -191,10 +200,10 @@ def calibrate_baseline():
 
     Body (JSON):
         {
-            "user_id": "chathurika_001",
-            "name":    "Chathurika"          # optional, stored on first call
+            "name":        "Chathurika"      # optional, stored on first call
             "min_windows": 50               # optional override (default 50 test / 200 production)
         }
+        (user identified by the Authorization: Bearer <token> header)
 
     Response (success):
         {
@@ -207,13 +216,10 @@ def calibrate_baseline():
         { "status": "insufficient_data", "window_count": 37, "required": 50 }
     """
     data = request.json or {}
-    user_id   = data.get('user_id')
+    user_id   = g.user_id
     name      = data.get('name', user_id)
     # Use 50 as default for testing; bump to 200 for the real 28-day trial
     min_windows = int(data.get('min_windows', 50))
-
-    if not user_id:
-        return jsonify({"error": "user_id is required"}), 400
 
     # ── 1. Fetch all valid calibration windows from Firebase ──────────────────
     windows = get_calibration_windows(user_id)

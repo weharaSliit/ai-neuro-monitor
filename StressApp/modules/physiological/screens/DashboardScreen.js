@@ -418,6 +418,8 @@ export default function DashboardScreen({ navigation }) {
             <ActionTile icon="📋" label="PSS-4"      color={COLORS.normal}   isDark={isDark} onPress={() => navigation.navigate('PSS-4')} />
             <ActionTile icon="📊" label="History"    color={COLORS.gsr}      isDark={isDark} onPress={() => navigation.navigate('History')} />
             <ActionTile icon="💍" label="Ring"       color={COLORS.brand}    isDark={isDark} onPress={() => navigation.navigate('Ring')} />
+            <ActionTile icon="🧬" label="Fusion"     color={COLORS.stress}   isDark={isDark} onPress={() => navigation.navigate('Fusion')} />
+            <ActionTile icon="🧠" label="EEG"        color={COLORS.warning}  isDark={isDark} onPress={() => navigation.navigate('Eeg')} />
           </View>
         </View>
 

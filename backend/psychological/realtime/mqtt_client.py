@@ -64,14 +64,12 @@ def parse_payload(payload: str) -> list[RawSample]:
 
 
 def make_client(broker: str, port: int, topic: str, buffer: RawSampleBuffer, client_id: str = 'eeg_inference'):
-    """Returns a connected paho-mqtt client wired to append parsed samples into `buffer`.
-    Caller owns calling .loop_start()/.loop_forever() and eventual .disconnect().
+    """Returns a connected, already-looping paho-mqtt client wired to append
+    parsed samples into `buffer` (connection/subscribe/loop_start wiring
+    lives in backend/common/mqtt_bridge.py, shared with the ring's bridge).
+    Caller owns eventual .loop_stop()/.disconnect().
     """
-    import paho.mqtt.client as mqtt
-
-    def on_connect(client, userdata, flags, reason_code, properties=None):
-        print(f'[mqtt] connected (reason_code={reason_code}), subscribing to {topic}')
-        client.subscribe(topic)
+    from backend.common.mqtt_bridge import connect_mqtt
 
     def on_message(client, userdata, msg):
         samples = parse_payload(msg.payload.decode('utf-8', errors='replace'))
@@ -81,8 +79,4 @@ def make_client(broker: str, port: int, topic: str, buffer: RawSampleBuffer, cli
         for sample in samples:
             buffer.append(sample)
 
-    client = mqtt.Client(client_id=client_id, callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
-    client.on_connect = on_connect
-    client.on_message = on_message
-    client.connect(broker, port)
-    return client
+    return connect_mqtt(broker, port, topic, on_message, client_id=client_id)

@@ -8,6 +8,7 @@ import LoginScreen from './screens/LoginScreen';
 import RegisterScreen from './screens/RegisterScreen';
 import PhysiologicalNavigator from './modules/physiological/PhysiologicalNavigator';
 import FusionSessionScreen from './modules/fusion/screens/FusionSessionScreen';
+import EegSessionScreen from './modules/eeg/screens/EegSessionScreen';
 import CalibrationScreen from './modules/physiological/screens/CalibrationScreen';
 import EMAScreen from './modules/physiological/screens/EMAScreen';
 import { AppContext } from './modules/physiological/screens/AppState';
@@ -45,6 +46,11 @@ function RootNavigator() {
             name="Fusion"
             component={FusionSessionScreen}
             options={{ headerShown: true, title: 'Fusion' }}
+          />
+          <Stack.Screen
+            name="Eeg"
+            component={EegSessionScreen}
+            options={{ headerShown: true, title: 'EEG' }}
           />
         </>
       ) : (

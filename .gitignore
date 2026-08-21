@@ -53,6 +53,3 @@ desktop.ini
 serviceAccountKey.json
 .env
 .env.*
-
-# Allow production models to be committed
-!phenotyping/models/stress_engine.pkl
