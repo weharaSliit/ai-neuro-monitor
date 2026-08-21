@@ -300,7 +300,12 @@ export const MeditationGame = ({ initialMode, mode }) => {
   });
 
   return (
-    <View style={[styles.container, { backgroundColor: currentConfig.bgGradient[0] }]}>
+    <ScrollView
+      style={{ flex: 1, width: '100%' }}
+      contentContainerStyle={[styles.container, { backgroundColor: currentConfig.bgGradient[0] }]}
+      showsVerticalScrollIndicator={false}
+      bounces={false}
+    >
       {/* Mode Switcher Header Tabs */}
       <View style={styles.headerTabScroll}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.modeScrollRow}>
@@ -404,9 +409,9 @@ export const MeditationGame = ({ initialMode, mode }) => {
                   style={[
                     styles.chakraRingItem,
                     {
-                      width: 220 - idx * 24,
-                      height: 220 - idx * 24,
-                      borderRadius: (220 - idx * 24) / 2,
+                      width: 160 - idx * 18,
+                      height: 160 - idx * 18,
+                      borderRadius: (160 - idx * 18) / 2,
                       borderColor: c.color,
                     }
                   ]}
@@ -432,11 +437,11 @@ export const MeditationGame = ({ initialMode, mode }) => {
         {activeMode === 'sound_meditation' && (
           <View style={styles.artworkBoxContainer}>
             <View style={styles.waveBarContainer}>
-              <Animated.View style={[styles.waveBar, { height: 110, backgroundColor: currentConfig.color, transform: [{ scaleY: waveAnim1 }] }]} />
-              <Animated.View style={[styles.waveBar, { height: 140, backgroundColor: '#A7F3D0', transform: [{ scaleY: waveAnim2 }] }]} />
-              <Animated.View style={[styles.waveBar, { height: 170, backgroundColor: currentConfig.color, transform: [{ scaleY: waveAnim3 }] }]} />
-              <Animated.View style={[styles.waveBar, { height: 130, backgroundColor: '#FDE68A', transform: [{ scaleY: waveAnim1 }] }]} />
-              <Animated.View style={[styles.waveBar, { height: 90, backgroundColor: currentConfig.color, transform: [{ scaleY: waveAnim2 }] }]} />
+              <Animated.View style={[styles.waveBar, { height: 80, backgroundColor: currentConfig.color, transform: [{ scaleY: waveAnim1 }] }]} />
+              <Animated.View style={[styles.waveBar, { height: 100, backgroundColor: '#A7F3D0', transform: [{ scaleY: waveAnim2 }] }]} />
+              <Animated.View style={[styles.waveBar, { height: 120, backgroundColor: currentConfig.color, transform: [{ scaleY: waveAnim3 }] }]} />
+              <Animated.View style={[styles.waveBar, { height: 95, backgroundColor: '#FDE68A', transform: [{ scaleY: waveAnim1 }] }]} />
+              <Animated.View style={[styles.waveBar, { height: 70, backgroundColor: currentConfig.color, transform: [{ scaleY: waveAnim2 }] }]} />
             </View>
           </View>
         )}
@@ -488,44 +493,44 @@ export const MeditationGame = ({ initialMode, mode }) => {
           <Text style={styles.audioToggleText}>{isPlayingSound ? '🔊 Speaker On' : '🔇 Audio Muted'}</Text>
         </TouchableOpacity>
       </View>
-    </View>
+    </ScrollView>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
-    paddingTop: 8,
+    flexGrow: 1,
+    paddingTop: 4,
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingBottom: 16,
+    justifyContent: 'flex-start',
+    paddingBottom: 12,
   },
   headerTabScroll: {
     width: '100%',
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
   },
   modeScrollRow: {
     flexDirection: 'row',
-    gap: 8,
-    paddingVertical: 8,
+    gap: 6,
+    paddingVertical: 4,
   },
   modeTab: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 20,
+    paddingVertical: 5,
+    paddingHorizontal: 12,
+    borderRadius: 18,
     backgroundColor: 'rgba(255, 255, 255, 0.06)',
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.12)',
-    gap: 6,
+    gap: 5,
   },
   modeTabIcon: {
-    fontSize: 16,
+    fontSize: 14,
   },
   modeTabText: {
     color: 'rgba(255, 255, 255, 0.7)',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '600',
   },
   modeTabTextActive: {
@@ -537,30 +542,30 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     width: width * 0.88,
-    marginVertical: 6,
+    marginVertical: 3,
   },
   badgeContainer: {
-    paddingVertical: 4,
-    paddingHorizontal: 12,
-    borderRadius: 12,
+    paddingVertical: 3,
+    paddingHorizontal: 10,
+    borderRadius: 10,
     borderWidth: 1,
   },
   badgeText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
     letterSpacing: 0.5,
   },
   cyclesText: {
     color: 'rgba(255,255,255,0.6)',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '500',
   },
   canvasContainer: {
     width: width * 0.85,
-    height: width * 0.75,
+    height: Math.min(width * 0.48, 210),
     alignItems: 'center',
     justifyContent: 'center',
-    marginVertical: 10,
+    marginVertical: 4,
   },
   artworkBoxContainer: {
     width: '100%',
@@ -571,63 +576,63 @@ const styles = StyleSheet.create({
   },
   rippleCircle: {
     position: 'absolute',
-    width: 140,
-    height: 140,
-    borderRadius: 70,
+    width: 110,
+    height: 110,
+    borderRadius: 55,
     borderWidth: 2,
   },
   zenSquare: {
-    width: 170,
-    height: 170,
-    borderRadius: 36,
+    width: 125,
+    height: 125,
+    borderRadius: 28,
     borderWidth: 3,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.03)',
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.8,
-    shadowRadius: 25,
+    shadowRadius: 20,
   },
   centerEmoji: {
-    fontSize: 44,
+    fontSize: 34,
   },
   artworkTitleText: {
     color: 'rgba(255,255,255,0.5)',
-    fontSize: 9,
+    fontSize: 8,
     fontWeight: '700',
-    letterSpacing: 1.5,
-    marginTop: 6,
+    letterSpacing: 1.2,
+    marginTop: 4,
   },
-  cornerDotTL: { position: 'absolute', top: 10, left: 10, width: 8, height: 8, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.3)' },
-  cornerDotTR: { position: 'absolute', top: 10, right: 10, width: 8, height: 8, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.3)' },
-  cornerDotBL: { position: 'absolute', bottom: 10, left: 10, width: 8, height: 8, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.3)' },
-  cornerDotBR: { position: 'absolute', bottom: 10, right: 10, width: 8, height: 8, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.3)' },
+  cornerDotTL: { position: 'absolute', top: 6, left: 6, width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.3)' },
+  cornerDotTR: { position: 'absolute', top: 6, right: 6, width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.3)' },
+  cornerDotBL: { position: 'absolute', bottom: 6, left: 6, width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.3)' },
+  cornerDotBR: { position: 'absolute', bottom: 6, right: 6, width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.3)' },
   auraCircle: {
-    width: 220,
-    height: 220,
-    borderRadius: 110,
+    width: 160,
+    height: 160,
+    borderRadius: 80,
     alignItems: 'center',
     justifyContent: 'center',
   },
   bodyNodeColumn: {
-    gap: 6,
+    gap: 4,
     width: '100%',
     alignItems: 'center',
   },
   bodyNodePill: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 5,
-    paddingHorizontal: 14,
-    borderRadius: 16,
+    paddingVertical: 3,
+    paddingHorizontal: 10,
+    borderRadius: 12,
     backgroundColor: 'rgba(255,255,255,0.06)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
-    width: '80%',
-    gap: 8,
+    width: '82%',
+    gap: 6,
   },
-  bodyNodeIcon: { fontSize: 14 },
-  bodyNodeText: { color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: '500' },
+  bodyNodeIcon: { fontSize: 12 },
+  bodyNodeText: { color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: '500' },
   bodyNodeTextActive: { color: '#FFFFFF', fontWeight: '700' },
   chakraRingItem: {
     position: 'absolute',
@@ -635,104 +640,107 @@ const styles = StyleSheet.create({
     opacity: 0.75,
   },
   singingBowlOuter: {
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    borderWidth: 4,
+    width: 130,
+    height: 130,
+    borderRadius: 65,
+    borderWidth: 3,
     alignItems: 'center',
     justifyContent: 'center',
   },
   singingBowlInner: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
+    width: 85,
+    height: 85,
+    borderRadius: 42.5,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  bowlEmoji: { fontSize: 48 },
+  bowlEmoji: { fontSize: 34 },
   waveBarContainer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    gap: 12,
-    height: 180,
+    gap: 10,
+    height: 130,
   },
   waveBar: {
-    width: 16,
-    borderRadius: 8,
+    width: 14,
+    borderRadius: 7,
   },
   guidanceBox: {
     alignItems: 'center',
-    marginVertical: 4,
+    marginVertical: 3,
   },
   phaseTextDisplay: {
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: '800',
     letterSpacing: 0.5,
     textAlign: 'center',
   },
   subtextInstruction: {
     color: 'rgba(255,255,255,0.5)',
-    fontSize: 11,
-    marginTop: 4,
+    fontSize: 10,
+    marginTop: 2,
   },
   soundControlCard: {
     width: width * 0.9,
     backgroundColor: 'rgba(255,255,255,0.04)',
-    padding: 12,
-    borderRadius: 16,
+    padding: 8,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
+    marginVertical: 4,
   },
   soundControlHeader: {
     color: 'rgba(255,255,255,0.8)',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   soundScrollRow: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 6,
   },
   soundChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 14,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 12,
     backgroundColor: 'rgba(255,255,255,0.06)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
-    gap: 6,
+    gap: 5,
   },
-  soundChipIcon: { fontSize: 14 },
-  soundChipText: { color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: '500' },
+  soundChipIcon: { fontSize: 13 },
+  soundChipText: { color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: '500' },
   soundChipTextActive: { color: '#FFFFFF', fontWeight: '700' },
   footerControls: {
     flexDirection: 'row',
-    gap: 12,
+    gap: 10,
     width: width * 0.88,
     justifyContent: 'center',
+    marginTop: 4,
+    marginBottom: 6,
   },
   playBtn: {
-    paddingVertical: 12,
-    paddingHorizontal: 32,
-    borderRadius: 24,
+    paddingVertical: 10,
+    paddingHorizontal: 26,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowOffset: { width: 0, height: 4 },
+    shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.3,
-    shadowRadius: 8,
+    shadowRadius: 6,
     elevation: 4,
   },
   playBtnText: {
     color: '#FFFFFF',
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
   },
   audioToggleBtn: {
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 24,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 20,
     backgroundColor: 'rgba(255,255,255,0.08)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.15)',
@@ -741,7 +749,7 @@ const styles = StyleSheet.create({
   },
   audioToggleText: {
     color: 'rgba(255,255,255,0.8)',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '600',
   },
 });
