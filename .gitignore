@@ -48,6 +48,8 @@ desktop.ini
 
 # Logs
 *.log
+# Node.js dependencies
+node_modules/
 
 # Firebase Secrets & Environment Variables (CRITICAL: Do not commit!)
 serviceAccountKey.json
