@@ -12,14 +12,12 @@
 #   python -m backend.physiological.mqtt_bridge)
 # ============================================================
 
-import json
 import math
+import json
+import os
 import sys
 import time
 from pathlib import Path
-
-import requests
-import paho.mqtt.client as mqtt
 
 if __package__ is None:
     repo_root = Path(__file__).resolve().parents[2]
@@ -29,21 +27,24 @@ if __package__ is None:
 from backend.physiological.firebase_service import (
     init_firebase, save_device_heartbeat
 )
-from backend.common.auth import generate_token
+from backend.common.mqtt_bridge import auth_headers, connect_mqtt, post_json
 from backend.common.config import (
     MQTT_BROKER, MQTT_PORT, MQTT_TOPIC, GSR_CAL,
     WINDOW_SEC, SETTLE_SEC
 )
 
-FLASK_URL = f"http://{MQTT_BROKER}:5000/predict"
-USER_ID   = "Wehara"
+# Flask's host/port is independent of MQTT_BROKER (the ring's broker address
+# can be anywhere; this script and Flask are co-located on this machine) --
+# was hardcoded as f"http://{MQTT_BROKER}:5000/predict", which silently
+# broke when Flask moved off port 5000 (macOS ControlCenter/AirPlay
+# Receiver claims that port by default) to 5050. PHYSIOLOGICAL_PORT lets it
+# track app.py's actual port without another hardcoded literal.
+FLASK_HOST = os.environ.get("PHYSIOLOGICAL_FLASK_HOST", "127.0.0.1")
+FLASK_PORT = os.environ.get("PHYSIOLOGICAL_PORT", "5050")
+FLASK_URL  = f"http://{FLASK_HOST}:{FLASK_PORT}/predict"
+USER_ID    = "Wehara"
 
-# /predict now requires auth. This script already runs locally with
-# direct access to the Firebase service account (more privileged than
-# any mobile client), so minting its own token for USER_ID is no less
-# trusted than that — no interactive login needed for a local script.
-AUTH_TOKEN = generate_token(USER_ID)
-AUTH_HEADERS = {"Authorization": f"Bearer {AUTH_TOKEN}"}
+AUTH_HEADERS = auth_headers(USER_ID)
 
 HEARTBEAT_MIN_GAP_SEC = 5   # don't hammer Firebase at ~5 msgs/sec
 # SETTLE_SEC discards this many seconds of data right after startup —
@@ -81,22 +82,11 @@ def send_window():
             "gsr_calibration": GSR_CAL,
             "actual_fs":       actual_fs
         }
-        try:
-            resp = requests.post(FLASK_URL, json=payload,
-                                  headers=AUTH_HEADERS, timeout=10)
-            print(f"[Window {window_idx}] fs={actual_fs}Hz -> "
-                  f"{resp.status_code} {resp.json()}")
-        except Exception as e:
-            print(f"[Window {window_idx}] request failed: {e}")
+        post_json(FLASK_URL, payload, AUTH_HEADERS, timeout=10, label=f"Window {window_idx}")
 
     window_idx += 1
     ibi_buf, gsr_buf, acc_buf = [], [], []
     window_start = time.time()
-
-
-def on_connect(client, userdata, flags, rc):
-    print("Connected to MQTT broker" if rc == 0 else f"Connect failed rc={rc}")
-    client.subscribe(MQTT_TOPIC)
 
 
 def on_message(client, userdata, msg):
@@ -131,13 +121,9 @@ def on_message(client, userdata, msg):
         send_window()
 
 
-client = mqtt.Client()
-client.on_connect = on_connect
-client.on_message = on_message
-
 print("Starting MQTT -> Flask bridge...")
-client.connect(MQTT_BROKER, MQTT_PORT, 60)
-client.loop_start()
+# Already connected + looping -- see backend/common/mqtt_bridge.py::connect_mqtt().
+client = connect_mqtt(MQTT_BROKER, MQTT_PORT, MQTT_TOPIC, on_message, client_id="physio_bridge_wearable01")
 
 print(f"Letting the sensor settle for {SETTLE_SEC}s before the first "
       f"window starts (electrode contact needs a moment to stabilize)...")

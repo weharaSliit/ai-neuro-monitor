@@ -17,6 +17,7 @@ import PSS4Screen        from './screens/PSS4Screen';
 import HistoryScreen     from './screens/HistoryScreen';
 import RingScreen        from './screens/Ringscreen';
 import ProfileScreen     from './screens/ProfileScreen';
+import EegSessionScreen  from '../eeg/screens/EegSessionScreen';
 
 const Tab = createBottomTabNavigator();
 
@@ -25,6 +26,7 @@ const TABS = [
   { name: 'History',     icon: '📊' },
   { name: 'PSS-4',       icon: '📋' },
   { name: 'Ring',        icon: '💍' },
+  { name: 'EEG',         icon: '🧠' },
   { name: 'Profile',     icon: '👤' },
 ];
 
@@ -99,6 +101,7 @@ export default function PhysiologicalNavigator() {
       <Tab.Screen name="History"     component={HistoryScreen}      />
       <Tab.Screen name="PSS-4"       component={PSS4Screen}        />
       <Tab.Screen name="Ring"        component={RingScreen}        />
+      <Tab.Screen name="EEG"         component={EegSessionScreen}  />
       <Tab.Screen name="Profile"     component={ProfileScreen}     />
     </Tab.Navigator>
   );

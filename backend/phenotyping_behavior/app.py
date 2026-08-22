@@ -1,18 +1,15 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 import numpy as np
 import sys
-import os
 from pathlib import Path
 
-# --- MODULE PATH FIX ---
 if __package__ is None:
     repo_root = Path(__file__).resolve().parents[2]
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
-# Import your local services
-from firebase_service import (
+from backend.phenotyping_behavior.firebase_service import (
     init_firebase, save_behavioral_window, get_user_baselines,
     save_stress_prediction, save_validation_label,
     get_latest_stress_prediction,             # T7-B: neuroadaptive bridge
@@ -20,8 +17,9 @@ from firebase_service import (
     set_user_calibration_status, create_user_profile,
     save_to_fusion_engine                     # Shared fusion_engine table
 )
-from predictor import predictor
-from ema_service import update_personalized_baseline
+from backend.phenotyping_behavior.predictor import predictor
+from backend.phenotyping_behavior.ema_service import update_personalized_baseline
+from backend.common.auth import require_auth
 
 app = Flask(__name__)
 CORS(app)
@@ -30,14 +28,11 @@ CORS(app)
 init_firebase()
 
 @app.route('/behavior/predict', methods=['POST'])
+@require_auth
 def predict_behavioral_stress():
-    """
-    Endpoint for Objective 3: Real-time Behavioral Inference.
-    Handles Category A Features (Dwell, Flight, Interaction).
-    """
     data = request.json
-    user_id = data.get('user_id')
-    
+    user_id = g.user_id
+
     # 1. Aggregation Logic (Custom Keyboard Data)
     # The phone sends raw arrays of timing; we calculate window stats here
     raw_dwells = data.get('dwell_times', [])
@@ -95,13 +90,14 @@ def predict_behavioral_stress():
     })
 
 @app.route('/behavior/label', methods=['POST'])
+@require_auth
 def submit_label():
     """
     Endpoint for Ground Truth Collection (Validation).
     Receives PSS-4 or SISS scores.
     """
     data = request.json
-    user_id = data.get('user_id')
+    user_id = g.user_id
     label_type = data.get('type') # 'pss4' or 'siss'
     score = data.get('score')
     
@@ -110,37 +106,9 @@ def submit_label():
  
  
 @app.route('/behavior/stress-summary', methods=['GET'])
+@require_auth
 def stress_summary():
-    """
-    T7-B: Neuroadaptive Integration Bridge.
-
-    Called by the team's neuroadaptive guidance module to get the current
-    behavioral stress state for a given user. This is the handshake point
-    between the Behavioral Digital Phenotyping module (R26-DS-016) and the
-    Neuroadaptive Guidance module (T7 on the WBS).
-
-    Usage:
-        GET /behavior/stress-summary?user_id=chathurika_001
-
-    Response (stress detected):
-        {
-            "user_id": "chathurika_001",
-            "stress_level": "elevated",       # "normal" | "elevated" | "high"
-            "stress_score": 0.6,              # 0.0 – 1.0
-            "label": "Pre-Stress (Digital Phenotype detected)",
-            "is_anomaly": true,
-            "trigger_guidance": true,          # True when score > 0.5
-            "recommended_action": "breathing", # "none" | "breathing" | "mindfulness"
-            "timestamp": "2026-08-02T14:30:00",
-            "source": "behavioral_phenotyping"
-        }
-
-    Response (no data yet):
-        { "user_id": "...", "stress_level": "unknown", "trigger_guidance": false }
-    """
-    user_id = request.args.get('user_id')
-    if not user_id:
-        return jsonify({"error": "user_id query param required"}), 400
+    user_id = g.user_id
 
     latest = get_latest_stress_prediction(user_id)
 
@@ -187,43 +155,13 @@ def stress_summary():
     })
 
 @app.route('/behavior/calibrate', methods=['POST'])
+@require_auth
 def calibrate_baseline():
-    """
-    Objective 2: Automatic 7-Day Baseline Initializer.
-
-    Triggered after a participant completes the 7-day onboarding period.
-    Reads ALL valid behavioral windows stored in Firebase for the user,
-    computes the idiographic mean and std for every feature, and writes
-    the resulting profile as the user's permanent personal baseline.
-
-    After this endpoint runs successfully the user's profile is set to
-    is_calibrated = True and EMA continual learning becomes active.
-
-    Body (JSON):
-        {
-            "user_id": "chathurika_001",
-            "name":    "Chathurika"          # optional, stored on first call
-            "min_windows": 50               # optional override (default 50 test / 200 production)
-        }
-
-    Response (success):
-        {
-            "status": "calibrated",
-            "window_count": 214,
-            "baselines": { "avg_dwell": {"mean": 0.12, "std": 0.03}, ... }
-        }
-
-    Response (not enough data yet):
-        { "status": "insufficient_data", "window_count": 37, "required": 50 }
-    """
     data = request.json or {}
-    user_id   = data.get('user_id')
+    user_id   = g.user_id
     name      = data.get('name', user_id)
     # Use 50 as default for testing; bump to 200 for the real 28-day trial
     min_windows = int(data.get('min_windows', 50))
-
-    if not user_id:
-        return jsonify({"error": "user_id is required"}), 400
 
     # ── 1. Fetch all valid calibration windows from Firebase ──────────────────
     windows = get_calibration_windows(user_id)

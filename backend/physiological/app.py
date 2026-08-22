@@ -1,9 +1,4 @@
-# ============================================================
-# app.py — Main Flask server
-# All API endpoints for the real-ring stress detection pipeline.
-# WESAD simulation mode has been removed — the real ring is the
-# only deployment target.
-# ============================================================
+
 
 import sys
 
@@ -16,7 +11,6 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
 
 from flask import Flask, jsonify, request, g
 from flask_cors import CORS
-from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 import numpy as np
 import re
@@ -33,7 +27,7 @@ from backend.common.config import (
     STRESS_COLORS,
     EMA_ALPHA, N_BASELINE_WIN
 )
-from backend.common.auth import generate_token, verify_token
+from backend.common.auth import generate_token, require_auth
 from backend.physiological.firebase_service import (
     init_firebase,
     create_user, get_user, list_users,
@@ -45,6 +39,8 @@ from backend.physiological.firebase_service import (
     save_ema_update, _ref,
     save_prediction_quality,
     save_fusion_signal,
+    save_fusion_en_rtdb,
+    label_session_ground_truth_rtdb,
     get_device_status
 )
 from backend.physiological.predictor import (
@@ -73,24 +69,10 @@ _calibration_sessions = {}
 
 USER_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{3,30}$')
 
-
-def require_auth(view_func):
-    """Verifies Authorization: Bearer <token>, sets g.user_id. Every
-    user-scoped route below derives user_id from g.user_id rather than
-    trusting whatever the client puts in the request body/path — the
-    request path's own user_id (where routes still take one) is only
-    used as an ownership check, never as the source of truth."""
-    @wraps(view_func)
-    def wrapper(*args, **kwargs):
-        header = request.headers.get('Authorization', '')
-        if not header.startswith('Bearer '):
-            return jsonify({'error': 'Missing or malformed Authorization header'}), 401
-        user_id = verify_token(header[len('Bearer '):].strip())
-        if user_id is None:
-            return jsonify({'error': 'Invalid or expired token'}), 401
-        g.user_id = user_id
-        return view_func(*args, **kwargs)
-    return wrapper
+# require_auth itself now lives in backend/common/auth.py — every backend
+# module verifies the same Bearer token against the same SECRET_KEY, so one
+# StressApp login (issued below by /login) works across physiological/,
+# phenotyping_behavior/, and psychological/ alike.
 
 
 @app.route('/health', methods=['GET'])
@@ -367,13 +349,23 @@ def predict():
     sm = ring_sessions[user_id]
 
     # ── Predict (binary) ───────────────────────────────────────
-    if b_mean is None:
-        # No personal baseline yet — raw model output,
-        # no trend detection (nothing to compare against).
-        result = predict_raw(features_2d)
-    else:
-        sm.update_baseline(b_mean)
-        result = predict_window(features_2d, b_mean, b_std, sm, feat_dict)
+    try:
+        if b_mean is None:
+            # No personal baseline yet — raw model output,
+            # no trend detection (nothing to compare against).
+            result = predict_raw(features_2d)
+        else:
+            sm.update_baseline(b_mean)
+            result = predict_window(features_2d, b_mean, b_std, sm, feat_dict)
+    except RuntimeError as e:
+        # predictor.py raises this specifically when MODEL_FILE/SCALER_FILE
+        # weren't found at import time (see its startup WARNING) -- an
+        # expected, already-flagged condition here, not a real crash, so it
+        # gets a clean JSON error instead of an unstructured 500. Without
+        # this, callers expecting JSON (e.g. mqtt_bridge.py's post_json())
+        # fail on response.json() with a confusing "Expecting value" error
+        # that hides the real cause.
+        return jsonify({'error': 'Model unavailable', 'details': str(e)}), 503
 
     # ── Save structured data only ──────────────────────────────
     save_prediction(
@@ -393,6 +385,17 @@ def predict():
         result['confidence'], signal_quality,
         result['prob_normal'], result['prob_stress'],
         result['label'], result['trending_toward_stress']
+    )
+    # Live fusion store (fusion_en/{session_id}/{fusion_window_key()}) -- the
+    # Cloud Firestore fusion_engine collection this used to also write to was
+    # removed as a duplicate store; fusion_en (RTDB) is the one live path now.
+    # No change needed here once ring hardware is live -- same /predict codepath.
+    save_fusion_en_rtdb(
+        user_id, session_id, window_idx,
+        result['confidence'], signal_quality,
+        result['prob_normal'], result['prob_stress'],
+        result['label'], result['trending_toward_stress'],
+        feat_dict
     )
 
     return jsonify({
@@ -435,6 +438,10 @@ def submit_pss4():
     q4 = int(data.get('q4', 0))
 
     score = save_pss4(user_id, session_id, q1, q2, q3, q4)
+    # Backfill this session's real PSS-4 self-report onto every fusion_en
+    # row already written for it -- the genuine ground-truth label
+    # fusion_engin.py's meta-model needs and has had nothing to fit against.
+    label_session_ground_truth_rtdb(session_id, score)
 
     level = (
         'Normal' if score <= 6 else
@@ -661,8 +668,13 @@ if __name__ == '__main__':
     print("=" * 50)
     app.run(
         host='0.0.0.0',
-        port=5000,
+        port=5050,
         debug=True,
+        use_reloader=False,  # see backend/psychological/app.py's app.run() comment --
+                             # the default reloader watches the whole repo tree, not just
+                             # this app's own modules, and can kill an in-flight request
+                             # (e.g. mid-window /predict from real ring hardware) on any
+                             # unrelated file save anywhere in the repo.
         threaded=True  # required — /calibrate/start runs a background
                        # capture thread; without this, that request (and
                        # the several-minute capture behind it) would block
