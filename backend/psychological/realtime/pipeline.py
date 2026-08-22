@@ -67,7 +67,7 @@ from backend.psychological.sam40.derived_features import add_baseline_relative  
 from backend.psychological.sam40.features import epoch_features  # noqa: E402
 from backend.psychological.sam40.preprocess import notch_then_bandpass  # noqa: E402
 
-from .adc import code_to_microvolts  # noqa: E402
+from .adc import clip_physiological_uv, code_to_microvolts  # noqa: E402
 from .mqtt_client import RawSample  # noqa: E402
 from .quality_gate import TrustedIoTEEGValidator  # noqa: E402
 from .raw_cleaning import clean_raw_channel  # noqa: E402
@@ -182,8 +182,11 @@ def preprocess_block(samples: list[RawSample], duration_sec: float | None = None
     """
     duration_sec = BLOCK_SEC if duration_sec is None else duration_sec
     millis = np.array([s.millis for s in samples], dtype=float)
-    ch1_uv = code_to_microvolts(np.array([s.ch1_code for s in samples]))
-    ch2_uv = code_to_microvolts(np.array([s.ch2_code for s in samples]))
+    # clip_physiological_uv: TEMPORARY debug clamp for the current electrode/
+    # reference hardware fault -- see adc.py's CLIP_UV docstring. Scores
+    # computed from a clamped block are NOT trustworthy real EEG readings.
+    ch1_uv = clip_physiological_uv(code_to_microvolts(np.array([s.ch1_code for s in samples])))
+    ch2_uv = clip_physiological_uv(code_to_microvolts(np.array([s.ch2_code for s in samples])))
 
     ch1_clean, _ = clean_raw_channel(millis, ch1_uv, target_fs=SOURCE_FS, duration_sec=duration_sec)
     ch2_clean, _ = clean_raw_channel(millis, ch2_uv, target_fs=SOURCE_FS, duration_sec=duration_sec)
@@ -252,8 +255,23 @@ RATING_ORDER = {'POOR': 0, 'QUESTIONABLE': 1, 'GOOD': 2}
 
 class RealtimeInference:
     def __init__(self, model_dir: Path, thresholds: DecisionThresholds = DecisionThresholds(),
-                 quality_window_blocks: int = 8, calibration_min_rating: str = 'GOOD'):
-        """calibration_min_rating: minimum SignalQualityGate rating a block
+                 quality_window_blocks: int = 8, calibration_min_rating: str = 'GOOD',
+                 disable_quality_gate: bool = False):
+        """disable_quality_gate: TEMPORARY debug knob -- when True, every
+        block is treated as trusted regardless of what the 9-factor gate/
+        Itakura check actually found, for both calibrate_block() and
+        infer_block(). Added to unblock live-hardware testing while a real
+        electrode-contact fault (readings in the thousands of uV, see
+        session notes) keeps every real block failing the gate -- the gate
+        itself is doing its job correctly, this just lets scores through
+        anyway so the rest of the pipeline (dashboard, fusion) can be
+        exercised with real hardware in the meantime. Every quality_* field
+        is still computed and returned either way, so a skipped-vs-shown
+        comparison stays possible; task_state_score with this on should NOT
+        be treated as trustworthy -- turn it back off once electrode
+        contact is fixed.
+
+        calibration_min_rating: minimum SignalQualityGate rating a block
         must reach to be used as this user's baseline reference. Default
         'GOOD' (not just non-POOR) -- backed by every real-hardware quality
         reading collected during this project's live debugging: every
@@ -280,6 +298,7 @@ class RealtimeInference:
         self._itakura_baseline_filtered_ch2: np.ndarray | None = None
         self.session_quality = SessionQualityMonitor(window_blocks=quality_window_blocks)
         self.calibration_min_rating = calibration_min_rating
+        self.disable_quality_gate = disable_quality_gate
         # (score, features, filtered T7 signal, filtered T8 signal) for every non-POOR calibration
         # attempt, whether or not it met calibration_min_rating -- candidates for
         # finalize_calibration's degraded fallback.
@@ -303,7 +322,8 @@ class RealtimeInference:
         filtered = preprocess_block(samples)  # the ACTUAL signal the model would see -- see quality_gate.py docstring
         feats = epoch_features(filtered, channel_names=CHANNELS, fs=TARGET_FS, include_bipolar=True)
         quality = self.quality_validator.assess_only(ch1_codes, ch2_codes, filtered[0], filtered[1])
-        meets_bar = RATING_ORDER.get(quality['gate_rating'], -1) >= RATING_ORDER[self.calibration_min_rating]
+        meets_bar = self.disable_quality_gate or (
+            RATING_ORDER.get(quality['gate_rating'], -1) >= RATING_ORDER[self.calibration_min_rating])
         quality['is_trusted'] = meets_bar  # overrides assess_only's looser (non-POOR) default for calibration use
         if not meets_bar:
             if quality['gate_rating'] != 'POOR':
@@ -350,7 +370,16 @@ class RealtimeInference:
                                   if self._itakura_baseline_filtered_ch2 is not None else filtered[1])
         quality = self.quality_validator.validate_epoch(ch1_codes, ch2_codes, filtered[0], filtered[1],
                                                           baseline_filtered_ch1, baseline_filtered_ch2)
+        if self.disable_quality_gate:
+            quality['is_trusted'] = True
         health = self.session_quality.update(quality['is_trusted'])
+
+        # Computed regardless of trust -- an untrusted block still gets a live
+        # feature readout for the dashboard (see firebase_sync.py's
+        # features_eeg.bipolar), it just never reaches the model or
+        # decision-state history/baseline below. Cost is the same either way;
+        # the only thing trust gates is what those features are USED for.
+        raw_feats = epoch_features(filtered, channel_names=CHANNELS, fs=TARGET_FS, include_bipolar=True)
 
         if not quality['is_trusted']:
             # Untrusted blocks are neither scored nor added to decision-state
@@ -361,11 +390,11 @@ class RealtimeInference:
                 'high_load_alert': False, 'micro_break_recommended': False,
                 'fatigue_warning': False, 'cooldown_logged': False,
                 'baseline_degraded': self.baseline_degraded,
+                **raw_feats,
                 **{f'quality_{k}': v for k, v in quality.items()},
                 **{f'session_{k}': v for k, v in health.items()},
             }
 
-        raw_feats = epoch_features(filtered, channel_names=CHANNELS, fs=TARGET_FS, include_bipolar=True)
         row = dict(raw_feats)
 
         baseline_mean = self.baseline.mean()

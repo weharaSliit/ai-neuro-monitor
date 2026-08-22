@@ -2,8 +2,9 @@
 # mqtt_bridge.py
 #
 # Subscribes to the wearable02 EEG firmware's batched MQTT stream
-# (eeg/t7t8/raw, see iot_firmware/wearable02/wearable02.ino::publishBatch()),
-# accumulates raw ADC samples into 25s/6250-sample blocks (BLOCK_SEC @
+# (mindpulse/wearable02/sensors, see
+# iot_firmware/wearable02/wearable02.ino::publishBatch()), accumulates raw
+# ADC samples into 25s/6250-sample blocks (BLOCK_SEC @
 # SOURCE_FS, matching backend/psychological/realtime/pipeline.py), and
 # POSTs them to this module's own Flask API (/calibrate then /predict) --
 # same shape as backend/physiological/mqtt_bridge.py's MQTT-to-Flask
@@ -18,6 +19,8 @@ import sys
 import time
 from pathlib import Path
 
+import requests
+
 if __package__ is None:
     repo_root = Path(__file__).resolve().parents[2]
     if str(repo_root) not in sys.path:
@@ -31,12 +34,20 @@ BLOCK_SEC = 25.0
 BLOCK_SAMPLES = int(BLOCK_SEC * SOURCE_FS)  # 6250 raw samples per block @ 250 SPS
 N_CALIBRATION_BLOCKS = 3  # Relax-period blocks before live prediction starts
 
+# Raw-preview push to /live_raw, independent of the 25s block cycle above --
+# gives the dashboard waveform a genuinely live feel (updates ~1x/sec) instead
+# of only refreshing once per 25s block. LIVE_RAW_SAMPLES is deliberately
+# small (~1s of data): enough for a smooth-looking sparkline update, far
+# short of a full inference block.
+LIVE_RAW_SAMPLES = 250  # ~1s @ 250 SPS
+LIVE_RAW_INTERVAL_SEC = 1.0
+
 # This device's own broker/topic -- independent of the ring's MQTT_BROKER/
 # MQTT_TOPIC in backend/common/config.py (different hardware, different
-# topic: eeg/t7t8/raw vs the ring's mindpulse/wearable01/sensors).
+# topic: mindpulse/wearable02/sensors vs the ring's mindpulse/wearable01/sensors).
 EEG_MQTT_BROKER = os.environ.get("EEG_MQTT_BROKER", "172.28.6.169")
 EEG_MQTT_PORT = int(os.environ.get("EEG_MQTT_PORT", "1883"))
-EEG_MQTT_TOPIC = os.environ.get("EEG_MQTT_TOPIC", "eeg/t7t8/raw")
+EEG_MQTT_TOPIC = os.environ.get("EEG_MQTT_TOPIC", "mindpulse/wearable02/sensors")
 
 FLASK_URL = f"http://127.0.0.1:{os.environ.get('PSYCHOLOGICAL_PORT', '5001')}"
 USER_ID = os.environ.get("EEG_BRIDGE_USER_ID", "Wehara")
@@ -53,6 +64,21 @@ def block_payload(samples) -> dict:
         "ch1_code": [s.ch1_code for s in samples],
         "ch2_code": [s.ch2_code for s in samples],
     }
+
+
+def _post_live_raw(samples) -> None:
+    """Best-effort, deliberately quiet (no post_json print) -- this fires
+    every ~1s, and losing an occasional preview frame to a dropped request
+    doesn't matter the way losing a /predict result would; the next one
+    lands a second later regardless."""
+    try:
+        requests.post(
+            f"{FLASK_URL}/live_raw",
+            json={"session_id": SESSION_ID, **block_payload(samples)},
+            headers=AUTH_HEADERS, timeout=5,
+        )
+    except Exception:
+        pass
 
 
 def run():
@@ -74,9 +100,22 @@ def run():
     calibration_blocks = []
     calibrated = False
     block_idx = 0
+    last_live_raw_push = 0.0
 
     try:
         while True:
+            # Independent of the block-accumulation cycle below -- runs every
+            # loop iteration (both while waiting for a full block and right
+            # after processing one), throttled to LIVE_RAW_INTERVAL_SEC.
+            # Works during calibration too, so the dashboard can show signal
+            # while electrodes are still being positioned.
+            now = time.time()
+            if now - last_live_raw_push >= LIVE_RAW_INTERVAL_SEC:
+                recent = buffer.peek_recent(LIVE_RAW_SAMPLES)
+                if recent:
+                    _post_live_raw(recent)
+                last_live_raw_push = now
+
             if buffer.peek_count() < BLOCK_SAMPLES:
                 time.sleep(0.5)
                 continue

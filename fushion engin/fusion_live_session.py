@@ -1,39 +1,8 @@
-"""
-Live fusion session loop -- watches one active session's RTDB fusion_en/
-data, computes fused_probability/fused_label/stress_trend/stress_deviation
-per window as new EEG/HRV-GSR predictions arrive, and writes the result
-back until the session ends.
-
-Does NOT start or stop the EEG (backend/psychological/app.py) or HRV/GSR
-(backend/physiological/app.py) processes -- those already run
-independently and each write prob_eeg/prob_hrv_gsr into
-fusion_en/{session_id}/{window} per prediction (verified this session to
-merge correctly into one node per window across both independently-
-written sides). This loop only watches ONE session_id's data and adds the
-fused result on top -- whoever operates the EEG/HRV-GSR processes is
-responsible for pointing them at the same session_id (EEG's
-realtime_inference.py already takes --firebase-session-id; HRV/GSR's
-/predict already takes session_id per request).
-
-Usage:
-    python3 "fushion engin/fusion_live_session.py" --session-id S1 \\
-        --firebase-cred ~/.secrets/stress-monitor-firebase.json \\
-        --firebase-db-url https://stress-monitor-c39ee-default-rtdb.asia-southeast1.firebasedatabase.app/
-
-Session end: the mobile client (or anything else with write access) sets
-fusion_en_sessions/{session_id}/ended = true directly in RTDB -- a
-SIBLING path to fusion_en/{session_id}, not a child of it, specifically so
-it's never mistaken for a window row by this loop or by
-backend/physiological/firebase_service.py::label_session_ground_truth_rtdb()
-(which iterates every child under fusion_en/{session_id} assuming each one
-is a window). This loop polls for that flag every cycle and exits cleanly
-once it appears.
-"""
-
 import argparse
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -41,19 +10,14 @@ import numpy as np
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-import fusion_engin  # noqa: E402 -- same directory as this script (sys.path[0])
-from backend.common.firebase_config import FIREBASE_DB_URL  # noqa: E402
+import fusion_engin 
+from backend.common.firebase_config import FIREBASE_DB_URL  
 from backend.psychological.realtime.firebase_sync import _trend_direction  # noqa: E402
 
-BASELINE_N = 3  # "mean of the first 3 fused readings" -- see module docstring / plan
+BASELINE_N = 3 
 
 
 def _init_firebase(cred_path: str, db_url: str):
-    """Same get_app()-or-initialize_app() pattern as FirebaseSync.__init__
-    (backend/psychological/realtime/firebase_sync.py) -- reuses an
-    already-initialized app (e.g. if this process later also imports
-    something that inits firebase_admin) rather than crashing on a second
-    init."""
     import firebase_admin
     from firebase_admin import credentials, db
 
@@ -72,51 +36,61 @@ def _init_firebase(cred_path: str, db_url: str):
 
 
 def load_session_windows(session_ref) -> dict:
-    """session_ref.get() -> {window_key: row_dict}, filtered to keys that
-    look like window indices (digits only) and whose value is itself a
-    dict -- defensive against any future non-window child appearing under
-    fusion_en/{session_id}/ (the session-end flag lives at a SIBLING path
-    specifically so it never needs this filter, but this stays as a second
-    line of defense)."""
     data = session_ref.get() or {}
     return {k: v for k, v in data.items() if str(k).isdigit() and isinstance(v, dict)}
 
 
-def poll_once(session_id: str, session_ref, ended_ref) -> dict:
-    """One fetch/compute/write cycle. Stateless across calls -- re-reads
-    the whole session's windows every time (cheap at research-session
-    scale: tens to low-hundreds of 25s windows) rather than tracking
-    per-window fusion state, so a late-arriving modality for an
-    already-seen window just gets picked up and re-fused on the next poll
-    with no bookkeeping needed.
+# Fields EEG writes at fusion_en_sessions/{session_id}/{window} -- see
+# backend/psychological/realtime/firebase_sync.py::make_eeg_fusion_session_record().
+_EEG_FUSION_FIELDS = (
+    "prob_eeg", "conf_eeg", "model_acc_eeg", "signal_quality_eeg",
+    "stress_label_eeg", "timestamp_eeg",
+)
 
-    Returns {'ended': True} if the session-end flag is set (nothing else
-    is touched in that case), otherwise
-    {'ended': False, 'windows_fused': [...], 'baseline_ready': bool}.
-    """
+
+def merge_eeg_into_windows(windows: dict, eeg_windows: dict) -> dict:
+    """Merges EEG's fusion_en_sessions/{session_id}/{window} fields into the
+    ring's fusion_en/{session_id}/{window} dict this function otherwise
+    works from. Both sides key by the SAME fusion_window_key() 60s
+    wall-clock bucket (backend/common/fusion.py) -- NOT either modality's
+    own local window/block index, which don't align across the ring's
+    window length and EEG's 25s blocks -- so matching keys here is what
+    actually pairs a ring reading with a same-ish-time EEG reading. A key
+    present on only one side still comes through (with the other
+    modality's fields simply absent), same as it always could when only
+    one modality had reported for a window."""
+    merged = {k: dict(v) for k, v in windows.items()}
+    for k, eeg_row in eeg_windows.items():
+        target = merged.setdefault(k, {})
+        for field in _EEG_FUSION_FIELDS:
+            if field in eeg_row:
+                target[field] = eeg_row[field]
+    return merged
+
+
+def poll_once(session_id: str, session_ref, ended_ref, eeg_session_ref) -> dict:
     if ended_ref.get():
         return {"ended": True}
 
     windows = load_session_windows(session_ref)
+    eeg_windows = load_session_windows(eeg_session_ref)
+    windows = merge_eeg_into_windows(windows, eeg_windows)
     if not windows:
         return {"ended": False, "windows_fused": [], "baseline_ready": False}
 
-    # Fuse every window with at least one real modality -- unconditionally,
-    # every poll (idempotent; see module docstring for why this beats
-    # tracking "already fused" state per window).
     fusable_keys = [
         k for k, v in windows.items()
         if v.get("prob_eeg") is not None or v.get("prob_hrv_gsr") is not None
     ]
     fusable_keys.sort(key=lambda k: int(k))
+    fused_by_key = {}
     if fusable_keys:
         fused_rows = fusion_engin.compute_fusion_for_records([windows[k] for k in fusable_keys])
         for k, fused in zip(fusable_keys, fused_rows):
+            fused_by_key[k] = fused
             windows[k]["fused_probability"] = fused["fused_probability"]
             windows[k]["fused_label"] = fused["fused_label"]
 
-    # Trend + deviation need ascending window order and the full fused
-    # history (not just this poll's newly-fused windows).
     ordered_keys = sorted(windows.keys(), key=lambda k: int(k))
     fused_history = [windows[k].get("fused_probability") for k in ordered_keys]
     valid_fused = [v for v in fused_history if v is not None]
@@ -127,20 +101,63 @@ def poll_once(session_id: str, session_ref, ended_ref) -> dict:
         if windows[k].get("fused_probability") is None:
             continue
         trend = _trend_direction(fused_history[: i + 1])
+        # fused_by_key[k] carries fusion_engin.py's full per-modality
+        # breakdown (handle_missing_values/compute_reliability_weight's
+        # {m}_missing, prob_{m}, {m}_reliability_weight_norm) -- surfaced
+        # here so the dashboard can show WHICH modality actually produced
+        # this fused reading (and how much each was trusted), not just the
+        # single blended number. {m}_missing correctly distinguishes "this
+        # modality read 0.0" from "this modality wasn't present at all"
+        # (handle_missing_values fills missing prob_* with 0.0, so prob_*
+        # alone can't tell the two apart).
+        fused = fused_by_key[k]
         write = {
             "fused_probability": windows[k]["fused_probability"],
             "fused_label": windows[k]["fused_label"],
             "stress_trend": trend,
+            "eeg_weight": fused.get("eeg_reliability_weight_norm"),
+            "hrv_gsr_weight": fused.get("hrv_gsr_reliability_weight_norm"),
         }
-        # Retroactively backfills stress_deviation onto earlier windows once
-        # baseline_mean becomes available (the 3rd fused reading arrives) --
-        # satisfies "mean of the first 3" exactly rather than approximating it.
+        # Each modality writes its OWN raw prob_{m}/conf_{m} directly into
+        # this same fusion_en/{session}/{window} node exactly once, when its
+        # writer first creates that wall-clock bucket (see
+        # save_fusion_en_rtdb() / make_eeg_fusion_session_record()) -- it
+        # never revisits that key again afterward. This poll runs every few
+        # seconds and won't always see both sides landed yet (EEG's ~25s
+        # blocks and the ring's own window cadence aren't in lockstep), so
+        # explicitly writing `prob_eeg: None` / `prob_hrv_gsr: None` here
+        # whenever THIS read found one missing used to permanently delete
+        # the other writer's already-valid value (Firebase's .update()
+        # treats null as "delete this field") -- a one-time race then showed
+        # as that modality "not reporting" forever, not just for one poll.
+        # Only write these keys when there's a real value, so an update()
+        # simply leaves whatever's already there untouched instead of
+        # erasing it.
+        if not fused.get("eeg_missing"):
+            write["prob_eeg"] = fused.get("prob_eeg")
+        if not fused.get("hrv_gsr_missing"):
+            write["prob_hrv_gsr"] = fused.get("prob_hrv_gsr")
+
         write["stress_deviation"] = (
             windows[k]["fused_probability"] - baseline_mean
             if baseline_mean is not None
             else None
         )
         session_ref.child(k).update(write)
+
+        # Mirrors the fused (not per-modality) result onto the SAME window
+        # key in fusion_en_sessions/{session_id} -- that store previously
+        # only ever held EEG's own raw contribution (prob_eeg/stress_label_eeg/
+        # etc, see make_eeg_fusion_session_record()), never the actual
+        # combined stress reading. .update(), not .set() -- a window may not
+        # have an EEG entry there yet (an HRV/GSR-only window still fuses
+        # and deserves a record here too), and EEG's own writer now also
+        # uses FirebaseSync.merge()/.update() on this same key specifically
+        # so the two don't clobber each other regardless of write order.
+        eeg_session_ref.child(k).update({
+            "fused_stress_label": "high_stress" if windows[k]["fused_label"] == 1 else "low_stress",
+            "fused_stress_probability": windows[k]["fused_probability"],
+        })
         updated.append(k)
 
     return {"ended": False, "windows_fused": updated, "baseline_ready": baseline_mean is not None}
@@ -149,18 +166,65 @@ def poll_once(session_id: str, session_ref, ended_ref) -> dict:
 def run(session_id: str, poll_interval_sec: float, cred_path: str, db_url: str):
     db_mod = _init_firebase(cred_path, db_url)
     session_ref = db_mod.reference(f"fusion_en/{session_id}")
+    eeg_session_ref = db_mod.reference(f"fusion_en_sessions/{session_id}")
     ended_ref = db_mod.reference(f"fusion_en_sessions/{session_id}/ended")
+    started_at_ref = db_mod.reference(f"fusion_en_sessions/{session_id}/started_at")
+    ended_at_ref = db_mod.reference(f"fusion_en_sessions/{session_id}/ended_at")
+
+    # Written once, the first time this session_id is ever seen live --
+    # NOT on every process restart/reconnect, so started_at keeps meaning
+    # "when this session first went live" across this script being killed
+    # and relaunched (e.g. after the DNS-hiccup crash this now guards
+    # against above) rather than resetting on every restart.
+    if started_at_ref.get() is None:
+        started_at_ref.set(datetime.now(timezone.utc).isoformat())
 
     print(
         f"[fusion_live_session] watching fusion_en/{session_id} "
+        f"+ fusion_en_sessions/{session_id} (EEG) "
         f"(poll every {poll_interval_sec}s) -- Ctrl+C to stop early"
     )
+    # PAUSES on ended=True, does not exit -- both dashboard screens now
+    # auto-watch this same fixed session_id on every mount (no manual
+    # Start/Stop lifecycle anymore, see EegSessionScreen.js/
+    # FusionSessionScreen.js's auto-watch useEffect), so "ended" no longer
+    # means "this session is genuinely over", just "nobody was watching
+    # briefly". Exiting here used to mean the NEXT screen open couldn't get
+    # a fused reading again until someone noticed the dashboard had gone
+    # stale and manually relaunched this process -- happened twice in one
+    # session already. Only Ctrl+C stops the process now.
+    was_ended = False
     try:
         while True:
-            result = poll_once(session_id, session_ref, ended_ref)
+            try:
+                result = poll_once(session_id, session_ref, ended_ref, eeg_session_ref)
+            except Exception as e:  # noqa: BLE001 -- a transient network/Firebase
+                # blip (e.g. DNS hiccup during a WiFi switch, one dropped
+                # connection) used to kill this ENTIRE process -- there was no
+                # retry loop around poll_once() at all, only a bare
+                # `except KeyboardInterrupt` around the whole while loop. That
+                # meant one bad iteration silently stopped ALL live fusion
+                # merging (both EEG and HRV/GSR keep writing their own raw
+                # data fine independently either way) until someone noticed
+                # the dashboard had gone stale and manually relaunched this
+                # script -- confirmed happening in practice. Log and keep
+                # going instead; a single failed poll just means one cycle's
+                # worth of merging is delayed, not lost forever.
+                print(f"[fusion_live_session] poll failed ({e}) -- retrying in {poll_interval_sec}s")
+                time.sleep(poll_interval_sec)
+                continue
             if result["ended"]:
-                print(f"[fusion_live_session] session {session_id} ended -- exiting")
-                break
+                if not was_ended:
+                    print(f"[fusion_live_session] session {session_id} marked ended -- "
+                          f"pausing (still running) until a screen re-opens and clears it")
+                    was_ended = True
+                    ended_at_ref.set(datetime.now(timezone.utc).isoformat())
+                time.sleep(poll_interval_sec)
+                continue
+            if was_ended:
+                print(f"[fusion_live_session] session {session_id} resumed")
+                was_ended = False
+                ended_at_ref.delete()
             n = len(result.get("windows_fused", []))
             baseline_note = "" if result.get("baseline_ready") else " (establishing baseline...)"
             print(f"[fusion_live_session] fused {n} window(s){baseline_note}")

@@ -20,9 +20,12 @@
 # hardware; the bipolar model is reference-agnostic by construction).
 # ============================================================
 
+import os
 import re
+import time
 from pathlib import Path
 
+import numpy as np
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
@@ -39,6 +42,16 @@ CORS(app)
 
 MODEL_DIR = Path(__file__).resolve().parent / "models"
 MODEL_VERSION = "bipolar_only_v1"
+
+# TEMPORARY: set EEG_DISABLE_QUALITY_GATE=1 to let every block through
+# regardless of signal quality -- see RealtimeInference's disable_quality_gate
+# docstring (pipeline.py) for why. Turn back off once electrode contact is
+# fixed; task_state_score with this on is not trustworthy.
+DISABLE_QUALITY_GATE = os.environ.get("EEG_DISABLE_QUALITY_GATE", "0") == "1"
+if DISABLE_QUALITY_GATE:
+    print("[WARNING] EEG_DISABLE_QUALITY_GATE=1 -- signal-quality gate is bypassed, "
+          "every block will be scored regardless of quality. task_state_score is "
+          "NOT trustworthy while this is on.")
 
 # Raw EEG samples are logged here per session, independent of Firebase --
 # EegFirebaseSession.push_raw() no-ops without $FIREBASE_CREDENTIALS (see its
@@ -58,6 +71,14 @@ def _raw_csv_path(session_id: str) -> Path:
 
 eeg_sessions = {}  # session_id -> {'engine': RealtimeInference, 'firebase': EegFirebaseSession,
                    #                'csv_logger': CsvLogger, 'score_history': [...]}
+
+# Deliberately separate from eeg_sessions: a live raw-signal preview is
+# useful WHILE positioning electrodes too (before /calibrate has ever
+# succeeded, or even been called), so it can't depend on calibration having
+# completed. Lazily created per session_id on first /live_raw call, reused
+# thereafter -- constructing EegFirebaseSession on every call would open a
+# fresh set of Firebase refs per push instead of once per session.
+live_raw_sessions: dict[str, EegFirebaseSession] = {}
 
 
 def _samples_from_payload(data: dict) -> list[RawSample]:
@@ -143,7 +164,7 @@ def calibrate():
     firebase = EegFirebaseSession(session_id)
     csv_logger = CsvLogger(str(_raw_csv_path(session_id)), RAW_FIELDS)
 
-    engine = RealtimeInference(MODEL_DIR)
+    engine = RealtimeInference(MODEL_DIR, disable_quality_gate=DISABLE_QUALITY_GATE)
     for i, block in enumerate(blocks):
         try:
             samples = _samples_from_payload(block)
@@ -177,6 +198,7 @@ def calibrate():
         "csv_logger": csv_logger,
         "score_history": [],
     }
+    firebase.mark_session_started()
     return jsonify({"success": True, "session_id": session_id, **outcome})
 
 
@@ -234,12 +256,53 @@ def predict():
     )
 
 
+# -- /live_raw -- ~1s raw preview -> Firebase, for a genuinely live -------
+# dashboard waveform. Independent of /calibrate and /predict's 25s-block/
+# quality-gate cycle -- works before calibration even starts (useful while
+# positioning electrodes), and every call OVERWRITES the same
+# {session_id}/live_raw node rather than accumulating history there.
+#
+# REQUEST FORMAT: same shape as /predict, just a much smaller batch
+#   {"session_id": "live_session_1", "millis": [...], "ch1_code": [...], "ch2_code": [...]}
+@app.route("/live_raw", methods=["POST"])
+@require_auth
+def live_raw():
+    data = request.json or {}
+    session_id = data.get("session_id", "session_001")
+
+    try:
+        samples = _samples_from_payload(data)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    firebase = live_raw_sessions.get(session_id)
+    if firebase is None:
+        firebase = EegFirebaseSession(session_id)
+        live_raw_sessions[session_id] = firebase
+
+    # Deliberately NOT clamped, unlike pipeline.py's preprocess_block: this
+    # feeds the raw-signal preview chart, whose whole point is showing what
+    # wearable02 is ACTUALLY outputting right now (e.g. while positioning
+    # electrodes) -- clamping here would hide the real (possibly railed/
+    # faulty) reading behind a flat, artificial line. The model-facing clamp
+    # in preprocess_block stays; this display path shows the true value.
+    firebase.push_live_raw({
+        "timestamp": time.time(),
+        "millis": [s.millis for s in samples],
+        "ch1_uv": [round(v, 3) for v in code_to_microvolts(np.array([s.ch1_code for s in samples]))],
+        "ch2_uv": [round(v, 3) for v in code_to_microvolts(np.array([s.ch2_code for s in samples]))],
+    })
+
+    return jsonify({"success": True, "session_id": session_id, "n_samples": len(samples)})
+
+
 @app.route("/sessions/<session_id>", methods=["DELETE"])
 @require_auth
 def end_session(session_id):
     state = eeg_sessions.pop(session_id, None)
     if state is not None:
         state["csv_logger"].close()
+        state["firebase"].mark_session_ended()
     return jsonify({"success": True, "session_id": session_id, "existed": state is not None})
 
 
@@ -254,6 +317,16 @@ if __name__ == "__main__":
     print("  GET    /health")
     print("  POST   /calibrate          <- baseline capture (Relax-period blocks)")
     print("  POST   /predict            <- one 25s block -> task_state_score")
+    print("  POST   /live_raw           <- ~1s raw preview -> live dashboard waveform")
     print("  DELETE /sessions/<id>      <- drop session state")
     print("=" * 50)
-    app.run(host="0.0.0.0", port=5001, debug=True)
+    # use_reloader=False -- werkzeug's default reloader watches every file
+    # under the CWD (repo root), not just this app's imported modules, so
+    # ANY save anywhere in the repo (an editor autosave, git touching
+    # mtimes, another backend's own file) restarts this process mid-request.
+    # Confirmed live: killed an in-flight /calibrate POST from real
+    # wearable02 hardware mid-request when an unrelated file
+    # (fushion engin/fusion_engin.py) changed during a 25s+ calibration
+    # capture. debug=True's error pages are still useful, just not the
+    # auto-restart-on-any-repo-change behavior.
+    app.run(host="0.0.0.0", port=5001, debug=True, use_reloader=False)

@@ -17,6 +17,37 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 
 const Stack = createNativeStackNavigator();
 
+// Web-only concern: without this, NavigationContainer never reflects the
+// current screen in the URL, so a hard page refresh always remounts at the
+// default route (Home) instead of wherever the user actually was (e.g. the
+// live EEG or Fusion screen) -- looked like "the dashboard shows nothing
+// after refresh" when it was really "the app is back on Home". Tab names
+// here must match PhysiologicalNavigator.js's <Tab.Screen name="..."> exactly.
+const linking = {
+  prefixes: [],
+  config: {
+    screens: {
+      Login: 'login',
+      Register: 'register',
+      Physiological: {
+        path: '',
+        screens: {
+          Home:     'home',
+          History:  'history',
+          'PSS-4':  'pss4',
+          Ring:     'ring',
+          EEG:      'eeg-tab',
+          Profile:  'profile',
+        },
+      },
+      Calibration: 'calibration',
+      EmaDetail:   'ema',
+      Fusion:      'fusion',
+      Eeg:         'eeg',
+    },
+  },
+};
+
 function RootNavigator() {
   const { user, isLoading } = useAuth();
   const { theme } = useTheme();
@@ -81,7 +112,7 @@ export default function App() {
     <ThemeProvider>
       <AuthProvider>
         <AppContext.Provider value={sharedState}>
-          <NavigationContainer>
+          <NavigationContainer linking={linking}>
             <ThemedStatusBar />
             <RootNavigator />
           </NavigationContainer>

@@ -1,5 +1,6 @@
-"""MQTT subscriber for the ESP32 firmware's batched payload on eeg/t7t8/raw
--- one or more "millis,ch1,ch2" records per message, separated by ';'
+"""MQTT subscriber for the ESP32 firmware's batched payload on
+mindpulse/wearable02/sensors -- one or more "millis,ch1,ch2" records per
+message, separated by ';'
 (see firmware/eeg_t7t8/eeg_t7t8.ino publishBatch(), BATCH_SIZE samples per
 publish rather than one publish() per sample).
 
@@ -41,6 +42,15 @@ class RawSampleBuffer:
     def peek_count(self) -> int:
         with self._lock:
             return len(self._buf)
+
+    def peek_recent(self, n: int) -> list:
+        """Returns up to the n most recently appended samples WITHOUT
+        removing them -- for a live preview push that runs independently
+        of (and doesn't compete with) drain()'s FIFO block consumption."""
+        with self._lock:
+            if n >= len(self._buf):
+                return list(self._buf)
+            return list(self._buf)[-n:]
 
 
 def parse_payload(payload: str) -> list[RawSample]:

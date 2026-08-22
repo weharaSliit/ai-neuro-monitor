@@ -4,13 +4,6 @@ import numpy as np
 import sys
 from pathlib import Path
 
-# Lets this run directly (`python app.py`) as well as via `python -m
-# backend.phenotyping_behavior.app` -- the latter is how physiological/ and
-# psychological/ are run, and importing as backend.phenotyping_behavior.*
-# below (not a bare `from firebase_service import ...`) keeps this module on
-# the same backend.common.* singletons those two share (see
-# firebase_service.py's comment on why the bare form is a real bug, not
-# just a style choice).
 if __package__ is None:
     repo_root = Path(__file__).resolve().parents[2]
     if str(repo_root) not in sys.path:
@@ -36,10 +29,6 @@ init_firebase()
 @app.route('/behavior/predict', methods=['POST'])
 @require_auth
 def predict_behavioral_stress():
-    """
-    Endpoint for Objective 3: Real-time Behavioral Inference.
-    Handles Category A Features (Dwell, Flight, Interaction).
-    """
     data = request.json
     user_id = g.user_id
 
@@ -109,35 +98,6 @@ def submit_label():
 @app.route('/behavior/stress-summary', methods=['GET'])
 @require_auth
 def stress_summary():
-    """
-    T7-B: Neuroadaptive Integration Bridge.
-
-    Called by the team's neuroadaptive guidance module to get the current
-    behavioral stress state for a given user. This is the handshake point
-    between the Behavioral Digital Phenotyping module (R26-DS-016) and the
-    Neuroadaptive Guidance module (T7 on the WBS).
-
-    Usage:
-        GET /behavior/stress-summary
-        (user identified by the Authorization: Bearer <token> header, not a
-        query param -- see require_auth in backend/common/auth.py)
-
-    Response (stress detected):
-        {
-            "user_id": "chathurika_001",
-            "stress_level": "elevated",       # "normal" | "elevated" | "high"
-            "stress_score": 0.6,              # 0.0 – 1.0
-            "label": "Pre-Stress (Digital Phenotype detected)",
-            "is_anomaly": true,
-            "trigger_guidance": true,          # True when score > 0.5
-            "recommended_action": "breathing", # "none" | "breathing" | "mindfulness"
-            "timestamp": "2026-08-02T14:30:00",
-            "source": "behavioral_phenotyping"
-        }
-
-    Response (no data yet):
-        { "user_id": "...", "stress_level": "unknown", "trigger_guidance": false }
-    """
     user_id = g.user_id
 
     latest = get_latest_stress_prediction(user_id)
@@ -187,34 +147,6 @@ def stress_summary():
 @app.route('/behavior/calibrate', methods=['POST'])
 @require_auth
 def calibrate_baseline():
-    """
-    Objective 2: Automatic 7-Day Baseline Initializer.
-
-    Triggered after a participant completes the 7-day onboarding period.
-    Reads ALL valid behavioral windows stored in Firebase for the user,
-    computes the idiographic mean and std for every feature, and writes
-    the resulting profile as the user's permanent personal baseline.
-
-    After this endpoint runs successfully the user's profile is set to
-    is_calibrated = True and EMA continual learning becomes active.
-
-    Body (JSON):
-        {
-            "name":        "Chathurika"      # optional, stored on first call
-            "min_windows": 50               # optional override (default 50 test / 200 production)
-        }
-        (user identified by the Authorization: Bearer <token> header)
-
-    Response (success):
-        {
-            "status": "calibrated",
-            "window_count": 214,
-            "baselines": { "avg_dwell": {"mean": 0.12, "std": 0.03}, ... }
-        }
-
-    Response (not enough data yet):
-        { "status": "insufficient_data", "window_count": 37, "required": 50 }
-    """
     data = request.json or {}
     user_id   = g.user_id
     name      = data.get('name', user_id)
@@ -276,4 +208,5 @@ def health():
 
 if __name__ == '__main__':
     # Using a different port than your group member's physiological server
-    app.run(port=5002, debug=True)
+    # use_reloader=False -- see backend/psychological/app.py's app.run() comment.
+    app.run(port=5002, debug=True, use_reloader=False)

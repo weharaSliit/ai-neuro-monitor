@@ -57,6 +57,24 @@ def code_to_microvolts(code: np.ndarray | int, gain: float = GAIN, vref: float =
     return volts * 1e6  # -> microvolts, matching SAM40's feature-extraction scale
 
 
+# TEMPORARY debug clamp: the deployed electrode/reference setup has been
+# observed producing +-150,000-200,000uV blocks (railed/shorted contact,
+# ~3000x a normal +-tens-of-uV EEG signal) -- clamping to a physiological
+# range keeps the filter chain and model from mathematically exploding on
+# that input (the sigmoid otherwise fully underflows, e.g. task_state_score
+# ~1e-291) so the pipeline stays exercisable end-to-end. A clamped block is
+# NOT recovered signal -- it's a railed/flat-topped waveform, and any
+# task_state_score computed from it reflects that clipping artifact, not a
+# real EEG reading. Remove once the actual hardware fault (RLD/reference
+# connection, electrode contact -- see this module's docstring) is fixed;
+# do not treat clamped-block scores as trustworthy in the meantime.
+CLIP_UV = 100.0
+
+
+def clip_physiological_uv(uv: np.ndarray) -> np.ndarray:
+    return np.clip(uv, -CLIP_UV, CLIP_UV)
+
+
 def microvolts_to_code(uv: np.ndarray | float, gain: float = GAIN, vref: float = VREF_VOLTS) -> np.ndarray:
     """Inverse of code_to_microvolts -- for synthesizing/reconstructing raw ADC codes
     from a uV-domain signal (scripts/generate_synthetic_eeg.py, realtime_inference.py's

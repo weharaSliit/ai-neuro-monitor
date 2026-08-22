@@ -3,12 +3,20 @@
 # ============================================================
 
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # Paths
-BASE_PATH = r"C:\Users\weha1\OneDrive\Documents\ResearchCode\ai-neuro-monitor"
+# Was hardcoded to a teammate's Windows machine (C:\Users\weha1\...) --
+# broke model loading on every other machine (/predict, /calibrate return
+# 503 "model artifacts not available" whenever this path doesn't exist
+# locally, even though the actual .pkl files are checked into the repo at
+# physiological_signals/saved_models/). Resolved relative to this file's
+# own location (backend/common/ -> repo root) instead, so it's correct on
+# whichever machine actually has this checkout.
+BASE_PATH = str(Path(__file__).resolve().parents[2])
 
 MODELS_PATH = os.path.join(
     BASE_PATH,
@@ -16,7 +24,7 @@ MODELS_PATH = os.path.join(
     "saved_models"
 )
 
-WESAD_PATH = r"C:\Users\weha1\datasets\WESAD"
+WESAD_PATH = os.environ.get("WESAD_PATH", r"C:\Users\weha1\datasets\WESAD")
 
 RESULTS_PATH = os.path.join(
     BASE_PATH,
@@ -44,7 +52,6 @@ from .firebase_config import (  # noqa: E402
     FIREBASE_CRED_DICT,
     FIREBASE_CRED_FILE,
     FIREBASE_DB_URL,
-    FIRESTORE_FUSION_COLLECTION,
     RTDB_NAMESPACES,
 )
 
