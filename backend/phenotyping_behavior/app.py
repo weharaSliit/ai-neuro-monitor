@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 import numpy as np
+import os
 import sys
 from pathlib import Path
 
@@ -224,7 +225,9 @@ def evaluate_accuracy_endpoint():
     user_id  = request.args.get('user_id')
     eval_all = request.args.get('all', '0') == '1'
 
-    from evaluate_accuracy import init_firebase as _ef_init, run_evaluation, run_all_users, list_all_user_ids
+    from backend.phenotyping_behavior.evaluate_accuaracy import (
+        init_firebase as _ef_init, run_evaluation, run_all_users, list_all_user_ids,
+    )
     _ef_init()   # safe — no-op if already initialised
 
     if eval_all:
@@ -249,6 +252,7 @@ def health():
     return jsonify({"status": "Phenotyping Backend Online"})
 
 if __name__ == '__main__':
-    # Render.com injects $PORT — use it in production; default to 5001 locally.
-    port = int(os.environ.get('PORT', 5001))
+    # Render.com injects $PORT -- use it in production; default to 5002 locally
+    # (5001 is the psychological/EEG backend's port -- see backend/psychological/app.py).
+    port = int(os.environ.get('PORT', 5002))
     app.run(host='0.0.0.0', port=port, debug=False)

@@ -372,6 +372,8 @@ class RealtimeInference:
                                                           baseline_filtered_ch1, baseline_filtered_ch2)
         if self.disable_quality_gate:
             quality['is_trusted'] = True
+        if not quality['is_trusted']:
+            print(f"[quality_gate] rejected: {quality}")
         health = self.session_quality.update(quality['is_trusted'])
 
         # Computed regardless of trust -- an untrusted block still gets a live
