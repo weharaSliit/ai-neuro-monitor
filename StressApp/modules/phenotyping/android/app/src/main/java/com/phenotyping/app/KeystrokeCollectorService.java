@@ -38,14 +38,19 @@ public class KeystrokeCollectorService extends AccessibilityService {
     private static final String TAG = "PhenoCare_Sensor";
 
     // -----------------------------------------------------------------------
-    // CONFIG — Real device via USB (Android Studio run)
-    //   Option A (current): PC's Ethernet IP — works over the same network.
-    //   Option B (USB tunnel): run once → adb reverse tcp:5001 tcp:5001
-    //   then change FLASK_BASE_URL to "http://localhost:5001"
+    // CONFIG — Backend URL
+    //   HOSTED (Render.com): use the URL below for production.
+    //   LOCAL (USB tunnel):  comment out HOSTED line, uncomment LOCAL line,
+    //                        then run: adb reverse tcp:5001 tcp:5001
     // -----------------------------------------------------------------------
-    
-    //private static final String FLASK_BASE_URL   = "http://192.168.1.6:5001";
-    private static final String FLASK_BASE_URL   = "http://127.0.0.1:5001";
+
+    // HOSTED — Render.com deployment
+    private static final String FLASK_BASE_URL   = "https://my-phenotyping-backend-2.onrender.com";
+
+    // LOCAL — USB tunnel (comment out HOSTED above and uncomment this for local dev)
+    // private static final String FLASK_BASE_URL = "http://127.0.0.1:5001";
+    // private static final String FLASK_BASE_URL = "http://192.168.1.6:5001";
+
     private static final String PREDICT_ENDPOINT = FLASK_BASE_URL + "/behavior/predict";
 
     // Firebase REST — only used for the UI dashboard display
@@ -425,6 +430,7 @@ public class KeystrokeCollectorService extends AccessibilityService {
         dwellTimes.clear();    // Technique 2: clear dwell buffer for next window
         scrollSpeeds.clear();
         appSwitchCount = 0; // RESET counter for the next window!
+        unlockCount = 0;    // RESET counter for the next window!
 
         // Log the noise-gate decision so it's visible in Logcat
         if (!windowDataValid) {
@@ -464,6 +470,7 @@ public class KeystrokeCollectorService extends AccessibilityService {
                 payload.put("scroll_velocity",   avgScroll);
                 payload.put("interaction_rate",  interactionRate);
                 payload.put("app_switch_rate",   appSwitchRate);
+                payload.put("unlocks_count",     unlockSnapshot);
                 payload.put("data_valid",        windowDataValid); // ✅ T7-A: real motion flag
 
                 Log.d(TAG, "📡 Sending to Flask: " + flightSnapshot.size()
@@ -572,8 +579,10 @@ public class KeystrokeCollectorService extends AccessibilityService {
             conn.setRequestMethod(method);
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
             conn.setDoOutput(true);
-            conn.setConnectTimeout(2_000);
-            conn.setReadTimeout(2_000);
+            // Render.com free tier can take up to 30-60 s to wake from sleep;
+            // 15 s connect + 10 s read gives it enough budget to warm up.
+            conn.setConnectTimeout(15_000);
+            conn.setReadTimeout(10_000);
 
             try (OutputStream os = conn.getOutputStream()) {
                 os.write(jsonBody.getBytes("utf-8"));

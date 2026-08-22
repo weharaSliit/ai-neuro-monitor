@@ -54,6 +54,7 @@ export function DigitalSignals() {
                 const dwellHistory = recentEntries.map((e, idx) => ({ val: e.avg_dwell, active: idx === recentEntries.length - 1 }));
                 const flightHistory = recentEntries.map((e, idx) => ({ val: e.avg_flight, active: idx === recentEntries.length - 1 }));
                 const scrollHistory = recentEntries.map((e, idx) => ({ val: e.scroll_velocity, active: idx === recentEntries.length - 1 }));
+                const unlockHistory = recentEntries.map((e, idx) => ({ val: e.unlocks_count || 0, active: idx === recentEntries.length - 1 }));
 
                 formattedSignals.push(
                     {
@@ -69,12 +70,12 @@ export function DigitalSignals() {
                     {
                         signalId: 'screen',
                         title: '📱 Screen On/Off Times',
-                        value: `${Math.round(12 + Math.random() * 5)} unlocks`,
+                        value: `${latest.unlocks_count || 0} unlocks`,
                         subtext: 'Unlock frequency & session duration',
                         colorClass: 'bg-orange-500',
-                        bars: generateMockBars(10, 15, 70),
-                        trend: 'up',
-                        status: 'elevated',
+                        bars: unlockHistory,
+                        trend: (latest.unlocks_count || 0) > 20 ? 'up' : 'down',
+                        status: (latest.unlocks_count || 0) > 30 ? 'elevated' : 'normal',
                     },
                     {
                         signalId: 'scroll',
