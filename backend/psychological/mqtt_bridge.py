@@ -26,6 +26,7 @@ if __package__ is None:
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
+from backend.common.firebase_config import CURRENT_SESSION_ID_FIELD, FIREBASE_DB_URL, RTDB_NAMESPACES
 from backend.common.mqtt_bridge import auth_headers, post_json
 from backend.psychological.realtime.mqtt_client import RawSampleBuffer, make_client
 from backend.psychological.realtime.resample import SOURCE_FS
@@ -51,11 +52,40 @@ EEG_MQTT_TOPIC = os.environ.get("EEG_MQTT_TOPIC", "mindpulse/wearable02/sensors"
 
 FLASK_URL = f"http://127.0.0.1:{os.environ.get('PSYCHOLOGICAL_PORT', '5001')}"
 USER_ID = os.environ.get("EEG_BRIDGE_USER_ID", "Wehara")
-SESSION_ID = os.environ.get(
-    "EEG_SESSION_ID", "wearable02_" + time.strftime("%Y%m%dT%H%M%S")
-)
+# Mutable, not a one-time-read constant: StressApp (App.js) is the actual
+# authority on the current session_id now, written to
+# {psychological}/current_session_id when the app opens/reuses a session --
+# this process polls that field (see run()'s main loop,
+# POINTER_POLL_INTERVAL_SEC) and rotates onto whatever it says, since a
+# long-running MQTT bridge process has no other way to learn a new app
+# session started. Lives inside the psychological/ root itself (this
+# bridge's own namespace), not a separate shared "pointer" store -- see
+# backend/common/firebase_config.py's CURRENT_SESSION_ID_FIELD docstring.
+# EEG_SESSION_ID (if set) is a manual override/fallback for standalone
+# debugging without the app -- the field still wins once it's ever set to
+# something different. `or`, not .get(key, default): see
+# backend/physiological/mqtt_bridge.py's identical SESSION_ID line for why
+# an empty (but present) env var must also fall through to the default.
+SESSION_ID = os.environ.get("EEG_SESSION_ID") or "wearable02_" + time.strftime("%Y%m%dT%H%M%S")
+POINTER_POLL_INTERVAL_SEC = 10.0
 
 AUTH_HEADERS = auth_headers(USER_ID)
+
+
+def _poll_session_pointer() -> str | None:
+    """GET {psychological}/current_session_id -- plain REST, not
+    firebase_admin: this bridge has no firebase_admin dependency anywhere
+    else in its import graph (it only ever talks to its own Flask API via
+    requests), so REST keeps that true instead of adding a new, heavier
+    dependency just for this one read."""
+    try:
+        resp = requests.get(
+            f"{FIREBASE_DB_URL}{RTDB_NAMESPACES['psychological']}/{CURRENT_SESSION_ID_FIELD}.json", timeout=5
+        )
+        value = resp.json()
+        return value if isinstance(value, str) and value else None
+    except Exception:
+        return None
 
 
 def block_payload(samples) -> dict:
@@ -82,6 +112,7 @@ def _post_live_raw(samples) -> None:
 
 
 def run():
+    global SESSION_ID
     print("=" * 60)
     print("EEG (wearable02) MQTT -> Flask bridge")
     print("=" * 60)
@@ -101,15 +132,31 @@ def run():
     calibrated = False
     block_idx = 0
     last_live_raw_push = 0.0
+    last_pointer_poll = 0.0
 
     try:
         while True:
+            # Rotation check: has StressApp started a new session since we
+            # last looked? Throttled the same way LIVE_RAW_INTERVAL_SEC
+            # throttles the preview push below -- this is a cheap read, but
+            # no reason to hit Firebase every 0.5s loop iteration.
+            now = time.time()
+            if now - last_pointer_poll >= POINTER_POLL_INTERVAL_SEC:
+                pointer_session_id = _poll_session_pointer()
+                if pointer_session_id and pointer_session_id != SESSION_ID:
+                    print(f"[session] rotating {SESSION_ID!r} -> {pointer_session_id!r} "
+                          f"(app started a new session) -- recalibrating")
+                    SESSION_ID = pointer_session_id
+                    calibrated = False
+                    calibration_blocks = []
+                    block_idx = 0
+                last_pointer_poll = now
+
             # Independent of the block-accumulation cycle below -- runs every
             # loop iteration (both while waiting for a full block and right
             # after processing one), throttled to LIVE_RAW_INTERVAL_SEC.
             # Works during calibration too, so the dashboard can show signal
             # while electrodes are still being positioned.
-            now = time.time()
             if now - last_live_raw_push >= LIVE_RAW_INTERVAL_SEC:
                 recent = buffer.peek_recent(LIVE_RAW_SAMPLES)
                 if recent:

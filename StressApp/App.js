@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
-import { View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, AppState as RNAppState } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ref, update } from 'firebase/database';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
@@ -14,15 +16,46 @@ import EMAScreen from './modules/physiological/screens/EMAScreen';
 import { AppContext } from './modules/physiological/screens/AppState';
 import { ThemeProvider, useTheme } from './modules/physiological/config/ThemeContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { db } from './firebase';
 
 const Stack = createNativeStackNavigator();
+const SESSION_ID_KEY = '@stressapp/liveSessionId';
+const LAST_ACTIVE_KEY = '@stressapp/liveSessionLastActive';
+const CURRENT_SESSION_ID_FIELD = 'current_session_id';
+const CURRENT_SESSION_ID_ROOTS = ['psychological', 'fusion_en', 'fusion_en_sessions'];
+const SESSION_GRACE_MS = 30 * 60 * 1000;
+const HEARTBEAT_INTERVAL_MS = 20 * 1000;
 
-// Web-only concern: without this, NavigationContainer never reflects the
-// current screen in the URL, so a hard page refresh always remounts at the
-// default route (Home) instead of wherever the user actually was (e.g. the
-// live EEG or Fusion screen) -- looked like "the dashboard shows nothing
-// after refresh" when it was really "the app is back on Home". Tab names
-// here must match PhysiologicalNavigator.js's <Tab.Screen name="..."> exactly.
+function mintSessionId() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return `session_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}T`
+        + `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+async function resolveLiveSessionId() {
+    const stored = await AsyncStorage.multiGet([SESSION_ID_KEY, LAST_ACTIVE_KEY]);
+    const storedId = stored[0][1];
+    const storedLastActive = stored[1][1] ? Number(stored[1][1]) : 0;
+    const withinGrace = !!storedId && (Date.now() - storedLastActive) < SESSION_GRACE_MS;
+    const sessionId = withinGrace ? storedId : mintSessionId();
+
+    await AsyncStorage.multiSet([
+        [SESSION_ID_KEY, sessionId],
+        [LAST_ACTIVE_KEY, String(Date.now())],
+    ]);
+    const updates = {};
+    for (const root of CURRENT_SESSION_ID_ROOTS) {
+        updates[`${root}/${CURRENT_SESSION_ID_FIELD}`] = sessionId;
+    }
+    await update(ref(db), updates);
+    return sessionId;
+}
+
+function touchLiveSessionHeartbeat() {
+    AsyncStorage.setItem(LAST_ACTIVE_KEY, String(Date.now())).catch(() => {});
+}
+
 const linking = {
   prefixes: [],
   config: {
@@ -51,10 +84,25 @@ const linking = {
 function RootNavigator() {
   const { user, isLoading } = useAuth();
   const { theme } = useTheme();
+  useEffect(() => {
+    if (!user) return;
+
+    resolveLiveSessionId().catch((e) => console.log('[live_session] resolve failed:', e?.message));
+
+    const heartbeat = setInterval(touchLiveSessionHeartbeat, HEARTBEAT_INTERVAL_MS);
+    const subscription = RNAppState.addEventListener('change', (nextState) => {
+      if (nextState === 'background' || nextState === 'inactive') {
+        touchLiveSessionHeartbeat();
+      }
+    });
+
+    return () => {
+      clearInterval(heartbeat);
+      subscription.remove();
+    };
+  }, [user]);
 
   if (isLoading) {
-    // Auth restore from AsyncStorage is fast/local — a blank themed
-    // screen avoids a flash of Login before a saved session restores.
     return <View style={{ flex: 1, backgroundColor: theme.bg }} />;
   }
 

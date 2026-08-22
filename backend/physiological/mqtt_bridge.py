@@ -32,6 +32,7 @@ from backend.common.config import (
     MQTT_BROKER, MQTT_PORT, MQTT_TOPIC, GSR_CAL,
     WINDOW_SEC, SETTLE_SEC
 )
+from backend.common.firebase_config import CURRENT_SESSION_ID_FIELD, FUSION_EN_ROOT
 
 # Flask's host/port is independent of MQTT_BROKER (the ring's broker address
 # can be anywhere; this script and Flask are co-located on this machine) --
@@ -47,6 +48,40 @@ USER_ID    = "Wehara"
 AUTH_HEADERS = auth_headers(USER_ID)
 
 HEARTBEAT_MIN_GAP_SEC = 5   # don't hammer Firebase at ~5 msgs/sec
+POINTER_POLL_INTERVAL_SEC = 10  # how often to check for a new app-driven session
+
+# StressApp (App.js) is the authority on the current session_id -- written
+# to {FUSION_EN_ROOT}/current_session_id when the app opens/reuses a
+# session, polled here (see the bottom while-loop) since this is a
+# long-running process with no other way to learn a new app session
+# started. Lives inside fusion_en/ itself (a root this bridge already
+# writes to via save_fusion_en_rtdb()), not a separate shared "pointer"
+# store -- see backend/common/firebase_config.py's
+# CURRENT_SESSION_ID_FIELD docstring. This was a bare "live_session_1"
+# string literal directly in send_window()'s payload before; no
+# calibration/baseline state needs resetting on rotation here (the ring's
+# personal baseline is per-user, not per-session, see
+# firebase_service.py's load_baseline()) -- rotation just means stamping
+# the new id on outgoing windows from here on.
+# `or`, not .get(key, default) -- start_all.sh passes RING_SESSION_ID="" (an
+# empty, PRESENT string) when it wants this bridge to follow the app-driven
+# pointer instead of a manual pin; .get()'s default only kicks in when the
+# key is ABSENT, not empty, so it would silently accept "" as a real session
+# id without this.
+SESSION_ID = os.environ.get("RING_SESSION_ID") or "wearable01_" + time.strftime("%Y%m%dT%H%M%S")
+
+
+def _poll_session_pointer():
+    """GET {FUSION_EN_ROOT}/current_session_id via the already-initialized
+    firebase_admin app (this process calls init_firebase() at import time
+    for firebase_service.py already) rather than adding a second, redundant
+    REST-based path."""
+    from firebase_admin import db
+    try:
+        value = db.reference(f"{FUSION_EN_ROOT}/{CURRENT_SESSION_ID_FIELD}").get()
+        return value if isinstance(value, str) and value else None
+    except Exception:
+        return None
 # SETTLE_SEC discards this many seconds of data right after startup —
 # GSR electrode straps take a bit to reach steady skin contact, and
 # capturing that transient into the first live window skews it (same
@@ -74,7 +109,7 @@ def send_window():
     else:
         payload = {
             "user_id":         USER_ID,
-            "session_id":      "live_session_1",
+            "session_id":      SESSION_ID,
             "window_idx":      window_idx,
             "ibi_array":       ibi_buf,
             "gsr_adc_array":   gsr_buf,
@@ -136,8 +171,17 @@ window_idx   = 0
 print("Settling done — live predictions starting now.\n")
 
 try:
+    last_pointer_poll = 0.0
     while True:
         time.sleep(1)
+        now = time.time()
+        if now - last_pointer_poll >= POINTER_POLL_INTERVAL_SEC:
+            pointer_session_id = _poll_session_pointer()
+            if pointer_session_id and pointer_session_id != SESSION_ID:
+                print(f"[session] rotating {SESSION_ID!r} -> {pointer_session_id!r} "
+                      f"(app started a new session)")
+                SESSION_ID = pointer_session_id
+            last_pointer_poll = now
 except KeyboardInterrupt:
     print("\nStopping bridge...")
     client.loop_stop()

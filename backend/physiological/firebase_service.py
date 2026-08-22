@@ -12,7 +12,7 @@ from backend.common.config import (
     MIN_CONFIDENCE_FOR_RETRAIN,
     MIN_SIGNAL_QUALITY_FOR_RETRAIN,
 )
-from backend.common.firebase_config import init_firebase_app
+from backend.common.firebase_config import FUSION_EN_ROOT, init_firebase_app
 from backend.common.fusion import fusion_window_key
 
 def _ref(path):
@@ -220,45 +220,6 @@ def save_prediction_quality(user_id, session_id, window_idx,
     })
 
 
-def save_fusion_signal(user_id, session_id, window_idx,
-                       confidence, signal_quality,
-                       prob_normal, prob_stress,
-                       label, trending_toward_stress):
-    """
-    Cross-modality feed for the fusion engine — lives OUTSIDE the
-    'physiological' namespace (unlike everything else in this file)
-    so other modalities can write to the same root-level collection
-    later. Kept minimal — confidence/probability/signal quality plus
-    the binary label and trend flag a fusion layer actually needs to
-    combine with other modalities — no raw features or retrain
-    metadata, those stay physiological-module-internal in
-    prediction_quality/.
-
-    NOTE: this writes to Realtime Database (fusion_engine/{user_id}/
-    {session_id}, auto-keyed push()), a DIFFERENT product from Cloud
-    Firestore's `fusion_engine` collection that
-    `fushion engin/fusion_engin.py::load_fusion_records()` actually
-    reads (db.collection("fusion_engine"), via firebase_admin.firestore)
-    -- kept as-is for whatever already reads this RTDB path. The Cloud
-    Firestore fusion_engine collection bridge that used to live below this
-    function (save_fusion_engine_firestore(), removed) was a separate,
-    duplicate store of the same fusion data -- removed in favor of
-    fusion_en (RTDB, save_fusion_en_rtdb() below) as the one live store.
-    """
-    ref = _global_ref(f'fusion_engine/{user_id}/{session_id}')
-    ref.push({
-        'modality':                'physiological',
-        'window_idx':              window_idx,
-        'timestamp':               datetime.now().isoformat(),
-        'confidence':              float(confidence),
-        'signal_quality':          float(signal_quality),
-        'prob_normal':             float(prob_normal),
-        'prob_stress':             float(prob_stress),
-        'label':                   label,
-        'trending_toward_stress':  bool(trending_toward_stress),
-    })
-
-
 # LOSO accuracy of the deployed binary (Normal/Stress) XGBoost model,
 # from physiological_signals/notebooks/05_model_training.ipynb's own
 # reported run (913 WESAD windows, Normal=587/Stress=326) -- fixed
@@ -362,7 +323,7 @@ def save_fusion_en_rtdb(user_id, session_id, window_idx,
                                     prob_normal, prob_stress, label, trending_toward_stress, feat_dict)
     key = fusion_window_key()
     try:
-        _global_ref(f'fusion_en/{session_id}/{key}').update(fields)
+        _global_ref(f'{FUSION_EN_ROOT}/{session_id}/{key}').update(fields)
     except Exception as e:  # noqa: BLE001 -- one failed write shouldn't break /predict
         print(f'[firebase] WARNING: fusion_en write failed for {session_id}/{key}: {e}')
 
@@ -372,9 +333,9 @@ def label_session_ground_truth_rtdb(session_id, pss4_score):
     fusion_en/{session_id}/* child for this session."""
     ground_truth_stress = int(pss4_score > 6)
     try:
-        children = _global_ref(f'fusion_en/{session_id}').get() or {}
+        children = _global_ref(f'{FUSION_EN_ROOT}/{session_id}').get() or {}
         for window_key in children:
-            _global_ref(f'fusion_en/{session_id}/{window_key}').update({
+            _global_ref(f'{FUSION_EN_ROOT}/{session_id}/{window_key}').update({
                 'ground_truth_stress': ground_truth_stress,
                 'ground_truth_pss4_score': pss4_score,
             })
