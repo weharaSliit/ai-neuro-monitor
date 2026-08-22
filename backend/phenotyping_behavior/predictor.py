@@ -1,48 +1,45 @@
-import numpy as np
-import joblib
-import os
-from ema_service import calculate_z_score
+from backend.phenotyping_behavior.ema_service import calculate_z_score
 
-# --- PATH SETUP ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# Updated to point to the Step 8 Production Model
-MODEL_PATH = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "phenotyping", "models", "stress_engine.pkl"))
+# The One-Class SVM formerly loaded here (phenotyping/models/stress_engine.pkl,
+# built by phenotyping/s8_deploy_production.py) was fit on 500
+# np.random.normal(loc=[120, 200, 45], scale=[15, 20, 5]) FAKE samples, not
+# real behavioral data -- confirmed by inspecting its support vectors, which
+# cluster exactly on that synthetic distribution. No real-data-trained
+# replacement with the same (dwell_time, flight_time, scroll_velocity) raw-ms
+# feature schema exists anywhere in the repo (the CMU/StudentLife research
+# models use different feature counts/semantics and pre-normalized inputs;
+# the raw datasets needed to retrain a compatible one aren't present either
+# -- see phenotyping/research_v2_cmu, research_v3_studentlife, research_v4_swell).
+#
+# Classification below is therefore driven ENTIRELY by composite_z -- each
+# user's real, idiographic baseline (mean/std of their own past windows,
+# maintained by /behavior/calibrate + ema_service.py, no model file involved)
+# -- rather than faking a same-shaped model to keep a two-signal blend that
+# was never real to begin with. This is honest but weaker for a brand-new
+# user with no calibrated baseline yet (see the class docstring below); it
+# is NOT a stand-in for retraining a real population-level model once enough
+# real Firebase-collected windows accumulate from the Android
+# KeystrokeCollectorService.
 
 class StressPredictor:
-    def __init__(self):
-        print(f"[INFO] Initializing Production Brain: {MODEL_PATH}")
-        try:
-            self.model = joblib.load(MODEL_PATH)
-            print("[OK] Winner Model (One-Class SVM) loaded successfully")
-        except Exception as e:
-            print(f"[WARN] Warning: Could not load production model. Error: {e}")
-            self.model = None
+    """Idiographic-baseline-only stress classifier for the phenotyping
+    (keystroke/scroll) modality. See module docstring for why this doesn't
+    load a population-level model."""
 
     def predict(self, firebase_metrics, user_baselines):
         """
-        Decision Logic: Maps Android Sensors to Deployed Model Features.
+        Decision Logic: composite Z-score deviation from this user's own
+        real, previously-calibrated baseline (no model file involved).
         """
-        if not self.model:
-            return {"label": "Error", "score": 0.0, "is_anomaly": False}
-            
         if not user_baselines:
             user_baselines = {}
 
-        # 1. Feature Mapping (Android -> Deployed Model logic)
-        # s8_deploy_production.py expected: ["dwell_time", "flight_time", "scroll_velocity"]
         dwell_time = float(firebase_metrics.get('avg_dwell', 0))
         flight_time = float(firebase_metrics.get('avg_flight', 0))
         scroll_velocity = float(firebase_metrics.get('scroll_velocity', 0))
 
-        feat_array = np.array([[dwell_time, flight_time, scroll_velocity]])
-
-        # 2. Anomaly Detection (Objective 1 Winner)
-        # Output: 1 (Normal), -1 (Anomaly/Stress)
-        model_prediction = self.model.predict(feat_array)[0]
-        is_anomaly = bool(model_prediction == -1)
-
-        # 3. Z-Score Validation — Multi-Feature Composite (Idiographic Baseline)
-        # Research Gap 4: We check how far ALL three key signals deviate from
+        # Z-Score Validation — Multi-Feature Composite (Idiographic Baseline)
+        # Research Gap 4: we check how far ALL three key signals deviate from
         # THIS user's personal baseline, then use the average deviation.
         # This is more sensitive than checking a single feature alone.
 
@@ -65,11 +62,13 @@ class StressPredictor:
         # If the user has no scroll data yet (z_scroll=0), still works correctly
         composite_z = round((z_dwell + z_flight + z_scroll) / 3.0, 4)
 
-        # 4. Final Stress Classification (OC-SVM + composite Z-score gate)
-        if is_anomaly and composite_z > 2.0:
+        # Final Stress Classification -- composite Z-score alone (same
+        # thresholds the old model+z blend used for its z-only branches).
+        is_anomaly = composite_z > 1.5
+        if composite_z > 2.0:
             label = "High Confidence Stress"
             score = 0.9
-        elif is_anomaly or composite_z > 1.5:
+        elif is_anomaly:
             label = "Pre-Stress (Digital Phenotype detected)"
             score = 0.6
         else:

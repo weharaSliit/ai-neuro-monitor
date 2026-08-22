@@ -1,5 +1,6 @@
 #include <Wire.h>
 #include <WiFi.h>
+#include <ESPmDNS.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <Adafruit_MPU6050.h>
@@ -7,9 +8,9 @@
 #include "MAX30105.h"
 #include "heartRate.h"
 
-const char* WIFI_SSID     = "Wehara's A07";   // fill in
-const char* WIFI_PASSWORD = "wehara1216";  // fill in
-const char* MQTT_BROKER   = "10.180.48.56";
+const char* WIFI_SSID     = "Wehara's A07";  
+const char* WIFI_PASSWORD = "wehara1216";
+const char* MQTT_HOSTNAME = "Hirunis-MacBook-Pro-2";
 const int   MQTT_PORT     = 1883;
 const char* MQTT_TOPIC    = "mindpulse/wearable01/sensors";
 const char* DEVICE_ID     = "wearable01";
@@ -44,6 +45,16 @@ void connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("\nWiFi connected. IP: " + WiFi.localIP().toString());
     Serial.println("WiFi signal strength (RSSI): " + String(WiFi.RSSI()) + " dBm");
+
+    // Starts the mDNS responder/resolver -- required before queryHost() in
+    // connectMQTT() works. The name here is this DEVICE's own advertised
+    // hostname (wearable01-ring.local), unrelated to MQTT_HOSTNAME (the
+    // Mac we resolve).
+    if (MDNS.begin("wearable01-ring")) {
+      Serial.println("mDNS resolver started");
+    } else {
+      Serial.println("mDNS resolver failed to start");
+    }
   } else {
     Serial.println("\nWiFi connection FAILED after 20s — retrying in loop");
   }
@@ -51,7 +62,23 @@ void connectWiFi() {
 
 void connectMQTT() {
   while (!mqttClient.connected()) {
-    Serial.print("Connecting to MQTT broker...");
+    // Re-resolved on every attempt (not cached once at boot) -- if the Mac
+    // gets a new DHCP lease while this device stays connected, the next
+    // reconnect attempt picks it up automatically instead of needing a
+    // re-flash. See MQTT_HOSTNAME's comment above.
+    IPAddress brokerIP = MDNS.queryHost(MQTT_HOSTNAME);
+    if (brokerIP == IPAddress(0, 0, 0, 0)) {
+      Serial.print("mDNS lookup failed for ");
+      Serial.print(MQTT_HOSTNAME);
+      Serial.println(".local — retry in 2s");
+      delay(2000);
+      continue;
+    }
+    mqttClient.setServer(brokerIP, MQTT_PORT);
+
+    Serial.print("Connecting to MQTT broker (");
+    Serial.print(brokerIP);
+    Serial.print(")...");
     if (mqttClient.connect(DEVICE_ID)) {
       Serial.println("connected");
     } else {
@@ -93,7 +120,8 @@ void setup() {
 
   connectWiFi();
 
-  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+  // Server is resolved by mDNS hostname and set inside connectMQTT() itself
+  // (re-resolved on every reconnect attempt), not here.
   mqttClient.setKeepAlive(60);
   mqttClient.setSocketTimeout(10);
 

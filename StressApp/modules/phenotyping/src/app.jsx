@@ -1,6 +1,7 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { ThemeProvider } from './context/ThemeContext';
+import { isUserRegistered } from './utils/userStorage';
 import { Welcome } from './pages/welcome';
 import { Permissions } from './pages/permissions';
 import PhenotypingDashboard from './pages/PhenotypingDashboard';
@@ -20,7 +21,7 @@ function App() {
             <Router>
                 {/* IMPORTANT: No height/overflow here — each page manages itself */}
                 <Routes>
-                    <Route path="/" element={<Welcome />} />
+                    <Route path="/" element={isUserRegistered() ? <Navigate to="/dashboard" replace /> : <Welcome />} />
                     <Route path="/permissions" element={<Permissions />} />
                     <Route path="/baseline" element={<BaselineSurvey />} />
                     <Route path="/setup-complete" element={<SetupComplete />} />

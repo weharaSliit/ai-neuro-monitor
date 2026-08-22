@@ -20,22 +20,41 @@ class MissingValueHandler:
     def process_telemetry(self, telemetry: TelemetryPayload) -> ProcessedSignalResult:
         """
         Processes incoming telemetry according to Missing Value Handler rules:
-        1. Operates purely on single fused_stress_label and stress_probability inputs.
-        2. LOCF imputation within 3 seconds.
-        3. Assume 'normal' state between 3 to 10 seconds timeout.
-        4. Trigger alert notification after 10 seconds data loss.
-        5. Safety override: If fused label is 'normal' but stress_probability > 0.75, force label to 'stress'.
+        1. Checks 2-minute baseline calibration status (is_calibrated).
+        2. During calibration: Defaults to 'normal' state and bypasses false alerts/safety overrides.
+        3. After calibration:
+           - LOCF imputation within 3 seconds.
+           - Assume 'normal' state between 3 to 10 seconds timeout.
+           - Trigger alert notification after 10 seconds data loss during active streaming.
+           - Safety override: If fused label is 'normal' but calibrated stress_probability > 0.75, force label to 'stress'.
         """
         user_id = telemetry.user_id
         dt = telemetry.seconds_since_last_packet
+        is_calibrated = getattr(telemetry, "is_calibrated", True)
         
         is_locf_applied = False
         is_alert_triggered = False
         is_safety_override = False
         effective_label = telemetry.fused_stress_label or "normal"
         stress_prob = telemetry.stress_probability
+        msg_parts = []
 
-        # --- Rule 1, 2, 3: Data Loss & LOCF Logic ---
+        # --- Rule 0: Handling 2-Minute Baseline Calibration Phase ---
+        if not is_calibrated:
+            effective_label = "normal"
+            summary_msg = "CALIBRATION ACTIVE (2-min baseline): Processing raw baseline signals. Defaulting state to 'normal'."
+            self._last_observations[user_id] = telemetry
+            return ProcessedSignalResult(
+                user_id=user_id,
+                effective_label=effective_label,
+                is_safety_override=False,
+                is_locf_applied=False,
+                is_alert_triggered=False,
+                features_flat=[stress_prob, max(0.0, 1.0 - stress_prob)],
+                message=summary_msg
+            )
+
+        # --- Rule 1, 2, 3: Data Loss & LOCF Logic (Calibrated Telemetry) ---
         if dt > 0:
             if dt <= LOCF_MAX_SECONDS:
                 # Apply LOCF if available
@@ -52,7 +71,7 @@ class MissingValueHandler:
                 is_alert_triggered = True
                 effective_label = "normal"
 
-        # --- Rule 4: Safety Override Logic based strictly on stress_probability ---
+        # --- Rule 4: Safety Override Logic based strictly on calibrated stress_probability ---
         if effective_label == "normal":
             if stress_prob > SAFETY_PROBABILITY_THRESHOLD:
                 effective_label = "stress"
@@ -62,9 +81,8 @@ class MissingValueHandler:
         self._last_observations[user_id] = telemetry
 
         # Message summary
-        msg_parts = []
         if is_safety_override:
-            msg_parts.append(f"CRITICAL: Safety Override engaged! Multimodal stress probability ({stress_prob:.2f} > 0.75) overrides 'normal' label to 'stress'.")
+            msg_parts.append(f"CRITICAL: Safety Override engaged! Calibrated stress probability ({stress_prob:.2f} > 0.75) overrides 'normal' label to 'stress'.")
         if is_locf_applied:
             msg_parts.append(f"LOCF applied for missing packet (dt={dt:.1f}s <= 3s).")
         if dt > ALERT_TIMEOUT_SECONDS:

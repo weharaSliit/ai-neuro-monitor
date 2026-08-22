@@ -10,7 +10,6 @@ from app.api import (
     validate_router,
     bandit_router,
     chatbot_router,
-    simulator_router,
     auth_router,
     suitability_router,
     telemetry_router
@@ -36,7 +35,6 @@ app.include_router(intervention_router.router)
 app.include_router(validate_router.router)
 app.include_router(bandit_router.router)
 app.include_router(chatbot_router.router)
-app.include_router(simulator_router.router)
 app.include_router(auth_router.router)
 app.include_router(suitability_router.router)
 app.include_router(telemetry_router.router)
