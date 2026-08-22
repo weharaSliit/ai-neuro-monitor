@@ -77,7 +77,7 @@ EMA_ALPHA         = 0.2  # EMA learning rate
 # across calibrate_ring.py and mqtt_bridge.py, which meant every network
 # change (switching WiFi networks, re-measuring GSR_CAL) required editing
 # multiple files and kept getting missed in one of them. Update here only.
-MQTT_BROKER = os.environ.get("STRESSAPP_MQTT_BROKER", "10.76.255.56")
+MQTT_BROKER = os.environ.get("STRESSAPP_MQTT_BROKER", "10.180.48.56")
 MQTT_PORT   = 1883
 MQTT_TOPIC  = "mindpulse/wearable01/sensors"
 GSR_CAL     = 2872   # measured: electrodes off, raw analogRead(GSR_PIN)

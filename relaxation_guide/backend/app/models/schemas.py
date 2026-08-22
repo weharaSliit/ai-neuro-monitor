@@ -20,12 +20,14 @@ class TelemetryPayload(BaseModel):
     fused_stress_label: str = Field("normal", description="Single fused stress label from multimodal fusion engine: normal, pre-stress, or stress")
     stress_probability: float = Field(0.50, ge=0.0, le=1.0, description="Single stress probability score from multimodal fusion engine (0.0 to 1.0)")
     seconds_since_last_packet: float = Field(0.0, description="Seconds elapsed since previous data packet")
+    is_calibrated: bool = Field(True, description="True if 2-minute baseline calibration is complete")
 
 class FusionEngineIngestRequest(BaseModel):
     user_id: str = Field("user_default", description="User ID")
     fused_stress_label: str = Field("normal", description="Single fused stress label from teammate fusion engine (normal, pre-stress, stress)")
     stress_probability: float = Field(0.50, ge=0.0, le=1.0, description="Single stress probability score from teammate fusion engine (0.0 to 1.0)")
     seconds_since_last_packet: float = Field(0.0, description="Elapsed time since previous data packet")
+    is_calibrated: bool = Field(True, description="True if 2-minute baseline calibration is complete")
 
 class ProcessedSignalResult(BaseModel):
     user_id: str

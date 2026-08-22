@@ -24,6 +24,15 @@ export function DigitalSignals() {
 
     useEffect(() => {
         if (!userId) return;
+
+        const cached = localStorage.getItem(`cache_digital_signals_${userId}`);
+        if (cached) {
+            try {
+                setMetrics(JSON.parse(cached));
+                setLoading(false);
+            } catch (e) {}
+        }
+
         const metricsRef = ref(db, `phenotyping/data_logs/${userId}`);
         const unsubscribe = onValue(metricsRef, (snapshot) => {
             const rawData = snapshot.val();
@@ -36,13 +45,7 @@ export function DigitalSignals() {
 
                 const dwellHistory = recentEntries.map((e, idx) => ({ val: e.avg_dwell, active: idx === recentEntries.length - 1 }));
                 const scrollHistory = recentEntries.map((e, idx) => ({ val: e.scroll_velocity, active: idx === recentEntries.length - 1 }));
-                // Real signal (data_valid), not random -- 90/30 is a display-only
-                // bar-height mapping of the same boolean the card's status/value
-                // already reflect, not a fabricated measurement.
-                const activityHistory = recentEntries.map((e, idx) => ({
-                    val: e.data_valid === false ? 30 : 90,
-                    active: idx === recentEntries.length - 1,
-                }));
+                const unlockHistory = recentEntries.map((e, idx) => ({ val: e.unlocks_count || 0, active: idx === recentEntries.length - 1 }));
 
                 formattedSignals.push(
                     {
@@ -54,6 +57,16 @@ export function DigitalSignals() {
                         bars: dwellHistory,
                         trend: latest.avg_dwell > 130 ? 'up' : 'down',
                         status: latest.avg_dwell > 150 ? 'anomalous' : latest.avg_dwell > 130 ? 'elevated' : 'normal',
+                    },
+                    {
+                        signalId: 'screen',
+                        title: '📱 Screen On/Off Times',
+                        value: `${latest.unlocks_count || 0} unlocks`,
+                        subtext: 'Unlock frequency & session duration',
+                        colorClass: 'bg-orange-500',
+                        bars: unlockHistory,
+                        trend: (latest.unlocks_count || 0) > 20 ? 'up' : 'down',
+                        status: (latest.unlocks_count || 0) > 30 ? 'elevated' : 'normal',
                     },
                     {
                         signalId: 'scroll',
@@ -90,6 +103,7 @@ export function DigitalSignals() {
 
             setMetrics(formattedSignals);
             setLoading(false);
+            localStorage.setItem(`cache_digital_signals_${userId}`, JSON.stringify(formattedSignals));
         });
 
         return () => unsubscribe();

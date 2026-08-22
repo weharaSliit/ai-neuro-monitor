@@ -14,7 +14,8 @@ from backend.phenotyping_behavior.firebase_service import (
     save_stress_prediction, save_validation_label,
     get_latest_stress_prediction,             # T7-B: neuroadaptive bridge
     get_calibration_windows,                  # Objective 2: 7-day baseline
-    set_user_calibration_status, create_user_profile
+    set_user_calibration_status, create_user_profile,
+    save_to_fusion_engine                     # Shared fusion_engine table
 )
 from backend.phenotyping_behavior.predictor import predictor
 from backend.phenotyping_behavior.ema_service import update_personalized_baseline
@@ -50,7 +51,8 @@ def predict_behavioral_stress():
         'flight_std': flight_std,
         'interaction_rate': data.get('interaction_rate', 0),
         'scroll_velocity': data.get('scroll_velocity', 0),
-        'app_switch_rate': data.get('app_switch_rate', 0)
+        'app_switch_rate': data.get('app_switch_rate', 0),
+        'unlocks_count': data.get('unlocks_count', 0)
     }
 
     # 2. Context Filtering (Variable #25)
@@ -68,7 +70,15 @@ def predict_behavioral_stress():
     save_behavioral_window(user_id, window_data)
     save_stress_prediction(user_id, result)
 
-    # 6. Continual Learning (Gap 3: EMA Update)
+    # 5b. Write to shared fusion_engine table (for group integration)
+    #     Creates: fusion_engine/{display_name}/live_session_{YYYYMMDD}/{push-key}
+    #     Fields: label, modality, prob_stress, prob_normal, confidence,
+    #             signal_quality, model_accuracy, composite_z, timestamp
+    try:
+        save_to_fusion_engine(user_id, result, window_features, is_valid)
+    except Exception as fe:
+        print(f"[WARN] fusion_engine write failed (non-critical): {fe}")
+
     # Only update if the window is Normal AND the context is valid
     if not result['is_anomaly'] and is_valid:
         update_personalized_baseline(user_id, window_features, False)
@@ -201,12 +211,44 @@ def calibrate_baseline():
         "baselines":    baselines
     })
 
+@app.route('/behavior/evaluate', methods=['GET'])
+def evaluate_accuracy_endpoint():
+    """
+    Objective 4: Live Accuracy & Validation Evaluation Suite.
+    Evaluates both Subjective EMA Ground Truth (PSS-4/SISS) and Objective Multimodal Triangulation.
+
+    Usage:
+        GET /behavior/evaluate?user_id=<uuid>
+        GET /behavior/evaluate?all=1         (evaluates all registered users)
+    """
+    user_id  = request.args.get('user_id')
+    eval_all = request.args.get('all', '0') == '1'
+
+    from evaluate_accuracy import init_firebase as _ef_init, run_evaluation, run_all_users, list_all_user_ids
+    _ef_init()   # safe — no-op if already initialised
+
+    if eval_all:
+        results = run_all_users()
+        return jsonify({"status": "success", "mode": "all_users", "results": results or {}})
+
+    if not user_id:
+        # Return list of known user IDs
+        ids = list_all_user_ids()
+        return jsonify({
+            "status": "ok",
+            "hint": "Pass ?user_id=<uuid> or ?all=1",
+            "registered_users": ids
+        })
+
+    results = run_evaluation(user_id)
+    return jsonify({"status": "success", "user_id": user_id, "results": results})
+
 
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({"status": "Phenotyping Backend Online"})
 
 if __name__ == '__main__':
-    # Using a different port than your group member's physiological server
-    # use_reloader=False -- see backend/psychological/app.py's app.run() comment.
-    app.run(port=5002, debug=True, use_reloader=False)
+    # Render.com injects $PORT — use it in production; default to 5001 locally.
+    port = int(os.environ.get('PORT', 5001))
+    app.run(host='0.0.0.0', port=port, debug=False)

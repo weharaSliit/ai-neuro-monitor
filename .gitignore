@@ -48,8 +48,18 @@ desktop.ini
 
 # Logs
 *.log
+# Node.js dependencies
+node_modules/
 
 # Firebase Secrets & Environment Variables (CRITICAL: Do not commit!)
 serviceAccountKey.json
 .env
 .env.*
+
+# Allow production models to be committed
+!phenotyping/models/stress_engine.pkl
+
+# Physiological backend model — needed by teammates for integration
+!physiological_signals/saved_models/best_model_obj1_v2.pkl
+!physiological_signals/saved_models/scaler_obj1_v2.pkl
+!physiological_signals/saved_models/feature_cols_obj1_v2.pkl
