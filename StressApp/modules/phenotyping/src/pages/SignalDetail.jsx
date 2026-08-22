@@ -167,11 +167,11 @@ export function SignalDetail() {
                     processedMeasures = [
                         {
                             ...config.measures[0],
-                            value: `${Math.round(latest.interaction_rate || 0)} unlocks`,
-                            baseline: '5 unlocks',
+                            value: `${latest.unlocks_count || 0} unlocks`,
+                            baseline: '-',
                             deviation: '-',
-                            status: (latest.interaction_rate || 0) > 8 ? 'elevated' : 'normal',
-                            bars: entries.map(e => e.interaction_rate || 0)
+                            status: (latest.unlocks_count || 0) > 30 ? 'elevated' : 'normal',
+                            bars: entries.map(e => e.unlocks_count || 0)
                         }
                     ];
                 }
