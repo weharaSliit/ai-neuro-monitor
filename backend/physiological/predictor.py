@@ -1,22 +1,19 @@
 # ============================================================
 # predictor.py
-# Loads model and handles all prediction logic
-# Personalized baseline + feature-aware state machine
-#
-# Replaced simple trend detector with
-# StressStateMachine that uses all 22 features
-# grouped by their physiological pattern from
-# exploratory analysis (
+# Loads the binary (Normal/Stress) model and handles all
+# prediction logic — personalized baseline + feature-aware
+# trend detection. WESAD simulation (3-class) has been removed;
+# the real ring is the only deployment target.
 # ============================================================
 
 import numpy as np
 import joblib
 from backend.common.config import (
     MODEL_FILE, SCALER_FILE, FEATURES_FILE,
-    N_BASELINE_WIN, EMA_ALPHA
+    N_BASELINE_WIN, EMA_ALPHA,
+    STRESS_LABELS, TREND_RISING_THRESHOLD
 )
 
-# ── Load model files once at startup ─────────────────────────
 print("Loading model files...")
 model        = joblib.load(MODEL_FILE)
 scaler       = joblib.load(SCALER_FILE)
@@ -37,14 +34,16 @@ EDA_FEATURES = [
 ]
 
 # ── Feature groups from exploratory analysis ──────────────────
-# Cell 5 findings: 18/22 features show pre-stress as distinct
-# Pattern 1: monotonic N<PS<S (tonic EDA features)
+# Used only for trending_toward_stress direction voting (see
+# StressStateMachine below) — never affects the hard Normal/
+# Stress label, which comes from the model alone.
+# Pattern 1: monotonic rise from Normal toward Stress (tonic EDA)
 MONOTONIC_UP = [
     'EDA_q75', 'EDA_mean', 'SCL_mean',
     'ACC_std', 'EDA_q10', 'EDA_q90'
 ]
 
-# Pattern 2: peak at pre-stress then drop (phasic alarm)
+# Pattern 2: rises during onset, then falls once sustained (phasic alarm)
 PHASIC_PEAK = [
     'MeanHR', 'SDHR', 'SCR_count',
     'SCR_width_mean', 'SCR_amp_mean',
@@ -107,33 +106,63 @@ def normalize_features(X, baseline_mean, baseline_std):
     return X_norm
 
 
-# ── Main prediction function ──────────────────────────────────
-def predict_window(features_array,
-                   baseline_mean, baseline_std,
-                   trend_history=None):
-    X_norm        = normalize_features(
-        features_array, baseline_mean, baseline_std
-    )
-    X_scaled      = scaler.transform(X_norm)
-    prediction    = int(model.predict(X_scaled)[0])
-    probabilities = model.predict_proba(X_scaled)[0]
+# ── Main prediction functions ──────────────────────────────────
+def predict_window(features_array, baseline_mean, baseline_std,
+                   state_machine=None, feat_dict=None):
+    """
+    Binary Normal/Stress prediction with personal baseline
+    normalization applied first.
 
-    # Legacy trend detector kept for compatibility
-    # State machine in app.py overrides this
-    trend_alert = False
-    if trend_history is not None:
-        trend_alert = detect_prestress_trend(trend_history)
-        if trend_alert and prediction == 0:
-            prediction = 1
+    trending_toward_stress reuses the state machine's rising-
+    feature voting — it's a separate flag, never a label override.
+    Requires this window's features to be recorded into the state
+    machine's history first, which happens here.
+    """
+    X_norm   = normalize_features(features_array, baseline_mean, baseline_std)
+    X_scaled = scaler.transform(X_norm)
 
-    return prediction, probabilities, trend_alert
+    probs = model.predict_proba(X_scaled)[0]
+    prob_normal, prob_stress = float(probs[0]), float(probs[1])
+
+    prediction = 1 if prob_stress > prob_normal else 0
+    confidence = max(prob_normal, prob_stress)
+
+    trending_toward_stress = False
+    if state_machine is not None and feat_dict is not None:
+        state_machine.history.append(feat_dict)
+        if len(state_machine.history) > state_machine.window_size + 3:
+            state_machine.history.pop(0)
+
+        if len(state_machine.history) >= state_machine.window_size:
+            votes_for, votes_against, total_votes = \
+                state_machine._trend_votes(feat_dict)
+            conf = votes_for / total_votes if total_votes > 0 else 0
+            trending_toward_stress = conf >= TREND_RISING_THRESHOLD
+
+    return {
+        'prediction':  prediction,
+        'label':       STRESS_LABELS[prediction],
+        'prob_normal': prob_normal,
+        'prob_stress': prob_stress,
+        'confidence':  confidence,
+        'trending_toward_stress': trending_toward_stress
+    }
 
 
 def predict_raw(features_array):
-    X_scaled      = scaler.transform(features_array)
-    prediction    = int(model.predict(X_scaled)[0])
-    probabilities = model.predict_proba(X_scaled)[0]
-    return prediction, probabilities
+    """Binary prediction with no personal baseline normalization yet."""
+    X_scaled = scaler.transform(features_array)
+    probs = model.predict_proba(X_scaled)[0]
+    prob_normal, prob_stress = float(probs[0]), float(probs[1])
+    prediction = 1 if prob_stress > prob_normal else 0
+    return {
+        'prediction':  prediction,
+        'label':       STRESS_LABELS[prediction],
+        'prob_normal': prob_normal,
+        'prob_stress': prob_stress,
+        'confidence':  max(prob_normal, prob_stress),
+        'trending_toward_stress': False
+    }
 
 
 def build_feature_dict(features_array):
@@ -143,88 +172,40 @@ def build_feature_dict(features_array):
     }
 
 
-# ── Legacy trend detector (kept for reference) ────────────────
-def detect_prestress_trend(history, window_size=5,
-                           threshold=3):
-    if len(history) < window_size:
-        return False
-    recent    = history[-window_size:]
-    triggered = 0
-    for feat, direction in [
-        ('SCL_mean',   'up'),
-        ('AVNN',       'down'),
-        ('SCR_count',  'up'),
-        ('deriv1_std', 'up')
-    ]:
-        if feat not in recent[0]:
-            continue
-        vals  = [w[feat] for w in recent]
-        diffs = [vals[i]-vals[i-1]
-                 for i in range(1, len(vals))]
-        if direction == 'up':
-            if sum(d > 0 for d in diffs) >= 3:
-                triggered += 1
-        else:
-            if sum(d < 0 for d in diffs) >= 3:
-                triggered += 1
-    return triggered >= threshold
-
-
-# ── Feature-aware stress state machine ───────────────────────
+# ── Feature-aware trend voting ────────────────────────────────
 class StressStateMachine:
     """
-    Context-aware stress classifier using all 22 features.
+    Watches recent windows for a rising-toward-stress feature
+    pattern, used only to compute trending_toward_stress — a flag
+    reported alongside the model's Normal/Stress label, never a
+    label override.
 
-    Based on exploratory analysis findings (Cell 5):
-      18/22 features (81.8%) distinguish pre-stress
-      as a genuine intermediate physiological state.
-
-    Three feature groups vote on each window:
+    Three feature groups vote on direction of change:
 
     MONOTONIC_UP (6 features — tonic EDA):
-      Rising = pre-stress onset signal
-      Elevated but slowing = sustained stress
+      Rising = stress-onset signal
 
     PHASIC_PEAK (12 features — alarm response):
-      Rising = pre-stress onset (alarm phase)
-      Elevated + falling = stress (adaptation phase)
-      Consistent with General Adaptation Syndrome
+      Rising = onset (alarm phase)
 
     TROUGH (4 features — HRV inverse):
-      Falling = pre-stress (HR going up)
-      Stable below baseline = sustained stress
-
-    Correctly distinguishes:
-      HR=95 rising from 65 → Pre-stress
-      HR=95 falling from 101 → Stress
-      Same value, different trajectory, different label
+      Falling = onset (HR going up)
     """
 
     def __init__(self, feature_cols_list,
                  baseline_mean=None,
                  window_size=5,
-                 ps_threshold=0.35,
-                 st_threshold=0.25,
-                 rec_threshold=0.40):
+                 trend_threshold=0.35):
 
-        self.feature_cols   = feature_cols_list
-        self.baseline_mean  = baseline_mean
-        self.window_size    = window_size
-        self.ps_threshold   = ps_threshold
-        self.st_threshold   = st_threshold
-        self.rec_threshold  = rec_threshold
+        self.feature_cols    = feature_cols_list
+        self.baseline_mean   = baseline_mean
+        self.window_size     = window_size
+        self.trend_threshold = trend_threshold
 
-        self.state          = 'Normal'
-        self.history        = []
-        self.state_duration = 0
+        self.history          = []
 
     def update_baseline(self, baseline_mean):
         self.baseline_mean = baseline_mean
-
-    def reset(self):
-        self.state          = 'Normal'
-        self.history        = []
-        self.state_duration = 0
 
     # ── Direction helpers ─────────────────────────────────────
 
@@ -276,18 +257,18 @@ class StressStateMachine:
             return False
         return (base - value) / abs(base) > threshold
 
-    # ── Voting functions ──────────────────────────────────────
+    # ── Voting ─────────────────────────────────────────────────
 
-    def _prestress_votes(self, feat_dict):
+    def _trend_votes(self, feat_dict):
         """
-        Count features voting for pre-stress onset.
+        Count features voting for a rising-toward-stress trend.
         Uses all three groups with their patterns.
         """
         votes_for     = 0
         votes_against = 0
         total         = 0
 
-        # Group A: Monotonic — rising = pre-stress onset
+        # Group A: Monotonic — rising = onset
         for feat in MONOTONIC_UP:
             if feat not in self.feature_cols:
                 continue
@@ -298,7 +279,7 @@ class StressStateMachine:
                   and not self._rising(feat)):
                 votes_against += 1
 
-        # Group B: Phasic — rising = alarm, falling = stress
+        # Group B: Phasic — rising = alarm
         for feat in PHASIC_PEAK:
             if feat not in self.feature_cols:
                 continue
@@ -321,147 +302,3 @@ class StressStateMachine:
                 votes_against += 1
 
         return votes_for, votes_against, total
-
-    def _stress_votes(self, feat_dict):
-        """
-        Count features voting for sustained stress.
-        Elevated but no longer in onset direction.
-        """
-        votes = 0
-        total = 0
-
-        # Group A: elevated but slowing
-        for feat in MONOTONIC_UP:
-            if feat not in self.feature_cols:
-                continue
-            total += 1
-            if (self._above_baseline(feat_dict, feat, 0.15)
-                    and not self._rising(feat)):
-                votes += 1
-
-        # Group B: elevated and falling from peak
-        for feat in PHASIC_PEAK:
-            if feat not in self.feature_cols:
-                continue
-            total += 1
-            if (self._above_baseline(feat_dict, feat, 0.10)
-                    and self._falling(feat)):
-                votes += 1
-
-        # Group C: below baseline and stabilizing
-        for feat in TROUGH:
-            if feat not in self.feature_cols:
-                continue
-            total += 1
-            if (self._below_baseline(feat_dict, feat, 0.10)
-                    and not self._falling(feat)):
-                votes += 1
-
-        return votes, total
-
-    def _recovery_votes(self, feat_dict):
-        """
-        Count features voting for recovery to Normal.
-        """
-        votes = 0
-        total = 0
-
-        # Group A: falling back toward baseline
-        for feat in MONOTONIC_UP:
-            if feat not in self.feature_cols:
-                continue
-            total += 1
-            if (self._falling(feat)
-                    and not self._above_baseline(
-                        feat_dict, feat, 0.05)):
-                votes += 1
-
-        # Group C: rising back toward baseline
-        for feat in TROUGH:
-            if feat not in self.feature_cols:
-                continue
-            total += 1
-            if self._rising(feat):
-                votes += 1
-
-        return votes, total
-
-    # ── Main process function ─────────────────────────────────
-
-    def process_window(self, feat_dict,
-                       model_prediction):
-        """
-        Process one window using all 22 features.
-
-        Parameters:
-            feat_dict        : {feature: value}
-            model_prediction : XGBoost raw prediction
-
-        Returns:
-            prediction : corrected class (0/1/2)
-            state      : current state string
-            alert      : True if pre-stress detected
-        """
-        self.history.append(feat_dict)
-        if len(self.history) > self.window_size + 3:
-            self.history.pop(0)
-
-        # Need enough history for direction detection
-        if len(self.history) < self.window_size:
-            self.state_duration += 1
-            return model_prediction, self.state, False
-
-        ps_for, ps_against, total = \
-            self._prestress_votes(feat_dict)
-        st_votes, st_total = \
-            self._stress_votes(feat_dict)
-        rec_votes, rec_total = \
-            self._recovery_votes(feat_dict)
-
-        ps_conf  = ps_for / total       if total     > 0 else 0
-        st_conf  = st_votes / st_total  if st_total  > 0 else 0
-        rec_conf = rec_votes / rec_total if rec_total > 0 else 0
-
-        # ── State transitions ─────────────────────────────────
-
-        if self.state == 'Normal':
-            if ps_conf >= self.ps_threshold:
-                self.state          = 'Prestress'
-                self.state_duration = 1
-                return 1, 'Prestress', True
-            self.state_duration += 1
-            return 0, 'Normal', False
-
-        elif self.state == 'Prestress':
-            self.state_duration += 1
-
-            if ps_against > ps_for and \
-               st_conf >= self.st_threshold:
-                self.state          = 'Stress'
-                self.state_duration = 1
-                return 2, 'Stress', False
-
-            elif ps_conf >= 0.25:
-                return 1, 'Prestress', True
-
-            elif st_conf >= self.st_threshold:
-                self.state          = 'Stress'
-                self.state_duration = 1
-                return 2, 'Stress', False
-
-            else:
-                self.state          = 'Normal'
-                self.state_duration = 1
-                return 0, 'Normal', False
-
-        elif self.state == 'Stress':
-            self.state_duration += 1
-
-            if rec_conf >= self.rec_threshold:
-                self.state          = 'Normal'
-                self.state_duration = 1
-                return 0, 'Normal', False
-
-            return 2, 'Stress', False
-
-        return model_prediction, self.state, False

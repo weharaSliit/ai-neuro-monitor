@@ -31,7 +31,7 @@ def compute_session_mean(windows_features,
     Compute mean of each feature using ONLY Normal windows.
 
     Why only Normal windows:
-        Stress and pre-stress windows reflect acute responses.
+        Stress windows reflect acute responses.
         They do not represent the person's true resting state.
         Using all windows biases baseline toward stress state.
 
@@ -50,7 +50,7 @@ def compute_session_mean(windows_features,
     Parameters:
         windows_features : numpy array (n_windows, n_features)
         predictions      : list of int predictions per window
-                           0=Normal, 1=Pre-stress, 2=Stress
+                           0=Normal, 1=Stress
                            If None — use all windows
 
     Returns:

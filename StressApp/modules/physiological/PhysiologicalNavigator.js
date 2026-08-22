@@ -1,26 +1,31 @@
+// ============================================================
+// PhysiologicalNavigator.js
+// WESAD simulation/calibration tabs removed — the real ring
+// (via mqtt_bridge.py -> Flask /predict, /calibrate) is the only
+// deployment target now. EMA is no longer its own tab — folded into
+// Home/Profile as a compact summary card (EmaSummaryCard), full detail
+// still reachable at the "EmaDetail" stack screen (App.js).
+// ============================================================
+
 import React, { useRef, useEffect } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { View, Text, Animated } from 'react-native';
 import { useTheme } from './config/ThemeContext';
 
 import DashboardScreen   from './screens/DashboardScreen';
-import SimulationScreen  from './screens/SimulationScreen';
-import CalibrationScreen from './screens/CalibrationScreen';
-import EMAScreen         from './screens/EMAScreen';
 import PSS4Screen        from './screens/PSS4Screen';
 import HistoryScreen     from './screens/HistoryScreen';
-import ExploratoryScreen from './screens/ExploratoryScreen';
+import RingScreen        from './screens/Ringscreen';
+import ProfileScreen     from './screens/ProfileScreen';
 
 const Tab = createBottomTabNavigator();
 
 const TABS = [
-  { name: 'Dashboard',   icon: '🏠' },
-  { name: 'Simulation',  icon: '▶️'  },
-  { name: 'Calibration', icon: '🎯' },
-  { name: 'EMA Update',  icon: '🔄' },
-  { name: 'PSS-4',       icon: '📋' },
+  { name: 'Home',        icon: '🏠' },
   { name: 'History',     icon: '📊' },
-  { name: 'Analysis',    icon: '🔬' },
+  { name: 'PSS-4',       icon: '📋' },
+  { name: 'Ring',        icon: '💍' },
+  { name: 'Profile',     icon: '👤' },
 ];
 
 function TabIcon({ name, focused, color, COLORS }) {
@@ -66,8 +71,7 @@ function TabIcon({ name, focused, color, COLORS }) {
 }
 
 export default function PhysiologicalNavigator() {
-  const { isDark, theme, COLORS } = useTheme();
-  const t = theme;
+  const { theme, COLORS } = useTheme();
 
   return (
     <Tab.Navigator
@@ -77,10 +81,10 @@ export default function PhysiologicalNavigator() {
           <TabIcon name={route.name} focused={focused} color={color} COLORS={COLORS} />
         ),
         tabBarActiveTintColor:   COLORS.brand,
-        tabBarInactiveTintColor: isDark ? '#3a5a7a' : '#8aacc8',
+        tabBarInactiveTintColor: theme.textMuted,
         tabBarStyle: {
-          backgroundColor: isDark ? '#0a1628' : '#ffffff',
-          borderTopColor:  isDark ? '#1a3352' : '#dceaf7',
+          backgroundColor: theme.surface,
+          borderTopColor:  theme.border,
           borderTopWidth:  1,
           height:          64,
           paddingBottom:   10,
@@ -91,13 +95,11 @@ export default function PhysiologicalNavigator() {
         },
       })}
     >
-      <Tab.Screen name="Dashboard"   component={DashboardScreen}   />
-      <Tab.Screen name="Simulation"  component={SimulationScreen}  />
-      <Tab.Screen name="Calibration" component={CalibrationScreen} />
-      <Tab.Screen name="EMA Update"  component={EMAScreen}         />
-      <Tab.Screen name="PSS-4"       component={PSS4Screen}        />
+      <Tab.Screen name="Home"        component={DashboardScreen}   />
       <Tab.Screen name="History"     component={HistoryScreen}      />
-      <Tab.Screen name="Analysis"    component={ExploratoryScreen} />
+      <Tab.Screen name="PSS-4"       component={PSS4Screen}        />
+      <Tab.Screen name="Ring"        component={RingScreen}        />
+      <Tab.Screen name="Profile"     component={ProfileScreen}     />
     </Tab.Navigator>
   );
 }
