@@ -6,18 +6,10 @@ from backend.common.fusion import fusion_window_key
 TASK_STATE_LABEL_THRESHOLD = 0.5  # >=: high task-state; <: low
 
 MODEL_ACCURACY_AUC = {
-    'bipolar_only_v1': 0.706,  # results/models_25s_block_bipolar_only/model_comparison.csv (logistic_regression)
-    'car_v1': 0.795,           # results/models_25s_block/model_comparison.csv (random_forest) -- NOT
-                                # recommended for live 2-electrode hardware, see pipeline.py docstring
+    'bipolar_only_v1': 0.706,  
+    'car_v1': 0.795,           
 }
 
-# The deployed bipolar-only model's full feature set, computed from the T7-T8
-# differential signal -- suffix order matches sam40.features.channel_features()'s
-# own insertion order (band powers -> Hjorth -> time-domain -> sample entropy),
-# same as psycological/results/features_bipolar_only_25s_block.csv's header
-# (that CSV is generated from the same function). `result` in
-# make_eeg_output_record() carries these prefixed 'bipolar_' -- see
-# sam40.features.epoch_features(..., include_bipolar=True).
 BIPOLAR_FEATURE_SUFFIXES = [
     'delta_power', 'delta_rel_power', 'delta_log_power',
     'theta_power', 'theta_rel_power', 'theta_log_power',
@@ -69,12 +61,7 @@ def make_eeg_output_record(result: dict, window_sec: float, model_version: str,
         'ch2_reconstructed': bool(result.get('ch2_reconstructed', False)),
     }
 
-    # Populated whenever pipeline.infer_block() extracted features at all --
-    # which is now every block, trusted or not (see pipeline.py's infer_block
-    # docstring comment above raw_feats). This gives the dashboard a live
-    # 29-feature reading on every 25s block instead of only on blocks that
-    # pass the quality gate; task_state_score/label below stay gated on trust
-    # -- untrusted features are fine to LOOK at, just not to score with.
+
     if result.get('T7_total_power') is not None:
         record['features_eeg'] = {
             't7_power': result.get('T7_total_power'),
@@ -111,12 +98,7 @@ def make_eeg_output_record(result: dict, window_sec: float, model_version: str,
 class FirebaseSync:
     def __init__(self, credential_path: str, database_url: str, session_id: str | None = None,
                  root_path: str = 'psychological', extra_path: str | None = None):
-        """extra_path: optional child segment appended after the session id
-        (e.g. 'raw') -- lets two FirebaseSync instances share the same
-        session root but write window-keyed children under different
-        sub-paths (psychological/{session}/{window} vs.
-        psychological/{session}/raw/{window}), instead of needing a whole
-        separate top-level root_path per sub-store."""
+
         import firebase_admin
         from firebase_admin import credentials, db
 
@@ -129,8 +111,6 @@ class FirebaseSync:
             )
 
         cred = credentials.Certificate(str(cred_path))
-        # Reuse an already-initialized default app if one exists (e.g. re-running
-        # in the same interpreter/tests), otherwise this crashes on second init.
         try:
             self._app = firebase_admin.get_app()
         except ValueError:
@@ -150,19 +130,11 @@ class FirebaseSync:
                 self._ref.child(key).set(record)
             else:
                 self._ref.push(record)
-        except Exception as e:  # noqa: BLE001 -- one failed push shouldn't kill a live session
+        except Exception as e:  
             print(f'[firebase] WARNING: push failed for window={window}: {e}')
 
     def merge(self, record: dict) -> None:
-        """Like push(), but .update()s the keyed child instead of set()-ing
-        it -- for a path another process ALSO writes fields into for the
-        same window key (e.g. fusion_en_sessions/{session_id}/{window}: EEG
-        writes its own prob_eeg/etc here via push() above, but
-        fusion_live_session.py separately mirrors the fused cross-modality
-        result onto the SAME key). Two set()s racing on one key is a
-        guaranteed clobber -- whichever lands second wins outright and
-        erases the other's fields entirely; two update()s merge instead,
-        regardless of write order."""
+
         window = record.get('window')
         key = str(window) if window is not None else None
         if key is None:
@@ -182,50 +154,7 @@ class FirebaseSync:
         except Exception as e:  # noqa: BLE001 -- one failed write shouldn't kill a live session
             print(f'[firebase] WARNING: set failed for session_id={self.session_id}: {e}')
 
-def make_fusion_engin_record(record: dict) -> dict:
-    """EEG-only record for the fusion_engin/{session_id}/{window} path --
-    deliberately just these 5 fields (not the full derived-output record
-    already at psychological/{session_id}/{window}): confidence,
-    model_accuracy, task_state_score, timestamp, task_state_label.
-
-    confidence here is model_confidence from make_eeg_output_record()
-    (abs(p-0.5)*2, range [0,1]) -- NOT recomputed on a different scale,
-    unlike the old cross-modality fusion_en record this replaces (which
-    had to reconcile EEG's and the ring's differing confidence
-    conventions; this path only ever holds EEG's own values now)."""
-    return {
-        'confidence': record.get('model_confidence'),
-        'model_accuracy': record.get('model_accuracy'),
-        'task_state_score': record.get('task_state_score'),
-        'timestamp': record.get('timestamp_end'),
-        'task_state_label': record.get('task_state_label'),
-        'window': record.get('window'),
-    }
-
-
-def make_eeg_fusion_session_record(record: dict) -> dict:
-    """EEG's contribution to fusion_en_sessions/{session_id}/{window} --
-    fusion_engin.py's compute_fusion_for_records() schema (prob_eeg,
-    conf_eeg, model_acc_eeg, signal_quality_eeg, stress_label_eeg), which
-    fusion_live_session.py merges with the ring's fusion_en/{session_id}
-    windows before running the actual weighted fusion. See that merge
-    (fusion_live_session.py::merge_eeg_into_windows()) for why this lives
-    at a SEPARATE path from fusion_en rather than written directly there:
-    the ring keys fusion_en by fusion_window_key() (see backend/common/
-    fusion.py) via save_fusion_en_rtdb(), while EEG's own natural window
-    index is a monotonic 25s-block counter -- writing directly into
-    fusion_en under EEG's own key would essentially never land on the same
-    key the ring uses. Keying THIS record by fusion_window_key() instead
-    (same shared 60s wall-clock bucket) is what makes the later merge
-    possible; window here is deliberately NOT record['window'] (EEG's own
-    block index).
-
-    prob_eeg is task_state_score, matching fusion_engin.py's naming --
-    still cognitive load, NOT validated stress (see this module's other
-    docstrings). None on a skipped block, so handle_missing_values() in
-    fusion_engin.py correctly zeroes EEG's reliability weight for that
-    fusion window instead of fusing in an untrusted reading.
-    """
+def make_eeg_fusion_record(record: dict) -> dict:
     skipped = bool(record.get('skipped'))
     p = None if skipped else record.get('task_state_score')
     label = record.get('task_state_label')

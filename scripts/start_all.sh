@@ -1,29 +1,8 @@
-#!/usr/bin/env bash
-# ============================================================
-# start_all.sh -- one command to bring up the whole stack:
-#   MQTT broker -> 3 backends -> both wearable bridges -> fusion engine -> StressApp
-#
-# Idempotent: skips anything already listening/running instead of
-# double-spawning it. Safe to re-run after e.g. only the frontend died.
-#
-# Usage:
-#   ./scripts/start_all.sh
-#
-# Logs: /tmp/*.log (see the printed paths at the end). Stop everything
-# with ./scripts/stop_all.sh.
-# ============================================================
-
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY="$ROOT/venv/bin/python3"
 CRED="$ROOT/backend/common/serviceAccountKey.json"
-
-# Both wearable bridges must post under the SAME session_id for the fusion
-# engine to actually correlate their windows (fusion_en/{session_id}) --
-# "live_session_1" matches backend/physiological/mqtt_bridge.py's hardcoded
-# default, so this is the one value everything else follows.
-SESSION_ID="${SESSION_ID:-live_session_1}"
 
 port_listening() { lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
 proc_running()   { pgrep -f "$1" >/dev/null 2>&1; }
@@ -69,21 +48,21 @@ for i in $(seq 1 15); do
   sleep 1
 done
 
-echo "== wearable01 (ring) MQTT bridge, session=$SESSION_ID =="
+echo "== wearable01 (ring) MQTT bridge, session=${SESSION_ID:-<app-driven>} =="
 if proc_running "backend.physiological.mqtt_bridge"; then
   echo "  already running"
 else
-  STRESSAPP_MQTT_BROKER=localhost nohup "$PY" -u -m backend.physiological.mqtt_bridge \
+  STRESSAPP_MQTT_BROKER=localhost RING_SESSION_ID="${SESSION_ID:-}" nohup "$PY" -u -m backend.physiological.mqtt_bridge \
     > /tmp/physio_mqtt_bridge.log 2>&1 &
   disown
   echo "  started, pid $!"
 fi
 
-echo "== wearable02 (EEG) MQTT bridge, session=$SESSION_ID =="
+echo "== wearable02 (EEG) MQTT bridge, session=${SESSION_ID:-<app-driven>} =="
 if proc_running "backend.psychological.mqtt_bridge"; then
   echo "  already running"
 else
-  EEG_MQTT_BROKER=localhost EEG_SESSION_ID="$SESSION_ID" nohup "$PY" -u -m backend.psychological.mqtt_bridge \
+  EEG_MQTT_BROKER=localhost EEG_SESSION_ID="${SESSION_ID:-}" nohup "$PY" -u -m backend.psychological.mqtt_bridge \
     > /tmp/eeg_mqtt_bridge.log 2>&1 &
   disown
   echo "  started, pid $!"
@@ -94,7 +73,7 @@ if proc_running "fusion_live_session.py"; then
   echo "  already running"
 else
   ( cd "$ROOT" && FIREBASE_CREDENTIALS="$CRED" nohup "$PY" -u "fushion engin/fusion_live_session.py" \
-      --session-id "$SESSION_ID" > /tmp/fusion_live_session.log 2>&1 & disown )
+      ${SESSION_ID:+--session-id "$SESSION_ID"} > /tmp/fusion_live_session.log 2>&1 & disown )
   echo "  started"
 fi
 
@@ -108,7 +87,12 @@ fi
 
 echo
 echo "============================================================"
-echo "Stack up. session_id for both wearables: $SESSION_ID"
+if [ -n "${SESSION_ID:-}" ]; then
+  echo "Stack up. session_id pinned (debug override): $SESSION_ID"
+else
+  echo "Stack up. session_id is app-driven -- open StressApp to start a session"
+  echo "(each bridge + the fusion engine follow their own current_session_id field in Firebase)."
+fi
 echo "  StressApp:            http://localhost:8081"
 echo "  physiological backend: http://localhost:5050/health"
 echo "  psychological backend: http://localhost:5001/health"

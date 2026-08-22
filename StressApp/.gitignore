@@ -39,3 +39,8 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# copied by postinstall (see package.json) from node_modules/canvaskit-wasm --
+# @shopify/react-native-skia's web CanvasKit binary, must be served as a
+# static asset for react-native-graph to render on web
+/public/canvaskit.wasm

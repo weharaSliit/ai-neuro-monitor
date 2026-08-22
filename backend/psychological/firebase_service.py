@@ -1,12 +1,9 @@
-import time
-
 import os
 
-from backend.common.firebase_config import FIREBASE_DB_URL, RTDB_NAMESPACES
+from backend.common.firebase_config import FIREBASE_DB_URL, FUSION_EN_ROOT, RTDB_NAMESPACES
 from backend.psychological.realtime.firebase_sync import (
     FirebaseSync,
-    make_eeg_fusion_session_record,
-    make_fusion_engin_record,
+    make_eeg_fusion_record,
 )
 
 RTDB_NAMESPACE = RTDB_NAMESPACES["psychological"]  # "psychological"
@@ -17,7 +14,7 @@ def resolve_credential_path():
 
 
 class EegFirebaseSession:
-    """Per-session Firebase writer. Five RTDB stores, all under this one
+    """Per-session Firebase writer. Four RTDB stores, all under this one
     session's id:
       - {RTDB_NAMESPACE}/{session_id}/{window}        derived output (see push())
       - {RTDB_NAMESPACE}/{session_id}/raw/{window}     full-resolution raw ADC codes +
@@ -27,24 +24,27 @@ class EegFirebaseSession:
                                                         for a genuinely live dashboard
                                                         waveform, independent of the 25s
                                                         block/quality-gate cadence above
-      - fusion_engin/{session_id}/{window}             EEG-only confidence/model_accuracy/
-                                                        task_state_score/timestamp/
-                                                        task_state_label (see push())
-      - fusion_en_sessions/{session_id}/{window}       EEG's contribution to actual live
-                                                        fusion (prob_eeg/conf_eeg/etc, keyed
-                                                        by the shared fusion_window_key()
-                                                        wall-clock bucket -- see push() and
-                                                        make_eeg_fusion_session_record()).
-                                                        fusion_live_session.py merges this
-                                                        with fusion_en/{session_id} (the
-                                                        ring's own writes) before fusing.
-    Plus session-lifecycle tracking (started/ended) at fusion_engine/{session_id} --
-    a SEPARATE store from fusion_engin above (note the trailing 'e'), holding
-    just the session's own active/ended state, not per-window data. (Yet
-    another separate store, fusion_en_sessions/{session_id}/ended, is set by
-    the StressApp frontend directly -- not written here -- to tell
-    fusion_live_session.py when to stop polling; see FusionSessionScreen.js's
-    endSession().)
+      - {FUSION_EN_ROOT}/{session_id}/{window}        EEG's raw contribution to live fusion
+                                                        (prob_eeg/conf_eeg/etc, keyed by the
+                                                        shared fusion_window_key() wall-clock
+                                                        bucket -- see push() and
+                                                        make_eeg_fusion_record()), written
+                                                        DIRECTLY here so fusion_en holds both
+                                                        modalities' data as soon as EITHER one
+                                                        reports, not only once
+                                                        fusion_live_session.py's separate merge
+                                                        loop gets to it. That script still reads
+                                                        this same path to compute and write back
+                                                        the FUSED probability/label, and mirrors
+                                                        its own summary (fused_stress_label/
+                                                        fused_stress_probability, session started/
+                                                        ended) into fusion_en_sessions -- see
+                                                        backend/common/firebase_config.py for the
+                                                        full schema.
+    (fusion_en_sessions/{session_id}/ended is set by the StressApp frontend
+    directly -- not written here -- to tell fusion_live_session.py when to
+    pause; the rest of fusion_en_sessions is written by fusion_live_session.py
+    itself, not this class -- see FusionSessionScreen.js's endSession().)
     """
 
     def __init__(self, session_id: str):
@@ -66,25 +66,22 @@ class EegFirebaseSession:
         self._live_raw_rtdb = FirebaseSync(
             self._cred_path, FIREBASE_DB_URL, session_id=session_id, root_path=RTDB_NAMESPACE, extra_path="live_raw"
         )
-        self._fusion_engin_rtdb = FirebaseSync(
-            self._cred_path, FIREBASE_DB_URL, session_id=session_id, root_path="fusion_engin"
-        )
-        self._fusion_en_sessions_rtdb = FirebaseSync(
-            self._cred_path, FIREBASE_DB_URL, session_id=session_id, root_path="fusion_en_sessions"
+        self._fusion_en_rtdb = FirebaseSync(
+            self._cred_path, FIREBASE_DB_URL, session_id=session_id, root_path=FUSION_EN_ROOT
         )
 
     def push(self, record: dict) -> None:
         if not self.enabled:
             return
         self._rtdb.push(record)
-        self._fusion_engin_rtdb.push(make_fusion_engin_record(record))
-        # merge(), not push() -- fusion_live_session.py separately mirrors
-        # the fused cross-modality result onto this SAME window key (see
-        # fusion_live_session.py::poll_once()); two set()s racing on one key
-        # would let whichever landed second silently erase the other's
-        # fields, .update() merges instead. See FirebaseSync.merge()'s
+        # merge(), not push() -- the ring writes its own fields into this
+        # SAME fusion_en/{session}/{window} key (save_fusion_en_rtdb()), and
+        # fusion_live_session.py later writes the fused result back onto it
+        # too; two set()s racing on one key would let whichever landed
+        # second silently erase the other's fields, .update() merges
+        # instead regardless of write order. See FirebaseSync.merge()'s
         # docstring.
-        self._fusion_en_sessions_rtdb.merge(make_eeg_fusion_session_record(record))
+        self._fusion_en_rtdb.merge(make_eeg_fusion_record(record))
 
     def push_raw(self, record: dict) -> None:
         if not self.enabled:
@@ -95,18 +92,3 @@ class EegFirebaseSession:
         if not self.enabled:
             return
         self._live_raw_rtdb.set(record)
-
-    def _mark_session(self, **fields) -> None:
-        if not self.enabled:
-            return
-        from firebase_admin import db
-        try:
-            db.reference(f"fusion_engine/{self.session_id}").update(fields)
-        except Exception as e:  # noqa: BLE001 -- one failed write shouldn't kill a live session
-            print(f"[firebase] WARNING: fusion_engine session write failed for {self.session_id}: {e}")
-
-    def mark_session_started(self) -> None:
-        self._mark_session(ended=False, started_at=time.time())
-
-    def mark_session_ended(self) -> None:
-        self._mark_session(ended=True, ended_at=time.time())

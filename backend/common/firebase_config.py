@@ -22,10 +22,15 @@ def resolve_credential():
 
 
 RTDB_NAMESPACES = {
-    "physiological":        "physiological",   # backend/physiological/ -- HRV/GSR ring
-    "phenotyping_behavior": "phenotyping",      # backend/phenotyping_behavior/ -- keystroke/app-usage
-    "psychological":        "psychological",    # psychological/ -- EEG (reference only, see module docstring above)
+    "physiological":        "physiological",   # backend/physiological/ -- HRV/GSR ring, raw readings
+    "phenotyping_behavior": "phenotyping",      # backend/phenotyping_behavior/ -- keystroke/app-usage, raw readings
+    "psychological":        "psychological",    # backend/psychological/ -- EEG, raw readings
+    "intervention":         "intervention",     # reserved -- no writer/reader yet, see this dict's own docstring below
 }
+
+FUSION_EN_ROOT = "fusion_en"
+FUSION_EN_SESSIONS_ROOT = "fusion_en_sessions"
+CURRENT_SESSION_ID_FIELD = "current_session_id"
 
 def init_firebase_app():
     import firebase_admin

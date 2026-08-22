@@ -198,7 +198,6 @@ def calibrate():
         "csv_logger": csv_logger,
         "score_history": [],
     }
-    firebase.mark_session_started()
     return jsonify({"success": True, "session_id": session_id, **outcome})
 
 
@@ -302,7 +301,6 @@ def end_session(session_id):
     state = eeg_sessions.pop(session_id, None)
     if state is not None:
         state["csv_logger"].close()
-        state["firebase"].mark_session_ended()
     return jsonify({"success": True, "session_id": session_id, "existed": state is not None})
 
 

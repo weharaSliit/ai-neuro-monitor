@@ -1,10 +1,3 @@
-#!/usr/bin/env bash
-# ============================================================
-# stop_all.sh -- stops everything start_all.sh starts, except mosquitto
-# (managed separately via `brew services stop mosquitto` since other
-# things on this machine may depend on it staying up).
-# ============================================================
-
 set -uo pipefail
 
 kill_port() {
