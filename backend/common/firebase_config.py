@@ -31,6 +31,12 @@ RTDB_NAMESPACES = {
 FUSION_EN_ROOT = "fusion_en"
 FUSION_EN_SESSIONS_ROOT = "fusion_en_sessions"
 CURRENT_SESSION_ID_FIELD = "current_session_id"
+# Companion to CURRENT_SESSION_ID_FIELD -- written by App.js alongside the
+# session id so a device bridge can attribute incoming data to whichever
+# user is actually logged into the app right now, instead of a user_id
+# fixed at bridge-launch time (see RING_USER_ID in
+# backend/physiological/mqtt_bridge.py).
+CURRENT_USER_ID_FIELD = "current_user_id"
 
 def init_firebase_app():
     import firebase_admin

@@ -20,6 +20,7 @@ import { db } from './firebase';
 
 const Stack = createNativeStackNavigator();
 const CURRENT_SESSION_ID_FIELD = 'current_session_id';
+const CURRENT_USER_ID_FIELD = 'current_user_id';
 const CURRENT_SESSION_ID_ROOTS = ['psychological', 'fusion_en', 'fusion_en_sessions'];
 
 function mintSessionId() {
@@ -35,11 +36,15 @@ function mintSessionId() {
 // ended_at on whatever session this replaces the moment it next polls
 // current_session_id, so closing the app and reopening it always produces a
 // clean session boundary with no client-side "on close" event needed.
-async function resolveLiveSessionId() {
+async function resolveLiveSessionId(userId) {
     const sessionId = mintSessionId();
     const updates = {};
     for (const root of CURRENT_SESSION_ID_ROOTS) {
         updates[`${root}/${CURRENT_SESSION_ID_FIELD}`] = sessionId;
+        // Lets a device bridge attribute incoming data to whoever is
+        // actually logged in right now, instead of a user_id fixed at
+        // the bridge's own launch time.
+        updates[`${root}/${CURRENT_USER_ID_FIELD}`] = userId;
     }
     await update(ref(db), updates);
     return sessionId;
@@ -76,7 +81,7 @@ function RootNavigator() {
   const { theme } = useTheme();
   useEffect(() => {
     if (!user) return;
-    resolveLiveSessionId().catch((e) => console.log('[live_session] resolve failed:', e?.message));
+    resolveLiveSessionId(user.userId).catch((e) => console.log('[live_session] resolve failed:', e?.message));
   }, [user]);
 
   if (isLoading) {
