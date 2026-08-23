@@ -22,8 +22,8 @@ import numpy as np
 import paho.mqtt.client as mqtt
 
 from backend.common.config import (
-    MQTT_BROKER, MQTT_PORT, MQTT_TOPIC, GSR_CAL,
-    WINDOW_SEC, SETTLE_SEC, N_BASELINE_WIN
+    MQTT_BROKER, MQTT_PORT, MQTT_TOPIC, MQTT_USER, MQTT_PASSWORD, MQTT_CA_CERT,
+    GSR_CAL, WINDOW_SEC, SETTLE_SEC, N_BASELINE_WIN
 )
 from backend.physiological.extract_features import extract_features
 from backend.physiological.predictor import (
@@ -160,6 +160,10 @@ def run_calibration_capture(user_id, on_progress=None):
     client = mqtt.Client()
     client.on_connect = on_connect
     client.on_message = on_message
+    if MQTT_CA_CERT:
+        client.tls_set(ca_certs=MQTT_CA_CERT)
+    if MQTT_USER:
+        client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
     try:
         client.connect(MQTT_BROKER, MQTT_PORT, 60)
     except Exception as e:
