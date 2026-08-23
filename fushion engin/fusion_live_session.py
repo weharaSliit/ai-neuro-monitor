@@ -21,19 +21,36 @@ BASELINE_N = 3
 
 
 def _init_firebase(cred_path: str, db_url: str):
+    import json
     import firebase_admin
     from firebase_admin import credentials, db
 
-    cred_file = Path(cred_path).expanduser().resolve()
-    if not cred_file.is_file():
-        raise FileNotFoundError(
-            f"Firebase credential not found at {cred_file}. Must be a path OUTSIDE this "
-            f"repository -- set it via --firebase-cred or $FIREBASE_CREDENTIALS."
-        )
+    # Prefer $FIREBASE_CRED_JSON (credential content directly) over a file
+    # path -- a deployed target like Render has no persistent file for
+    # cred_path to point at (see backend/common/firebase_config.py's
+    # identical FIREBASE_CRED_JSON handling). Falls back to the file-path
+    # behavior for local dev, where --firebase-cred/$FIREBASE_CREDENTIALS
+    # already works.
+    cred_json = os.environ.get("FIREBASE_CRED_JSON")
+    if cred_json:
+        try:
+            cert_source = json.loads(cred_json)
+        except Exception as e:
+            raise ValueError(f"Failed to parse $FIREBASE_CRED_JSON: {e}")
+    else:
+        cred_file = Path(cred_path).expanduser().resolve()
+        if not cred_file.is_file():
+            raise FileNotFoundError(
+                f"Firebase credential not found at {cred_file}. Must be a path OUTSIDE this "
+                f"repository -- set it via --firebase-cred or $FIREBASE_CREDENTIALS, or set "
+                f"$FIREBASE_CRED_JSON with the credential content directly (e.g. on Render)."
+            )
+        cert_source = str(cred_file)
+
     try:
         firebase_admin.get_app()
     except ValueError:
-        cred = credentials.Certificate(str(cred_file))
+        cred = credentials.Certificate(cert_source)
         firebase_admin.initialize_app(cred, {"databaseURL": db_url})
     return db
 
@@ -241,8 +258,11 @@ def main():
     )
     args = ap.parse_args()
 
-    if not args.firebase_cred:
-        raise SystemExit("--firebase-cred (or $FIREBASE_CREDENTIALS) is required.")
+    if not args.firebase_cred and not os.environ.get("FIREBASE_CRED_JSON"):
+        raise SystemExit(
+            "--firebase-cred (or $FIREBASE_CREDENTIALS) is required, unless "
+            "$FIREBASE_CRED_JSON (credential content directly) is set instead."
+        )
     if args.session_id and not args.user_id:
         raise SystemExit("--session-id requires --user-id too (fusion_en is user-scoped).")
 

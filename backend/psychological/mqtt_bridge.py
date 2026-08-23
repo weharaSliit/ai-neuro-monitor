@@ -48,11 +48,26 @@ LIVE_RAW_INTERVAL_SEC = 1.0
 # This device's own broker/topic -- independent of the ring's MQTT_BROKER/
 # MQTT_TOPIC in backend/common/config.py (different hardware, different
 # topic: mindpulse/wearable02/sensors vs the ring's mindpulse/wearable01/sensors).
-EEG_MQTT_BROKER = os.environ.get("EEG_MQTT_BROKER", "10.180.48.56")
-EEG_MQTT_PORT = int(os.environ.get("EEG_MQTT_PORT", "1883"))
+# Same EMQX Cloud Serverless deployment (mindpulse-broker) as the ring,
+# just a different device credential -- see wearable02.ino's identical
+# MQTT_BROKER/MQTT_USER/MQTT_PASS.
+EEG_MQTT_BROKER = os.environ.get("EEG_MQTT_BROKER", "ob1f0f10.ala.asia-southeast1.emqxsl.com")
+EEG_MQTT_PORT = int(os.environ.get("EEG_MQTT_PORT", "8883"))
 EEG_MQTT_TOPIC = os.environ.get("EEG_MQTT_TOPIC", "mindpulse/wearable02/sensors")
+EEG_MQTT_USER = os.environ.get("EEG_MQTT_USER", "wearable02")
+EEG_MQTT_PASSWORD = os.environ.get("EEG_MQTT_PASSWORD", "wearable02")
+EEG_MQTT_CA_CERT = os.path.join(
+    Path(__file__).resolve().parents[2], "iot_firmware", "emqxsl-ca.crt"
+)
 
-FLASK_URL = f"http://127.0.0.1:{os.environ.get('PSYCHOLOGICAL_PORT', '5001')}"
+# PSYCHOLOGICAL_FLASK_URL is a full-URL override for a deployed target
+# (e.g. Render's public HTTPS URL, no explicit port) -- see
+# backend/physiological/mqtt_bridge.py's identical PHYSIOLOGICAL_FLASK_URL
+# comment. Takes precedence over the localhost:port construction, which
+# stays the default for local dev where this script and Flask are
+# co-located.
+FLASK_URL = os.environ.get("PSYCHOLOGICAL_FLASK_URL") or \
+    f"http://127.0.0.1:{os.environ.get('PSYCHOLOGICAL_PORT', '5001')}"
 # No "Wehara" fallback -- see backend/physiological/mqtt_bridge.py's
 # identical USER_ID comment. Unset until EEG_BRIDGE_USER_ID is explicitly
 # pinned or the app-driven current_user_id pointer resolves a real user
@@ -147,7 +162,8 @@ def run():
 
     buffer = RawSampleBuffer()
     # Already connected + looping -- see backend/common/mqtt_bridge.py::connect_mqtt().
-    client = make_client(EEG_MQTT_BROKER, EEG_MQTT_PORT, EEG_MQTT_TOPIC, buffer, client_id="eeg_bridge_wearable02")
+    client = make_client(EEG_MQTT_BROKER, EEG_MQTT_PORT, EEG_MQTT_TOPIC, buffer, client_id="eeg_bridge_wearable02",
+                          username=EEG_MQTT_USER, password=EEG_MQTT_PASSWORD, ca_cert=EEG_MQTT_CA_CERT)
 
     calibration_blocks = []
     calibrated = False
@@ -207,10 +223,14 @@ def run():
                 calibration_blocks.append(block_payload(samples))
                 print(f"[calibrate] captured block {len(calibration_blocks)}/{N_CALIBRATION_BLOCKS}")
                 if len(calibration_blocks) >= N_CALIBRATION_BLOCKS:
+                    # 45s, not 30s -- see the identical comment in
+                    # backend/physiological/mqtt_bridge.py: Render's
+                    # free-tier Flask can take 30s+ to wake from a cold
+                    # start, and 30s was cutting it too close.
                     data = post_json(
                         f"{FLASK_URL}/calibrate",
                         {"session_id": SESSION_ID, "blocks": calibration_blocks},
-                        AUTH_HEADERS, timeout=30, label="calibrate",
+                        AUTH_HEADERS, timeout=45, label="calibrate",
                     )
                     calibrated = bool(data and data.get("success"))
                     if not calibrated:
@@ -221,7 +241,7 @@ def run():
             data = post_json(
                 f"{FLASK_URL}/predict",
                 {"session_id": SESSION_ID, **block_payload(samples)},
-                AUTH_HEADERS, timeout=30, label="predict",
+                AUTH_HEADERS, timeout=45, label="predict",
             )
             if data:
                 if data.get("skipped"):

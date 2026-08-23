@@ -326,4 +326,7 @@ if __name__ == "__main__":
     # (fushion engin/fusion_engin.py) changed during a 25s+ calibration
     # capture. debug=True's error pages are still useful, just not the
     # auto-restart-on-any-repo-change behavior.
-    app.run(host="0.0.0.0", port=5001, debug=True, use_reloader=False)
+    # Render.com injects $PORT -- use it in production; default to 5001
+    # locally (see backend/phenotyping_behavior/app.py's identical pattern).
+    port = int(os.environ.get('PORT', 5001))
+    app.run(host="0.0.0.0", port=port, debug=True, use_reloader=False)
