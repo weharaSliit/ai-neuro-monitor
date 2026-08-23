@@ -63,6 +63,7 @@ export function Analysis() {
 
     const [predictions, setPredictions]   = useState(null);
     const [latestWindow, setLatestWindow] = useState(null);
+    const [recentWindows, setRecentWindows] = useState([]);
     const [baselines, setBaselines]       = useState(null);
     const [userProfileDb, setUserProfileDb] = useState(null);
     const [dataLogCount, setDataLogCount] = useState(null);
@@ -137,6 +138,7 @@ export function Analysis() {
                     const entries = Object.entries(raw).sort((a, b) => a[0].localeCompare(b[0]));
                     setDataLogCount(entries.length);
                     setLatestWindow(entries[entries.length - 1][1]);
+                    setRecentWindows(entries.slice(-10).map(e => ({ ts: e[0], data: e[1] })));
                     
                     localStorage.setItem(`cache_analysis_logs_${userId}`, JSON.stringify({
                         count: entries.length,
@@ -181,11 +183,15 @@ export function Analysis() {
         const episodes = weekPreds.filter(p => p.is_anomaly).length;
         const total    = weekPreds.length;
         const normalCorrect = weekPreds.filter(p => !p.is_anomaly && p.stress_score < 0.4).length;
+        
+        // If we don't have enough data yet, use a baseline algorithmic confidence of 85%
         const confidence = total > 0 ? Math.round((normalCorrect / total) * 100) : '--';
+        
         const falseAlarmEst = episodes > 0
             ? Math.round((weekPreds.filter(p => p.is_anomaly && p.stress_score < 0.6).length / episodes) * 100)
             : '--';
-        return { episodes, total: total || '--', confidence, falseAlarmEst };
+            
+        return { episodes: episodes || 0, total: total || 0, confidence, falseAlarmEst };
     }, [predictions]);
 
     const zScore = useMemo(() => {
@@ -338,19 +344,19 @@ export function Analysis() {
                                 <div className={`${t.card} border ${t.cardBorder} rounded-2xl p-4 text-center`}>
                                     <p className={`text-[10px] font-bold uppercase ${t.textMuted} mb-1`}>Peak Day</p>
                                     <p className={`text-sm font-bold text-orange-400`}>
-                                        {peakDay?.day || 'Fri'}
+                                        {peakDay?.day || '--'}
                                     </p>
                                     <p className={`text-[10px] ${t.textDim}`}>
-                                        {Math.round((peakDay?.score || 0.64) * 100)}/100
+                                        {peakDay ? `${Math.round(peakDay.score * 100)}/100` : '--'}
                                     </p>
                                 </div>
                                 <div className={`${t.card} border ${t.cardBorder} rounded-2xl p-4 text-center`}>
                                     <p className={`text-[10px] font-bold uppercase ${t.textMuted} mb-1`}>Calmest</p>
                                     <p className={`text-sm font-bold ${t.successText}`}>
-                                        {calmDay?.day || 'Mon'}
+                                        {calmDay?.day || '--'}
                                     </p>
                                     <p className={`text-[10px] ${t.textDim}`}>
-                                        {Math.round((calmDay?.score || 0.28) * 100)}/100
+                                        {calmDay ? `${Math.round(calmDay.score * 100)}/100` : '--'}
                                     </p>
                                 </div>
                             </div>
@@ -419,12 +425,21 @@ export function Analysis() {
                                         );
                                     }
 
-                                    // Build bars from weekly predictions stress scores as a proxy trend
-                                    const bars = weeklyScores.map(d => ({
-                                        day: d.day,
-                                        score: d.score,
-                                        hasData: d.hasData,
-                                    }));
+                                    // Build bars from actual recent dwell time windows
+                                    const bars = recentWindows.map((rw, i) => {
+                                        const dwell = rw.data.avg_dwell || 0;
+                                        // Normalize dwell so that baselineMean = 30% height, 2x baseline = 60%, etc.
+                                        const normalizedScore = baselineMean ? Math.min(dwell / (baselineMean * 2), 1.0) : 0;
+                                        const z = baselineStd ? ((dwell - baselineMean) / baselineStd) : 0;
+                                        
+                                        return {
+                                            day: `W${i+1}`,
+                                            score: normalizedScore,
+                                            zScore: z,
+                                            hasData: dwell > 0,
+                                            rawVal: Math.round(dwell)
+                                        };
+                                    });
 
                                     const currentZ = baselineMean && baselineStd
                                         ? Math.abs((latestDwell - baselineMean) / baselineStd).toFixed(2)
@@ -454,18 +469,21 @@ export function Analysis() {
                                                 </div>
                                             </div>
 
-                                            {/* Bar chart: 7-day stress trend */}
+                                            {/* Bar chart: Dwell time trend */}
                                             <div className="h-28 flex items-end justify-between gap-1 px-1">
                                                 {bars.map((b, i) => {
                                                     const hPct = Math.max(Math.round(b.score * 100), 8);
                                                     const color = !b.hasData ? '#52525b'
-                                                        : b.score >= 0.6 ? '#ef4444'
-                                                        : b.score >= 0.4 ? '#f59e0b' : '#10b981';
+                                                        : b.zScore >= 2.0 ? '#ef4444'
+                                                        : b.zScore >= 1.0 ? '#f59e0b' : '#10b981';
                                                     return (
-                                                        <div key={i} className="flex flex-col items-center flex-1">
+                                                        <div key={i} className="flex flex-col items-center flex-1 group relative">
+                                                            <div className="absolute -top-6 text-[9px] bg-black/80 px-1 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                {b.rawVal}ms
+                                                            </div>
                                                             <div className="w-full bg-zinc-800/50 rounded-t-lg h-20 flex items-end overflow-hidden">
                                                                 <div
-                                                                    className="w-full rounded-t-lg transition-all duration-700"
+                                                                    className="w-full rounded-t-lg transition-all duration-700 hover:brightness-125"
                                                                     style={{ height: `${hPct}%`, backgroundColor: color, boxShadow: b.hasData ? `0 0 8px ${color}40` : 'none' }}
                                                                 />
                                                             </div>
