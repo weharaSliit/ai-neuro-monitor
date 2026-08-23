@@ -172,9 +172,15 @@ def run(session_id: str | None, poll_interval_sec: float, cred_path: str, db_url
     try:
         while True:
             if not manual_override:
-                pointer_session_id = pointer_ref.get()
-                if pointer_session_id and pointer_session_id != current_session_id:
-                    _switch_to(pointer_session_id, is_rotation=True)
+                try:
+                    pointer_session_id = pointer_ref.get()
+                    if pointer_session_id and pointer_session_id != current_session_id:
+                        _switch_to(pointer_session_id, is_rotation=True)
+                except Exception as e:
+                    print(f"[fusion_live_session] session-pointer poll failed ({e}) -- "
+                          f"retrying in {poll_interval_sec}s")
+                    time.sleep(poll_interval_sec)
+                    continue
 
             if refs is None:
                 time.sleep(poll_interval_sec)

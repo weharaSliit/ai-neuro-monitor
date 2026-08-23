@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WithSkiaWeb } from '@shopify/react-native-skia/lib/module/web';
-import { ref, onValue, off, get, query, orderByChild, limitToLast } from 'firebase/database';
+import { ref, onValue, off, query, orderByChild, limitToLast } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import { STRESS_COLORS, STRESS_EMOJI, EEG_TREND_LABELS, TASK_STATE_LABELS } from '../config/config';
@@ -145,6 +145,7 @@ export default function EegSessionScreen({ navigation, route }) {
     const startWatching = useCallback((idOverride) => {
         const targetId = (idOverride ?? sessionId).trim();
         if (!targetId) return;
+        if (targetId === sessionId && listenerRef.current) return;  // already watching this session
         setSessionId(targetId);
         setLatest(null);
         setHasAnyWindow(false);
@@ -182,16 +183,21 @@ export default function EegSessionScreen({ navigation, route }) {
     }, []);
 
     useEffect(() => {
-        let cancelled = false;
-        // Lives inside psychological/ itself (this screen's own domain,
-        // and the same root the EEG bridge already polls) -- no separate
-        // shared pointer store, see App.js's CURRENT_SESSION_ID_ROOTS.
-        get(ref(db, 'psychological/current_session_id')).then((snapshot) => {
-            if (cancelled) return;
+        // A live subscription, not a one-time get() -- picks up the current
+        // session the instant App.js writes it (no race if this screen
+        // mounts before that write lands) and follows any later rotation
+        // automatically, so there's never a manual "Start" step needed.
+        // Lives inside psychological/ itself (this screen's own domain, and
+        // the same root the EEG bridge already polls) -- no separate shared
+        // pointer store, see App.js's CURRENT_SESSION_ID_ROOTS.
+        const pointerRef = ref(db, 'psychological/current_session_id');
+        const handler = onValue(pointerRef, (snapshot) => {
             const liveId = snapshot.val();
             if (liveId) startWatching(liveId);
-        }).catch(() => {});
-        return () => { cancelled = true; };
+        });
+        return () => off(pointerRef, 'value', handler);
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- startWatching is always called
+        // with an explicit liveId override here, so its own sessionId-state closure never matters.
     }, []);
 
     const skipped = latest?.skipped;
@@ -252,27 +258,15 @@ export default function EegSessionScreen({ navigation, route }) {
                         <TextInput
                             style={[styles.input, { color: t.text, borderColor: t.border }]}
                             value={sessionId}
-                            onChangeText={setSessionId}
-                            editable={!watching}
-                            autoCapitalize="none"
-                            autoCorrect={false}
-                            placeholder="session id"
+                            editable={false}
+                            placeholder="waiting for live session…"
                             placeholderTextColor={t.textMuted}
                         />
                         <Text style={[styles.hint, { color: t.textMuted }]}>
-                            Auto-fills with the current live session on open. Edit this and press
-                            Start only to watch a different or past session's id.
+                            Follows the current live session automatically — no manual start needed.
                         </Text>
 
-                        {!watching ? (
-                            <TouchableOpacity
-                                style={[styles.button, { backgroundColor: COLORS.brand }]}
-                                onPress={() => startWatching()}
-                                activeOpacity={0.85}
-                            >
-                                <Text style={styles.buttonText}>Start Session (watch live)</Text>
-                            </TouchableOpacity>
-                        ) : (
+                        {watching && (
                             <TouchableOpacity
                                 style={[styles.button, styles.buttonDanger]}
                                 onPress={stopWatching}
