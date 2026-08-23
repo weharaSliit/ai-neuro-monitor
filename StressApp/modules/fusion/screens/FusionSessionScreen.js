@@ -6,7 +6,7 @@ import {
 
 const CHART_WIDTH = Dimensions.get('window').width - 2 * 20 - 2 * 18 - 40;
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { WithSkiaWeb } from '@shopify/react-native-skia/lib/module/web';
+import LineChart from '../../shared/LineChart';
 import { ref, onValue, off } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
@@ -195,14 +195,11 @@ export default function FusionSessionScreen({ navigation }) {
                                                 Session trendline — fused stress probability per window (%)
                                                 {baselinePercent !== null ? ` — baseline ${baselinePercent}%` : ''}
                                             </Text>
-                                            <WithSkiaWeb
-                                                getComponent={() => import('../../shared/SkiaLineGraph')}
-                                                componentProps={{
-                                                    points: fusedHistory,
-                                                    color: stateColor,
-                                                    width: CHART_WIDTH,
-                                                    height: 130,
-                                                }}
+                                            <LineChart
+                                                points={fusedHistory}
+                                                color={stateColor}
+                                                width={CHART_WIDTH}
+                                                height={130}
                                                 fallback={<Text style={[styles.waiting, { color: t.textMuted }]}>Loading chart…</Text>}
                                             />
                                         </View>
