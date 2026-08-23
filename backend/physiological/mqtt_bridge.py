@@ -32,7 +32,9 @@ from backend.common.config import (
     MQTT_BROKER, MQTT_PORT, MQTT_TOPIC, GSR_CAL,
     WINDOW_SEC, SETTLE_SEC
 )
-from backend.common.firebase_config import CURRENT_SESSION_ID_FIELD, FUSION_EN_ROOT
+from backend.common.firebase_config import (
+    CURRENT_SESSION_ID_FIELD, CURRENT_USER_ID_FIELD, FUSION_EN_ROOT
+)
 
 # Flask's host/port is independent of MQTT_BROKER (the ring's broker address
 # can be anywhere; this script and Flask are co-located on this machine) --
@@ -42,10 +44,17 @@ from backend.common.firebase_config import CURRENT_SESSION_ID_FIELD, FUSION_EN_R
 # track app.py's actual port without another hardcoded literal.
 FLASK_HOST = os.environ.get("PHYSIOLOGICAL_FLASK_HOST", "127.0.0.1")
 FLASK_PORT = os.environ.get("PHYSIOLOGICAL_PORT", "5050")
+# No "Wehara" fallback -- attributing data to a specific person by default
+# is wrong once a teammate runs this same bridge for their own ring.
+# USER_ID starts unset and stays that way until either RING_USER_ID is
+# explicitly set (manual override/pin, same idea as RING_SESSION_ID) or
+# the app-driven current_user_id pointer resolves a real logged-in user
+# (see the polling loop below) -- send_window() skips posting entirely
+# while USER_ID is None rather than guessing.
 FLASK_URL  = f"http://{FLASK_HOST}:{FLASK_PORT}/predict"
-USER_ID    = "Wehara"
+USER_ID    = os.environ.get("RING_USER_ID") or None
 
-AUTH_HEADERS = auth_headers(USER_ID)
+AUTH_HEADERS = auth_headers(USER_ID) if USER_ID else None
 
 HEARTBEAT_MIN_GAP_SEC = 5   # don't hammer Firebase at ~5 msgs/sec
 POINTER_POLL_INTERVAL_SEC = 10  # how often to check for a new app-driven session
@@ -82,6 +91,19 @@ def _poll_session_pointer():
         return value if isinstance(value, str) and value else None
     except Exception:
         return None
+
+
+def _poll_user_pointer():
+    """Same app-driven-pointer pattern as _poll_session_pointer(), but for
+    current_user_id -- lets this bridge attribute incoming ring data to
+    whoever is actually logged into the app right now, instead of the
+    RING_USER_ID set once at this process's own launch time."""
+    from firebase_admin import db
+    try:
+        value = db.reference(f"{FUSION_EN_ROOT}/{CURRENT_USER_ID_FIELD}").get()
+        return value if isinstance(value, str) and value else None
+    except Exception:
+        return None
 # SETTLE_SEC discards this many seconds of data right after startup —
 # GSR electrode straps take a bit to reach steady skin contact, and
 # capturing that transient into the first live window skews it (same
@@ -103,7 +125,10 @@ def send_window():
         duration = WINDOW_SEC
     actual_fs = max(1, round(len(gsr_buf) / duration))
 
-    if len(ibi_buf) < 10 or len(gsr_buf) < 20 or len(acc_buf) < 10:
+    if USER_ID is None:
+        print(f"[Window {window_idx}] skipped — no user logged in yet "
+              f"(waiting for the app's current_user_id pointer)")
+    elif len(ibi_buf) < 10 or len(gsr_buf) < 20 or len(acc_buf) < 10:
         print(f"[Window {window_idx}] skipped — insufficient data "
               f"(ibi={len(ibi_buf)}, gsr={len(gsr_buf)}, acc={len(acc_buf)})")
     else:
@@ -181,6 +206,14 @@ try:
                 print(f"[session] rotating {SESSION_ID!r} -> {pointer_session_id!r} "
                       f"(app started a new session)")
                 SESSION_ID = pointer_session_id
+
+            pointer_user_id = _poll_user_pointer()
+            if pointer_user_id and pointer_user_id != USER_ID:
+                print(f"[user] rotating {USER_ID!r} -> {pointer_user_id!r} "
+                      f"(app is now logged in as a different user)")
+                USER_ID = pointer_user_id
+                AUTH_HEADERS = auth_headers(USER_ID)
+
             last_pointer_poll = now
 except KeyboardInterrupt:
     print("\nStopping bridge...")

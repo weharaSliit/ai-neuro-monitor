@@ -22,6 +22,7 @@ const Stack = createNativeStackNavigator();
 const SESSION_ID_KEY = '@stressapp/liveSessionId';
 const LAST_ACTIVE_KEY = '@stressapp/liveSessionLastActive';
 const CURRENT_SESSION_ID_FIELD = 'current_session_id';
+const CURRENT_USER_ID_FIELD = 'current_user_id';
 const CURRENT_SESSION_ID_ROOTS = ['psychological', 'fusion_en', 'fusion_en_sessions'];
 const SESSION_GRACE_MS = 30 * 60 * 1000;
 const HEARTBEAT_INTERVAL_MS = 20 * 1000;
@@ -33,7 +34,7 @@ function mintSessionId() {
         + `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 
-async function resolveLiveSessionId() {
+async function resolveLiveSessionId(userId) {
     const stored = await AsyncStorage.multiGet([SESSION_ID_KEY, LAST_ACTIVE_KEY]);
     const storedId = stored[0][1];
     const storedLastActive = stored[1][1] ? Number(stored[1][1]) : 0;
@@ -47,6 +48,10 @@ async function resolveLiveSessionId() {
     const updates = {};
     for (const root of CURRENT_SESSION_ID_ROOTS) {
         updates[`${root}/${CURRENT_SESSION_ID_FIELD}`] = sessionId;
+        // Lets a device bridge attribute incoming data to whoever is
+        // actually logged in right now, instead of a user_id fixed at
+        // the bridge's own launch time.
+        updates[`${root}/${CURRENT_USER_ID_FIELD}`] = userId;
     }
     await update(ref(db), updates);
     return sessionId;
@@ -87,7 +92,7 @@ function RootNavigator() {
   useEffect(() => {
     if (!user) return;
 
-    resolveLiveSessionId().catch((e) => console.log('[live_session] resolve failed:', e?.message));
+    resolveLiveSessionId(user.userId).catch((e) => console.log('[live_session] resolve failed:', e?.message));
 
     const heartbeat = setInterval(touchLiveSessionHeartbeat, HEARTBEAT_INTERVAL_MS);
     const subscription = RNAppState.addEventListener('change', (nextState) => {
