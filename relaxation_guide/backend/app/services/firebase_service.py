@@ -150,56 +150,77 @@ def baseline_exists(user_id: str) -> bool:
         print(f"[Firebase Warning] baseline_exists failed ({e}). Defaulting to False.")
         return False
 
+# --- Helper to extract latest packet from nested nodes ---
+def _extract_latest_packet(node: Any, target_uid_clean: str = "") -> Dict[str, Any]:
+    """Traverses a dict or nested dict to extract the latest telemetry packet record."""
+    if not isinstance(node, dict):
+        return {}
+
+    # Case 1: Node itself contains direct telemetry keys
+    if any(k in node for k in ['fused_stress_label', 'fused_stress_probability', 'stress_label', 'probability', 'stress_probability', 'label']):
+        return node
+
+    latest_packet = {}
+    for key in sorted(node.keys()):
+        if key in ['current_session_id', 'current_user_id']:
+            continue
+        val = node[key]
+        if isinstance(val, dict):
+            val_uid = str(val.get('user_id', '')).strip().lower()
+            if target_uid_clean and target_uid_clean not in ['user_default', 'user_calm_ai', 'wehara', 'hiruni'] and val_uid and val_uid != target_uid_clean:
+                continue
+
+            if any(k in val for k in ['fused_stress_label', 'fused_stress_probability', 'stress_label', 'probability', 'stress_probability', 'label']):
+                latest_packet = val
+            else:
+                for inner_key in sorted(val.keys()):
+                    inner_val = val[inner_key]
+                    if isinstance(inner_val, dict) and any(k in inner_val for k in ['fused_stress_label', 'fused_stress_probability', 'stress_label', 'probability', 'stress_probability', 'label']):
+                        latest_packet = inner_val
+
+    return latest_packet
+
 # --- Prediction & Telemetry Ingestion operations ---
 def get_latest_prediction(user_id: str, session_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Fetches latest fusion prediction inputs from path: fusion_en_sessions
-    Reads inputs: stress_label and probability (or fused_stress_label / prob_stress).
+    Reads inputs: fused_stress_label ("low_stress"/"high_stress") and fused_stress_probability.
+    Supports user sub-nodes (e.g. fusion_en_sessions/Wehara/session_...) and active current_session_id.
     """
-    paths_to_check = []
-    if session_id:
-        paths_to_check.append(f'fusion_en_sessions/{user_id}/{session_id}')
-        paths_to_check.append(f'fusion_en_sessions/{session_id}')
-    paths_to_check.append(f'fusion_en_sessions/{user_id}')
-    paths_to_check.append('fusion_en_sessions')
-    paths_to_check.append(f'predictions/{user_id}')  # fallback legacy path
+    try:
+        ref_fusion = db.reference('fusion_en_sessions')
+        root_data = ref_fusion.get() or {}
 
-    for path in paths_to_check:
-        try:
-            ref = db.reference(path)
-            data = ref.get()
-            if not data:
-                continue
+        if not root_data:
+            ref_fusion = _ref('fusion_en_sessions')
+            root_data = ref_fusion.get() or {}
 
-            # Case 1: Direct dictionary record containing stress_label or probability
-            if isinstance(data, dict):
-                if any(k in data for k in ['stress_label', 'probability', 'fused_stress_label', 'stress_probability', 'label', 'prob_stress', 'prediction']):
-                    return data
+        if isinstance(root_data, dict):
+            curr_sid = root_data.get('current_session_id') or session_id
+            curr_uid = root_data.get('current_user_id')
 
-                # Case 2: Dict of session records / pushed keys
-                latest_record = {}
-                for key in sorted(data.keys()):
-                    val = data[key]
-                    if isinstance(val, dict):
-                        val_uid = str(val.get('user_id', '')).strip().lower()
-                        clean_target_uid = str(user_id).strip().lower()
-                        if val_uid and val_uid != clean_target_uid and clean_target_uid not in ['user_default', 'user_calm_ai']:
-                            continue
+            target_uid_clean = str(user_id).strip().lower()
 
-                        if any(k in val for k in ['stress_label', 'probability', 'fused_stress_label', 'stress_probability', 'label', 'prob_stress', 'prediction']):
-                            latest_record = val
-                        else:
-                            for inner_key in sorted(val.keys()):
-                                inner_val = val[inner_key]
-                                if isinstance(inner_val, dict) and any(k in inner_val for k in ['stress_label', 'probability', 'fused_stress_label', 'stress_probability', 'label']):
-                                    latest_record = inner_val
+            # 1. Check direct session node under current_session_id
+            if curr_sid and curr_sid in root_data:
+                packet = _extract_latest_packet(root_data[curr_sid])
+                if packet:
+                    return packet
 
-                if latest_record:
-                    return latest_record
+            # 2. Check user sub-folder (e.g. fusion_en_sessions/Wehara or fusion_en_sessions/Hiruni)
+            for k in [user_id, user_id.capitalize(), user_id.lower(), curr_uid]:
+                if k and k in root_data and isinstance(root_data[k], dict):
+                    packet = _extract_latest_packet(root_data[k])
+                    if packet:
+                        return packet
 
-        except Exception as e:
-            print(f"[Firebase Warning] Read from {path} failed: {e}")
-            continue
+            # 3. Global scan across all keys in fusion_en_sessions
+            packet = _extract_latest_packet(root_data, target_uid_clean)
+            if packet:
+                return packet
+
+    except Exception as e:
+        print(f"[Firebase Warning] Read fusion_en_sessions failed ({e}).")
 
     return {}
 

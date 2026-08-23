@@ -24,12 +24,14 @@ class TelemetryAggregator:
         # 1. Primary: Attempt to read latest prediction inputs from fusion_en_sessions in Firebase Realtime DB
         fb_prediction = firebase_service.get_latest_prediction(user_id, session_id)
         if fb_prediction and any(k in fb_prediction for k in ["stress_label", "probability", "fused_stress_label", "stress_probability", "label", "prob_stress", "prediction"]):
-            raw_label_val = fb_prediction.get("stress_label") or fb_prediction.get("fused_stress_label") or fb_prediction.get("label") or "Normal"
+            raw_label_val = fb_prediction.get("fused_stress_label") or fb_prediction.get("stress_label") or fb_prediction.get("label") or "Normal"
             raw_label = str(raw_label_val).lower().strip()
 
-            raw_prob_val = fb_prediction.get("probability")
+            raw_prob_val = fb_prediction.get("fused_stress_probability")
             if raw_prob_val is None:
                 raw_prob_val = fb_prediction.get("stress_probability")
+            if raw_prob_val is None:
+                raw_prob_val = fb_prediction.get("probability")
             if raw_prob_val is None:
                 raw_prob_val = fb_prediction.get("prob_stress", 0.50)
 
