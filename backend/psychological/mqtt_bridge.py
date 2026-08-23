@@ -48,9 +48,17 @@ LIVE_RAW_INTERVAL_SEC = 1.0
 # This device's own broker/topic -- independent of the ring's MQTT_BROKER/
 # MQTT_TOPIC in backend/common/config.py (different hardware, different
 # topic: mindpulse/wearable02/sensors vs the ring's mindpulse/wearable01/sensors).
-EEG_MQTT_BROKER = os.environ.get("EEG_MQTT_BROKER", "10.180.48.56")
-EEG_MQTT_PORT = int(os.environ.get("EEG_MQTT_PORT", "1883"))
+# Same EMQX Cloud Serverless deployment (mindpulse-broker) as the ring,
+# just a different device credential -- see wearable02.ino's identical
+# MQTT_BROKER/MQTT_USER/MQTT_PASS.
+EEG_MQTT_BROKER = os.environ.get("EEG_MQTT_BROKER", "ob1f0f10.ala.asia-southeast1.emqxsl.com")
+EEG_MQTT_PORT = int(os.environ.get("EEG_MQTT_PORT", "8883"))
 EEG_MQTT_TOPIC = os.environ.get("EEG_MQTT_TOPIC", "mindpulse/wearable02/sensors")
+EEG_MQTT_USER = os.environ.get("EEG_MQTT_USER", "wearable02")
+EEG_MQTT_PASSWORD = os.environ.get("EEG_MQTT_PASSWORD", "wearable02")
+EEG_MQTT_CA_CERT = os.path.join(
+    Path(__file__).resolve().parents[2], "iot_firmware", "emqxsl-ca.crt"
+)
 
 FLASK_URL = f"http://127.0.0.1:{os.environ.get('PSYCHOLOGICAL_PORT', '5001')}"
 # No "Wehara" fallback -- see backend/physiological/mqtt_bridge.py's
@@ -147,7 +155,8 @@ def run():
 
     buffer = RawSampleBuffer()
     # Already connected + looping -- see backend/common/mqtt_bridge.py::connect_mqtt().
-    client = make_client(EEG_MQTT_BROKER, EEG_MQTT_PORT, EEG_MQTT_TOPIC, buffer, client_id="eeg_bridge_wearable02")
+    client = make_client(EEG_MQTT_BROKER, EEG_MQTT_PORT, EEG_MQTT_TOPIC, buffer, client_id="eeg_bridge_wearable02",
+                          username=EEG_MQTT_USER, password=EEG_MQTT_PASSWORD, ca_cert=EEG_MQTT_CA_CERT)
 
     calibration_blocks = []
     calibrated = False

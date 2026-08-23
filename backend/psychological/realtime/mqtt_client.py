@@ -73,11 +73,15 @@ def parse_payload(payload: str) -> list[RawSample]:
     return samples
 
 
-def make_client(broker: str, port: int, topic: str, buffer: RawSampleBuffer, client_id: str = 'eeg_inference'):
+def make_client(broker: str, port: int, topic: str, buffer: RawSampleBuffer, client_id: str = 'eeg_inference',
+                 username: str = None, password: str = None, ca_cert: str = None):
     """Returns a connected, already-looping paho-mqtt client wired to append
     parsed samples into `buffer` (connection/subscribe/loop_start wiring
     lives in backend/common/mqtt_bridge.py, shared with the ring's bridge).
     Caller owns eventual .loop_stop()/.disconnect().
+
+    username/password/ca_cert: see connect_mqtt()'s docstring -- required
+    for EMQX Cloud Serverless, omit all three for a plain/anonymous broker.
     """
     from backend.common.mqtt_bridge import connect_mqtt
 
@@ -89,4 +93,5 @@ def make_client(broker: str, port: int, topic: str, buffer: RawSampleBuffer, cli
         for sample in samples:
             buffer.append(sample)
 
-    return connect_mqtt(broker, port, topic, on_message, client_id=client_id)
+    return connect_mqtt(broker, port, topic, on_message, client_id=client_id,
+                         username=username, password=password, ca_cert=ca_cert)
