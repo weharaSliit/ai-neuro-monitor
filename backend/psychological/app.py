@@ -26,9 +26,9 @@ import time
 from pathlib import Path
 
 import numpy as np
-from flask import Flask, jsonify, request
-from flask_cors import CORS
+from flask import jsonify, request, g
 
+from backend.common.app_factory import create_app
 from backend.common.auth import require_auth
 from backend.psychological.firebase_service import EegFirebaseSession
 from backend.psychological.realtime.adc import code_to_microvolts
@@ -37,8 +37,7 @@ from backend.psychological.realtime.firebase_sync import make_eeg_output_record
 from backend.psychological.realtime.mqtt_client import RawSample
 from backend.psychological.realtime.pipeline import BLOCK_SEC, RealtimeInference
 
-app = Flask(__name__)
-CORS(app)
+app = create_app(__name__)
 
 MODEL_DIR = Path(__file__).resolve().parent / "models"
 MODEL_VERSION = "bipolar_only_v1"
@@ -161,7 +160,7 @@ def calibrate():
     # calibration blocks is stored too -- signal storage shouldn't depend on
     # whether calibration happened to pass; reused below as this session's
     # firebase/csv handles rather than constructing second instances.
-    firebase = EegFirebaseSession(session_id)
+    firebase = EegFirebaseSession(session_id, g.user_id)
     csv_logger = CsvLogger(str(_raw_csv_path(session_id)), RAW_FIELDS)
 
     engine = RealtimeInference(MODEL_DIR, disable_quality_gate=DISABLE_QUALITY_GATE)
@@ -276,7 +275,7 @@ def live_raw():
 
     firebase = live_raw_sessions.get(session_id)
     if firebase is None:
-        firebase = EegFirebaseSession(session_id)
+        firebase = EegFirebaseSession(session_id, g.user_id)
         live_raw_sessions[session_id] = firebase
 
     # Deliberately NOT clamped, unlike pipeline.py's preprocess_block: this
