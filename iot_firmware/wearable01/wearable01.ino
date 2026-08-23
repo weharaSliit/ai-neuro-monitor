@@ -140,6 +140,14 @@ void setup() {
   mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
   mqttClient.setKeepAlive(60);
   mqttClient.setSocketTimeout(10);
+  // PubSubClient's default internal buffer is only 256 bytes -- the JSON
+  // payload below (device_id, ts, gsr, ir, finger, 3x acc float, an ibi
+  // array) can legitimately exceed that once ibi has any beats in it, and
+  // publish() silently drops the message with no error when it does (see
+  // the checked return value in loop() below). 512 covers the full
+  // 384-byte payload[] with headroom. Matches wearable02.ino's identical
+  // setBufferSize() call.
+  mqttClient.setBufferSize(512);
 
   Serial.println("--- Starting sensor + MQTT loop ---");
 }
@@ -202,7 +210,12 @@ void loop() {
     char payload[384];
     serializeJson(doc, payload);
 
-    mqttClient.publish(MQTT_TOPIC, payload);
+    bool published = mqttClient.publish(MQTT_TOPIC, payload);
     Serial.println(payload);
+    if (!published) {
+      Serial.print("PUBLISH FAILED (payload ");
+      Serial.print(strlen(payload));
+      Serial.println(" bytes) -- check setBufferSize() covers this size");
+    }
   }
 }
