@@ -1,13 +1,18 @@
 #include <SPI.h>
 #include <WiFi.h>
-#include <ESPmDNS.h>
 #include <PubSubClient.h>
 
 /* ================= WIFI ================= */
 
 const char* WIFI_SSID = "Wehara's A07";
 const char* WIFI_PASS = "wehara1216";
-const char* MQTT_HOSTNAME = "Hirunis-MacBook-Pro-2";
+// Direct IP for now instead of MQTT_HOSTNAME's mDNS lookup -- see
+// iot_firmware/wearable01/wearable01.ino's identical comment. Matches
+// MQTT_BROKER in backend/common/config.py / EEG_MQTT_BROKER for
+// backend/psychological/mqtt_bridge.py and API_BASE in StressApp's
+// config.js -- all four need to point at whichever machine is actually
+// running the broker + backends.
+const char* MQTT_BROKER = "10.180.48.56";
 const int   MQTT_PORT   = 1883;
 const char* MQTT_TOPIC  = "mindpulse/wearable02/sensors";
 
@@ -153,15 +158,6 @@ void connectWiFi() {
   Serial.println(WiFi.localIP());
 
   WiFi.setSleep(false);
-
-  // Starts the mDNS responder/resolver -- required before queryHost() below
-  // works. The name here is this DEVICE's own advertised hostname
-  // (wearable02-eeg.local), unrelated to MQTT_HOSTNAME (the Mac we resolve).
-  if (MDNS.begin("wearable02-eeg")) {
-    Serial.println("mDNS resolver started");
-  } else {
-    Serial.println("mDNS resolver failed to start");
-  }
 }
 
 /* ================================================= */
@@ -182,20 +178,7 @@ void maintainMQTT() {
 
   lastMqttAttempt = now;
 
-
-  IPAddress brokerIP = MDNS.queryHost(MQTT_HOSTNAME);
-  if (brokerIP == IPAddress(0, 0, 0, 0)) {
-    Serial.print("mDNS lookup failed for ");
-    Serial.print(MQTT_HOSTNAME);
-    Serial.println(".local -- retry in 2s");
-    return;
-  }
-
-  mqtt.setServer(brokerIP, MQTT_PORT);
-
-  Serial.print("Connecting MQTT (");
-  Serial.print(brokerIP);
-  Serial.print(")...");
+  Serial.print("Connecting MQTT...");
 
   if (mqtt.connect("ESP32_EEG")) {
     Serial.println("connected");
@@ -335,8 +318,7 @@ void setup() {
   connectWiFi();
 
   /* MQTT THIRD */
-  // Server is resolved by mDNS hostname and set inside maintainMQTT()
-  // itself (re-resolved on every reconnect attempt), not here.
+  mqtt.setServer(MQTT_BROKER, MQTT_PORT);
   mqtt.setBufferSize(1024);
   maintainMQTT();
 }

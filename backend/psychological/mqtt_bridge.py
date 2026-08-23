@@ -48,7 +48,7 @@ LIVE_RAW_INTERVAL_SEC = 1.0
 # This device's own broker/topic -- independent of the ring's MQTT_BROKER/
 # MQTT_TOPIC in backend/common/config.py (different hardware, different
 # topic: mindpulse/wearable02/sensors vs the ring's mindpulse/wearable01/sensors).
-EEG_MQTT_BROKER = os.environ.get("EEG_MQTT_BROKER", "172.28.6.169")
+EEG_MQTT_BROKER = os.environ.get("EEG_MQTT_BROKER", "10.180.48.56")
 EEG_MQTT_PORT = int(os.environ.get("EEG_MQTT_PORT", "1883"))
 EEG_MQTT_TOPIC = os.environ.get("EEG_MQTT_TOPIC", "mindpulse/wearable02/sensors")
 
