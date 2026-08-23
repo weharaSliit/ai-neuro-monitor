@@ -49,7 +49,7 @@ export const AppProvider = ({ children }) => {
   const [onboardingRecommendation, setOnboardingRecommendation] = useState(null);
   const [hasShownOnboardingAlert, setHasShownOnboardingAlert] = useState(false);
 
-  // Telemetry poll loop (every 3 seconds)
+  // Telemetry poll loop (every 2 seconds from fusion_en_sessions)
   useEffect(() => {
     let interval = null;
     if (isCalibrated) {
@@ -67,7 +67,7 @@ export const AppProvider = ({ children }) => {
         } catch (e) {
           console.warn('Telemetry polling error', e);
         }
-      }, 3000);
+      }, 2000);
     }
     return () => {
       if (interval) clearInterval(interval);
