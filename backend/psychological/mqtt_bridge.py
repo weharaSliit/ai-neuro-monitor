@@ -223,10 +223,14 @@ def run():
                 calibration_blocks.append(block_payload(samples))
                 print(f"[calibrate] captured block {len(calibration_blocks)}/{N_CALIBRATION_BLOCKS}")
                 if len(calibration_blocks) >= N_CALIBRATION_BLOCKS:
+                    # 45s, not 30s -- see the identical comment in
+                    # backend/physiological/mqtt_bridge.py: Render's
+                    # free-tier Flask can take 30s+ to wake from a cold
+                    # start, and 30s was cutting it too close.
                     data = post_json(
                         f"{FLASK_URL}/calibrate",
                         {"session_id": SESSION_ID, "blocks": calibration_blocks},
-                        AUTH_HEADERS, timeout=30, label="calibrate",
+                        AUTH_HEADERS, timeout=45, label="calibrate",
                     )
                     calibrated = bool(data and data.get("success"))
                     if not calibrated:
@@ -237,7 +241,7 @@ def run():
             data = post_json(
                 f"{FLASK_URL}/predict",
                 {"session_id": SESSION_ID, **block_payload(samples)},
-                AUTH_HEADERS, timeout=30, label="predict",
+                AUTH_HEADERS, timeout=45, label="predict",
             )
             if data:
                 if data.get("skipped"):
