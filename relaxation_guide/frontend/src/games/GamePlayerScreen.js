@@ -29,7 +29,9 @@ import { ZenRunnerGame } from '../games/ZenRunnerGame';
 import { LuminaBladeGame } from '../games/LuminaBladeGame';
 import { OrbDefenseGame } from '../games/OrbDefenseGame';
 import { PatternMatrixGame } from '../games/PatternMatrixGame';
+import { CognitiveDeStressGame } from '../games/CognitiveDeStressGame';
 import { MeditationGame } from '../games/MeditationGame';
+import { FocusArcade } from '../games/FocusArcadeGame';
 
 const { width, height } = Dimensions.get('window');
 
@@ -55,40 +57,40 @@ export const GamePlayerScreen = () => {
   const timerRef = useRef(null);
   const statsInterval = useRef(null);
 
-  const subId = selectedSubOption ? selectedSubOption.id : 'zen_runner';
+  const subId = selectedSubOption ? selectedSubOption.id : 'resonance_circle';
 
   // Game metadata
   const gameMetadata = {
     // Focus Arcade Games
-    zen_runner: {
-      title: 'Zen Wave Runner',
-      icon: '🏃',
-      color: '#38BDF8',
-      description: '2D rhythmic obstacle runner requiring sharp focus and crystal collection'
+    resonance_circle: {
+      title: 'Resonance Circle',
+      icon: '🔄',
+      color: '#60A5FA',
+      description: 'Visual biofeedback for heart rate variability training using paced resonance'
     },
-    lumina_blade: {
-      title: 'Lumina Stress Slicer',
-      icon: '⚔️',
-      color: '#EC4899',
-      description: 'Swipe-to-slice stress orbs into particle bursts with slice combos'
-    },
-    orb_defense: {
-      title: 'Aura Shield Defender',
-      icon: '🛡️',
-      color: '#38BDF8',
-      description: '360-degree shield defender deflecting incoming tension asteroids'
-    },
-    pattern_matrix: {
-      title: 'Mindful Pattern Matrix',
+    mindful_sweep: {
+      title: 'Mindful Sweep',
       icon: '🧠',
-      color: '#A78BFA',
-      description: 'High-concentration grid memory puzzle forcing complete cognitive focus'
+      color: '#34D399',
+      description: 'Gentle attention guidance through body awareness zones'
     },
-    gravity_flow: {
-      title: 'Cosmic Gravity Shift',
+    aurora_flow: {
+      title: 'Aurora Flow',
       icon: '🌌',
+      color: '#C084FC',
+      description: 'Paced color transition training for parasympathetic activation'
+    },
+    serenity_spiral: {
+      title: 'Serenity Spiral',
+      icon: '🌀',
+      color: '#FBBF24',
+      description: 'Calming spiral meditation for attention restoration therapy'
+    },
+    stillness_dots: {
+      title: 'Stillness Dots',
+      icon: '🎯',
       color: '#F472B6',
-      description: 'Physics timing game steering energy orbs through winding galaxy paths'
+      description: 'Visual anchoring technique for attention stabilization'
     },
 
     // Guided Meditation & Breathwork
@@ -190,9 +192,53 @@ export const GamePlayerScreen = () => {
       color: '#818CF8',
       description: 'Follow the light for deep relaxation'
     },
+
+    // Cognitive De-Stress & Fidget Games
+    bubble_pop: {
+      title: 'Zen Bubble Pop',
+      icon: '🧼',
+      color: '#F43F5E',
+      description: 'Tactile stress bubble popping with satisfying visual particle bursts'
+    },
+    pattern_align: {
+      title: 'Pattern Alignment',
+      icon: '🧩',
+      color: '#3B82F6',
+      description: 'Frosted glass pattern matching puzzle to soothe overthinking'
+    },
+    stress_shatter: {
+      title: 'Stress Release Shatter',
+      icon: '💥',
+      color: '#EF4444',
+      description: 'Tap-to-shatter dark glass stress objects into harmless shards'
+    },
+    cloud_float: {
+      title: 'Cloud Floating',
+      icon: '☁️',
+      color: '#38BDF8',
+      description: 'Interact with soft drifting clouds in an open sky sanctuary'
+    },
+    sand_drop: {
+      title: 'Cascade Sand',
+      icon: '⏳',
+      color: '#F59E0B',
+      description: 'Granular sand fall physics with calming hourglass flow'
+    },
+    cosmic_nebula: {
+      title: 'Cosmic Nebula',
+      icon: '🌌',
+      color: '#A78BFA',
+      description: 'Deep galaxy dust particles expanding to breathing pulse'
+    },
+    crystal_cave: {
+      title: 'Crystal Cave',
+      icon: '💎',
+      color: '#06B6D4',
+      description: 'Resonant crystal cavern with glowing harmonic audio visualizers'
+    }
   };
 
-  const meta = gameMetadata[subId] || gameMetadata.zen_runner;
+  const meta = gameMetadata[subId] || gameMetadata.resonance_circle;
 
   // Pulsing animation for the game container
   useEffect(() => {
@@ -249,16 +295,12 @@ export const GamePlayerScreen = () => {
   const renderGameCanvas = () => {
     switch (subId) {
       // Focus Arcade
-      case 'zen_runner':
-        return <ZenRunnerGame />;
-      case 'lumina_blade':
-        return <LuminaBladeGame />;
-      case 'orb_defense':
-        return <OrbDefenseGame />;
-      case 'pattern_matrix':
-        return <PatternMatrixGame />;
-      case 'gravity_flow':
-        return <ZenRunnerGame />;
+      case 'resonance_circle':
+      case 'mindful_sweep':
+      case 'aurora_flow':
+      case 'serenity_spiral':
+      case 'stillness_dots':
+        return <FocusArcade mode={subId} initialMode={subId} />;
 
       // Guided Meditation
       case 'box_meditation':
@@ -272,11 +314,11 @@ export const GamePlayerScreen = () => {
       case 'sound_meditation':
         return <MeditationGame mode="sound_meditation" initialMode="sound_meditation" />;
 
-      // Classic Environments
+      // Nature Sensory & Ambient Environments
       case 'rain_scene':
       case 'sunset_glow':
       case 'mountain_breeze':
-        return <AdaptiveRainGame />;
+        return <AdaptiveRainGame mode={subId} />;
       case 'forest_scene':
         return <ForestGame />;
       case 'ocean_scene':
@@ -288,13 +330,24 @@ export const GamePlayerScreen = () => {
       case 'water_lily_pond':
         return <LilyPondGame />;
       case 'pulse_wave':
-        return <PulseWaveGame />;
+      case 'cosmic_nebula':
+      case 'crystal_cave':
+        return <PulseWaveGame mode={subId} />;
       case 'particle_field':
         return <ParticleFieldGame />;
       case 'breathing_light':
         return <BreathingLightGame />;
+
+      // Cognitive De-Stress & Fidget Arcade
+      case 'bubble_pop':
+      case 'pattern_align':
+      case 'stress_shatter':
+      case 'cloud_float':
+      case 'sand_drop':
+        return <CognitiveDeStressGame mode={subId} />;
+
       default:
-        return <ZenRunnerGame />;
+        return <FocusArcade mode="resonance_circle" initialMode="resonance_circle" />;
     }
   };
 

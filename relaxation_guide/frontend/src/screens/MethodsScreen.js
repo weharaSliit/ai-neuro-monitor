@@ -43,11 +43,11 @@ export const MethodsScreen = () => {
       title: "Focus & Flow Arcade",
       icon: "🎮",
       sub_options: [
-        { id: "zen_runner", title: "Zen Wave Runner", description: "2D rhythmic obstacle runner requiring sharp focus." },
-        { id: "lumina_blade", title: "Lumina Stress Slicer", description: "Swipe-to-slice stress orbs into particle bursts." },
-        { id: "orb_defense", title: "Aura Shield Defender", description: "360-degree shield defender deflecting tension asteroids." },
-        { id: "pattern_matrix", title: "Mindful Pattern Matrix", description: "High-concentration grid memory puzzle." },
-        { id: "gravity_flow", title: "Cosmic Gravity Shift", description: "Physics timing game steering energy orbs." }
+        { id: "resonance_circle", title: "Resonance Circle", description: "Visual biofeedback for heart rate variability training using paced resonance." },
+        { id: "mindful_sweep", title: "Mindful Sweep", description: "Gentle attention guidance through body awareness zones." },
+        { id: "aurora_flow", title: "Aurora Flow", description: "Paced color transition training for parasympathetic activation." },
+        { id: "serenity_spiral", title: "Serenity Spiral", description: "Calming spiral meditation for attention restoration therapy." },
+        { id: "stillness_dots", title: "Stillness Dots", description: "Visual anchoring technique for attention stabilization." }
       ]
     },
     {
