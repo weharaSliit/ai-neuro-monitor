@@ -309,11 +309,13 @@ def save_fusion_en_rtdb(user_id, session_id, window_idx,
                         label, trending_toward_stress,
                         feat_dict=None):
     """Writes this session's HRV/GSR fusion fields (via the shared
-    _hrv_gsr_fusion_fields() helper) to fusion_en/{session_id}/{key}.
-    Path key is the shared wall-clock bucket (see backend/common/fusion.py),
-    NOT window_idx -- this call's own local per-session counter, which only
-    coincidentally lined up with the EEG side's write near session start
-    (see fusion_window_key()'s docstring).
+    _hrv_gsr_fusion_fields() helper) to fusion_en/{user_id}/{session_id}/{key}
+    -- user-scoped like every other per-session store, since a "session" is
+    now a login-to-logout span that belongs to exactly one user (see
+    StressApp's AuthContext.js). Path key is the shared wall-clock bucket
+    (see backend/common/fusion.py), NOT window_idx -- this call's own local
+    per-session counter, which only coincidentally lined up with the EEG
+    side's write near session start (see fusion_window_key()'s docstring).
     update() (not set()) so an EEG write to the same path (see
     backend/psychological/realtime/firebase_sync.py's FirebaseSync pushing
     to root_path='fusion_en') merges into the same child rather than
@@ -323,27 +325,27 @@ def save_fusion_en_rtdb(user_id, session_id, window_idx,
                                     prob_normal, prob_stress, label, trending_toward_stress, feat_dict)
     key = fusion_window_key()
     try:
-        _global_ref(f'{FUSION_EN_ROOT}/{session_id}/{key}').update(fields)
+        _global_ref(f'{FUSION_EN_ROOT}/{user_id}/{session_id}/{key}').update(fields)
     except Exception as e:  # noqa: BLE001 -- one failed write shouldn't break /predict
-        print(f'[firebase] WARNING: fusion_en write failed for {session_id}/{key}: {e}')
+        print(f'[firebase] WARNING: fusion_en write failed for {user_id}/{session_id}/{key}: {e}')
 
 
-def label_session_ground_truth_rtdb(session_id, pss4_score):
+def label_session_ground_truth_rtdb(user_id, session_id, pss4_score):
     """Backfills ground_truth_stress onto every already-written
-    fusion_en/{session_id}/* child for this session."""
+    fusion_en/{user_id}/{session_id}/* child for this session."""
     ground_truth_stress = int(pss4_score > 6)
     try:
-        children = _global_ref(f'{FUSION_EN_ROOT}/{session_id}').get() or {}
+        children = _global_ref(f'{FUSION_EN_ROOT}/{user_id}/{session_id}').get() or {}
         for window_key in children:
-            _global_ref(f'{FUSION_EN_ROOT}/{session_id}/{window_key}').update({
+            _global_ref(f'{FUSION_EN_ROOT}/{user_id}/{session_id}/{window_key}').update({
                 'ground_truth_stress': ground_truth_stress,
                 'ground_truth_pss4_score': pss4_score,
             })
         print(f'[firebase] ground_truth_stress={ground_truth_stress} '
               f'(PSS-4={pss4_score}) backfilled onto {len(children)} fusion_en row(s) '
-              f'for session_id={session_id}')
+              f'for {user_id}/{session_id}')
     except Exception as e:  # noqa: BLE001 -- one failed backfill shouldn't break /pss4
-        print(f'[firebase] WARNING: fusion_en ground-truth backfill failed for session_id={session_id}: {e}')
+        print(f'[firebase] WARNING: fusion_en ground-truth backfill failed for {user_id}/{session_id}: {e}')
 
 
 # Device connectivity (written by mqtt_bridge.py on every message,

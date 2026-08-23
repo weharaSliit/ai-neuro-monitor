@@ -158,7 +158,10 @@ class TraditionalEEGValidator:
         kurt = float(abs(kurtosis(seg)))
         skw = float(abs(skew(seg)))
         is_valid = (ptp <= max_amplitude) and (std_dev > 0.01) and (kurt < 12.0) and (skw < 4.0)
-        return bool(is_valid), {"ptp": round(ptp, 2), "std": round(std_dev, 2)}
+        return bool(is_valid), {
+            "ptp": round(ptp, 2), "std": round(std_dev, 2),
+            "kurtosis": round(kurt, 2), "skew": round(skw, 2),
+        }
 
 
 class ConnectivityValidator:
@@ -368,5 +371,11 @@ class TrustedIoTEEGValidator:
             "amplitude_ok_ch2": time_ok2,
             "peak_to_peak_uV": stats1["ptp"],
             "peak_to_peak_uV_ch2": stats2["ptp"],
+            "std_uV": stats1["std"],
+            "std_uV_ch2": stats2["std"],
+            "kurtosis": stats1["kurtosis"],
+            "kurtosis_ch2": stats2["kurtosis"],
+            "skew": stats1["skew"],
+            "skew_ch2": stats2["skew"],
             "ml_rating": ml_rating,
         }

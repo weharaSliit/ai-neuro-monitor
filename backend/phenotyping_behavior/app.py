@@ -1,5 +1,4 @@
-from flask import Flask, request, jsonify, g
-from flask_cors import CORS
+from flask import request, jsonify, g
 import numpy as np
 import os
 import sys
@@ -10,20 +9,21 @@ if __package__ is None:
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
+from backend.common.app_factory import create_app
 from backend.phenotyping_behavior.firebase_service import (
     init_firebase, save_behavioral_window, get_user_baselines,
     save_stress_prediction, save_validation_label,
     get_latest_stress_prediction,             # T7-B: neuroadaptive bridge
     get_calibration_windows,                  # Objective 2: 7-day baseline
     set_user_calibration_status, create_user_profile,
-    save_to_fusion_engine                     # Shared fusion_engine table
+    save_to_fusion_engine,                    # Legacy fusion_engine table (no live reader)
+    save_fusion_en_rtdb, get_current_session  # Live fusion_en table (fushion engin/)
 )
 from backend.phenotyping_behavior.predictor import predictor
 from backend.phenotyping_behavior.ema_service import update_personalized_baseline
 from backend.common.auth import require_auth
 
-app = Flask(__name__)
-CORS(app)
+app = create_app(__name__)
 
 # Initialize Firebase on startup
 init_firebase()
@@ -71,14 +71,30 @@ def predict_behavioral_stress():
     save_behavioral_window(user_id, window_data)
     save_stress_prediction(user_id, result)
 
-    # 5b. Write to shared fusion_engine table (for group integration)
-    #     Creates: fusion_engine/{display_name}/live_session_{YYYYMMDD}/{push-key}
-    #     Fields: label, modality, prob_stress, prob_normal, confidence,
-    #             signal_quality, model_accuracy, composite_z, timestamp
+    # 5b. Write to shared fusion_engine table (legacy -- kept for now, but
+    #     nothing in the repo reads it live any more; see save_to_fusion_engine's
+    #     own docstring)
     try:
         save_to_fusion_engine(user_id, result, window_features, is_valid)
     except Exception as fe:
         print(f"[WARN] fusion_engine write failed (non-critical): {fe}")
+
+    # 5c. Write to the LIVE cross-modality fusion table (fushion engin/) --
+    #     Creates/merges: fusion_en/{user_id}/{session_id}/{window}
+    #     Unlike EEG/HRV-GSR, the Android keystroke collector has no
+    #     session_id of its own (it's an always-on background service, not
+    #     tied to a "start session" screen), so the current live session is
+    #     resolved server-side from the same current_session_id/
+    #     current_user_id pointer StressApp's AuthContext.js writes at
+    #     login and clears at logout. If nobody is logged in right now,
+    #     this window simply isn't fused (still saved above via
+    #     save_behavioral_window/save_stress_prediction).
+    try:
+        session_id, _pointer_user_id = get_current_session()
+        if session_id:
+            save_fusion_en_rtdb(user_id, session_id, result, window_features, is_valid)
+    except Exception as fe:
+        print(f"[WARN] fusion_en write failed (non-critical): {fe}")
 
     # Only update if the window is Normal AND the context is valid
     if not result['is_anomaly'] and is_valid:

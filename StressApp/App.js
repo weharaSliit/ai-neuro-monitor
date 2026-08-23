@@ -1,6 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { View } from 'react-native';
-import { ref, update } from 'firebase/database';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
@@ -16,39 +15,8 @@ import EMAScreen from './modules/physiological/screens/EMAScreen';
 import { AppContext } from './modules/physiological/screens/AppState';
 import { ThemeProvider, useTheme } from './modules/physiological/config/ThemeContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { db } from './firebase';
 
 const Stack = createNativeStackNavigator();
-const CURRENT_SESSION_ID_FIELD = 'current_session_id';
-const CURRENT_USER_ID_FIELD = 'current_user_id';
-const CURRENT_SESSION_ID_ROOTS = ['psychological', 'fusion_en', 'fusion_en_sessions'];
-
-function mintSessionId() {
-    const d = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    return `session_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}T`
-        + `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-}
-
-// No reuse/grace window -- every app open mints a genuinely new session,
-// full stop. The backend (fushion engin/fusion_live_session.py's
-// _switch_to(), and each wearable bridge's own pointer poll) already stamps
-// ended_at on whatever session this replaces the moment it next polls
-// current_session_id, so closing the app and reopening it always produces a
-// clean session boundary with no client-side "on close" event needed.
-async function resolveLiveSessionId(userId) {
-    const sessionId = mintSessionId();
-    const updates = {};
-    for (const root of CURRENT_SESSION_ID_ROOTS) {
-        updates[`${root}/${CURRENT_SESSION_ID_FIELD}`] = sessionId;
-        // Lets a device bridge attribute incoming data to whoever is
-        // actually logged in right now, instead of a user_id fixed at
-        // the bridge's own launch time.
-        updates[`${root}/${CURRENT_USER_ID_FIELD}`] = userId;
-    }
-    await update(ref(db), updates);
-    return sessionId;
-}
 
 const linking = {
   prefixes: [],
@@ -79,10 +47,6 @@ const linking = {
 function RootNavigator() {
   const { user, isLoading } = useAuth();
   const { theme } = useTheme();
-  useEffect(() => {
-    if (!user) return;
-    resolveLiveSessionId(user.userId).catch((e) => console.log('[live_session] resolve failed:', e?.message));
-  }, [user]);
 
   if (isLoading) {
     return <View style={{ flex: 1, backgroundColor: theme.bg }} />;
