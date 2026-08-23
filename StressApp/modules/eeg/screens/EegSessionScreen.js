@@ -4,7 +4,7 @@ import {
     TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { WithSkiaWeb } from '@shopify/react-native-skia/lib/module/web';
+import LineChart from '../../shared/LineChart';
 import { ref, onValue, off, query, orderByChild, limitToLast } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
@@ -114,9 +114,11 @@ function SignalChart({ title, lastValue, points, min, max, color, t, last }) {
             {points.length > 1 ? (
                 <>
                     <View style={styles.signalChartClip}>
-                        <WithSkiaWeb
-                            getComponent={() => import('../../shared/SkiaLineGraph')}
-                            componentProps={{ points, color, width: RAW_CHART_WIDTH, height: RAW_CHART_HEIGHT }}
+                        <LineChart
+                            points={points}
+                            color={color}
+                            width={RAW_CHART_WIDTH}
+                            height={RAW_CHART_HEIGHT}
                             fallback={<Text style={[styles.waiting, { color: t.textMuted }]}>Loading chart…</Text>}
                         />
                     </View>
@@ -427,14 +429,11 @@ export default function EegSessionScreen({ navigation, route }) {
                             <ScrollView horizontal showsHorizontalScrollIndicator>
                                 <View style={{ width: bipolarLinePoints.length * BIPOLAR_POINT_WIDTH }}>
                                     <View style={{ height: FEATURE_CHART_HEIGHT }}>
-                                        <WithSkiaWeb
-                                            getComponent={() => import('../../shared/SkiaLineGraph')}
-                                            componentProps={{
-                                                points: bipolarLinePoints,
-                                                color: COLORS.brand,
-                                                width: bipolarLinePoints.length * BIPOLAR_POINT_WIDTH,
-                                                height: FEATURE_CHART_HEIGHT,
-                                            }}
+                                        <LineChart
+                                            points={bipolarLinePoints}
+                                            color={COLORS.brand}
+                                            width={bipolarLinePoints.length * BIPOLAR_POINT_WIDTH}
+                                            height={FEATURE_CHART_HEIGHT}
                                             fallback={<Text style={[styles.waiting, { color: t.textMuted }]}>Loading chart…</Text>}
                                         />
                                     </View>

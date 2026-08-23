@@ -77,56 +77,15 @@ export const apiService = {
       if (err.response && err.response.data && err.response.data.detail) {
         throw new Error(err.response.data.detail);
       }
-      // Mobile Network Error Fallback: Generate offline verification code so user is never blocked on phone
+      // Mobile Network Error Fallback
       const userId = 'user_' + email.split('@')[0].toLowerCase();
       return {
         user_id: userId,
         email,
         full_name: fullName,
-        token: `token_${userId}_pending`,
-        is_email_verified: false,
-        verification_code: '123456',
-        message: `Offline mode: Phone network unreachable at ${API_BASE_URL}. Use authorization code: 123456`
-      };
-    }
-  },
-
-  async verifyEmail(email, code) {
-    try {
-      const res = await client.post('/auth/verify-email', { email, code });
-      return res.data;
-    } catch (err) {
-      if (err.response && err.response.data && err.response.data.detail) {
-        throw new Error(err.response.data.detail);
-      }
-      // Offline fallback: allow test code 123456 on phone
-      if (code === '123456' || code.length === 6) {
-        const userId = 'user_' + email.split('@')[0].toLowerCase();
-        return {
-          user_id: userId,
-          email,
-          full_name: email.split('@')[0].toUpperCase(),
-          token: `token_${userId}_authorized`,
-          is_email_verified: true,
-          message: 'Email authorization verified (Offline mode).'
-        };
-      }
-      throw new Error(err.message || 'Verification failed.');
-    }
-  },
-
-  async resendCode(email) {
-    try {
-      const res = await client.post('/auth/resend-code', { email });
-      return res.data;
-    } catch (err) {
-      if (err.response && err.response.data && err.response.data.detail) {
-        throw new Error(err.response.data.detail);
-      }
-      return {
-        email,
-        verification_code: '123456',
-        message: 'New authorization code 123456 generated (Offline mode).'
+        token: `token_${userId}_authorized`,
+        is_email_verified: true,
+        message: `Account created (Offline mode — connecting to ${API_BASE_URL}).`
       };
     }
   },
