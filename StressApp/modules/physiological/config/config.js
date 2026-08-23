@@ -9,7 +9,7 @@
 // longer a simulation counterpart to disambiguate from.
 // ============================================================
 
-export const API_BASE     = 'http://localhost:5050';
+export const API_BASE     = 'http://10.180.48.56:5050';
 export const DEVICE_ID    = 'wearable01';
 
 export const STRESS_COLORS = {
