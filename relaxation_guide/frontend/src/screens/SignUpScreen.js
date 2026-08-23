@@ -1,26 +1,62 @@
-import React, { useState, useContext } from 'react';
+import React, { useState, useContext, useRef, useEffect } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  ActivityIndicator
+  View, Text, StyleSheet, TextInput,
+  TouchableOpacity, ActivityIndicator, Animated, Easing
 } from 'react-native';
 import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
 import { Header } from '../components/Header';
 import { apiService } from '../api/apiService';
-
 import { useSweetAlert } from '../context/SweetAlertContext';
+
+const FocusInput = ({ label, value, onChangeText, placeholder, secureText, keyboardType, theme }) => {
+  const [focused, setFocused] = useState(false);
+  const [showPass, setShowPass] = useState(false);
+  const borderAnim = useRef(new Animated.Value(0)).current;
+
+  const onFocus = () => {
+    setFocused(true);
+    Animated.timing(borderAnim, { toValue: 1, duration: 200, useNativeDriver: false }).start();
+  };
+  const onBlur = () => {
+    setFocused(false);
+    Animated.timing(borderAnim, { toValue: 0, duration: 200, useNativeDriver: false }).start();
+  };
+
+  const borderColor = borderAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [theme.border, theme.accent],
+  });
+
+  return (
+    <View style={s.inputGroup}>
+      <Text style={[s.label, { color: focused ? theme.accent : theme.textSecondary }]}>{label}</Text>
+      <Animated.View style={[s.inputWrap, { borderColor, backgroundColor: theme.bgCard }]}>
+        <TextInput
+          style={[s.input, { color: theme.textPrimary }]}
+          value={value}
+          onChangeText={onChangeText}
+          autoCapitalize="none"
+          keyboardType={keyboardType || 'default'}
+          placeholder={placeholder}
+          placeholderTextColor={theme.textMuted}
+          secureTextEntry={secureText && !showPass}
+          onFocus={onFocus}
+          onBlur={onBlur}
+        />
+        {secureText && (
+          <TouchableOpacity onPress={() => setShowPass(p => !p)} style={s.eyeBtn}>
+            <Text style={[s.eyeIcon, { color: theme.textMuted }]}>{showPass ? '🙈' : '👁️'}</Text>
+          </TouchableOpacity>
+        )}
+      </Animated.View>
+    </View>
+  );
+};
 
 export const SignUpScreen = () => {
   const { showAlert } = useSweetAlert();
-  const {
-    setCurrentScreen,
-    setUserEmail,
-    setPendingVerificationCode
-  } = useContext(AppContext);
+  const { setCurrentScreen, setUserEmail, setPendingVerificationCode } = useContext(AppContext);
   const { theme } = useContext(ThemeContext);
 
   const [fullName, setFullName] = useState('');
@@ -29,179 +65,157 @@ export const SignUpScreen = () => {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
+  const logoScale = useRef(new Animated.Value(0.8)).current;
+  const logoGlow  = useRef(new Animated.Value(1)).current;
+  const formOpacity = useRef(new Animated.Value(0)).current;
+  const formSlide   = useRef(new Animated.Value(30)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.spring(logoScale, { toValue: 1, tension: 60, friction: 8, useNativeDriver: true }),
+      Animated.timing(formOpacity, { toValue: 1, duration: 600, delay: 200, useNativeDriver: true }),
+      Animated.spring(formSlide, { toValue: 0, tension: 50, friction: 8, delay: 200, useNativeDriver: true }),
+    ]).start();
+
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(logoGlow, { toValue: 1.06, duration: 2200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(logoGlow, { toValue: 1, duration: 2200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      ])
+    ).start();
+  }, []);
+
   const handleSignUp = async () => {
     if (!email || !fullName || !password) {
-      showAlert({
-        title: 'Missing Fields',
-        text: 'Please fill in all fields (Full Name, Email Address, and Password).',
-        icon: 'warning'
-      });
+      showAlert({ title: 'Missing Fields', text: 'Please fill in all fields.', icon: 'warning' });
       return;
     }
     setLoading(true);
     setErrorMsg('');
-
     try {
       const res = await apiService.signUp(email, password, fullName);
       setUserEmail(email);
-      if (res.verification_code) {
-        setPendingVerificationCode(res.verification_code);
-      }
-
       showAlert({
-        title: 'Account Created! 🔐',
-        text: `Authorization code sent to ${email}. Please enter your 6-digit code to authorize your email.`,
+        title: 'Account Created! 🚀',
+        text: `Welcome ${fullName}! Your participant profile has been created.`,
         icon: 'success',
-        confirmButtonText: 'Enter Code',
-        onConfirm: () => setCurrentScreen('EmailVerification')
+        confirmButtonText: 'Continue →',
+        onConfirm: () => setCurrentScreen('BaselineCalibration')
       });
     } catch (e) {
       const msg = e.message || 'Registration error. Please check your credentials.';
       setErrorMsg(msg);
-      showAlert({
-        title: 'Registration Error',
-        text: msg,
-        icon: 'error'
-      });
+      showAlert({ title: 'Registration Error', text: msg, icon: 'error' });
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
+    <View style={[s.container, { backgroundColor: theme.bgPrimary }]}>
       <Header title="Create Account" showBack onBack={() => setCurrentScreen('Welcome')} />
 
-      <View style={styles.body}>
-        <Text style={[styles.heading, { color: theme.textPrimary }]}>Join CAPS Study</Text>
-        <Text style={[styles.sub, { color: theme.textSecondary }]}>
-          Register your participant profile. Email authorization is required to activate sign-in.
-        </Text>
+      <View style={s.body}>
+        <Animated.View style={[s.logoWrap, { transform: [{ scale: logoScale }] }]}>
+          <Animated.View style={[s.logoBadge, { backgroundColor: theme.accent + '20', borderColor: theme.accent, transform: [{ scale: logoGlow }] }]}>
+            <Text style={s.logoIcon}>🧠</Text>
+          </Animated.View>
+        </Animated.View>
 
-        {errorMsg ? (
-          <View style={styles.errorBox}>
-            <Text style={styles.errorTxt}>⚠️ {errorMsg}</Text>
-          </View>
-        ) : null}
+        <Animated.View style={[{ opacity: formOpacity, transform: [{ translateY: formSlide }], width: '100%' }]}>
+          <Text style={[s.heading, { color: theme.textPrimary }]}>Join the Study</Text>
+          <Text style={[s.sub, { color: theme.textSecondary }]}>
+            Register your participant profile to begin bio-feedback monitoring.
+          </Text>
 
-        <View style={styles.inputGroup}>
-          <Text style={[styles.label, { color: theme.textSecondary }]}>Full Name</Text>
-          <TextInput
-            style={[styles.input, { backgroundColor: theme.bgCard, color: theme.textPrimary, borderColor: theme.border }]}
+          {errorMsg ? (
+            <View style={s.errorBox}>
+              <Text style={s.errorTxt}>⚠️  {errorMsg}</Text>
+            </View>
+          ) : null}
+
+          <FocusInput
+            label="Full Name"
             value={fullName}
             onChangeText={setFullName}
             placeholder="Jane Doe"
-            placeholderTextColor={theme.textMuted}
+            theme={theme}
           />
-        </View>
-
-        <View style={styles.inputGroup}>
-          <Text style={[styles.label, { color: theme.textSecondary }]}>Email Address</Text>
-          <TextInput
-            style={[styles.input, { backgroundColor: theme.bgCard, color: theme.textPrimary, borderColor: theme.border }]}
+          <FocusInput
+            label="Email Address"
             value={email}
             onChangeText={setEmail}
-            autoCapitalize="none"
-            keyboardType="email-address"
             placeholder="jane@research.org"
-            placeholderTextColor={theme.textMuted}
+            keyboardType="email-address"
+            theme={theme}
           />
-        </View>
-
-        <View style={styles.inputGroup}>
-          <Text style={[styles.label, { color: theme.textSecondary }]}>Password</Text>
-          <TextInput
-            style={[styles.input, { backgroundColor: theme.bgCard, color: theme.textPrimary, borderColor: theme.border }]}
+          <FocusInput
+            label="Password"
             value={password}
             onChangeText={setPassword}
-            secureTextEntry
             placeholder="••••••••"
-            placeholderTextColor={theme.textMuted}
+            secureText
+            theme={theme}
           />
-        </View>
 
-        <TouchableOpacity
-          style={[styles.primaryBtn, { backgroundColor: theme.accent }]}
-          onPress={handleSignUp}
-          disabled={loading}
-        >
-          {loading ? (
-            <ActivityIndicator color={theme.accentText} />
-          ) : (
-            <Text style={[styles.primaryBtnTxt, { color: theme.accentText }]}>Create & Request Verification →</Text>
-          )}
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={[s.primaryBtn, { backgroundColor: theme.accent, opacity: loading ? 0.7 : 1 }]}
+            onPress={handleSignUp}
+            disabled={loading}
+            activeOpacity={0.85}
+          >
+            {loading ? (
+              <ActivityIndicator color={theme.accentText} />
+            ) : (
+              <Text style={[s.primaryBtnTxt, { color: theme.accentText }]}>Create Account & Verify  →</Text>
+            )}
+          </TouchableOpacity>
 
-        <TouchableOpacity style={styles.switchBtn} onPress={() => setCurrentScreen('SignIn')}>
-          <Text style={[styles.switchTxt, { color: theme.textMuted }]}>
-            Already have an account? <Text style={{ color: theme.accent, fontWeight: '700' }}>Sign In</Text>
-          </Text>
-        </TouchableOpacity>
+          <TouchableOpacity style={s.switchBtn} onPress={() => setCurrentScreen('SignIn')}>
+            <Text style={[s.switchTxt, { color: theme.textMuted }]}>
+              Already have an account?{'  '}
+              <Text style={{ color: theme.accent, fontWeight: '700' }}>Sign In</Text>
+            </Text>
+          </TouchableOpacity>
+        </Animated.View>
       </View>
     </View>
   );
 };
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1
+const s = StyleSheet.create({
+  container: { flex: 1 },
+  body: { padding: 24, flex: 1, justifyContent: 'center', alignItems: 'center' },
+  logoWrap: { marginBottom: 16, alignItems: 'center' },
+  logoBadge: {
+    width: 72, height: 72, borderRadius: 36,
+    alignItems: 'center', justifyContent: 'center', borderWidth: 2,
+    shadowColor: '#38BDF8', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 12, elevation: 8,
   },
-  body: {
-    padding: 24,
-    flex: 1,
-    justifyContent: 'center'
-  },
-  heading: {
-    fontSize: 24,
-    fontWeight: '800',
-    marginBottom: 6
-  },
-  sub: {
-    fontSize: 14,
-    marginBottom: 16
-  },
+  logoIcon: { fontSize: 36 },
+  heading: { fontSize: 24, fontWeight: '800', marginBottom: 4 },
+  sub: { fontSize: 13, marginBottom: 20, lineHeight: 19 },
   errorBox: {
-    backgroundColor: 'rgba(239, 68, 68, 0.15)',
-    borderColor: '#EF4444',
-    borderWidth: 1,
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 16,
+    backgroundColor: 'rgba(239,68,68,0.12)', borderColor: '#EF4444',
+    borderWidth: 1, borderRadius: 12, padding: 12, marginBottom: 14,
   },
-  errorTxt: {
-    color: '#EF4444',
-    fontSize: 13,
-    fontWeight: '700',
+  errorTxt: { color: '#EF4444', fontSize: 13, fontWeight: '700' },
+  inputGroup: { marginBottom: 14, width: '100%' },
+  label: { fontSize: 12, fontWeight: '700', marginBottom: 6 },
+  inputWrap: {
+    flexDirection: 'row', alignItems: 'center',
+    borderRadius: 14, borderWidth: 1.5, overflow: 'hidden',
   },
-  inputGroup: {
-    marginBottom: 14
-  },
-  label: {
-    fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 6
-  },
-  input: {
-    borderRadius: 12,
-    padding: 14,
-    fontSize: 15,
-    borderWidth: 1
-  },
+  input: { flex: 1, padding: 14, fontSize: 15 },
+  eyeBtn: { paddingHorizontal: 14 },
+  eyeIcon: { fontSize: 18 },
   primaryBtn: {
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginTop: 10
+    paddingVertical: 16, borderRadius: 16,
+    alignItems: 'center', marginTop: 8, width: '100%',
+    shadowColor: '#38BDF8', shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.3, shadowRadius: 14, elevation: 6,
   },
-  primaryBtnTxt: {
-    fontWeight: '800',
-    fontSize: 16
-  },
-  switchBtn: {
-    marginTop: 16,
-    alignItems: 'center'
-  },
-  switchTxt: {
-    fontSize: 13
-  }
+  primaryBtnTxt: { fontWeight: '800', fontSize: 16 },
+  switchBtn: { marginTop: 20, alignItems: 'center' },
+  switchTxt: { fontSize: 13 },
 });

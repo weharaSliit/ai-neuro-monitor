@@ -145,13 +145,6 @@ class SignInRequest(BaseModel):
     email: str
     password: str
 
-class VerifyEmailRequest(BaseModel):
-    email: str
-    code: str
-
-class ResendCodeRequest(BaseModel):
-    email: str
-
 class AuthResponse(BaseModel):
     user_id: str
     email: str
