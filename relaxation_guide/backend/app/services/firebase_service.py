@@ -25,10 +25,28 @@ def _ref(path: str):
     return db.reference(f"{FIREBASE_NAMESPACE}/{clean_path}")
 
 def init_firebase():
-    """Initializes Firebase Admin SDK if not already initialized."""
+    """Initializes Firebase Admin SDK if not already initialized.
+
+    Prefers $FIREBASE_CRED_JSON (credential content directly) over
+    FIREBASE_CRED_FILE's path -- a deployed target like Render has no
+    persistent file for that path to point at (see
+    backend/common/firebase_config.py's identical FIREBASE_CRED_JSON
+    handling). Falls back to the file-path behavior for local dev.
+    """
     if not firebase_admin._apps:
+        cred_json = os.environ.get("FIREBASE_CRED_JSON")
         cred_path = FIREBASE_CRED_FILE
-        if os.path.exists(cred_path):
+        if cred_json:
+            try:
+                import json
+                cred = credentials.Certificate(json.loads(cred_json))
+                firebase_admin.initialize_app(cred, {
+                    'databaseURL': FIREBASE_DB_URL
+                })
+                print("Firebase initialized [OK]")
+            except Exception as e:
+                print(f"Warning: Firebase init error from $FIREBASE_CRED_JSON ({e}). Will fallback gracefully.")
+        elif os.path.exists(cred_path):
             try:
                 cred = credentials.Certificate(cred_path)
                 firebase_admin.initialize_app(cred, {
@@ -38,7 +56,8 @@ def init_firebase():
             except Exception as e:
                 print(f"Warning: Firebase init error ({e}). Will fallback gracefully.")
         else:
-            print(f"Warning: Firebase credentials file '{cred_path}' not found. Will fallback gracefully.")
+            print(f"Warning: Firebase credentials file '{cred_path}' not found, and no "
+                  f"$FIREBASE_CRED_JSON set. Will fallback gracefully.")
 
 # Initialize upon import
 init_firebase()

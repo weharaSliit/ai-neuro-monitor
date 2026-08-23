@@ -60,7 +60,14 @@ EEG_MQTT_CA_CERT = os.path.join(
     Path(__file__).resolve().parents[2], "iot_firmware", "emqxsl-ca.crt"
 )
 
-FLASK_URL = f"http://127.0.0.1:{os.environ.get('PSYCHOLOGICAL_PORT', '5001')}"
+# PSYCHOLOGICAL_FLASK_URL is a full-URL override for a deployed target
+# (e.g. Render's public HTTPS URL, no explicit port) -- see
+# backend/physiological/mqtt_bridge.py's identical PHYSIOLOGICAL_FLASK_URL
+# comment. Takes precedence over the localhost:port construction, which
+# stays the default for local dev where this script and Flask are
+# co-located.
+FLASK_URL = os.environ.get("PSYCHOLOGICAL_FLASK_URL") or \
+    f"http://127.0.0.1:{os.environ.get('PSYCHOLOGICAL_PORT', '5001')}"
 # No "Wehara" fallback -- see backend/physiological/mqtt_bridge.py's
 # identical USER_ID comment. Unset until EEG_BRIDGE_USER_ID is explicitly
 # pinned or the app-driven current_user_id pointer resolves a real user

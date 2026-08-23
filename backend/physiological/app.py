@@ -557,10 +557,13 @@ if __name__ == '__main__':
     print(f"  POST /ema/update")
     print(f"  GET  /ema/history/<user_id>")
     print("=" * 50)
+    # Render.com injects $PORT -- use it in production; default to 5050
+    # locally (see backend/phenotyping_behavior/app.py's identical pattern).
+    port = int(os.environ.get('PORT', 5050))
     app.run(
         host='0.0.0.0',
-        port=5050,
+        port=port,
         debug=True,
-        use_reloader=False, 
-        threaded=True 
+        use_reloader=False,
+        threaded=True
     )
