@@ -26,7 +26,9 @@ if __package__ is None:
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
-from backend.common.firebase_config import CURRENT_SESSION_ID_FIELD, FIREBASE_DB_URL, RTDB_NAMESPACES
+from backend.common.firebase_config import (
+    CURRENT_SESSION_ID_FIELD, CURRENT_USER_ID_FIELD, FIREBASE_DB_URL, RTDB_NAMESPACES
+)
 from backend.common.mqtt_bridge import auth_headers, post_json
 from backend.psychological.realtime.mqtt_client import RawSampleBuffer, make_client
 from backend.psychological.realtime.resample import SOURCE_FS
@@ -51,7 +53,12 @@ EEG_MQTT_PORT = int(os.environ.get("EEG_MQTT_PORT", "1883"))
 EEG_MQTT_TOPIC = os.environ.get("EEG_MQTT_TOPIC", "mindpulse/wearable02/sensors")
 
 FLASK_URL = f"http://127.0.0.1:{os.environ.get('PSYCHOLOGICAL_PORT', '5001')}"
-USER_ID = os.environ.get("EEG_BRIDGE_USER_ID", "Wehara")
+# No "Wehara" fallback -- see backend/physiological/mqtt_bridge.py's
+# identical USER_ID comment. Unset until EEG_BRIDGE_USER_ID is explicitly
+# pinned or the app-driven current_user_id pointer resolves a real user
+# (see _poll_user_pointer() and run()'s main loop below); calibration and
+# predict posting are both skipped while USER_ID is None.
+USER_ID = os.environ.get("EEG_BRIDGE_USER_ID") or None
 # Mutable, not a one-time-read constant: StressApp (App.js) is the actual
 # authority on the current session_id now, written to
 # {psychological}/current_session_id when the app opens/reuses a session --
@@ -69,7 +76,7 @@ USER_ID = os.environ.get("EEG_BRIDGE_USER_ID", "Wehara")
 SESSION_ID = os.environ.get("EEG_SESSION_ID") or "wearable02_" + time.strftime("%Y%m%dT%H%M%S")
 POINTER_POLL_INTERVAL_SEC = 10.0
 
-AUTH_HEADERS = auth_headers(USER_ID)
+AUTH_HEADERS = auth_headers(USER_ID) if USER_ID else None
 
 
 def _poll_session_pointer() -> str | None:
@@ -81,6 +88,20 @@ def _poll_session_pointer() -> str | None:
     try:
         resp = requests.get(
             f"{FIREBASE_DB_URL}{RTDB_NAMESPACES['psychological']}/{CURRENT_SESSION_ID_FIELD}.json", timeout=5
+        )
+        value = resp.json()
+        return value if isinstance(value, str) and value else None
+    except Exception:
+        return None
+
+
+def _poll_user_pointer() -> str | None:
+    """REST equivalent of _poll_session_pointer(), for current_user_id --
+    lets this bridge attribute EEG data to whoever is actually logged into
+    the app right now, same as backend/physiological/mqtt_bridge.py."""
+    try:
+        resp = requests.get(
+            f"{FIREBASE_DB_URL}{RTDB_NAMESPACES['psychological']}/{CURRENT_USER_ID_FIELD}.json", timeout=5
         )
         value = resp.json()
         return value if isinstance(value, str) and value else None
@@ -112,7 +133,7 @@ def _post_live_raw(samples) -> None:
 
 
 def run():
-    global SESSION_ID
+    global SESSION_ID, USER_ID, AUTH_HEADERS
     print("=" * 60)
     print("EEG (wearable02) MQTT -> Flask bridge")
     print("=" * 60)
@@ -150,6 +171,14 @@ def run():
                     calibrated = False
                     calibration_blocks = []
                     block_idx = 0
+
+                pointer_user_id = _poll_user_pointer()
+                if pointer_user_id and pointer_user_id != USER_ID:
+                    print(f"[user] rotating {USER_ID!r} -> {pointer_user_id!r} "
+                          f"(app is now logged in as a different user)")
+                    USER_ID = pointer_user_id
+                    AUTH_HEADERS = auth_headers(USER_ID)
+
                 last_pointer_poll = now
 
             # Independent of the block-accumulation cycle below -- runs every
@@ -168,6 +197,11 @@ def run():
                 continue
 
             samples = buffer.drain(BLOCK_SAMPLES)
+
+            if USER_ID is None:
+                print(f"[block {block_idx}] skipped — no user logged in yet "
+                      f"(waiting for the app's current_user_id pointer)")
+                continue
 
             if not calibrated:
                 calibration_blocks.append(block_payload(samples))

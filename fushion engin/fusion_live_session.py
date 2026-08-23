@@ -12,7 +12,8 @@ sys.path.insert(0, str(REPO))
 
 import fusion_engin
 from backend.common.firebase_config import (
-    CURRENT_SESSION_ID_FIELD, FIREBASE_DB_URL, FUSION_EN_ROOT, FUSION_EN_SESSIONS_ROOT,
+    CURRENT_SESSION_ID_FIELD, CURRENT_USER_ID_FIELD, FIREBASE_DB_URL,
+    FUSION_EN_ROOT, FUSION_EN_SESSIONS_ROOT,
 )
 from backend.psychological.realtime.firebase_sync import _trend_direction  # noqa: E402
 
@@ -114,6 +115,7 @@ def _session_refs(db_mod, session_id: str) -> dict:
         "eeg_session_ref": db_mod.reference(f"{FUSION_EN_SESSIONS_ROOT}/{session_id}"),
         "started_at_ref": db_mod.reference(f"{FUSION_EN_SESSIONS_ROOT}/{session_id}/started_at"),
         "ended_at_ref": db_mod.reference(f"{FUSION_EN_SESSIONS_ROOT}/{session_id}/ended_at"),
+        "user_id_ref": db_mod.reference(f"{FUSION_EN_SESSIONS_ROOT}/{session_id}/user_id"),
     }
 
 
@@ -133,6 +135,7 @@ def run(session_id: str | None, poll_interval_sec: float, cred_path: str, db_url
     db_mod = _init_firebase(cred_path, db_url)
     manual_override = session_id is not None
     pointer_ref = db_mod.reference(f"{FUSION_EN_SESSIONS_ROOT}/{CURRENT_SESSION_ID_FIELD}")
+    user_pointer_ref = db_mod.reference(f"{FUSION_EN_SESSIONS_ROOT}/{CURRENT_USER_ID_FIELD}")
 
     current_session_id = session_id or pointer_ref.get()
     refs = None
@@ -147,6 +150,13 @@ def run(session_id: str | None, poll_interval_sec: float, cred_path: str, db_url
         refs = _session_refs(db_mod, current_session_id)
         if refs["started_at_ref"].get() is None:
             refs["started_at_ref"].set(datetime.now(timezone.utc).isoformat())
+            # Stamp which user this session belongs to -- same app-driven
+            # pointer the ring/EEG bridges already follow for attribution.
+            # Written once at session start since a session belongs to one
+            # user for its whole lifetime.
+            user_id = user_pointer_ref.get()
+            if isinstance(user_id, str) and user_id:
+                refs["user_id_ref"].set(user_id)
         print(
             f"[fusion_live_session] watching fusion_en/{current_session_id} "
             f"+ fusion_en_sessions/{current_session_id} (EEG) "

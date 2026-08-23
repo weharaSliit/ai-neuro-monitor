@@ -52,7 +52,7 @@ echo "== wearable01 (ring) MQTT bridge, session=${SESSION_ID:-<app-driven>} =="
 if proc_running "backend.physiological.mqtt_bridge"; then
   echo "  already running"
 else
-  STRESSAPP_MQTT_BROKER=localhost RING_SESSION_ID="${SESSION_ID:-}" nohup "$PY" -u -m backend.physiological.mqtt_bridge \
+  STRESSAPP_MQTT_BROKER=localhost RING_SESSION_ID="${SESSION_ID:-}" RING_USER_ID="${RING_USER_ID:-}" nohup "$PY" -u -m backend.physiological.mqtt_bridge \
     > /tmp/physio_mqtt_bridge.log 2>&1 &
   disown
   echo "  started, pid $!"
