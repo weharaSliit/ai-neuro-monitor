@@ -10,6 +10,7 @@ import { WithSkiaWeb } from '@shopify/react-native-skia/lib/module/web';
 import { ref, onValue, off } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
+import { useAuth } from '../../../context/AuthContext';
 import { STRESS_COLORS, STRESS_LABELS, STRESS_EMOJI, FUSION_TREND_LABELS } from '../config/config';
 
 function sortedWindowKeys(windowsObj) {
@@ -37,12 +38,15 @@ function MetricBadge({ label, value, unit, color, t }) {
 
 export default function FusionSessionScreen({ navigation }) {
     const { isDark, theme: t, COLORS } = useTheme();
+    const { user } = useAuth();
+    const userId = user?.userId;
     const [sessionId, setSessionId] = useState('');
     const [watching, setWatching] = useState(false);
     const [windows, setWindows] = useState(null);
     const [hasAnyWindow, setHasAnyWindow] = useState(false);
     const listenerRef = useRef(null);
     const startWatching = useCallback((idOverride) => {
+        if (!userId) return;
         const targetId = (idOverride ?? sessionId).trim();
         if (!targetId) return;
         if (targetId === sessionId && listenerRef.current) return;  // already watching this session
@@ -50,7 +54,12 @@ export default function FusionSessionScreen({ navigation }) {
         setWindows(null);
         setHasAnyWindow(false);
 
-        const sessionRef = ref(db, `fusion_en/${targetId}`);
+        // Nested under the logged-in user (fusion_en/{userId}/{sessionId}) --
+        // a "session" is a login-to-logout span belonging to one user, see
+        // backend/psychological/firebase_service.py's EegFirebaseSession and
+        // fushion engin/fusion_live_session.py, which write/read this same
+        // user-scoped path.
+        const sessionRef = ref(db, `fusion_en/${userId}/${targetId}`);
         const handler = onValue(sessionRef, (snapshot) => {
             const data = snapshot.val();
             setHasAnyWindow(!!data);
@@ -58,14 +67,14 @@ export default function FusionSessionScreen({ navigation }) {
         });
         listenerRef.current = { sessionRef, handler };
         setWatching(true);
-    }, [sessionId]);
+    }, [sessionId, userId]);
     useEffect(() => {
+        if (!userId) return;
         // A live subscription, not a one-time get() -- picks up the current
-        // session the instant App.js writes it and follows any later
-        // rotation automatically, so there's never a manual "Start" step
-        // needed. Lives inside fusion_en_sessions/ itself (this screen's
-        // own domain, and the same root fusion_live_session.py already
-        // polls) -- no separate shared pointer store, see App.js's
+        // session the instant AuthContext.js writes it (at login) and
+        // follows any later rotation automatically, so there's never a
+        // manual "Start" step needed. current_session_id itself stays a flat
+        // pointer (not user-scoped) -- see AuthContext.js's
         // CURRENT_SESSION_ID_ROOTS.
         const pointerRef = ref(db, 'fusion_en_sessions/current_session_id');
         const handler = onValue(pointerRef, (snapshot) => {
@@ -75,7 +84,7 @@ export default function FusionSessionScreen({ navigation }) {
         return () => off(pointerRef, 'value', handler);
         // eslint-disable-next-line react-hooks/exhaustive-deps -- startWatching is always called
         // with an explicit liveId override here, so its own sessionId-state closure never matters.
-    }, []);
+    }, [userId]);
 
     const latest = useMemo(() => latestWindow(windows), [windows]);
     const { fusedHistory, baselinePercent } = useMemo(() => {
@@ -112,8 +121,10 @@ export default function FusionSessionScreen({ navigation }) {
     const stateColor = label !== undefined && label !== null ? STRESS_COLORS[label] : COLORS.brand;
     const eegProb = latest?.prob_eeg;
     const hrvGsrProb = latest?.prob_hrv_gsr;
+    const behavProb = latest?.prob_behav;
     const eegWeight = latest?.eeg_weight;
     const hrvGsrWeight = latest?.hrv_gsr_weight;
+    const behavWeight = latest?.behav_weight;
     const hrvGsr = latest?.features_hrv_gsr;
 
     return (
@@ -126,7 +137,7 @@ export default function FusionSessionScreen({ navigation }) {
                         </TouchableOpacity>
                         <Text style={[styles.title, { color: t.text }]}>Live Fusion</Text>
                         <Text style={[styles.subtitle, { color: t.textMuted }]}>
-                            Combined EEG + HRV/GSR stress state, live
+                            Combined EEG + HRV/GSR + Behavioral stress state, live
                         </Text>
                     </View>
 
@@ -239,6 +250,18 @@ export default function FusionSessionScreen({ navigation }) {
                                             <Text style={[styles.sourceValue, { color: t.textMuted }]}>
                                                 {hrvGsrProb !== undefined && hrvGsrProb !== null
                                                     ? `${(hrvGsrProb * 100).toFixed(0)}% · ${((hrvGsrWeight || 0) * 100).toFixed(0)}% weight`
+                                                    : 'not reporting'}
+                                            </Text>
+                                        </View>
+                                        <View style={styles.sourceRow}>
+                                            <View style={[styles.sourceDot, {
+                                                backgroundColor: behavProb !== undefined && behavProb !== null
+                                                    ? (COLORS.behav || COLORS.brand) : t.border,
+                                            }]} />
+                                            <Text style={[styles.sourceName, { color: t.text }]}>Behavioral</Text>
+                                            <Text style={[styles.sourceValue, { color: t.textMuted }]}>
+                                                {behavProb !== undefined && behavProb !== null
+                                                    ? `${(behavProb * 100).toFixed(0)}% · ${((behavWeight || 0) * 100).toFixed(0)}% weight`
                                                     : 'not reporting'}
                                             </Text>
                                         </View>

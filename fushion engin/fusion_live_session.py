@@ -43,15 +43,7 @@ def load_session_windows(session_ref) -> dict:
     return {k: v for k, v in data.items() if str(k).isdigit() and isinstance(v, dict)}
 
 
-def poll_once(session_ref, eeg_session_ref) -> dict:
-    # Both modalities now write their own raw contribution DIRECTLY into
-    # fusion_en/{session_id}/{window} -- the ring via save_fusion_en_rtdb(),
-    # EEG via EegFirebaseSession.push()/make_eeg_fusion_record() -- so a
-    # single read here already has whichever side(s) have reported, with no
-    # separate merge step (or dependency on eeg_session_ref for the raw
-    # fields) needed. eeg_session_ref is still used below purely to write
-    # this poll's fused SUMMARY (fused_stress_label/fused_stress_probability)
-    # into fusion_en_sessions.
+def poll_once(session_ref, session_meta_ref) -> dict:
     windows = load_session_windows(session_ref)
     if not windows:
         return {"windows_fused": [], "baseline_ready": False}
@@ -59,6 +51,7 @@ def poll_once(session_ref, eeg_session_ref) -> dict:
     fusable_keys = [
         k for k, v in windows.items()
         if v.get("prob_eeg") is not None or v.get("prob_hrv_gsr") is not None
+        or v.get("prob_behav") is not None
     ]
     fusable_keys.sort(key=lambda k: int(k))
     fused_by_key = {}
@@ -74,6 +67,9 @@ def poll_once(session_ref, eeg_session_ref) -> dict:
     valid_fused = [v for v in fused_history if v is not None]
     baseline_mean = float(np.mean(valid_fused[:BASELINE_N])) if len(valid_fused) >= BASELINE_N else None
 
+    if baseline_mean is not None:
+        session_meta_ref.update({"baseline": baseline_mean})
+
     updated = []
     for i, k in enumerate(ordered_keys):
         if windows[k].get("fused_probability") is None:
@@ -86,12 +82,15 @@ def poll_once(session_ref, eeg_session_ref) -> dict:
             "stress_trend": trend,
             "eeg_weight": fused.get("eeg_reliability_weight_norm"),
             "hrv_gsr_weight": fused.get("hrv_gsr_reliability_weight_norm"),
+            "behav_weight": fused.get("behav_reliability_weight_norm"),
         }
 
         if not fused.get("eeg_missing"):
             write["prob_eeg"] = fused.get("prob_eeg")
         if not fused.get("hrv_gsr_missing"):
             write["prob_hrv_gsr"] = fused.get("prob_hrv_gsr")
+        if not fused.get("behav_missing"):
+            write["prob_behav"] = fused.get("prob_behav")
 
         write["stress_deviation"] = (
             windows[k]["fused_probability"] - baseline_mean
@@ -100,82 +99,93 @@ def poll_once(session_ref, eeg_session_ref) -> dict:
         )
         session_ref.child(k).update(write)
 
-        eeg_session_ref.child(k).update({
-            "fused_stress_label": "high_stress" if windows[k]["fused_label"] == 1 else "low_stress",
-            "fused_stress_probability": windows[k]["fused_probability"],
+        # Per-window summary mirrored into fusion_en_sessions/{user}/{session}
+        # -- probability_vector carries every modality's raw contribution
+        # (None where that modality didn't report this window) alongside the
+        # fused value, so a session-history reader doesn't need to cross
+        # back into fusion_en/ to see per-modality detail.
+        session_meta_ref.child(k).update({
+            "stress_label": "high_stress" if windows[k]["fused_label"] == 1 else "low_stress",
+            "probability_vector": {
+                "eeg": fused.get("prob_eeg"),
+                "hrv_gsr": fused.get("prob_hrv_gsr"),
+                "behav": fused.get("prob_behav"),
+                "fused": windows[k]["fused_probability"],
+            },
         })
         updated.append(k)
 
     return {"windows_fused": updated, "baseline_ready": baseline_mean is not None}
 
 
-def _session_refs(db_mod, session_id: str) -> dict:
+def _session_refs(db_mod, user_id: str, session_id: str) -> dict:
     return {
-        "session_ref": db_mod.reference(f"{FUSION_EN_ROOT}/{session_id}"),
-        "eeg_session_ref": db_mod.reference(f"{FUSION_EN_SESSIONS_ROOT}/{session_id}"),
-        "started_at_ref": db_mod.reference(f"{FUSION_EN_SESSIONS_ROOT}/{session_id}/started_at"),
-        "ended_at_ref": db_mod.reference(f"{FUSION_EN_SESSIONS_ROOT}/{session_id}/ended_at"),
-        "user_id_ref": db_mod.reference(f"{FUSION_EN_SESSIONS_ROOT}/{session_id}/user_id"),
+        "session_ref": db_mod.reference(f"{FUSION_EN_ROOT}/{user_id}/{session_id}"),
+        "session_meta_ref": db_mod.reference(f"{FUSION_EN_SESSIONS_ROOT}/{user_id}/{session_id}"),
     }
 
 
-def run(session_id: str | None, poll_interval_sec: float, cred_path: str, db_url: str):
-    """session_id: a manual pin/override for standalone debugging -- when
-    None (the normal case), this process instead follows whatever
-    StressApp (App.js) has published at
-    {FUSION_EN_SESSIONS_ROOT}/current_session_id, polling it every
-    poll_interval_sec and rotating onto a new id the moment the app opens
-    (or reuses) one -- see backend/common/firebase_config.py's
-    CURRENT_SESSION_ID_FIELD docstring. Rotation writes ended_at onto the
-    OLD session (it just, by definition, ended) and started_at onto the
-    new one, replacing the old ended-flag pause/resume mechanism entirely:
-    that existed to stop a SHARED, eternally-reused session_id from being
-    fused into while nobody watched, which is no longer a real risk once
-    every app-open mints its own genuinely new id."""
+def run(session_id: str | None, user_id: str | None, poll_interval_sec: float,
+        cred_path: str, db_url: str):
     db_mod = _init_firebase(cred_path, db_url)
     manual_override = session_id is not None
     pointer_ref = db_mod.reference(f"{FUSION_EN_SESSIONS_ROOT}/{CURRENT_SESSION_ID_FIELD}")
     user_pointer_ref = db_mod.reference(f"{FUSION_EN_SESSIONS_ROOT}/{CURRENT_USER_ID_FIELD}")
 
-    current_session_id = session_id or pointer_ref.get()
+    current_session_id = session_id
+    current_user_id = user_id
+    if not manual_override:
+        current_session_id = pointer_ref.get()
+        current_user_id = user_pointer_ref.get()
     refs = None
 
-    def _switch_to(new_session_id: str, *, is_rotation: bool):
-        nonlocal current_session_id, refs
+    # A "session" is a login-to-logout span belonging to one user (see
+    # StressApp's AuthContext.js) -- fusion_en/fusion_en_sessions are
+    # therefore nested under user_id, so BOTH pointers must resolve before
+    # there's a path to watch at all.
+    def _switch_to(new_session_id: str, new_user_id: str, *, is_rotation: bool):
+        nonlocal current_session_id, current_user_id, refs
         if is_rotation and refs is not None:
-            refs["ended_at_ref"].set(datetime.now(timezone.utc).isoformat())
-            print(f"[fusion_live_session] session {current_session_id} ended "
-                  f"(app started a new session)")
+            refs["session_meta_ref"].update({"session_ended": datetime.now(timezone.utc).isoformat()})
+            print(f"[fusion_live_session] session {current_user_id}/{current_session_id} ended")
         current_session_id = new_session_id
-        refs = _session_refs(db_mod, current_session_id)
-        if refs["started_at_ref"].get() is None:
-            refs["started_at_ref"].set(datetime.now(timezone.utc).isoformat())
-            # Stamp which user this session belongs to -- same app-driven
-            # pointer the ring/EEG bridges already follow for attribution.
-            # Written once at session start since a session belongs to one
-            # user for its whole lifetime.
-            user_id = user_pointer_ref.get()
-            if isinstance(user_id, str) and user_id:
-                refs["user_id_ref"].set(user_id)
+        current_user_id = new_user_id
+        refs = _session_refs(db_mod, current_user_id, current_session_id)
+        # StressApp's AuthContext.js already writes session_started at login
+        # (the authoritative moment a session begins); this is only a
+        # fallback for a session this process discovers mid-flight without
+        # ever having seen that write (e.g. process restarted).
+        if refs["session_meta_ref"].child("session_started").get() is None:
+            refs["session_meta_ref"].update({"session_started": datetime.now(timezone.utc).isoformat()})
         print(
-            f"[fusion_live_session] watching fusion_en/{current_session_id} "
-            f"+ fusion_en_sessions/{current_session_id} (EEG) "
+            f"[fusion_live_session] watching fusion_en/{current_user_id}/{current_session_id} "
+            f"+ fusion_en_sessions/{current_user_id}/{current_session_id} "
             f"(poll every {poll_interval_sec}s) -- Ctrl+C to stop early"
         )
 
-    if current_session_id:
-        _switch_to(current_session_id, is_rotation=False)
+    if current_session_id and current_user_id:
+        _switch_to(current_session_id, current_user_id, is_rotation=False)
     else:
-        print(f"[fusion_live_session] no session_id yet -- waiting for the app to open "
-              f"(polling {FUSION_EN_SESSIONS_ROOT}/{CURRENT_SESSION_ID_FIELD} every {poll_interval_sec}s)")
+        print(f"[fusion_live_session] no live session yet -- waiting for a login "
+              f"(polling {FUSION_EN_SESSIONS_ROOT}/{CURRENT_SESSION_ID_FIELD}"
+              f"/{CURRENT_USER_ID_FIELD} every {poll_interval_sec}s)")
 
     try:
         while True:
             if not manual_override:
                 try:
                     pointer_session_id = pointer_ref.get()
-                    if pointer_session_id and pointer_session_id != current_session_id:
-                        _switch_to(pointer_session_id, is_rotation=True)
+                    pointer_user_id = user_pointer_ref.get()
+                    if (pointer_session_id and pointer_user_id
+                            and (pointer_session_id, pointer_user_id) != (current_session_id, current_user_id)):
+                        _switch_to(pointer_session_id, pointer_user_id, is_rotation=True)
+                    elif not pointer_session_id and refs is not None:
+                        # Logged out -- AuthContext.js's logout() already wrote
+                        # session_ended directly, and cleared the pointer.
+                        # Stop polling until the next login.
+                        print(f"[fusion_live_session] {current_user_id}/{current_session_id} "
+                              f"logged out -- pausing until next login")
+                        refs = None
                 except Exception as e:
                     print(f"[fusion_live_session] session-pointer poll failed ({e}) -- "
                           f"retrying in {poll_interval_sec}s")
@@ -187,7 +197,7 @@ def run(session_id: str | None, poll_interval_sec: float, cred_path: str, db_url
                 continue
 
             try:
-                result = poll_once(refs["session_ref"], refs["eeg_session_ref"])
+                result = poll_once(refs["session_ref"], refs["session_meta_ref"])
             except Exception as e:
                 print(f"[fusion_live_session] poll failed ({e}) -- retrying in {poll_interval_sec}s")
                 time.sleep(poll_interval_sec)
@@ -207,8 +217,15 @@ def main():
         "--session-id",
         default=None,
         help="Pin to this session id and IGNORE the live app-driven pointer -- for standalone "
-        "debugging only. Normal runs should omit this: the process follows "
-        "{FUSION_EN_SESSIONS_ROOT}/current_session_id (written by StressApp's App.js) instead.",
+        "debugging only. Requires --user-id too (fusion_en/fusion_en_sessions are user-scoped). "
+        "Normal runs should omit both: the process follows "
+        "{FUSION_EN_SESSIONS_ROOT}/current_session_id + current_user_id (written by StressApp's "
+        "AuthContext.js at login) instead.",
+    )
+    ap.add_argument(
+        "--user-id",
+        default=None,
+        help="Required alongside --session-id for a manual pin -- ignored otherwise.",
     )
     ap.add_argument("--poll-interval-sec", type=float, default=5.0)
     ap.add_argument(
@@ -226,8 +243,10 @@ def main():
 
     if not args.firebase_cred:
         raise SystemExit("--firebase-cred (or $FIREBASE_CREDENTIALS) is required.")
+    if args.session_id and not args.user_id:
+        raise SystemExit("--session-id requires --user-id too (fusion_en is user-scoped).")
 
-    run(args.session_id, args.poll_interval_sec, args.firebase_cred, args.firebase_db_url)
+    run(args.session_id, args.user_id, args.poll_interval_sec, args.firebase_cred, args.firebase_db_url)
 
 
 if __name__ == "__main__":

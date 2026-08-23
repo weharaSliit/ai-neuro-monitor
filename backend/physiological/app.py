@@ -1,14 +1,6 @@
 import sys
 
-# Windows consoles default to the cp1252 codepage, which can't encode the
-# checkmark/arrow characters used in this backend's startup log lines and
-# crashes the process with UnicodeEncodeError before Flask ever starts.
-if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
-    sys.stdout.reconfigure(encoding="utf-8")
-    sys.stderr.reconfigure(encoding="utf-8")
-
-from flask import Flask, jsonify, request, g
-from flask_cors import CORS
+from flask import jsonify, request, g
 from werkzeug.security import generate_password_hash, check_password_hash
 import numpy as np
 import re
@@ -21,6 +13,7 @@ if __package__ is None:
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
+from backend.common.app_factory import create_app
 from backend.common.config import (
     STRESS_COLORS,
     EMA_ALPHA, N_BASELINE_WIN
@@ -51,8 +44,7 @@ from backend.physiological.calibration_capture import (
     save_calibration_windows, run_calibration_capture
 )
 
-app = Flask(__name__)
-CORS(app)
+app = create_app(__name__)
 init_firebase()
 
 ring_sessions = {}  
@@ -340,7 +332,7 @@ def submit_pss4():
     q4 = int(data.get('q4', 0))
 
     score = save_pss4(user_id, session_id, q1, q2, q3, q4)
-    label_session_ground_truth_rtdb(session_id, score)
+    label_session_ground_truth_rtdb(user_id, session_id, score)
 
     level = (
         'Normal' if score <= 6 else

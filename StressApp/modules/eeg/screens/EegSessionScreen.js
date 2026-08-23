@@ -8,6 +8,7 @@ import { WithSkiaWeb } from '@shopify/react-native-skia/lib/module/web';
 import { ref, onValue, off, query, orderByChild, limitToLast } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
+import { useAuth } from '../../../context/AuthContext';
 import { STRESS_COLORS, STRESS_EMOJI, EEG_TREND_LABELS, TASK_STATE_LABELS } from '../config/config';
 
 
@@ -134,6 +135,8 @@ function SignalChart({ title, lastValue, points, min, max, color, t, last }) {
 export default function EegSessionScreen({ navigation, route }) {
     const showBack = route?.name === 'Eeg';
     const { isDark, theme: t, COLORS } = useTheme();
+    const { user } = useAuth();
+    const userId = user?.userId;
     const [sessionId, setSessionId] = useState('');
     const [watching, setWatching] = useState(false);
     const [latest, setLatest] = useState(null);
@@ -143,6 +146,7 @@ export default function EegSessionScreen({ navigation, route }) {
     const listenerRef = useRef(null);
     const rawListenerRef = useRef(null);
     const startWatching = useCallback((idOverride) => {
+        if (!userId) return;
         const targetId = (idOverride ?? sessionId).trim();
         if (!targetId) return;
         if (targetId === sessionId && listenerRef.current) return;  // already watching this session
@@ -151,7 +155,14 @@ export default function EegSessionScreen({ navigation, route }) {
         setHasAnyWindow(false);
         setLatestRaw(null);
         setHasAnyRaw(false);
-        const sessionRef = query(ref(db, `psychological/${targetId}`), orderByChild('window'), limitToLast(1));
+        // Nested under the logged-in user (psychological/{userId}/{sessionId}/...),
+        // matching backend/psychological/firebase_service.py's EegFirebaseSession --
+        // see backend/psychological/app.py's /calibrate and /live_raw, both of
+        // which write here keyed by g.user_id (the auth token's user, not a
+        // client-supplied value).
+        const sessionRef = query(
+            ref(db, `psychological/${userId}/${targetId}`), orderByChild('window'), limitToLast(1)
+        );
         const handler = onValue(sessionRef, (snapshot) => {
             const data = snapshot.val();
             setHasAnyWindow(!!data);
@@ -159,7 +170,7 @@ export default function EegSessionScreen({ navigation, route }) {
         });
         listenerRef.current = sessionRef;
 
-        const rawRef = ref(db, `psychological/${targetId}/live_raw`);
+        const rawRef = ref(db, `psychological/${userId}/${targetId}/live_raw`);
         const rawHandler = onValue(rawRef, (snapshot) => {
             const data = snapshot.val();
             setHasAnyRaw(!!data);
@@ -168,7 +179,7 @@ export default function EegSessionScreen({ navigation, route }) {
         rawListenerRef.current = rawRef;
 
         setWatching(true);
-    }, [sessionId]);  // eslint-disable-line react-hooks/exhaustive-deps -- idOverride intentionally omitted, see its own comment above
+    }, [sessionId, userId]);  // eslint-disable-line react-hooks/exhaustive-deps -- idOverride intentionally omitted, see its own comment above
 
     const stopWatching = useCallback(() => {
         if (listenerRef.current) {
@@ -183,13 +194,16 @@ export default function EegSessionScreen({ navigation, route }) {
     }, []);
 
     useEffect(() => {
+        if (!userId) return;
         // A live subscription, not a one-time get() -- picks up the current
         // session the instant App.js writes it (no race if this screen
         // mounts before that write lands) and follows any later rotation
         // automatically, so there's never a manual "Start" step needed.
         // Lives inside psychological/ itself (this screen's own domain, and
         // the same root the EEG bridge already polls) -- no separate shared
-        // pointer store, see App.js's CURRENT_SESSION_ID_ROOTS.
+        // pointer store, see App.js's CURRENT_SESSION_ID_ROOTS. Re-subscribes
+        // if userId becomes available after mount (auth restore can resolve
+        // async), so a pointer value that arrived before that isn't missed.
         const pointerRef = ref(db, 'psychological/current_session_id');
         const handler = onValue(pointerRef, (snapshot) => {
             const liveId = snapshot.val();
@@ -198,7 +212,7 @@ export default function EegSessionScreen({ navigation, route }) {
         return () => off(pointerRef, 'value', handler);
         // eslint-disable-next-line react-hooks/exhaustive-deps -- startWatching is always called
         // with an explicit liveId override here, so its own sessionId-state closure never matters.
-    }, []);
+    }, [userId]);
 
     const skipped = latest?.skipped;
     const label = latest?.task_state_label;
