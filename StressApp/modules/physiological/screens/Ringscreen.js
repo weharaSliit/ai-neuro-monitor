@@ -15,7 +15,7 @@ import {
   View, Text, ScrollView, StyleSheet, Animated, Dimensions
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { WithSkiaWeb } from '@shopify/react-native-skia/lib/module/web';
+import LineChart from '../../shared/LineChart';
 import axios from 'axios';
 import { useTheme } from '../config/ThemeContext';
 import { useAuth } from '../../../context/AuthContext';
@@ -205,14 +205,11 @@ export default function RingScreen() {
             <Text style={[styles.cardHint, { color: t.textMuted, marginTop: -6, marginBottom: 12 }]}>
               P(stress) across the most recent windows (%)
             </Text>
-            <WithSkiaWeb
-              getComponent={() => import('../../shared/SkiaLineGraph')}
-              componentProps={{
-                points: stressTrend,
-                color: trendColor,
-                width: TREND_CHART_WIDTH,
-                height: 130,
-              }}
+            <LineChart
+              points={stressTrend}
+              color={trendColor}
+              width={TREND_CHART_WIDTH}
+              height={130}
               fallback={<Text style={[styles.cardHint, { color: t.textMuted }]}>Loading chart…</Text>}
             />
           </View>

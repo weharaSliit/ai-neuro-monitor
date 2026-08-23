@@ -19,7 +19,7 @@ import {
     TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { WithSkiaWeb } from '@shopify/react-native-skia/lib/module/web';
+import LineChart from '../../shared/LineChart';
 import { ref, onValue, off } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
@@ -204,14 +204,11 @@ export default function HrvGsrSessionScreen({ navigation, route }) {
                             <Text style={[styles.label, { color: t.textSub, marginBottom: 12 }]}>
                                 Session trendline — P(stress) per window (%)
                             </Text>
-                            <WithSkiaWeb
-                                getComponent={() => import('../../shared/SkiaLineGraph')}
-                                componentProps={{
-                                    points: stressTrend,
-                                    color: stateColor,
-                                    width: TREND_CHART_WIDTH,
-                                    height: 130,
-                                }}
+                            <LineChart
+                                points={stressTrend}
+                                color={stateColor}
+                                width={TREND_CHART_WIDTH}
+                                height={130}
                                 fallback={<Text style={[styles.waiting, { color: t.textMuted }]}>Loading chart…</Text>}
                             />
                         </View>
