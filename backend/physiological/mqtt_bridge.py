@@ -147,7 +147,11 @@ def send_window():
             "gsr_calibration": GSR_CAL,
             "actual_fs":       actual_fs
         }
-        post_json(FLASK_URL, payload, AUTH_HEADERS, timeout=10, label=f"Window {window_idx}")
+        # 45s, not 10s -- Render's free-tier Flask service can take 30s+ to
+        # wake from a cold start after ~15min idle; a short timeout here
+        # silently drops the window (and its prediction) every time that
+        # happens instead of just waiting it out.
+        post_json(FLASK_URL, payload, AUTH_HEADERS, timeout=45, label=f"Window {window_idx}")
 
     window_idx += 1
     ibi_buf, gsr_buf, acc_buf = [], [], []
