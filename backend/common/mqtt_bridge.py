@@ -14,7 +14,6 @@
 # and windowing logic, built on top of the pieces below.
 # ============================================================
 
-import fcntl
 import os
 import sys
 import tempfile
@@ -24,6 +23,13 @@ import paho.mqtt.client as mqtt
 import requests
 
 from backend.common.auth import generate_token
+
+# fcntl is POSIX-only (Mac/Linux) -- msvcrt is the Windows-native
+# equivalent for the same advisory file lock, used interchangeably below.
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 
 def auth_headers(user_id: str) -> dict:
@@ -39,19 +45,26 @@ def _acquire_single_instance_lock(client_id: str):
     """Refuses to start a second bridge with the same client_id. Two
     processes both subscribed to the same MQTT topic silently double (or
     triple) every window POSTed to Flask/Firebase -- this turns that into
-    a loud startup failure instead. flock is tied to the open fd, so the
-    lock is released automatically if the process dies or is killed, no
-    stale-pidfile cleanup needed."""
+    a loud startup failure instead. The lock is tied to the open fd
+    (flock on POSIX, msvcrt.locking on Windows), so it's released
+    automatically if the process dies or is killed, no stale-pidfile
+    cleanup needed. PID is written and flushed before locking on Windows
+    specifically -- msvcrt.locking()'s byte range must not exceed the
+    file's actual size, which is 0 right after opening in "w" mode."""
     lock_path = Path(tempfile.gettempdir()) / f"mindpulse_{client_id}.lock"
     fh = open(lock_path, "w")
+    fh.write(str(os.getpid()))
+    fh.flush()
     try:
-        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if os.name == "nt":
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         print(f"[mqtt] another '{client_id}' bridge is already running "
               f"(lock held on {lock_path}) -- exiting instead of double-subscribing.")
         sys.exit(1)
-    fh.write(str(os.getpid()))
-    fh.flush()
     return fh
 
 
