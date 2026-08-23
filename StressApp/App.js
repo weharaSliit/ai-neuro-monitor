@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, AppState as RNAppState } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { View } from 'react-native';
 import { ref, update } from 'firebase/database';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -11,6 +10,7 @@ import RegisterScreen from './screens/RegisterScreen';
 import PhysiologicalNavigator from './modules/physiological/PhysiologicalNavigator';
 import FusionSessionScreen from './modules/fusion/screens/FusionSessionScreen';
 import EegSessionScreen from './modules/eeg/screens/EegSessionScreen';
+import HrvGsrSessionScreen from './modules/hrvgsr/screens/HrvGsrSessionScreen';
 import CalibrationScreen from './modules/physiological/screens/CalibrationScreen';
 import EMAScreen from './modules/physiological/screens/EMAScreen';
 import { AppContext } from './modules/physiological/screens/AppState';
@@ -19,12 +19,8 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { db } from './firebase';
 
 const Stack = createNativeStackNavigator();
-const SESSION_ID_KEY = '@stressapp/liveSessionId';
-const LAST_ACTIVE_KEY = '@stressapp/liveSessionLastActive';
 const CURRENT_SESSION_ID_FIELD = 'current_session_id';
 const CURRENT_SESSION_ID_ROOTS = ['psychological', 'fusion_en', 'fusion_en_sessions'];
-const SESSION_GRACE_MS = 30 * 60 * 1000;
-const HEARTBEAT_INTERVAL_MS = 20 * 1000;
 
 function mintSessionId() {
     const d = new Date();
@@ -33,27 +29,20 @@ function mintSessionId() {
         + `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 
+// No reuse/grace window -- every app open mints a genuinely new session,
+// full stop. The backend (fushion engin/fusion_live_session.py's
+// _switch_to(), and each wearable bridge's own pointer poll) already stamps
+// ended_at on whatever session this replaces the moment it next polls
+// current_session_id, so closing the app and reopening it always produces a
+// clean session boundary with no client-side "on close" event needed.
 async function resolveLiveSessionId() {
-    const stored = await AsyncStorage.multiGet([SESSION_ID_KEY, LAST_ACTIVE_KEY]);
-    const storedId = stored[0][1];
-    const storedLastActive = stored[1][1] ? Number(stored[1][1]) : 0;
-    const withinGrace = !!storedId && (Date.now() - storedLastActive) < SESSION_GRACE_MS;
-    const sessionId = withinGrace ? storedId : mintSessionId();
-
-    await AsyncStorage.multiSet([
-        [SESSION_ID_KEY, sessionId],
-        [LAST_ACTIVE_KEY, String(Date.now())],
-    ]);
+    const sessionId = mintSessionId();
     const updates = {};
     for (const root of CURRENT_SESSION_ID_ROOTS) {
         updates[`${root}/${CURRENT_SESSION_ID_FIELD}`] = sessionId;
     }
     await update(ref(db), updates);
     return sessionId;
-}
-
-function touchLiveSessionHeartbeat() {
-    AsyncStorage.setItem(LAST_ACTIVE_KEY, String(Date.now())).catch(() => {});
 }
 
 const linking = {
@@ -77,6 +66,7 @@ const linking = {
       EmaDetail:   'ema',
       Fusion:      'fusion',
       Eeg:         'eeg',
+      HrvGsr:      'hrv-gsr',
     },
   },
 };
@@ -86,20 +76,7 @@ function RootNavigator() {
   const { theme } = useTheme();
   useEffect(() => {
     if (!user) return;
-
     resolveLiveSessionId().catch((e) => console.log('[live_session] resolve failed:', e?.message));
-
-    const heartbeat = setInterval(touchLiveSessionHeartbeat, HEARTBEAT_INTERVAL_MS);
-    const subscription = RNAppState.addEventListener('change', (nextState) => {
-      if (nextState === 'background' || nextState === 'inactive') {
-        touchLiveSessionHeartbeat();
-      }
-    });
-
-    return () => {
-      clearInterval(heartbeat);
-      subscription.remove();
-    };
   }, [user]);
 
   if (isLoading) {
@@ -130,6 +107,11 @@ function RootNavigator() {
             name="Eeg"
             component={EegSessionScreen}
             options={{ headerShown: true, title: 'EEG' }}
+          />
+          <Stack.Screen
+            name="HrvGsr"
+            component={HrvGsrSessionScreen}
+            options={{ headerShown: true, title: 'HRV/GSR' }}
           />
         </>
       ) : (
