@@ -9,7 +9,6 @@ import { SplashScreen } from './src/screens/SplashScreen';
 import { WelcomeScreen } from './src/screens/WelcomeScreen';
 import { SignInScreen } from './src/screens/SignInScreen';
 import { SignUpScreen } from './src/screens/SignUpScreen';
-import { EmailVerificationScreen } from './src/screens/EmailVerificationScreen';
 import { OnboardingQuestionsScreen } from './src/screens/OnboardingQuestionsScreen';
 import { UserProfileScreen } from './src/screens/UserProfileScreen';
 import { PrivacyPolicyScreen } from './src/screens/PrivacyPolicyScreen';
@@ -43,8 +42,6 @@ const MainNavigator = () => {
         return <SignInScreen />;
       case 'SignUp':
         return <SignUpScreen />;
-      case 'EmailVerification':
-        return <EmailVerificationScreen />;
       case 'OnboardingQuestions':
         return <OnboardingQuestionsScreen />;
       case 'UserProfile':
