@@ -64,7 +64,7 @@ init_firebase()
 
 # --- User operations (Root 'users' path in Firebase) ---
 def _users_ref(path: str = ""):
-    """Returns a direct reference under the root 'users' node in Firebase Realtime DB."""
+    """Returns a direct reference under the root 'users' node in Firebase DB."""
     clean_path = str(path).lstrip('/')
     if not clean_path:
         return db.reference('users')
