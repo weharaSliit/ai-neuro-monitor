@@ -420,6 +420,7 @@ export default function DashboardScreen({ navigation }) {
             <ActionTile icon="💍" label="Ring"       color={COLORS.brand}    isDark={isDark} onPress={() => navigation.navigate('Ring')} />
             <ActionTile icon="🧬" label="Fusion"     color={COLORS.stress}   isDark={isDark} onPress={() => navigation.navigate('Fusion')} />
             <ActionTile icon="🧠" label="EEG"        color={COLORS.warning}  isDark={isDark} onPress={() => navigation.navigate('Eeg')} />
+            <ActionTile icon="❤️" label="HRV/GSR"    color={COLORS.hrv}      isDark={isDark} onPress={() => navigation.navigate('HrvGsr')} />
           </View>
         </View>
 

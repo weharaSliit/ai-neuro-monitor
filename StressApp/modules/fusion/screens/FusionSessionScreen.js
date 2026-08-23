@@ -7,7 +7,7 @@ import {
 const CHART_WIDTH = Dimensions.get('window').width - 2 * 20 - 2 * 18 - 40;
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WithSkiaWeb } from '@shopify/react-native-skia/lib/module/web';
-import { ref, onValue, off, get } from 'firebase/database';
+import { ref, onValue, off } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import { STRESS_COLORS, STRESS_LABELS, STRESS_EMOJI, FUSION_TREND_LABELS } from '../config/config';
@@ -45,6 +45,7 @@ export default function FusionSessionScreen({ navigation }) {
     const startWatching = useCallback((idOverride) => {
         const targetId = (idOverride ?? sessionId).trim();
         if (!targetId) return;
+        if (targetId === sessionId && listenerRef.current) return;  // already watching this session
         setSessionId(targetId);
         setWindows(null);
         setHasAnyWindow(false);
@@ -57,19 +58,23 @@ export default function FusionSessionScreen({ navigation }) {
         });
         listenerRef.current = { sessionRef, handler };
         setWatching(true);
-    }, [sessionId]);  
+    }, [sessionId]);
     useEffect(() => {
-        let cancelled = false;
-        // Lives inside fusion_en_sessions/ itself (this screen's own
-        // domain, and the same root fusion_live_session.py already polls)
-        // -- no separate shared pointer store, see App.js's
+        // A live subscription, not a one-time get() -- picks up the current
+        // session the instant App.js writes it and follows any later
+        // rotation automatically, so there's never a manual "Start" step
+        // needed. Lives inside fusion_en_sessions/ itself (this screen's
+        // own domain, and the same root fusion_live_session.py already
+        // polls) -- no separate shared pointer store, see App.js's
         // CURRENT_SESSION_ID_ROOTS.
-        get(ref(db, 'fusion_en_sessions/current_session_id')).then((snapshot) => {
-            if (cancelled) return;
+        const pointerRef = ref(db, 'fusion_en_sessions/current_session_id');
+        const handler = onValue(pointerRef, (snapshot) => {
             const liveId = snapshot.val();
             if (liveId) startWatching(liveId);
-        }).catch(() => {});
-        return () => { cancelled = true; };
+        });
+        return () => off(pointerRef, 'value', handler);
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- startWatching is always called
+        // with an explicit liveId override here, so its own sessionId-state closure never matters.
     }, []);
 
     const latest = useMemo(() => latestWindow(windows), [windows]);
@@ -130,27 +135,15 @@ export default function FusionSessionScreen({ navigation }) {
                         <TextInput
                             style={[styles.input, { color: t.text, borderColor: t.border }]}
                             value={sessionId}
-                            onChangeText={setSessionId}
-                            editable={!watching}
-                            autoCapitalize="none"
-                            autoCorrect={false}
-                            placeholder="session id"
+                            editable={false}
+                            placeholder="waiting for live session…"
                             placeholderTextColor={t.textMuted}
                         />
                         <Text style={[styles.hint, { color: t.textMuted }]}>
-                            Auto-fills with the current live session on open. Edit this and press
-                            Start only to watch a different or past session's id.
+                            Follows the current live session automatically — no manual start needed.
                         </Text>
 
-                        {!watching ? (
-                            <TouchableOpacity
-                                style={[styles.button, { backgroundColor: COLORS.brand }]}
-                                onPress={() => startWatching()}
-                                activeOpacity={0.85}
-                            >
-                                <Text style={styles.buttonText}>Start Session (watch live)</Text>
-                            </TouchableOpacity>
-                        ) : (
+                        {watching && (
                             <TouchableOpacity
                                 style={[styles.button, styles.buttonDanger]}
                                 onPress={stopWatching}
