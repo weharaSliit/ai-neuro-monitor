@@ -1,20 +1,29 @@
-import React, { useContext } from 'react';
-import { StatusBar, StyleSheet, View, LogBox } from 'react-native';
+// ============================================================
+// Relaxation Guide module -- StressApp's primary post-login screen
+// (see initialRouteName="Relaxation" in ../../App.js). EEG/HRV-GSR/Fusion
+// are supporting data sources feeding this module's live pipeline, not
+// separate destinations users land on. This module has no login/signup of
+// its own -- it is handed StressApp's already-logged-in identity (from
+// AuthContext) directly, and "leaving" means a real logout (src/context/
+// AppContext.js's hostExit, consumed by the Profile screen's Log Out
+// button), same as any other primary app screen.
+// ============================================================
+
+import React from 'react';
+import { ActivityIndicator, StatusBar, StyleSheet, View, LogBox } from 'react-native';
+import { useAuth } from '../../context/AuthContext';
 import { AppProvider, AppContext } from './src/context/AppContext';
 import { ThemeProvider, ThemeContext } from './src/context/ThemeContext';
+import { SweetAlertProvider } from './src/context/SweetAlertContext';
 import { BottomNavBar } from './src/components/BottomNavBar';
 
-// Import Screens
-import { SplashScreen } from './src/screens/SplashScreen';
-import { WelcomeScreen } from './src/screens/WelcomeScreen';
-import { SignInScreen } from './src/screens/SignInScreen';
-import { SignUpScreen } from './src/screens/SignUpScreen';
 import { OnboardingQuestionsScreen } from './src/screens/OnboardingQuestionsScreen';
 import { UserProfileScreen } from './src/screens/UserProfileScreen';
 import { PrivacyPolicyScreen } from './src/screens/PrivacyPolicyScreen';
 import { PermissionsScreen } from './src/screens/PermissionsScreen';
 import { BaselineCalibrationScreen } from './src/screens/BaselineCalibrationScreen';
 import { DashboardScreen } from './src/screens/DashboardScreen';
+import { FusionPipelineScreen } from './src/screens/FusionPipelineScreen';
 import { MethodsScreen } from './src/screens/MethodsScreen';
 import { InterventionScreen } from './src/screens/InterventionScreen';
 import { SubOptionSelectorScreen } from './src/screens/SubOptionSelectorScreen';
@@ -24,24 +33,21 @@ import { RecoveryScreen } from './src/screens/RecoveryScreen';
 import { HistoryScreen } from './src/screens/HistoryScreen';
 import { ChatbotScreen } from './src/screens/ChatbotScreen';
 
-import { SweetAlertProvider } from './src/context/SweetAlertContext';
-
 LogBox.ignoreLogs(['Expo AV has been deprecated', 'Expo AV is deprecated']);
 
 const MainNavigator = () => {
-  const { currentScreen } = React.useContext(AppContext);
+  const { currentScreen, identityChecked } = React.useContext(AppContext);
   const { isDarkMode, theme } = React.useContext(ThemeContext);
 
   const renderScreen = () => {
+    if (!identityChecked) {
+      return (
+        <View style={[styles.loadingWrap, { backgroundColor: theme.bgPrimary }]}>
+          <ActivityIndicator size="large" color={theme.accent} />
+        </View>
+      );
+    }
     switch (currentScreen) {
-      case 'Splash':
-        return <SplashScreen />;
-      case 'Welcome':
-        return <WelcomeScreen />;
-      case 'SignIn':
-        return <SignInScreen />;
-      case 'SignUp':
-        return <SignUpScreen />;
       case 'OnboardingQuestions':
         return <OnboardingQuestionsScreen />;
       case 'UserProfile':
@@ -54,6 +60,8 @@ const MainNavigator = () => {
         return <BaselineCalibrationScreen />;
       case 'Dashboard':
         return <DashboardScreen />;
+      case 'FusionPipeline':
+        return <FusionPipelineScreen />;
       case 'Methods':
         return <MethodsScreen />;
       case 'Intervention':
@@ -71,7 +79,7 @@ const MainNavigator = () => {
       case 'Chatbot':
         return <ChatbotScreen />;
       default:
-        return <WelcomeScreen />;
+        return <PrivacyPolicyScreen />;
     }
   };
 
@@ -87,11 +95,17 @@ const MainNavigator = () => {
   );
 };
 
-export default function App() {
+export default function RelaxationGuideModule() {
+  const { user, logout } = useAuth();
+
   return (
     <ThemeProvider>
       <SweetAlertProvider>
-        <AppProvider>
+        <AppProvider
+          initialUserId={user?.userId}
+          initialUsername={user?.name}
+          onExit={logout}
+        >
           <View style={styles.root}>
             <MainNavigator />
           </View>
@@ -110,5 +124,10 @@ const styles = StyleSheet.create({
   },
   screenContainer: {
     flex: 1
+  },
+  loadingWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center'
   }
 });

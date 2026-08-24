@@ -3,13 +3,18 @@ import { apiService } from '../api/apiService';
 
 export const AppContext = createContext();
 
-export const AppProvider = ({ children }) => {
-  const [currentScreen, setCurrentScreen] = useState('Splash');
-  const [userId, setUserId] = useState('user_calm_ai');
-  const [username, setUsername] = useState('Research Participant');
+// userId/username are the identity of whoever is logged into the host app
+// (StressApp's AuthContext) -- this module has no sign-in/sign-up of its own
+// and never mints its own identity. initialUserId is required for any of the
+// live telemetry endpoints to resolve real Firebase data (see firebase_service.py);
+// the 'guest_' fallback only exists so this module still renders standalone in dev.
+export const AppProvider = ({ children, initialUserId, initialUsername, onExit = null }) => {
+  const [currentScreen, setCurrentScreen] = useState('PrivacyPolicy');
+  const [userId, setUserId] = useState(initialUserId || `guest_${Date.now()}`);
+  const [username, setUsername] = useState(initialUsername || 'Participant');
   const [userEmail, setUserEmail] = useState('');
   const [pendingVerificationCode, setPendingVerificationCode] = useState('');
-  const [isGuest, setIsGuest] = useState(false);
+  const [isGuest, setIsGuest] = useState(!initialUserId);
 
   // Individual Permission Toggles (Grant Access screen)
   const [permissionsGranted, setPermissionsGranted] = useState(false);
@@ -20,6 +25,30 @@ export const AppProvider = ({ children }) => {
 
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
   const [isCalibrated, setIsCalibrated] = useState(false);
+
+  // Returning-user check: has this identity already finished the one-time
+  // Privacy/Onboarding/Permissions/Calibration flow before, on any device?
+  // Gates rendering so a returning user never flashes onboarding before we
+  // know. Guests (no initialUserId, e.g. standalone dev run) always see it.
+  const [identityChecked, setIdentityChecked] = useState(!initialUserId);
+
+  useEffect(() => {
+    if (!initialUserId) return;
+    let cancelled = false;
+    (async () => {
+      const alreadyOnboarded = await apiService.getCalibrationStatus(initialUserId);
+      if (cancelled) return;
+      if (alreadyOnboarded) {
+        setPrivacyAccepted(true);
+        setPermissionsGranted(true);
+        setIsCalibrated(true);
+        setCurrentScreen('Dashboard');
+      }
+      setIdentityChecked(true);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Live Multi-Member Telemetry & Stress State (2 inputs: fused_stress_label & stress_probability)
   const [stressState, setStressState] = useState('normal');
@@ -49,18 +78,24 @@ export const AppProvider = ({ children }) => {
   const [onboardingRecommendation, setOnboardingRecommendation] = useState(null);
   const [hasShownOnboardingAlert, setHasShownOnboardingAlert] = useState(false);
 
-  // Telemetry poll loop (every 2 seconds from fusion_en_sessions)
+  // Telemetry poll loop (every 2 seconds).
+  // "normal" sim mode means no manual test override is active, so we read
+  // real-time fused probability straight from fusion_en_sessions in Firebase.
+  // Any other sim mode (pre-stress/stress/safety_override_test) is a manual
+  // developer override and goes through the simulator instead.
   useEffect(() => {
     let interval = null;
     if (isCalibrated) {
       interval = setInterval(async () => {
         try {
-          const telemetry = await apiService.getProcessedTelemetry(userId, 0.0);
+          const telemetry = simMode === 'normal'
+            ? await apiService.getLiveFusionTelemetry(userId)
+            : await apiService.getProcessedTelemetry(userId, 0.0);
           setStressState(telemetry.effective_label);
           setIsSafetyOverride(telemetry.is_safety_override);
           setIsAlertTriggered(telemetry.is_alert_triggered);
           setTelemetryMessage(telemetry.message);
-          
+
           if (telemetry.features_flat && telemetry.features_flat.length >= 1) {
             setStressProbability(telemetry.features_flat[0]);
           }
@@ -72,13 +107,15 @@ export const AppProvider = ({ children }) => {
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [isCalibrated, userId]);
+  }, [isCalibrated, userId, simMode]);
 
   // Update simulator mode manually
   const updateSimMode = async (mode) => {
     setSimMode(mode);
     await apiService.setSimulatorMode(mode);
-    const telemetry = await apiService.getProcessedTelemetry(userId, 0.0);
+    const telemetry = mode === 'normal'
+      ? await apiService.getLiveFusionTelemetry(userId)
+      : await apiService.getProcessedTelemetry(userId, 0.0);
     setStressState(telemetry.effective_label);
     setIsSafetyOverride(telemetry.is_safety_override);
     setIsAlertTriggered(telemetry.is_alert_triggered);
@@ -91,6 +128,11 @@ export const AppProvider = ({ children }) => {
   return (
     <AppContext.Provider
       value={{
+        // The host app's (StressApp's) real logout function -- this module
+        // has no login/logout of its own, so the Profile screen's "Log Out"
+        // button calls straight through to it. Null when run standalone.
+        hostExit: onExit,
+        identityChecked,
         currentScreen,
         setCurrentScreen,
         userId,

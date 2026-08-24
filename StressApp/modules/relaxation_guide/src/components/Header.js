@@ -2,6 +2,10 @@ import React, { useContext } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Platform, StatusBar } from 'react-native';
 import { ThemeContext } from '../context/ThemeContext';
 
+// This module is StressApp's primary post-login home now (not a side
+// feature reached from elsewhere), so the header never shows a "back to
+// host" affordance -- logging out (Profile screen) is the only way out,
+// same as any other primary app screen.
 export const Header = ({ title, showBack = false, onBack }) => {
   const { isDarkMode, toggleTheme, theme } = useContext(ThemeContext);
 

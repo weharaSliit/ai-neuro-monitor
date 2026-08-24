@@ -142,7 +142,7 @@ export const OnboardingQuestionsScreen = () => {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
-      <Header title="Personalization Survey" showBack onBack={() => setCurrentScreen('EmailVerification')} />
+      <Header title="Personalization Survey" showBack onBack={() => setCurrentScreen('PrivacyPolicy')} />
 
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={[styles.heading, { color: theme.textPrimary }]}>Tailor Your Relaxation Plan</Text>

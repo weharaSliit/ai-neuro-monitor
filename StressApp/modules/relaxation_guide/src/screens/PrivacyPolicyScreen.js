@@ -8,12 +8,12 @@ export const PrivacyPolicyScreen = () => {
 
   const handleAccept = () => {
     setPrivacyAccepted(true);
-    setCurrentScreen('Permissions');
+    setCurrentScreen('OnboardingQuestions');
   };
 
   return (
     <View style={styles.container}>
-      <Header title="Privacy & Data Ethics" showBack onBack={() => setCurrentScreen('Login')} />
+      <Header title="Privacy & Data Ethics" />
 
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.heading}>Research Data Privacy Consent</Text>
