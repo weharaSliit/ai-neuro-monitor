@@ -7,11 +7,10 @@ import { StatusBar } from 'expo-status-bar';
 import LoginScreen from './screens/LoginScreen';
 import RegisterScreen from './screens/RegisterScreen';
 import PhysiologicalNavigator from './modules/physiological/PhysiologicalNavigator';
-import FusionSessionScreen from './modules/fusion/screens/FusionSessionScreen';
-import EegSessionScreen from './modules/eeg/screens/EegSessionScreen';
 import HrvGsrSessionScreen from './modules/hrvgsr/screens/HrvGsrSessionScreen';
 import CalibrationScreen from './modules/physiological/screens/CalibrationScreen';
 import EMAScreen from './modules/physiological/screens/EMAScreen';
+import PSS4Screen from './modules/physiological/screens/PSS4Screen';
 import RelaxationGuideModule from './modules/relaxation_guide';
 import { AppContext } from './modules/physiological/screens/AppState';
 import { ThemeProvider, useTheme } from './modules/physiological/config/ThemeContext';
@@ -30,16 +29,15 @@ const linking = {
         screens: {
           Home:     'home',
           History:  'history',
-          'PSS-4':  'pss4',
           Ring:     'ring',
           EEG:      'eeg-tab',
+          Fusion:   'fusion-tab',
           Profile:  'profile',
         },
       },
       Calibration: 'calibration',
       EmaDetail:   'ema',
-      Fusion:      'fusion',
-      Eeg:         'eeg',
+      PSS4:        'pss4',
       HrvGsr:      'hrv-gsr',
       Relaxation:  'relaxation',
     },
@@ -79,14 +77,9 @@ function RootNavigator() {
             options={{ headerShown: true, title: 'Continual Learning' }}
           />
           <Stack.Screen
-            name="Fusion"
-            component={FusionSessionScreen}
-            options={{ headerShown: true, title: 'Fusion' }}
-          />
-          <Stack.Screen
-            name="Eeg"
-            component={EegSessionScreen}
-            options={{ headerShown: true, title: 'EEG' }}
+            name="PSS4"
+            component={PSS4Screen}
+            options={{ headerShown: true, title: 'PSS-4 Survey' }}
           />
           <Stack.Screen
             name="HrvGsr"
