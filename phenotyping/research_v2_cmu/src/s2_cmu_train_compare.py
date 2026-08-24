@@ -101,8 +101,14 @@ def run_robust_experiment():
     joblib.dump(ocsvm, model_path)
     
     report = pd.DataFrame(results)
+    
+    # Save results for cross-dataset synthesis (s1_metric_aggregator.py)
+    os.makedirs("../outputs/", exist_ok=True)
+    report.to_csv("../outputs/cmu_results.csv", index=False)
+    
     print(f"\nResults for User {target_user} ({n_samples} total samples):")
     print(report.to_string(index=False))
     print(f"\n✅ Final Model Saved: {model_path}")
+    print(f"📊 Results saved to ../outputs/cmu_results.csv")
 
 run_robust_experiment()

@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 from sklearn.svm import OneClassSVM
 from sklearn.ensemble import IsolationForest, RandomForestClassifier
-from sklearn.metrics import f1_score
+from sklearn.metrics import f1_score, recall_score
 from sklearn.preprocessing import StandardScaler
 import glob
 import os
@@ -53,9 +53,12 @@ def run_group_study_with_quality_gate():
         pre_stress_mask = is_drifting & is_stationary
         physical_noise_mask = is_drifting & (~is_stationary)
 
+        svm_preds = oc_svm.predict(X_scaled)
+        
         population_results.append({
             'user': df['user_id'].iloc[0],
-            'SVM_F1': f1_score(y_true, oc_svm.predict(X_scaled), pos_label=-1),
+            'SVM_F1': f1_score(y_true, svm_preds, pos_label=-1),
+            'SVM_Recall': recall_score(y_true, svm_preds, pos_label=-1),
             'true_pre_stress_alerts': pre_stress_mask.sum(),
             'physical_noise_rejections': physical_noise_mask.sum()
         })
