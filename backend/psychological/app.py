@@ -197,7 +197,13 @@ def calibrate():
         "csv_logger": csv_logger,
         "score_history": [],
     }
-    return jsonify({"success": True, "session_id": session_id, **outcome})
+    # firebase.enabled is False whenever FIREBASE_CREDENTIALS isn't set on
+    # THIS service -- calibration still succeeds and predictions still work
+    # either way, but nothing gets written to Firebase, which otherwise
+    # looks identical to a healthy deploy from the bridge/caller's side
+    # (success: True either way). Surfaced here so that's visible without
+    # cross-referencing this service's own startup logs.
+    return jsonify({"success": True, "session_id": session_id, "firebase_enabled": firebase.enabled, **outcome})
 
 
 # -- /predict -- one 25s block -> task_state_score --------------------
@@ -250,6 +256,9 @@ def predict():
             "high_load_alert": record.get("high_load_alert"),
             "micro_break_recommended": record.get("micro_break_recommended"),
             "fatigue_warning": record.get("fatigue_warning"),
+            # See /calibrate's identical field -- same session's Firebase
+            # handle, so this can only ever match what /calibrate reported.
+            "firebase_enabled": state["firebase"].enabled,
         }
     )
 
@@ -291,7 +300,10 @@ def live_raw():
         "ch2_uv": [round(v, 3) for v in code_to_microvolts(np.array([s.ch2_code for s in samples]))],
     })
 
-    return jsonify({"success": True, "session_id": session_id, "n_samples": len(samples)})
+    return jsonify({
+        "success": True, "session_id": session_id, "n_samples": len(samples),
+        "firebase_enabled": firebase.enabled,
+    })
 
 
 @app.route("/sessions/<session_id>", methods=["DELETE"])
