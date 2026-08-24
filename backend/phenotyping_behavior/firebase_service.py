@@ -12,44 +12,27 @@ if _BACKEND_ROOT not in sys.path:
 
 # Import the group's shared credentials and URL
 from common.config import FIREBASE_CRED_FILE, FIREBASE_DB_URL, FIREBASE_CRED_DICT
-from firebase_admin import db
-from datetime import datetime, timezone
-
-# Single source of truth for every module's RTDB namespace / credential /
-# Firestore collection name -- see backend/common/firebase_config.py.
-# Imported as backend.common.* (not a bare `common.*`/sys.path hack) so this
-# resolves to the SAME module object physiological/ and psychological/ use --
-# a separate top-level `common` package would double-import the file under a
-# different identity and silently diverge (e.g. two firebase_admin app
-# singletons instead of one shared one).
-from backend.common.firebase_config import (
-    RTDB_NAMESPACES, init_firebase_app,
-    FUSION_EN_ROOT, FUSION_EN_SESSIONS_ROOT,
-    CURRENT_SESSION_ID_FIELD, CURRENT_USER_ID_FIELD,
-)
-from backend.common.fusion import fusion_window_key
 
 # --- RESEARCH NAMESPACE ---
-# This ensures your data is stored under 'phenotyping/' in the database --
-# read from the shared registry (was a locally hardcoded literal) so this
-# stays in sync if the registry's key for this module ever changes.
-NAMESPACE = RTDB_NAMESPACES["phenotyping_behavior"]
+# This ensures your data is stored under 'phenotyping/' in the database
+NAMESPACE = "phenotyping"
 
 def _ref(path):
     """Helper to return a Firebase reference under your namespace."""
     clean_path = str(path).lstrip('/')
     return db.reference(f"{NAMESPACE}/{clean_path}")
 
-
-def _global_ref(path):
-    """Return a Firebase reference NOT nested under NAMESPACE -- for data
-    shared across modalities (fusion_en/), matching
-    backend/physiological/firebase_service.py's _global_ref()."""
-    return db.reference(str(path).lstrip('/'))
-
 def init_firebase():
     """Initializes Firebase using the shared group credentials."""
-    init_firebase_app()
+    if not firebase_admin._apps:
+        if FIREBASE_CRED_DICT:
+            cred = credentials.Certificate(FIREBASE_CRED_DICT)
+        else:
+            cred = credentials.Certificate(FIREBASE_CRED_FILE)
+            
+        firebase_admin.initialize_app(cred, {
+            'databaseURL': FIREBASE_DB_URL
+        })
     print(f"[OK] Firebase initialized for {NAMESPACE}")
 
 # --- USER & BASELINE OPERATIONS (Objective 2) ---
@@ -346,113 +329,3 @@ def save_to_fusion_engine(user_id, result, window_features, is_valid=True):
     print(f"[fusion_engine] Written: {display_name}/{session_key} "
           f"-> {record['label']} (p_stress={record['prob_stress']}, "
           f"confidence={record['confidence']}, quality={record['signal_quality']})")
-
-
-# ═══════════════════════════════════════════════════════════════════
-#  RTDB `fusion_en` INTEGRATION -- the live cross-modality fusion table
-#  fushion engin/fusion_live_session.py actually reads (fusion_engine/
-#  above is a separate, legacy per-modality table nothing else in the
-#  repo reads any more -- physiological/psychological both moved off it
-#  the same way; see backend/physiological/firebase_service.py's own
-#  "RTDB fusion_en MIRROR" section for the EEG/HRV-GSR precedent this
-#  mirrors).
-#
-#  Path: fusion_en/{user_id}/{session_id}/{window} -- user-scoped because
-#  a "session" is a login-to-logout span belonging to exactly one user
-#  (StressApp's AuthContext.js), matching every other fusion_en writer.
-#  update() (not set()) so EEG/HRV-GSR writes to the SAME window key merge
-#  with this modality's fields instead of clobbering them.
-# ═══════════════════════════════════════════════════════════════════
-
-MODEL_ACC_BEHAV = BEHAVIORAL_MODEL_ACCURACY  # same constant, fusion-schema name
-
-
-def get_current_session():
-    """Reads the app-driven current_session_id / current_user_id pointer
-    (written by StressApp's AuthContext.js at login, cleared at logout --
-    see fusion_en_sessions/current_session_id) so a phenotyping prediction
-    -- which, unlike EEG/HRV-GSR, has no session_id of its own -- can still
-    attach to whichever session is live right now.
-
-    Returns (session_id, user_id), either of which may be None if nobody
-    is currently logged in (or the pointer read fails).
-    """
-    try:
-        session_id = _global_ref(f'{FUSION_EN_SESSIONS_ROOT}/{CURRENT_SESSION_ID_FIELD}').get()
-        user_id = _global_ref(f'{FUSION_EN_SESSIONS_ROOT}/{CURRENT_USER_ID_FIELD}').get()
-        session_id = session_id if isinstance(session_id, str) and session_id else None
-        user_id = user_id if isinstance(user_id, str) and user_id else None
-        return session_id, user_id
-    except Exception as e:
-        print(f"[WARN] fusion_en session-pointer read failed: {e}")
-        return None, None
-
-
-def _behav_fusion_fields(user_id, result, window_features, is_valid=True):
-    """Field-mapping for the phenotyping/behavioral side of the fusion
-    schema, mirroring backend/physiological/firebase_service.py's
-    _hrv_gsr_fusion_fields(). `prob_stress` (not prob_normal) maps to
-    prob_behav, matching fusion_engin.py's prob_{modality} = P(stress)
-    convention.
-
-    UTC, not naive local time -- see _hrv_gsr_fusion_fields()'s docstring
-    for why a naive timestamp here would misalign with
-    fusion_engin.py's synchronize_timestamps()/flag_stale_predictions().
-
-    Signal-quality/confidence formulas duplicated (not imported) from
-    save_to_fusion_engine() above -- same reasoning as physiological's own
-    per-modality helper: this is this modality's own field-mapping, not a
-    shared one two callers must stay in lockstep on.
-    """
-    stress_score = float(result.get('score', 0.1))
-    composite_z = float(result.get('composite_z', 0.0))
-    is_anomaly = bool(result.get('is_anomaly', False))
-
-    has_typing = window_features.get('avg_dwell', 0) > 0
-    has_scroll = window_features.get('scroll_velocity', 0) > 0
-    has_apps = window_features.get('interaction_rate', 0) > 0
-    signal_quality = round(
-        (int(has_typing) * 0.50) + (int(has_scroll) * 0.30) + (int(has_apps) * 0.20), 2
-    )
-    if not is_valid:
-        signal_quality = round(signal_quality * 0.5, 2)
-
-    if is_anomaly:
-        confidence = round(min(1.0, 0.5 + (composite_z / 6.0)), 4)
-    else:
-        confidence = round(max(0.5, 1.0 - (composite_z / 4.0)), 4)
-
-    now_iso = datetime.now(timezone.utc).isoformat()
-    return {
-        'user_id':                     user_id,
-        'timestamp':                   now_iso,
-        'timestamp_behav':             now_iso,
-        'prob_behav':                  round(stress_score, 4),
-        'conf_behav':                  confidence,
-        'model_acc_behav':             MODEL_ACC_BEHAV,
-        'signal_quality_behav':        signal_quality,
-        'stress_label_behav':          result.get('label', 'Normal'),
-        'trending_toward_stress_behav': stress_score > 0.5,
-        'features_behav': {
-            'avg_dwell':         float(window_features.get('avg_dwell', 0)),
-            'avg_flight':        float(window_features.get('avg_flight', 0)),
-            'scroll_velocity':   float(window_features.get('scroll_velocity', 0)),
-            'composite_z':       composite_z,
-        },
-    }
-
-
-def save_fusion_en_rtdb(user_id, session_id, result, window_features, is_valid=True):
-    """Writes this window's behavioral fusion fields to
-    fusion_en/{user_id}/{session_id}/{key}, key = the shared wall-clock
-    bucket from backend/common/fusion.py's fusion_window_key() -- the same
-    bucket EEG/HRV-GSR independently compute at their own write time, so
-    all three modalities land as siblings under one window key without
-    coordinating directly.
-    """
-    fields = _behav_fusion_fields(user_id, result, window_features, is_valid)
-    key = fusion_window_key()
-    try:
-        _global_ref(f'{FUSION_EN_ROOT}/{user_id}/{session_id}/{key}').update(fields)
-    except Exception as e:  # noqa: BLE001 -- one failed write shouldn't break /behavior/predict
-        print(f'[firebase] WARNING: fusion_en write failed for {user_id}/{session_id}/{key}: {e}')
