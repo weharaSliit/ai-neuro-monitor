@@ -132,9 +132,11 @@ export default function FusionSessionScreen({ navigation }) {
             <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
                 <ScrollView contentContainerStyle={styles.scroll}>
                     <View style={styles.header}>
-                        <TouchableOpacity onPress={() => navigation.goBack()}>
-                            <Text style={[styles.back, { color: COLORS.brand }]}>{'←'} Back</Text>
-                        </TouchableOpacity>
+                        {navigation.canGoBack() && (
+                            <TouchableOpacity onPress={() => navigation.goBack()}>
+                                <Text style={[styles.back, { color: COLORS.stress }]}>{'←'} Back</Text>
+                            </TouchableOpacity>
+                        )}
                         <Text style={[styles.title, { color: t.text }]}>Live Fusion</Text>
                         <Text style={[styles.subtitle, { color: t.textMuted }]}>
                             Combined EEG + HRV/GSR + Behavioral stress state, live

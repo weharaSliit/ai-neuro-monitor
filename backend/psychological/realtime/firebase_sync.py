@@ -96,21 +96,27 @@ def make_eeg_output_record(result: dict, window_sec: float, model_version: str,
 
 
 class FirebaseSync:
-    def __init__(self, credential_path: str, database_url: str, session_id: str | None = None,
+    def __init__(self, credential: str | dict, database_url: str, session_id: str | None = None,
                  root_path: str = 'psychological', extra_path: str | None = None):
 
         import firebase_admin
         from firebase_admin import credentials, db
 
-        cred_path = Path(credential_path).expanduser().resolve()
-        if not cred_path.is_file():
-            raise FileNotFoundError(
-                f'Firebase credential not found at {cred_path}. This must be a path OUTSIDE '
-                f'the project repository (see module docstring) -- set it via --firebase-cred '
-                f'or the FIREBASE_CREDENTIALS environment variable.'
-            )
-
-        cred = credentials.Certificate(str(cred_path))
+        # dict -- the parsed FIREBASE_CRED_JSON env var (Render's ephemeral
+        # filesystem has no room for a real credential file); str -- a real
+        # file path (FIREBASE_CREDENTIALS, local dev only). Both are valid
+        # credentials.Certificate() inputs.
+        if isinstance(credential, dict):
+            cred = credentials.Certificate(credential)
+        else:
+            cred_path = Path(credential).expanduser().resolve()
+            if not cred_path.is_file():
+                raise FileNotFoundError(
+                    f'Firebase credential not found at {cred_path}. This must be a path OUTSIDE '
+                    f'the project repository (see module docstring) -- set it via --firebase-cred '
+                    f'or the FIREBASE_CREDENTIALS environment variable.'
+                )
+            cred = credentials.Certificate(str(cred_path))
         try:
             self._app = firebase_admin.get_app()
         except ValueError:
