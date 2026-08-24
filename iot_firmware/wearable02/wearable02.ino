@@ -177,6 +177,16 @@ void connectWiFi() {
   WiFi.mode(WIFI_STA);
 
   for (int i = 0; i < WIFI_NETWORK_COUNT; i++) {
+    // Without this, falling through from a failed attempt straight into
+    // the next WiFi.begin() hits the driver mid-state-machine and throws
+    // "E wifi:sta is connecting, cannot set config" -- that reconfigure
+    // is then silently dropped, so the "next network" attempt never
+    // actually takes. Also run before the very first attempt: a WiFi
+    // reconnect (called again from loop() after a drop, not just setup())
+    // can find the driver already mid-connecting from the prior failure.
+    WiFi.disconnect(true, true);
+    delay(100);
+
     Serial.print("Connecting WiFi: ");
     Serial.println(WIFI_SSIDS[i]);
     WiFi.begin(WIFI_SSIDS[i], WIFI_PASSWORDS[i]);
@@ -222,11 +232,17 @@ void maintainMQTT() {
 
   Serial.print("Connecting MQTT...");
 
-  if (mqtt.connect("ESP32_EEG", MQTT_USER, MQTT_PASS)) {
+  // Client ID matches the "wearable02" username/topic convention (see
+  // wearable01.ino's identical DEVICE_ID pattern) -- was hardcoded to the
+  // unrelated "ESP32_EEG" before, which is worth ruling out if the broker's
+  // ACL/authorization rules are scoped per client ID.
+  if (mqtt.connect("wearable02", MQTT_USER, MQTT_PASS)) {
     Serial.println("connected");
   }
   else {
-    Serial.println("retry in 2s");
+    Serial.print("failed, rc=");
+    Serial.print(mqtt.state());
+    Serial.println(" -- retry in 2s");
   }
 }
 
@@ -319,7 +335,20 @@ void publishBatch() {
       offset += n;
     }
 
-    mqtt.publish(MQTT_TOPIC, payload);
+    // Previously ignored -- for QoS0 this only confirms the write to the
+    // socket succeeded, not that the broker accepted it (an ACL rejection
+    // or oversized packet is silent either way), but it at least rules out
+    // the local, checkable half of "connected but no data arrives".
+    bool published = mqtt.publish(MQTT_TOPIC, payload);
+    Serial.print("Publish ");
+    Serial.print(published ? "OK" : "FAILED");
+    Serial.print(" (");
+    Serial.print(batchCount);
+    Serial.print(" samples, ");
+    Serial.print(offset);
+    Serial.println(" bytes)");
+  } else {
+    Serial.println("Skipped batch publish -- MQTT not connected");
   }
 
   batchCount = 0;
@@ -371,6 +400,15 @@ void setup() {
 /* ================================================= */
 
 void loop() {
+  // connectWiFi() was previously only ever called once, from setup() --
+  // a WiFi drop mid-session (router hiccup, range, AP reboot) had no
+  // recovery path at all and would silently kill data collection until
+  // the device was power-cycled. Matches wearable01.ino's same check.
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi dropped, reconnecting...");
+    connectWiFi();
+  }
+
   maintainMQTT();
   mqtt.loop();
 
@@ -393,6 +431,15 @@ void loop() {
 
   if (!statusValid(r[0])) {
     corruptFrameCount++;
+    // Was tallied but never surfaced -- if the ADS is wired/seated wrong,
+    // every frame fails this check, batchCount never reaches BATCH_SIZE,
+    // and publishBatch() silently never runs, looking identical to an MQTT
+    // problem from the Serial monitor.
+    if (corruptFrameCount % 250 == 0) {
+      Serial.print("WARNING: ");
+      Serial.print(corruptFrameCount);
+      Serial.println(" corrupt ADS frames so far -- check SPI wiring/DRDY");
+    }
     return;
   }
 

@@ -28,8 +28,12 @@ export const AppProvider = ({ children, initialUserId, initialUsername, onExit =
 
   // Returning-user check: has this identity already finished the one-time
   // Privacy/Onboarding/Permissions/Calibration flow before, on any device?
-  // Gates rendering so a returning user never flashes onboarding before we
-  // know. Guests (no initialUserId, e.g. standalone dev run) always see it.
+  // Baseline + survey data are captured once, at first login after
+  // registration (BaselineCalibrationScreen / OnboardingQuestionsScreen).
+  // On every later login this flag is true, so the whole flow is skipped
+  // and the user lands straight on the Dashboard. Policy/Survey/Calibration
+  // remain reachable afterwards from the Profile screen if the user wants
+  // to revisit them, just never shown again automatically.
   const [identityChecked, setIdentityChecked] = useState(!initialUserId);
 
   useEffect(() => {

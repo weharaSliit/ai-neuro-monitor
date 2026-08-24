@@ -4,7 +4,7 @@ import { AppContext } from '../context/AppContext';
 import { Header } from '../components/Header';
 
 export const PrivacyPolicyScreen = () => {
-  const { setCurrentScreen, setPrivacyAccepted } = useContext(AppContext);
+  const { setCurrentScreen, setPrivacyAccepted, isCalibrated } = useContext(AppContext);
 
   const handleAccept = () => {
     setPrivacyAccepted(true);
@@ -13,7 +13,13 @@ export const PrivacyPolicyScreen = () => {
 
   return (
     <View style={styles.container}>
-      <Header title="Privacy & Data Ethics" />
+      {/* Returning users reach this screen from Profile to re-read it, not
+          as a forced first step, so give them a way back out. */}
+      <Header
+        title="Privacy & Data Ethics"
+        showBack={isCalibrated}
+        onBack={() => setCurrentScreen('UserProfile')}
+      />
 
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.heading}>Research Data Privacy Consent</Text>
