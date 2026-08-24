@@ -21,6 +21,15 @@ from pathlib import Path
 
 import requests
 
+# Python block-buffers stdout by default whenever it isn't attached to a
+# real terminal -- exactly the case for a Render worker's log collector.
+# Without this, every print() below can sit invisible for a long time
+# (looking identical to "nothing is happening") even while the process is
+# actually running fine, until the buffer happens to fill. Forcing line
+# buffering here makes logs show up immediately regardless of whether
+# whoever deploys this remembers `python -u` / PYTHONUNBUFFERED=1.
+sys.stdout.reconfigure(line_buffering=True)
+
 if __package__ is None:
     repo_root = Path(__file__).resolve().parents[2]
     if str(repo_root) not in sys.path:
