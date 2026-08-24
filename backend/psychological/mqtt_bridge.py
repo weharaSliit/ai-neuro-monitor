@@ -76,6 +76,8 @@ EEG_MQTT_CA_CERT = os.path.join(
 # comment. Takes precedence over the localhost:port construction, which
 # stays the default for local dev where this script and Flask are
 # co-located.
+PSYCHOLOGICAL_FLASK_URL="https://mindpulse-eeg.onrender.com"
+
 FLASK_URL = os.environ.get("PSYCHOLOGICAL_FLASK_URL") or \
     f"http://127.0.0.1:{os.environ.get('PSYCHOLOGICAL_PORT', '5001')}"
 # No "Wehara" fallback -- see backend/physiological/mqtt_bridge.py's
