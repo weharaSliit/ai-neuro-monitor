@@ -2,7 +2,7 @@
 API Router for Intervention Selection (POST /intervention) and Fallback Handling (POST /fallback).
 Must execute Thompson Sampling selection in under 200ms.
 """
-
+ 
 from fastapi import APIRouter, HTTPException, Depends
 from app.models.schemas import (
     InterventionRequest,
@@ -17,6 +17,7 @@ from app.services.kmeans_clusterer import kmeans_clusterer
 from app.services.thompson_bandit import thompson_bandit
 from app.services.preference_learner import preference_learner
 from app.services.fallback_handler import fallback_handler
+from app.services import firebase_service
 
 router = APIRouter(tags=["Intervention"])
 
@@ -56,6 +57,27 @@ def get_personalized_intervention(req: InterventionRequest):
                 selected_sub = so
                 break
                 
+    # Step 5: Save intervention session details to root path: intervention_system_sessions/{user_id}/{session_id}
+    session_id = f"session_{int(req.telemetry.timestamp)}"
+    session_payload = {
+        "user_id": req.user_id,
+        "session_id": session_id,
+        "timestamp": req.telemetry.timestamp,
+        "fused_stress_label": req.telemetry.fused_stress_label,
+        "stress_probability": req.telemetry.stress_probability,
+        "recommended_technique_id": tech_id,
+        "selected_sub_option_id": selected_sub.id,
+        "context_cluster_id": cluster_id,
+        "blended_score": round(blended_score, 4),
+        "physiological_sample": round(s_physio, 4),
+        "preference_score": round(s_pref, 4),
+        "execution_time_ms": round(exec_ms, 2)
+    }
+    try:
+        firebase_service.save_intervention_session(req.user_id, session_id, session_payload)
+    except Exception as e:
+        print(f"[Firebase Warning] Could not save to intervention_system_sessions: {e}")
+
     return TechniqueRecommendation(
         technique_id=tech_id,
         title=tech_catalog["title"],

@@ -29,7 +29,19 @@ class SignalSimulator:
         now = time.time()
         mode = self._current_mode
 
+        # Check if live Firebase prediction is available from fusion_en_sessions
+        fb_fusion = None
         if mode == "normal":
+            try:
+                from app.services.telemetry_aggregator import telemetry_aggregator
+                fb_fusion = telemetry_aggregator.read_fusion_engine_output(user_id)
+            except Exception:
+                fb_fusion = None
+
+        if fb_fusion and ("fused_stress_label" in fb_fusion or "stress_probability" in fb_fusion):
+            fused_label = fb_fusion.get("fused_stress_label", "normal")
+            stress_prob = float(fb_fusion.get("stress_probability", 0.15))
+        elif mode == "normal":
             fused_label = "normal"
             stress_prob = float(np.random.normal(0.15, 0.02))
         elif mode == "pre-stress":

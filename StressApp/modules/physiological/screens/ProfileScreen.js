@@ -93,6 +93,22 @@ export default function ProfileScreen({ navigation }) {
           </Text>
         </TouchableOpacity>
 
+        {/* Back to Relaxation Guide -- the primary app experience; this
+            Physiological area is a supporting/sensor module reached from it */}
+        <TouchableOpacity
+          activeOpacity={0.8}
+          style={[styles.card, { backgroundColor: card, borderColor: border }]}
+          onPress={() => navigation.navigate('Relaxation')}
+        >
+          <View style={styles.cardHeaderRow}>
+            <Text style={[styles.cardTitle, { color: text }]}>🧘 Relaxation Guide</Text>
+            <Text style={[styles.chevron, { color: muted }]}>→</Text>
+          </View>
+          <Text style={[styles.cardSub, { color: muted }]}>
+            Back to your personalized stress relief dashboard.
+          </Text>
+        </TouchableOpacity>
+
         {/* EMA summary */}
         <EmaSummaryCard navigation={navigation} />
 

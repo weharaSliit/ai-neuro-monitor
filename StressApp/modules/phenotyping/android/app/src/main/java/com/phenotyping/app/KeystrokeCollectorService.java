@@ -41,15 +41,15 @@ public class KeystrokeCollectorService extends AccessibilityService {
     // CONFIG — Backend URL
     //   HOSTED (Render.com): use the URL below for production.
     //   LOCAL (USB tunnel):  comment out HOSTED line, uncomment LOCAL line,
-    //                        then run: adb reverse tcp:5001 tcp:5001
+    //                        then run: adb reverse tcp:5002 tcp:5002
     // -----------------------------------------------------------------------
 
     // HOSTED — Render.com deployment
     private static final String FLASK_BASE_URL   = "https://my-phenotyping-backend-2.onrender.com";
 
     // LOCAL — USB tunnel (comment out HOSTED above and uncomment this for local dev)
-    // private static final String FLASK_BASE_URL = "http://127.0.0.1:5001";
-    // private static final String FLASK_BASE_URL = "http://192.168.1.6:5001";
+    // private static final String FLASK_BASE_URL = "http://127.0.0.1:5002";
+    // private static final String FLASK_BASE_URL = "http://192.168.1.6:5002";
 
     private static final String PREDICT_ENDPOINT = FLASK_BASE_URL + "/behavior/predict";
 

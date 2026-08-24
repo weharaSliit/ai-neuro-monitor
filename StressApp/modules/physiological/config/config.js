@@ -2,14 +2,20 @@
 // config.js
 // Central configuration for StressApp
 //
-// WESAD simulation mode removed — the real ring (ESP32 -> WiFi ->
-// Mosquitto -> mqtt_bridge.py -> Flask) is the only deployment
-// target. Backend endpoints simplified to /predict and /calibrate
-// (previously /predict/ring, /calibrate/ring) since there's no
-// longer a simulation counterpart to disambiguate from.
+// WESAD simulation mode removed — the real ring (ESP32 -> EMQX Cloud ->
+// mqtt_bridge.py -> Flask) is the only deployment target. Backend
+// endpoints simplified to /predict and /calibrate (previously
+// /predict/ring, /calibrate/ring) since there's no longer a simulation
+// counterpart to disambiguate from.
+//
+// API_BASE now points at the Render-hosted Flask service instead of a
+// local machine IP -- fixes the recurring "app can't reach backend"
+// breakage every time the dev machine's network/IP changed (WiFi vs
+// Ethernet, hotspot switches, etc.), since this URL is permanent
+// regardless of which network anyone is on.
 // ============================================================
 
-export const API_BASE     = 'http://10.180.48.56:5000';
+export const API_BASE     = 'https://mindpulse-physiological.onrender.com';
 export const DEVICE_ID    = 'wearable01';
 
 export const STRESS_COLORS = {

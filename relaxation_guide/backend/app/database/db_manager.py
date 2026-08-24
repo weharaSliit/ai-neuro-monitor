@@ -1,247 +1,186 @@
 """
 Database Manager Module.
-Provides SQLite local persistence for user-wise personalization, user authentication,
-email authorization codes, Contextual Thompson Sampling bandit distributions, ratings, and interventions.
+Provides SQLite local persistence for user-wise personalization,
+Contextual Thompson Sampling bandit distributions, ratings, and interventions.
+User accounts themselves live in backend/physiological (see app/shared_auth.py).
 """
 
 import os
 import json
 import sqlite3
-import random
-import time
 from typing import Dict, Any, List, Optional
+
+from app.services import firebase_service
 
 class DatabaseManager:
     def __init__(self, db_path: str = "caps_local.db"):
         self.db_path = db_path
-        self.is_firebase = False
-        self.firestore_db = None
+        self.is_firebase = True
         self._init_sqlite()
 
     def _init_sqlite(self):
-        """Initializes SQLite tables for user-wise local persistence."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
-        # Users table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id TEXT PRIMARY KEY,
-                email TEXT UNIQUE,
-                password TEXT,
-                full_name TEXT,
-                is_email_verified INTEGER DEFAULT 0,
-                verification_code TEXT,
-                created_at REAL
-            )
-        """)
-
-        # Interventions table per user
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS interventions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT,
-                technique_id TEXT,
-                sub_option_id TEXT,
-                cluster_id INTEGER,
-                pre_label TEXT,
-                post_label TEXT,
-                reward REAL,
-                recovery_pct REAL,
-                timestamp REAL
-            )
-        """)
-
-        # Ratings table per user
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS ratings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT,
-                technique_id TEXT,
-                sub_option_id TEXT,
-                stars INTEGER,
-                timestamp REAL
-            )
-        """)
-
-        # User-wise Contextual Thompson Sampling Bandit Distributions table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS bandit_distributions (
-                user_id TEXT,
-                cluster_id INTEGER,
-                technique_id TEXT,
-                alpha REAL,
-                beta REAL,
-                PRIMARY KEY (user_id, cluster_id, technique_id)
-            )
-        """)
-
-        # User-wise Gamification Stats table (XP, Streak, Badges)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS user_gamification (
-                user_id TEXT PRIMARY KEY,
-                xp INTEGER DEFAULT 0,
-                streak INTEGER DEFAULT 1,
-                unlocked_badges TEXT
-            )
-        """)
-
-        conn.commit()
-        conn.close()
-
-    # --- User Auth Methods ---
-    def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
-        """Retrieves user by email from SQLite."""
-        email_clean = email.strip().lower()
-
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id, email, password, full_name, is_email_verified, verification_code, created_at FROM users WHERE email = ?", (email_clean,))
-        row = cursor.fetchone()
-        conn.close()
-
-        if row:
-            return {
-                "user_id": row[0],
-                "email": row[1],
-                "password": row[2],
-                "full_name": row[3],
-                "is_email_verified": bool(row[4]),
-                "verification_code": row[5],
-                "created_at": row[6]
-            }
-    def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieves user details by user_id from SQLite."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id, email, password, full_name, is_email_verified, verification_code, created_at FROM users WHERE user_id = ?", (user_id,))
-        row = cursor.fetchone()
-        conn.close()
-
-        if row:
-            return {
-                "user_id": row[0],
-                "email": row[1],
-                "password": row[2],
-                "full_name": row[3],
-                "is_email_verified": bool(row[4]),
-                "verification_code": row[5],
-                "created_at": row[6]
-            }
-        return None
-
-    def create_user(self, email: str, password: str, full_name: str) -> Dict[str, Any]:
-        """Creates a new user and generates a 6-digit email authorization code in SQLite."""
-        email_clean = email.strip().lower()
-        user_id = "user_" + email_clean.split("@")[0].replace(".", "_")
-        verification_code = str(random.randint(100000, 999999))
-        created_at = time.time()
-
-        user_data = {
-            "user_id": user_id,
-            "email": email_clean,
-            "password": password,
-            "full_name": full_name,
-            "is_email_verified": False,
-            "verification_code": verification_code,
-            "created_at": created_at
-        }
-
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT OR REPLACE INTO users (user_id, email, password, full_name, is_email_verified, verification_code, created_at)
-            VALUES (?, ?, ?, ?, 0, ?, ?)
-        """, (user_id, email_clean, password, full_name, verification_code, created_at))
-        conn.commit()
-        conn.close()
-
-        return user_data
-
-    def verify_user_email(self, email: str, code: str) -> bool:
-        """Verifies 6-digit email authorization code in SQLite."""
-        email_clean = email.strip().lower()
-        user = self.get_user_by_email(email_clean)
-        if not user:
-            return False
-
-        if user.get("verification_code") == code.strip() or code.strip() == "123456":
+        """Initializes SQLite tables for user-wise local persistence as fallback."""
+        try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            cursor.execute("UPDATE users SET is_email_verified = 1 WHERE email = ?", (email_clean,))
+
+            # Users table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id TEXT PRIMARY KEY,
+                    email TEXT UNIQUE,
+                    password TEXT,
+                    full_name TEXT,
+                    is_email_verified INTEGER DEFAULT 0,
+                    verification_code TEXT,
+                    created_at REAL
+                )
+            """)
+
+            # Interventions table per user
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS interventions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT,
+                    technique_id TEXT,
+                    sub_option_id TEXT,
+                    cluster_id INTEGER,
+                    pre_label TEXT,
+                    post_label TEXT,
+                    reward REAL,
+                    recovery_pct REAL,
+                    timestamp REAL
+                )
+            """)
+
+            # Ratings table per user
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ratings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT,
+                    technique_id TEXT,
+                    sub_option_id TEXT,
+                    stars INTEGER,
+                    timestamp REAL
+                )
+            """)
+
+            # User-wise Contextual Thompson Sampling Bandit Distributions table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS bandit_distributions (
+                    user_id TEXT,
+                    cluster_id INTEGER,
+                    technique_id TEXT,
+                    alpha REAL,
+                    beta REAL,
+                    PRIMARY KEY (user_id, cluster_id, technique_id)
+                )
+            """)
+
+            # User-wise Gamification Stats table (XP, Streak, Badges)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_gamification (
+                    user_id TEXT PRIMARY KEY,
+                    xp INTEGER DEFAULT 0,
+                    streak INTEGER DEFAULT 1,
+                    unlocked_badges TEXT
+                )
+            """)
+
             conn.commit()
             conn.close()
-            return True
-        return False
+        except Exception as e:
+            print(f"SQLite init error: {e}")
 
-    def resend_verification_code(self, email: str) -> Optional[str]:
-        """Generates a new 6-digit verification code in SQLite."""
-        email_clean = email.strip().lower()
-        user = self.get_user_by_email(email_clean)
-        if not user:
-            return None
+    # --- User Lookup (Firebase Realtime DB Primary) ---
+    # Account creation/verification lives in backend/physiological's
+    # /register + /login now (see app/shared_auth.py) -- this module only
+    # reads user records it doesn't own, for profile display.
+    def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves user details by user_id from Firebase Realtime DB."""
+        # 1. Primary: Firebase Realtime DB
+        fb_user = firebase_service.get_user(user_id)
+        if fb_user:
+            fb_user["user_id"] = user_id
+            return fb_user
 
-        new_code = str(random.randint(100000, 999999))
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("UPDATE users SET verification_code = ? WHERE email = ?", (new_code, email_clean))
-        conn.commit()
-        conn.close()
-        return new_code
+        # 2. Fallback: SQLite
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT user_id, email, password, full_name, is_email_verified, verification_code, created_at FROM users WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+            conn.close()
+
+            if row:
+                return {
+                    "user_id": row[0],
+                    "email": row[1],
+                    "password": row[2],
+                    "full_name": row[3],
+                    "is_email_verified": bool(row[4]),
+                    "verification_code": row[5],
+                    "created_at": row[6]
+                }
+        except Exception:
+            pass
+
+        return None
 
     def get_all_users(self) -> List[Dict[str, Any]]:
-        """Retrieves all registered users from SQLite."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id, email, password, full_name, is_email_verified, verification_code, created_at FROM users")
-        rows = cursor.fetchall()
-        conn.close()
-
-        users = []
-        for r in rows:
-            users.append({
-                "user_id": r[0],
-                "email": r[1],
-                "password": r[2],
-                "full_name": r[3],
-                "is_email_verified": bool(r[4]),
-                "verification_code": r[5],
-                "created_at": r[6]
-            })
-        return users
+        """Retrieves all registered users from Firebase Realtime DB."""
+        fb_users = firebase_service.list_users()
+        users_list = []
+        if isinstance(fb_users, dict):
+            for uid, data in fb_users.items():
+                if isinstance(data, dict):
+                    data["user_id"] = uid
+                    users_list.append(data)
+        return users_list
 
     # --- User-Wise Bandit Distribution Persistence ---
     def save_bandit_distribution(self, user_id: str, cluster_id: int, technique_id: str, alpha: float, beta: float):
-        """Saves a user's learned Beta(alpha, beta) parameters for a cluster & technique into SQLite."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT OR REPLACE INTO bandit_distributions (user_id, cluster_id, technique_id, alpha, beta)
-            VALUES (?, ?, ?, ?, ?)
-        """, (user_id, cluster_id, technique_id, alpha, beta))
-        conn.commit()
-        conn.close()
+        """Saves a user's learned Beta(alpha, beta) parameters into Firebase Realtime DB."""
+        firebase_service.save_bandit_distribution(user_id, cluster_id, technique_id, alpha, beta)
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO bandit_distributions (user_id, cluster_id, technique_id, alpha, beta)
+                VALUES (?, ?, ?, ?, ?)
+            """, (user_id, cluster_id, technique_id, alpha, beta))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
 
     def load_bandit_distributions(self, user_id: str) -> Dict[int, Dict[str, Dict[str, float]]]:
-        """Loads user-wise Beta distributions from SQLite."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT cluster_id, technique_id, alpha, beta
-            FROM bandit_distributions
-            WHERE user_id = ?
-        """, (user_id,))
-        rows = cursor.fetchall()
-        conn.close()
+        """Loads user-wise Beta distributions from Firebase Realtime DB."""
+        fb_dists = firebase_service.get_bandit_distributions(user_id)
+        if fb_dists:
+            return fb_dists
 
-        user_dists: Dict[int, Dict[str, Dict[str, float]]] = {}
-        for r in rows:
-            c_id, t_id, a, b = r[0], r[1], r[2], r[3]
-            if c_id not in user_dists:
-                user_dists[c_id] = {}
-            user_dists[c_id][t_id] = {"alpha": a, "beta": b}
+        # Fallback to SQLite
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT cluster_id, technique_id, alpha, beta
+                FROM bandit_distributions
+                WHERE user_id = ?
+            """, (user_id,))
+            rows = cursor.fetchall()
+            conn.close()
 
-        return user_dists
+            user_dists: Dict[int, Dict[str, Dict[str, float]]] = {}
+            for r in rows:
+                c_id, t_id, a, b = r[0], r[1], r[2], r[3]
+                if c_id not in user_dists:
+                    user_dists[c_id] = {}
+                user_dists[c_id][t_id] = {"alpha": a, "beta": b}
+            return user_dists
+        except Exception:
+            return {}
 
     # --- Telemetry & Interventions ---
     def log_intervention(

@@ -10,11 +10,12 @@
 // to show a live-updating feed of recent windows.
 // ============================================================
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, Animated
+  View, Text, ScrollView, StyleSheet, Animated, Dimensions
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import LineChart from '../../shared/LineChart';
 import axios from 'axios';
 import { useTheme } from '../config/ThemeContext';
 import { useAuth } from '../../../context/AuthContext';
@@ -22,6 +23,9 @@ import { API_BASE, DEVICE_ID } from '../config/config';
 import api from '../api/client';
 
 const POLL_INTERVAL_MS = 5000;
+// Same card-content-width math as EegSessionScreen.js/FusionSessionScreen.js
+// (ScrollView padding 20/side + card padding 18/side).
+const TREND_CHART_WIDTH = Dimensions.get('window').width - 2 * 20 - 2 * 18;
 
 function LivePulseDot({ color, active }) {
   const anim = useRef(new Animated.Value(1)).current;
@@ -98,8 +102,23 @@ export default function RingScreen() {
     };
   }, [pollStatus, pollFeed]);
 
+  // recentWindows is sorted NEWEST-first (see pollFeed's sort above) --
+  // reversed here for a left-to-right ascending-time chart, matching
+  // FusionSessionScreen.js's trendline convention. prob_stress/timestamp
+  // are the same flattened field names the feed rows above already read
+  // (see the "Live Activity" render below), not the nested
+  // probabilities.stress shape /predict's own direct response uses.
+  const stressTrend = useMemo(() => {
+    return [...recentWindows]
+      .reverse()
+      .filter((w) => w.timestamp && w.prob_stress !== undefined && w.prob_stress !== null)
+      .map((w) => ({ value: Math.round(w.prob_stress * 100), date: new Date(w.timestamp) }));
+  }, [recentWindows]);
+
   const t = theme;
   const connected = status === 'online';
+  const latestWindow = recentWindows[0];
+  const trendColor = latestWindow?.label === 'Stress' ? COLORS.stress : COLORS.normal;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }}>
@@ -175,6 +194,26 @@ export default function RingScreen() {
             })
           )}
         </View>
+
+        {/* ── Live stress trend (HRV/GSR) ─────────────────── */}
+        {stressTrend.length > 1 && (
+          <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border, borderWidth: 1 }]}>
+            <View style={styles.statusHeaderRow}>
+              <Text style={[styles.cardTitle, { color: t.text }]}>Live Stress Trend</Text>
+              <LivePulseDot color={trendColor} active={connected} />
+            </View>
+            <Text style={[styles.cardHint, { color: t.textMuted, marginTop: -6, marginBottom: 12 }]}>
+              P(stress) across the most recent windows (%)
+            </Text>
+            <LineChart
+              points={stressTrend}
+              color={trendColor}
+              width={TREND_CHART_WIDTH}
+              height={130}
+              fallback={<Text style={[styles.cardHint, { color: t.textMuted }]}>Loading chart…</Text>}
+            />
+          </View>
+        )}
 
         <View style={{ height: 40 }} />
       </ScrollView>

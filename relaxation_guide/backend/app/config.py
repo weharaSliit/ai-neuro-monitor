@@ -2,8 +2,12 @@
 Configuration module for Calm AI (Context-Aware Personalized Closed-Loop Bio-Feedback & Adaptive Neural Stress Intervention System).
 Contains constants, weight parameters, safety override thresholds, reward mappings, badge definitions, and technique catalog.
 """
-
+import sys
 import os
+
+# Add the project root directory (one level up from backend) to sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
+
 from dotenv import load_dotenv
 
 # Load environment variables from backend/.env file if present
@@ -20,6 +24,23 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 EMAIL_FROM = os.getenv("EMAIL_FROM", "noreply@caps-research.org")
+
+# --- Firebase Config (Imported from common.config) ---
+try:
+    from common.config import (
+        FIREBASE_CRED_FILE,
+        FIREBASE_DB_URL,
+        FIREBASE_NAMESPACE
+    )
+except ImportError:
+    _CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
+    _BACKEND_DIR = os.path.dirname(_CONFIG_DIR)
+    _COMMON_CRED = os.path.join(_BACKEND_DIR, "common", "serviceAccountKey.json")
+    _BACKEND_CRED = os.path.join(_BACKEND_DIR, "serviceAccountKey.json")
+    FIREBASE_CRED_FILE = os.getenv("FIREBASE_CRED_FILE", _COMMON_CRED if os.path.exists(_COMMON_CRED) else _BACKEND_CRED)
+    FIREBASE_DB_URL = os.getenv("FIREBASE_DB_URL", "https://stress-monitor-c39ee-default-rtdb.asia-southeast1.firebasedatabase.app/")
+    FIREBASE_NAMESPACE = os.getenv("FIREBASE_NAMESPACE", "physiological")
+
 
 # --- Probability Vector Constants ---
 PROBABILITY_VECTOR_DIM = 2  # 2-element input vector: [stress_probability, 1.0 - stress_probability]
@@ -109,16 +130,16 @@ TECHNIQUES = {
             {"id": "sound_meditation", "title": "Acoustic Meditation", "description": "Resonant soundscape meditation for effortless presence."}
         ]
     },
-    "focus_arcade": {
+   "focus_arcade": {
         "id": "focus_arcade",
         "title": "Focus & Flow Arcade",
         "description": "High-engagement, focus-inducing mini games engineered to replace stress loops with deep flow state.",
         "sub_options": [
-            {"id": "zen_runner", "title": "Zen Wave Runner", "description": "2D rhythmic obstacle runner requiring sharp focus and crystal collection."},
-            {"id": "lumina_blade", "title": "Lumina Stress Slicer", "description": "Swipe-to-slice stress orbs into particle bursts with slice combos."},
-            {"id": "orb_defense", "title": "Aura Shield Defender", "description": "360-degree shield defender deflecting incoming tension asteroids."},
-            {"id": "pattern_matrix", "title": "Mindful Pattern Matrix", "description": "High-concentration grid memory puzzle forcing complete cognitive focus."},
-            {"id": "gravity_flow", "title": "Cosmic Gravity Shift", "description": "Physics timing game steering energy orbs through winding galaxy paths."}
+            {"id": "resonance_circle", "title": "Resonance Circle", "description": "Visual biofeedback for heart rate variability training using paced resonance."},
+            {"id": "mindful_sweep", "title": "Mindful Sweep", "description": "Gentle attention guidance through body awareness zones."},
+            {"id": "aurora_flow", "title": "Aurora Flow", "description": "Paced color transition training for parasympathetic activation."},
+            {"id": "serenity_spiral", "title": "Serenity Spiral", "description": "Calming spiral meditation for attention restoration therapy."},
+            {"id": "stillness_dots", "title": "Stillness Dots", "description": "Visual anchoring technique for attention stabilization."}
         ]
     },
     "adaptive_environment": {

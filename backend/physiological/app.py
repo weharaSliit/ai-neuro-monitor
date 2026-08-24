@@ -1,22 +1,7 @@
-# ============================================================
-# app.py — Main Flask server
-# All API endpoints for the real-ring stress detection pipeline.
-# WESAD simulation mode has been removed — the real ring is the
-# only deployment target.
-# ============================================================
-
+import os
 import sys
 
-# Windows consoles default to the cp1252 codepage, which can't encode the
-# checkmark/arrow characters used in this backend's startup log lines and
-# crashes the process with UnicodeEncodeError before Flask ever starts.
-if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
-    sys.stdout.reconfigure(encoding="utf-8")
-    sys.stderr.reconfigure(encoding="utf-8")
-
-from flask import Flask, jsonify, request, g
-from flask_cors import CORS
-from functools import wraps
+from flask import jsonify, request, g
 from werkzeug.security import generate_password_hash, check_password_hash
 import numpy as np
 import re
@@ -29,11 +14,12 @@ if __package__ is None:
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
+from backend.common.app_factory import create_app
 from backend.common.config import (
     STRESS_COLORS,
     EMA_ALPHA, N_BASELINE_WIN
 )
-from backend.common.auth import generate_token, verify_token
+from backend.common.auth import generate_token, require_auth
 from backend.physiological.firebase_service import (
     init_firebase,
     create_user, get_user, list_users,
@@ -44,7 +30,8 @@ from backend.physiological.firebase_service import (
     save_pss4, get_pss4_history,
     save_ema_update, _ref,
     save_prediction_quality,
-    save_fusion_signal,
+    save_fusion_en_rtdb,
+    label_session_ground_truth_rtdb,
     get_device_status
 )
 from backend.physiological.predictor import (
@@ -58,40 +45,14 @@ from backend.physiological.calibration_capture import (
     save_calibration_windows, run_calibration_capture
 )
 
-app = Flask(__name__)
-CORS(app)
+app = create_app(__name__)
 init_firebase()
 
-ring_sessions = {}  # per-user state machines, kept warm across windows
+ring_sessions = {}  
 
-# In-memory progress state for the live in-app calibration trigger —
-# {user_id: {'status': 'idle'|'settling'|'capturing'|'done'|'error', ...}}.
-# A plain dict is enough here: single local Flask instance, not a
-# multi-server deployment. Populated/read by /calibrate/start and
-# /calibrate/status below.
 _calibration_sessions = {}
 
 USER_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{3,30}$')
-
-
-def require_auth(view_func):
-    """Verifies Authorization: Bearer <token>, sets g.user_id. Every
-    user-scoped route below derives user_id from g.user_id rather than
-    trusting whatever the client puts in the request body/path — the
-    request path's own user_id (where routes still take one) is only
-    used as an ownership check, never as the source of truth."""
-    @wraps(view_func)
-    def wrapper(*args, **kwargs):
-        header = request.headers.get('Authorization', '')
-        if not header.startswith('Bearer '):
-            return jsonify({'error': 'Missing or malformed Authorization header'}), 401
-        user_id = verify_token(header[len('Bearer '):].strip())
-        if user_id is None:
-            return jsonify({'error': 'Invalid or expired token'}), 401
-        g.user_id = user_id
-        return view_func(*args, **kwargs)
-    return wrapper
-
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -101,7 +62,6 @@ def health():
         'features': len(feature_cols),
         'firebase': 'connected'
     })
-
 
 @app.route('/register', methods=['POST'])
 def register():
@@ -125,8 +85,6 @@ def register():
     if existing is None:
         create_user_with_password(user_id, name, password_hash)
     else:
-        # Legacy passwordless record (e.g. pre-auth test users) —
-        # claim it in place, only password_hash changes.
         set_password_hash(user_id, password_hash)
 
     return jsonify({
@@ -146,7 +104,6 @@ def login():
     user = get_user(user_id)
     if not user or 'password_hash' not in user or \
             not check_password_hash(user['password_hash'], password):
-        # Same generic message either way — don't leak which field was wrong.
         return jsonify({'error': 'Invalid username or password'}), 401
 
     return jsonify({
@@ -166,20 +123,6 @@ def get_users():
     }
     return jsonify({'users': users})
 
-
-# ── /calibrate — real-ring baseline capture ───────────────────
-# Extracts features from N raw sensor windows, then computes/
-# EMA-merges/saves a personal baseline for user_id.
-#
-# REQUEST FORMAT:
-#   {
-#     "user_id": "Wehara",
-#     "windows": [
-#       {"ibi_array": [...], "gsr_adc_array": [...], "acc_array": [...],
-#        "gsr_calibration": 2048, "actual_fs": 5},
-#       ...  (N_BASELINE_WIN windows, collected while resting)
-#     ]
-#   }
 @app.route('/calibrate', methods=['POST'])
 @require_auth
 def calibrate():
@@ -199,13 +142,6 @@ def calibrate():
 
     return jsonify(result)
 
-
-# ── /calibrate/start, /calibrate/status — live in-app calibration ──
-# The ring only streams sensor data to Mosquitto over MQTT — the phone
-# never receives it directly, so it can't assemble a /calibrate request
-# itself. These two routes let the PHONE trigger a calibration capture
-# that runs server-side (Flask already has MQTT/network access), and
-# poll for progress instead.
 @app.route('/calibrate/start', methods=['POST'])
 @require_auth
 def calibrate_start():
@@ -248,38 +184,6 @@ def calibrate_status():
     state = _calibration_sessions.get(g.user_id, {'status': 'idle'})
     return jsonify(state)
 
-
-# ── /predict — real-ring binary prediction ─────────────────────
-# Binary (Normal/Stress) — model trained directly on WESAD data
-# relabeled to match the ring's real task (see
-# notebooks/05_binary_relabel_retrain.ipynb).
-#
-# Real traffic reaches this via mqtt_bridge.py (ESP32 -> Mosquitto
-# -> bridge -> here). Also works standalone for manual testing
-# (Postman / MQTT Explorer + curl).
-#
-# REQUEST FORMAT:
-#   {
-#     "user_id":         "Wehara",
-#     "session_id":      "live_session_1",
-#     "window_idx":      0,
-#     "ibi_array":       [812, 798, 821, ...],    ms
-#     "gsr_adc_array":   [1992, 1985, 2010, ...], 0-4095
-#     "acc_array":       [0.93, 0.94, 0.92, ...], g
-#     "gsr_calibration": 2048,                    ADC int
-#     "actual_fs":       5                        Hz — real GSR/ACC
-#                                                  sample rate, NOT
-#                                                  WESAD's 50Hz
-#   }
-#
-# MOTION REJECTION:
-#   If >10% of ACC samples exceed 1.2g, window rejected.
-#   Returns motion_rejected: true in response.
-#
-# DB RULE: raw sensor arrays above are never written to Firebase —
-# they exist only in this request. Only extracted features + the
-# prediction go to predictions/, and only probability/confidence/
-# signal_quality go to the separate prediction_quality/ table.
 @app.route('/predict', methods=['POST'])
 @require_auth
 def predict():
@@ -296,21 +200,12 @@ def predict():
     actual_fs       = data.get('actual_fs', 50)
 
     # ── Validate inputs ───────────────────────────────────────
-    # 10, not 4 — matches min_ibi_count in notebook 03's training
-    # windowing (extract_windows_and_features). A window with fewer
-    # beats than training ever considered valid can let a single
-    # missed-beat (doubled interval) skew a small-sample AVNN/MeanHR
-    # average well outside anything the model was trained on.
     if len(ibi_array) < 10:
         return jsonify({
             'error': 'ibi_array too short — minimum 10 IBI values',
             'hint':  'Ensure MAX30102 is detecting R-peaks correctly'
         }), 400
-
-    # Floor lowered from 100 (assumed WESAD's 50Hz) — the real ring
-    # runs ~5Hz, so a full 60s window is only ~300 samples. 20 is
-    # just a floor to catch a truncated/degraded window, not a
-    # target — normal windows will be far above this.
+    
     if len(gsr_adc_array) < 20:
         return jsonify({
             'error': 'gsr_adc_array too short — minimum 20 samples',
@@ -367,13 +262,15 @@ def predict():
     sm = ring_sessions[user_id]
 
     # ── Predict (binary) ───────────────────────────────────────
-    if b_mean is None:
-        # No personal baseline yet — raw model output,
-        # no trend detection (nothing to compare against).
-        result = predict_raw(features_2d)
-    else:
-        sm.update_baseline(b_mean)
-        result = predict_window(features_2d, b_mean, b_std, sm, feat_dict)
+    try:
+        if b_mean is None:
+
+            result = predict_raw(features_2d)
+        else:
+            sm.update_baseline(b_mean)
+            result = predict_window(features_2d, b_mean, b_std, sm, feat_dict)
+    except RuntimeError as e:
+        return jsonify({'error': 'Model unavailable', 'details': str(e)}), 503
 
     # ── Save structured data only ──────────────────────────────
     save_prediction(
@@ -388,11 +285,13 @@ def predict():
         result['prob_normal'], result['prob_stress'],
         result['trending_toward_stress']
     )
-    save_fusion_signal(
+
+    save_fusion_en_rtdb(
         user_id, session_id, window_idx,
         result['confidence'], signal_quality,
         result['prob_normal'], result['prob_stress'],
-        result['label'], result['trending_toward_stress']
+        result['label'], result['trending_toward_stress'],
+        feat_dict
     )
 
     return jsonify({
@@ -408,7 +307,6 @@ def predict():
         },
         'window_idx':      window_idx,
         'motion_rejected': False,
-        # Key sensor readings for live graph display
         'features': {
             'AVNN':        float(feat_dict.get('AVNN', 0)),
             'MeanHR':      float(feat_dict.get('MeanHR', 0)),
@@ -435,6 +333,7 @@ def submit_pss4():
     q4 = int(data.get('q4', 0))
 
     score = save_pss4(user_id, session_id, q1, q2, q3, q4)
+    label_session_ground_truth_rtdb(user_id, session_id, score)
 
     level = (
         'Normal' if score <= 6 else
@@ -659,13 +558,13 @@ if __name__ == '__main__':
     print(f"  POST /ema/update")
     print(f"  GET  /ema/history/<user_id>")
     print("=" * 50)
+    # Render.com injects $PORT -- use it in production; default to 5050
+    # locally (see backend/phenotyping_behavior/app.py's identical pattern).
+    port = int(os.environ.get('PORT', 5050))
     app.run(
         host='0.0.0.0',
-        port=5000,
+        port=port,
         debug=True,
-        threaded=True  # required — /calibrate/start runs a background
-                       # capture thread; without this, that request (and
-                       # the several-minute capture behind it) would block
-                       # every other request, including /calibrate/status
-                       # polling the app needs to show live progress.
+        use_reloader=False,
+        threaded=True
     )

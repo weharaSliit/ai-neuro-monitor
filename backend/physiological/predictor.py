@@ -15,11 +15,23 @@ from backend.common.config import (
 )
 
 print("Loading model files...")
-model        = joblib.load(MODEL_FILE)
-scaler       = joblib.load(SCALER_FILE)
-feature_cols = joblib.load(FEATURES_FILE)
-print(f"  Model: {type(model).__name__} ✓")
-print(f"  Features: {len(feature_cols)} ✓")
+try:
+    model        = joblib.load(MODEL_FILE)
+    scaler       = joblib.load(SCALER_FILE)
+    feature_cols = joblib.load(FEATURES_FILE)
+    print(f"  Model: {type(model).__name__} ✓")
+    print(f"  Features: {len(feature_cols)} ✓")
+except FileNotFoundError as e:
+    # Auth/user/EMA routes don't touch the ring model at all -- letting a
+    # missing local model artifact take down the whole app (including
+    # /login) couples two unrelated concerns. predict_window/predict_raw
+    # below raise a clear error instead if actually called with no model.
+    model = scaler = None
+    feature_cols = []
+    print(f"  WARNING: model artifacts not found ({e}) -- /predict, /calibrate, "
+          f"and EMA/baseline routes will not work until MODEL_FILE/SCALER_FILE/"
+          f"FEATURES_FILE (backend/common/config.py) point to real files. "
+          f"Auth and other non-model routes are unaffected.")
 
 # ── Feature type definitions ──────────────────────────────────
 EDA_FEATURES = [
@@ -118,6 +130,12 @@ def predict_window(features_array, baseline_mean, baseline_std,
     Requires this window's features to be recorded into the state
     machine's history first, which happens here.
     """
+    if model is None or scaler is None:
+        raise RuntimeError(
+            "physiological model artifacts not available on this machine -- "
+            "see the WARNING printed at startup (predictor.py)"
+        )
+
     X_norm   = normalize_features(features_array, baseline_mean, baseline_std)
     X_scaled = scaler.transform(X_norm)
 
@@ -151,6 +169,11 @@ def predict_window(features_array, baseline_mean, baseline_std,
 
 def predict_raw(features_array):
     """Binary prediction with no personal baseline normalization yet."""
+    if model is None or scaler is None:
+        raise RuntimeError(
+            "physiological model artifacts not available on this machine -- "
+            "see the WARNING printed at startup (predictor.py)"
+        )
     X_scaled = scaler.transform(features_array)
     probs = model.predict_proba(X_scaled)[0]
     prob_normal, prob_stress = float(probs[0]), float(probs[1])

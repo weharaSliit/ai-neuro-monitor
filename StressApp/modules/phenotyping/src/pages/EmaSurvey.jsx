@@ -6,7 +6,7 @@ import {
 import { useTheme } from '../context/ThemeContext';
 import { getUserProfile } from '../utils/userStorage';
 
-const FLASK_BASE_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:5001";
+const FLASK_BASE_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:5002";
 
 const PSS4_QUESTIONS = [
     {

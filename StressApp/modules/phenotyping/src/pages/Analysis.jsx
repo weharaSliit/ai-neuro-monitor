@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
 import { BottomNav } from '../components/BottomNav';
 import { SparkChart } from '../components/SparkChart';
@@ -50,6 +51,7 @@ function calcZScore(val, mean, std) {
 
 export function Analysis() {
     const { t, isDark } = useTheme();
+    const navigate = useNavigate();
     const [activeTab, setActiveTab] = useState('overview');
     const [timeRange, setTimeRange] = useState('7d');
 
@@ -59,7 +61,7 @@ export function Analysis() {
 
     useEffect(() => {
         if (!userId) navigate('/');
-    }, [userId]);
+    }, [userId, navigate]);
 
     const [predictions, setPredictions]   = useState(null);
     const [latestWindow, setLatestWindow] = useState(null);

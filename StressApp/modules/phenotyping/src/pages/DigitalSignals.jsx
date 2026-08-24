@@ -8,14 +8,6 @@ import { useTheme } from '../context/ThemeContext';
 import { Loader2 } from 'lucide-react';
 import { getUserProfile } from '../utils/userStorage';
 
-// Mock data generators for the 2 new signals
-function generateMockBars(count = 10, min = 20, max = 80) {
-    return Array.from({ length: count }, (_, i) => ({
-        val: min + Math.random() * (max - min),
-        active: i === count - 1,
-    }));
-}
-
 export function DigitalSignals() {
     const navigate = useNavigate();
     const { t, isDark } = useTheme();
@@ -52,7 +44,6 @@ export function DigitalSignals() {
                 const recentEntries = entries.slice(-10);
 
                 const dwellHistory = recentEntries.map((e, idx) => ({ val: e.avg_dwell, active: idx === recentEntries.length - 1 }));
-                const flightHistory = recentEntries.map((e, idx) => ({ val: e.avg_flight, active: idx === recentEntries.length - 1 }));
                 const scrollHistory = recentEntries.map((e, idx) => ({ val: e.scroll_velocity, active: idx === recentEntries.length - 1 }));
                 const unlockHistory = recentEntries.map((e, idx) => ({ val: e.unlocks_count || 0, active: idx === recentEntries.length - 1 }));
 
@@ -95,7 +86,7 @@ export function DigitalSignals() {
                             ? 'Motion detected — window excluded from baseline'
                             : 'Physical activity detection & noise gate',
                         colorClass: latest.data_valid === false ? 'bg-orange-500' : 'bg-emerald-500',
-                        bars: generateMockBars(10, 60, 95),
+                        bars: activityHistory,
                         trend: null,
                         status: latest.data_valid === false ? 'elevated' : 'normal',
                     }
@@ -105,7 +96,6 @@ export function DigitalSignals() {
                 const emptyBars = Array(10).fill({ val: 0, active: false });
                 formattedSignals.push(
                     { signalId: 'keyboard', title: '⌨️ Keyboard Patterns', value: '-- ms', subtext: 'Typing rhythm & key press duration', colorClass: 'bg-zinc-600', bars: emptyBars, trend: null, status: 'pending' },
-                    { signalId: 'screen', title: '📱 Screen On/Off Times', value: '-- unlocks', subtext: 'Unlock frequency & session duration', colorClass: 'bg-zinc-600', bars: emptyBars, trend: null, status: 'pending' },
                     { signalId: 'scroll', title: '📜 Screen Scrolling', value: '-- px/s', subtext: 'Scroll speed & frequency patterns', colorClass: 'bg-zinc-600', bars: emptyBars, trend: null, status: 'pending' },
                     { signalId: 'activity', title: '🚶 Activity Context', value: '--', subtext: 'Physical activity detection & noise gate', colorClass: 'bg-zinc-600', bars: emptyBars, trend: null, status: 'pending' },
                 );
@@ -147,7 +137,7 @@ export function DigitalSignals() {
             </div>
 
             <p className={`text-center text-[10px] ${t.textDim} font-bold uppercase tracking-widest py-3`}>
-                4 signals actively monitoring
+                3 signals actively monitoring
             </p>
 
             <BottomNav />

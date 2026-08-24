@@ -3,12 +3,20 @@
 # ============================================================
 
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # Paths
-BASE_PATH = r"C:\Users\weha1\OneDrive\Documents\ResearchCode\ai-neuro-monitor"
+# Was hardcoded to a teammate's Windows machine (C:\Users\weha1\...) --
+# broke model loading on every other machine (/predict, /calibrate return
+# 503 "model artifacts not available" whenever this path doesn't exist
+# locally, even though the actual .pkl files are checked into the repo at
+# physiological_signals/saved_models/). Resolved relative to this file's
+# own location (backend/common/ -> repo root) instead, so it's correct on
+# whichever machine actually has this checkout.
+BASE_PATH = str(Path(__file__).resolve().parents[2])
 
 MODELS_PATH = os.path.join(
     BASE_PATH,
@@ -16,7 +24,7 @@ MODELS_PATH = os.path.join(
     "saved_models"
 )
 
-WESAD_PATH = r"C:\Users\weha1\datasets\WESAD"
+WESAD_PATH = os.environ.get("WESAD_PATH", r"C:\Users\weha1\datasets\WESAD")
 
 RESULTS_PATH = os.path.join(
     BASE_PATH,
@@ -34,23 +42,22 @@ MODEL_FILE    = os.path.join(MODELS_PATH, "best_model_obj1_v2.pkl")
 SCALER_FILE   = os.path.join(MODELS_PATH, "scaler_obj1_v2.pkl")
 FEATURES_FILE = os.path.join(MODELS_PATH, "feature_cols_obj1_v2.pkl")
 
-# Firebase
-_CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
-FIREBASE_CRED_FILE = os.path.join(_CONFIG_DIR, "serviceAccountKey.json")
-
-# Support for cloud hosting: load credentials from environment variable if it exists
-FIREBASE_CRED_DICT = None
-if "FIREBASE_CRED_JSON" in os.environ:
-    try:
-        FIREBASE_CRED_DICT = json.loads(os.environ["FIREBASE_CRED_JSON"])
-    except Exception as e:
-        print(f"Warning: Failed to parse FIREBASE_CRED_JSON env var: {e}")
-
-FIREBASE_DB_URL = "https://stress-monitor-c39ee-default-rtdb.asia-southeast1.firebasedatabase.app/"
+# Firebase -- see backend/common/firebase_config.py for the full,
+# documented single source of truth (every module's RTDB namespace, the
+# Firestore collection name, credential resolution). Re-exported here
+# under their original names so existing `from backend.common.config
+# import FIREBASE_...` / `from common.config import FIREBASE_...` calls
+# across physiological/ and phenotyping_behavior/ keep working unchanged.
+from .firebase_config import (  # noqa: E402
+    FIREBASE_CRED_DICT,
+    FIREBASE_CRED_FILE,
+    FIREBASE_DB_URL,
+    RTDB_NAMESPACES,
+)
 
 # Prefix all Firebase Realtime Database paths under this namespace
 # (e.g. physiological/users, physiological/sessions, ...).
-FIREBASE_NAMESPACE = "physiological"
+FIREBASE_NAMESPACE = RTDB_NAMESPACES["physiological"]
 
 # Auth — signs/verifies login tokens (backend/common/auth.py). Set
 # STRESSAPP_SECRET_KEY in backend/.env (gitignored) for anything beyond
@@ -70,10 +77,20 @@ EMA_ALPHA         = 0.2  # EMA learning rate
 # across calibrate_ring.py and mqtt_bridge.py, which meant every network
 # change (switching WiFi networks, re-measuring GSR_CAL) required editing
 # multiple files and kept getting missed in one of them. Update here only.
-MQTT_BROKER = os.environ.get("STRESSAPP_MQTT_BROKER", "10.180.48.56")
-MQTT_PORT   = 1883
-MQTT_TOPIC  = "mindpulse/wearable01/sensors"
-GSR_CAL     = 2872   # measured: electrodes off, raw analogRead(GSR_PIN)
+#
+# EMQX Cloud Serverless (mindpulse-broker, Asia-Pacific) — replaces the
+# local-IP broker this used to point at. Requires TLS on 8883 with
+# username/password auth, unlike the old local Mosquitto's plain-TCP/
+# allow_anonymous setup — see MQTT_CA_CERT/MQTT_USER/MQTT_PASSWORD below
+# and backend/common/mqtt_bridge.py's connect_mqtt(), which now does the
+# tls_set()/username_pw_set() calls this requires.
+MQTT_BROKER   = os.environ.get("STRESSAPP_MQTT_BROKER", "ob1f0f10.ala.asia-southeast1.emqxsl.com")
+MQTT_PORT     = 8883
+MQTT_USER     = os.environ.get("RING_MQTT_USER", "wearable01")
+MQTT_PASSWORD = os.environ.get("RING_MQTT_PASSWORD", "wearable01")
+MQTT_CA_CERT  = os.path.join(BASE_PATH, "iot_firmware", "emqxsl-ca.crt")
+MQTT_TOPIC    = "mindpulse/wearable01/sensors"
+GSR_CAL       = 2872   # measured: electrodes off, raw analogRead(GSR_PIN)
 
 WINDOW_SEC = 60
 SETTLE_SEC = 30  # discard this many seconds of data right after startup/
