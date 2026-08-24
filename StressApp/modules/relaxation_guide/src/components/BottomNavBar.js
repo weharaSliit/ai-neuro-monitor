@@ -9,14 +9,15 @@ export const BottomNavBar = () => {
 
   const navItems = [
     { id: 'Dashboard', label: 'Home', icon: '🏠' },
+    { id: 'FusionPipeline', label: 'Pipeline', icon: '📡' },
     { id: 'Methods', label: 'Methods', icon: '📖' },
     { id: 'Intervention', label: 'Bandit', icon: '⚡' },
     { id: 'Chatbot', label: 'AI Guide', icon: '🤖' },
     { id: 'UserProfile', label: 'Profile', icon: '👤' }
   ];
 
-  // Hide bottom nav on splash/auth screens
-  if (['Splash', 'Login', 'SignIn', 'SignUp', 'Welcome'].includes(currentScreen)) {
+  // Hide bottom nav during the one-time consent/onboarding/calibration flow
+  if (['PrivacyPolicy', 'OnboardingQuestions', 'Permissions', 'BaselineCalibration'].includes(currentScreen)) {
     return null;
   }
 

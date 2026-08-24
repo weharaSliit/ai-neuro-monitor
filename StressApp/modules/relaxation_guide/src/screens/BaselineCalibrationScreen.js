@@ -4,6 +4,7 @@ import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
 import { Header } from '../components/Header';
 import { useSweetAlert } from '../context/SweetAlertContext';
+import { apiService } from '../api/apiService';
 
 const CALIBRATION_DURATION = 120; // 2 minutes
 
@@ -24,7 +25,7 @@ const TIPS = [
 
 export const BaselineCalibrationScreen = () => {
   const { showAlert } = useSweetAlert();
-  const { setCurrentScreen, setIsCalibrated } = useContext(AppContext);
+  const { userId, setCurrentScreen, setIsCalibrated } = useContext(AppContext);
   const { theme } = useContext(ThemeContext);
 
   const [secondsLeft, setSecondsLeft] = useState(CALIBRATION_DURATION);
@@ -114,6 +115,7 @@ export const BaselineCalibrationScreen = () => {
   useEffect(() => {
     if (isCalibrating && secondsLeft === 0) {
       setIsCalibrated(true);
+      apiService.completeCalibration(userId);
       showAlert({
         title: '🎯 Baseline Recorded!',
         text: 'Autonomic nervous system baseline captured. HRV, GSR, and EEG alpha/beta ratios stored. Real-time stress stream is now active.',

@@ -51,25 +51,6 @@ def _users_ref(path: str = ""):
         return db.reference('users')
     return db.reference(f'users/{clean_path}')
 
-def create_user(user_id: str, name: str, email: str = "", password: str = "") -> Optional[str]:
-    try:
-        ref = _users_ref(user_id)
-        data = {
-            'user_id': user_id,
-            'name': name,
-            'full_name': name,
-            'email': email,
-            'password': password,
-            'created_at': datetime.now().isoformat(),
-            'is_email_verified': True,
-            'session_count': 0
-        }
-        ref.set(data)
-        return user_id
-    except Exception as e:
-        print(f"[Firebase Warning] create_user failed ({e}). Falling back to SQLite.")
-        return None
-
 def get_user(user_id: str) -> Optional[Dict[str, Any]]:
     try:
         ref = _users_ref(user_id)
@@ -80,23 +61,6 @@ def get_user(user_id: str) -> Optional[Dict[str, Any]]:
             return data
     except Exception as e:
         print(f"[Firebase Warning] get_user failed ({e}). Falling back to SQLite.")
-    return None
-
-def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
-    try:
-        ref = _users_ref()
-        all_users = ref.get() or {}
-        clean_email = email.strip().lower()
-        if isinstance(all_users, dict):
-            for uid, user_data in all_users.items():
-                if isinstance(user_data, dict):
-                    user_email = str(user_data.get('email', '')).strip().lower()
-                    if user_email == clean_email:
-                        user_data['user_id'] = user_data.get('user_id') or uid
-                        user_data['full_name'] = user_data.get('full_name') or user_data.get('name') or user_data.get('username') or 'Participant'
-                        return user_data
-    except Exception as e:
-        print(f"[Firebase Warning] get_user_by_email failed ({e}). Falling back to SQLite.")
     return None
 
 def list_users() -> Dict[str, Any]:

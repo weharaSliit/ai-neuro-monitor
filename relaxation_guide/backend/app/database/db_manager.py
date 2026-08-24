@@ -1,14 +1,13 @@
 """
 Database Manager Module.
-Provides SQLite local persistence for user-wise personalization, user authentication,
-email authorization codes, Contextual Thompson Sampling bandit distributions, ratings, and interventions.
+Provides SQLite local persistence for user-wise personalization,
+Contextual Thompson Sampling bandit distributions, ratings, and interventions.
+User accounts themselves live in backend/physiological (see app/shared_auth.py).
 """
 
 import os
 import json
 import sqlite3
-import random
-import time
 from typing import Dict, Any, List, Optional
 
 from app.services import firebase_service
@@ -93,39 +92,10 @@ class DatabaseManager:
         except Exception as e:
             print(f"SQLite init error: {e}")
 
-    # --- User Auth Methods (Firebase Realtime DB Primary) ---
-    def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
-        """Retrieves user by email from Firebase Realtime DB."""
-        email_clean = email.strip().lower()
-        
-        # 1. Primary: Firebase Realtime DB
-        fb_user = firebase_service.get_user_by_email(email_clean)
-        if fb_user:
-            return fb_user
-
-        # 2. Fallback: SQLite
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT user_id, email, password, full_name, is_email_verified, verification_code, created_at FROM users WHERE email = ?", (email_clean,))
-            row = cursor.fetchone()
-            conn.close()
-
-            if row:
-                return {
-                    "user_id": row[0],
-                    "email": row[1],
-                    "password": row[2],
-                    "full_name": row[3],
-                    "is_email_verified": bool(row[4]),
-                    "verification_code": row[5],
-                    "created_at": row[6]
-                }
-        except Exception:
-            pass
-
-        return None
-
+    # --- User Lookup (Firebase Realtime DB Primary) ---
+    # Account creation/verification lives in backend/physiological's
+    # /register + /login now (see app/shared_auth.py) -- this module only
+    # reads user records it doesn't own, for profile display.
     def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Retrieves user details by user_id from Firebase Realtime DB."""
         # 1. Primary: Firebase Realtime DB
@@ -156,49 +126,6 @@ class DatabaseManager:
             pass
 
         return None
-
-    def create_user(self, email: str, password: str, full_name: str) -> Dict[str, Any]:
-        """Creates a new user in Firebase Realtime DB (and SQLite backup)."""
-        email_clean = email.strip().lower()
-        user_id = "user_" + email_clean.split("@")[0].replace(".", "_")
-        verification_code = str(random.randint(100000, 999999))
-        created_at = time.time()
-
-        user_data = {
-            "user_id": user_id,
-            "email": email_clean,
-            "password": password,
-            "full_name": full_name,
-            "is_email_verified": True,
-            "verification_code": verification_code,
-            "created_at": created_at
-        }
-
-        # 1. Save to Firebase Realtime DB
-        firebase_service.create_user(user_id, full_name, email_clean, password)
-
-        # 2. Backup to SQLite
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT OR REPLACE INTO users (user_id, email, password, full_name, is_email_verified, verification_code, created_at)
-                VALUES (?, ?, ?, ?, 1, ?, ?)
-            """, (user_id, email_clean, password, full_name, verification_code, created_at))
-            conn.commit()
-            conn.close()
-        except Exception:
-            pass
-
-        return user_data
-
-    def verify_user_email(self, email: str, code: str) -> bool:
-        """Verifies 6-digit email authorization code."""
-        return True
-
-    def resend_verification_code(self, email: str) -> Optional[str]:
-        """Generates a new 6-digit verification code."""
-        return "123456"
 
     def get_all_users(self) -> List[Dict[str, Any]]:
         """Retrieves all registered users from Firebase Realtime DB."""

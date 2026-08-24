@@ -6,7 +6,7 @@ import { Header } from '../components/Header';
 import { apiService } from '../api/apiService';
 
 export const UserProfileScreen = () => {
-  const { userId, username, logout, setCurrentScreen } = useContext(AppContext);
+  const { userId, username, hostExit, setCurrentScreen } = useContext(AppContext);
   const { isDarkMode, toggleTheme, theme } = useContext(ThemeContext);
 
   const [profileData, setProfileData] = useState(null);
@@ -26,10 +26,6 @@ export const UserProfileScreen = () => {
     };
     fetchProfile();
   }, [userId]);
-
-  const handleSignOut = () => {
-    logout();
-  };
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
@@ -104,9 +100,11 @@ export const UserProfileScreen = () => {
             ))}
           </View>
 
-          <TouchableOpacity style={[styles.logoutBtn, { borderColor: theme.danger }]} onPress={handleSignOut}>
-            <Text style={[styles.logoutTxt, { color: theme.danger }]}>Sign Out / Switch Account</Text>
-          </TouchableOpacity>
+          {hostExit ? (
+            <TouchableOpacity style={[styles.logoutBtn, { borderColor: theme.danger }]} onPress={hostExit}>
+              <Text style={[styles.logoutTxt, { color: theme.danger }]}>🔒 Log Out</Text>
+            </TouchableOpacity>
+          ) : null}
         </ScrollView>
       )}
     </View>

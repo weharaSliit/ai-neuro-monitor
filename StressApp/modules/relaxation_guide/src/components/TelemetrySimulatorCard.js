@@ -13,9 +13,9 @@ export const TelemetrySimulatorCard = ({
 
   return (
     <View style={[styles.card, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
-      <Text style={[styles.title, { color: theme.accent }]}>Multimodal Data Fusion Engine Simulator</Text>
+      <Text style={[styles.title, { color: theme.accent }]}>Multimodal Data Fusion Engine</Text>
       <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
-        Simulates 2 system inputs: fused_stress_label & stress_probability
+        "Live" reads real fused_stress_label & stress_probability from Firebase. Other modes override with synthetic test data.
       </Text>
 
       {/* Simulator Mode Selector Buttons */}
@@ -25,7 +25,7 @@ export const TelemetrySimulatorCard = ({
           style={[styles.modeBtn, currentMode === 'normal' && { backgroundColor: theme.success }]}
           onPress={() => onModeChange('normal')}
         >
-          <Text style={styles.modeBtnText}>Normal (P=0.15)</Text>
+          <Text style={styles.modeBtnText}>Live (Real Fusion Data)</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
