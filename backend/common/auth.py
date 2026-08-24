@@ -6,17 +6,19 @@
 # claims/standard needed, which is all a JWT library would add here.
 #
 # One StressApp login covers every backend module — physiological/,
-# phenotyping_behavior/, and psychological/ all verify the same token
-# against the same SECRET_KEY here, so a user logs in once (via
-# physiological/'s /login, the only module with /register+/login) and
-# the resulting Bearer token is valid everywhere. require_auth below
-# lives here (not copy-pasted per module) so that stays true by
-# construction instead of by convention.
+# phenotyping_behavior/, psychological/, and relaxation_guide/'s FastAPI
+# service (see relaxation_guide/backend/app/shared_auth.py) all verify the
+# same token against the same SECRET_KEY here, so a user logs in once (via
+# physiological/'s /login, the only module with /register+/login) and the
+# resulting Bearer token is valid everywhere. generate_token/verify_token
+# stay Flask-free (Flask is only imported inside require_auth, lazily) so
+# that non-Flask services can reuse the token logic without pulling Flask
+# in as a dependency; require_auth below lives here (not copy-pasted per
+# Flask module) so that stays true by construction instead of by convention.
 # ============================================================
 
 from functools import wraps
 
-from flask import g, jsonify, request
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 from backend.common.config import SECRET_KEY, AUTH_TOKEN_MAX_AGE_SECONDS
@@ -38,11 +40,13 @@ def verify_token(token):
 
 
 def require_auth(view_func):
-    """Verifies Authorization: Bearer <token>, sets g.user_id. Every
-    user-scoped route decorated with this derives user_id from g.user_id
-    rather than trusting whatever the client puts in the request body/path —
-    the request's own user_id (where routes still take one) is only used as
-    an ownership check, never as the source of truth."""
+    """Flask-only. Verifies Authorization: Bearer <token>, sets g.user_id.
+    Every user-scoped route decorated with this derives user_id from
+    g.user_id rather than trusting whatever the client puts in the request
+    body/path — the request's own user_id (where routes still take one) is
+    only used as an ownership check, never as the source of truth."""
+    from flask import g, jsonify, request
+
     @wraps(view_func)
     def wrapper(*args, **kwargs):
         header = request.headers.get('Authorization', '')

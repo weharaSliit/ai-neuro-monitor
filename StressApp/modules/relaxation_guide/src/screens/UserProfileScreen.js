@@ -1,13 +1,19 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Switch } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
 import { Header } from '../components/Header';
 import { apiService } from '../api/apiService';
 
 export const UserProfileScreen = () => {
-  const { userId, username, logout, setCurrentScreen } = useContext(AppContext);
+  const { userId, username, hostExit, setCurrentScreen } = useContext(AppContext);
   const { isDarkMode, toggleTheme, theme } = useContext(ThemeContext);
+  // Relaxation Guide's own screens are all reached via setCurrentScreen
+  // (in-module switch, see AppContext). The Physiological module is a
+  // separate top-level stack screen (App.js), so reaching its Dashboard
+  // needs the actual React Navigation object, not the in-module switch.
+  const navigation = useNavigation();
 
   const [profileData, setProfileData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -26,10 +32,6 @@ export const UserProfileScreen = () => {
     };
     fetchProfile();
   }, [userId]);
-
-  const handleSignOut = () => {
-    logout();
-  };
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
@@ -104,9 +106,50 @@ export const UserProfileScreen = () => {
             ))}
           </View>
 
-          <TouchableOpacity style={[styles.logoutBtn, { borderColor: theme.danger }]} onPress={handleSignOut}>
-            <Text style={[styles.logoutTxt, { color: theme.danger }]}>Sign Out / Switch Account</Text>
+          {/* Onboarding steps, revisitable instead of forced on every login */}
+          <Text style={[styles.secTitle, { color: theme.textPrimary }]}>Setup & Preferences</Text>
+          <TouchableOpacity
+            style={[styles.settingCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}
+            onPress={() => setCurrentScreen('PrivacyPolicy')}
+          >
+            <View style={styles.settingText}>
+              <Text style={[styles.settingTitle, { color: theme.textPrimary }]}>🔒 Privacy & Data Ethics</Text>
+              <Text style={[styles.settingSub, { color: theme.textMuted }]}>Review the research data consent policy.</Text>
+            </View>
           </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.settingCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}
+            onPress={() => setCurrentScreen('OnboardingQuestions')}
+          >
+            <View style={styles.settingText}>
+              <Text style={[styles.settingTitle, { color: theme.textPrimary }]}>📋 Personalization Survey</Text>
+              <Text style={[styles.settingSub, { color: theme.textMuted }]}>Retake the relaxation-style questionnaire.</Text>
+            </View>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.settingCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}
+            onPress={() => setCurrentScreen('BaselineCalibration')}
+          >
+            <View style={styles.settingText}>
+              <Text style={[styles.settingTitle, { color: theme.textPrimary }]}>🎯 Baseline Calibration</Text>
+              <Text style={[styles.settingSub, { color: theme.textMuted }]}>Recalibrate your HRV / GSR / EEG baseline.</Text>
+            </View>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.settingCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}
+            onPress={() => navigation.navigate('Physiological')}
+          >
+            <View style={styles.settingText}>
+              <Text style={[styles.settingTitle, { color: theme.textPrimary }]}>📊 Physiological Dashboard</Text>
+              <Text style={[styles.settingSub, { color: theme.textMuted }]}>Sensor data, ring, EEG & PSS-4 tools.</Text>
+            </View>
+          </TouchableOpacity>
+
+          {hostExit ? (
+            <TouchableOpacity style={[styles.logoutBtn, { borderColor: theme.danger }]} onPress={hostExit}>
+              <Text style={[styles.logoutTxt, { color: theme.danger }]}>🔒 Log Out</Text>
+            </TouchableOpacity>
+          ) : null}
         </ScrollView>
       )}
     </View>

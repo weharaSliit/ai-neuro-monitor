@@ -1,3 +1,17 @@
+import firebase_admin
+from firebase_admin import credentials, db
+from datetime import datetime, timezone, timedelta
+import os
+import sys
+
+# Ensure the backend root is in the path so we can import from common
+_CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+_BACKEND_ROOT = os.path.abspath(os.path.join(_CURRENT_DIR, ".."))
+if _BACKEND_ROOT not in sys.path:
+    sys.path.insert(0, _BACKEND_ROOT)
+
+# Import the group's shared credentials and URL
+from common.config import FIREBASE_CRED_FILE, FIREBASE_DB_URL, FIREBASE_CRED_DICT
 from firebase_admin import db
 from datetime import datetime, timezone
 
@@ -95,7 +109,8 @@ def save_behavioral_window(user_id, window_data):
     Stores the 30-minute aggregated feature window.
     window_data: dict containing all Category A features (dwell, flight, interaction)
     """
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    lk_tz = timezone(timedelta(hours=5, minutes=30))
+    timestamp = datetime.now(lk_tz).strftime("%Y%m%d_%H%M%S")
     ref = _ref(f'data_logs/{user_id}/{timestamp}')
     ref.set(window_data)
     return timestamp
@@ -282,7 +297,8 @@ def save_to_fusion_engine(user_id, result, window_features, is_valid=True):
       user_id               - UUID of the participant (for cross-referencing)
     """
     display_name = get_user_display_name(user_id)
-    session_date = datetime.now().strftime("%Y%m%d")
+    lk_tz = timezone(timedelta(hours=5, minutes=30))
+    session_date = datetime.now(lk_tz).strftime("%Y%m%d")
     session_key  = f"live_session_{session_date}"
 
     stress_score = float(result.get('score',       0.1))
@@ -322,7 +338,7 @@ def save_to_fusion_engine(user_id, result, window_features, is_valid=True):
         'composite_z':          round(composite_z, 4),
         'is_anomaly':           is_anomaly,
         'trending_toward_stress': stress_score > 0.5,
-        'timestamp':            datetime.now().isoformat(),
+        'timestamp':            datetime.now(lk_tz).isoformat(),
         'user_id':              user_id,
     }
 

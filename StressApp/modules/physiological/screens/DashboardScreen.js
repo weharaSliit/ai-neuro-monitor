@@ -417,6 +417,7 @@ export default function DashboardScreen({ navigation }) {
             <ActionTile icon="🎯" label="Calibrate"  color={COLORS.hrv}      isDark={isDark} onPress={() => navigation.navigate('Calibration')} />
             <ActionTile icon="📋" label="PSS-4"      color={COLORS.normal}   isDark={isDark} onPress={() => navigation.navigate('PSS4')} />
             <ActionTile icon="❤️" label="HRV/GSR"    color={COLORS.hrv}      isDark={isDark} onPress={() => navigation.navigate('HrvGsr')} />
+            <ActionTile icon="🧘" label="Relax"      color={COLORS.normal}   isDark={isDark} onPress={() => navigation.navigate('Relaxation')} />
           </View>
         </View>
 

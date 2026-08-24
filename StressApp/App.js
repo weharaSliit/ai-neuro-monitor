@@ -11,6 +11,7 @@ import HrvGsrSessionScreen from './modules/hrvgsr/screens/HrvGsrSessionScreen';
 import CalibrationScreen from './modules/physiological/screens/CalibrationScreen';
 import EMAScreen from './modules/physiological/screens/EMAScreen';
 import PSS4Screen from './modules/physiological/screens/PSS4Screen';
+import RelaxationGuideModule from './modules/relaxation_guide';
 import { AppContext } from './modules/physiological/screens/AppState';
 import { ThemeProvider, useTheme } from './modules/physiological/config/ThemeContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -38,6 +39,7 @@ const linking = {
       EmaDetail:   'ema',
       PSS4:        'pss4',
       HrvGsr:      'hrv-gsr',
+      Relaxation:  'relaxation',
     },
   },
 };
@@ -51,9 +53,18 @@ function RootNavigator() {
   }
 
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Navigator screenOptions={{ headerShown: false }} initialRouteName={user ? 'Relaxation' : 'Login'}>
       {user ? (
         <>
+          {/* Relaxation Guide is the primary post-login experience -- see
+              StressApp/modules/relaxation_guide/index.js. Physiological/EEG/
+              HRV-GSR/Fusion below are supporting sensor screens, reachable
+              but no longer the landing destination. */}
+          <Stack.Screen
+            name="Relaxation"
+            component={RelaxationGuideModule}
+            options={{ headerShown: false }}
+          />
           <Stack.Screen name="Physiological" component={PhysiologicalNavigator} />
           <Stack.Screen
             name="Calibration"

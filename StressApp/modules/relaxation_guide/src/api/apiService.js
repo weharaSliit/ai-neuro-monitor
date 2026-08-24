@@ -34,7 +34,47 @@ const client = axios.create({
   },
 });
 
+// This module has no login/signup of its own -- identity is StressApp's
+// own login (AuthContext.js), same shared Bearer token used by
+// modules/physiological/api/client.js. AuthContext calls setAuthToken()
+// here whenever that token changes so every request below carries it.
+let authToken = null;
+
+export function setAuthToken(token) {
+  authToken = token;
+}
+
+client.interceptors.request.use((config) => {
+  if (authToken) {
+    config.headers.Authorization = `Bearer ${authToken}`;
+  }
+  return config;
+});
+
 export const apiService = {
+  // Durable "has this user already finished the one-time onboarding flow"
+  // check (privacy consent + survey + permissions + baseline calibration).
+  // Used on login to decide whether to show that flow again or skip to
+  // Dashboard. Defaults to false (i.e. show onboarding) if unreachable --
+  // safer than silently skipping consent/calibration for a real new user.
+  async getCalibrationStatus(userId) {
+    try {
+      const res = await client.get(`/user/calibration-status/${userId}`);
+      return !!res.data?.is_calibrated;
+    } catch (err) {
+      return false;
+    }
+  },
+
+  async completeCalibration(userId) {
+    try {
+      const res = await client.post(`/user/calibration-status/${userId}`);
+      return res.data;
+    } catch (err) {
+      return { user_id: userId, is_calibrated: true };
+    }
+  },
+
   // Check Smart Technique Suitability
   async saveOnboardingAnswers(userId, answers) {
     try {
@@ -65,52 +105,6 @@ export const apiService = {
         warning_title: '⚠️ Calm AI Suitability Warning',
         warning_message: `Your live probability scores indicate acute stress. Calm AI recommends starting with 'Guided Meditation & Breathwork' for immediate autonomic baseline restoration.`
       };
-    }
-  },
-
-  // Auth API with Mobile IP Resolution & Fail-Safe Fallbacks
-  async signUp(email, password, fullName) {
-    try {
-      const res = await client.post('/auth/signup', { email, password, full_name: fullName });
-      return res.data;
-    } catch (err) {
-      if (err.response && err.response.data && err.response.data.detail) {
-        throw new Error(err.response.data.detail);
-      }
-      // Mobile Network Error Fallback
-      const userId = 'user_' + email.split('@')[0].toLowerCase();
-      return {
-        user_id: userId,
-        email,
-        full_name: fullName,
-        token: `token_${userId}_authorized`,
-        is_email_verified: true,
-        message: `Account created (Offline mode — connecting to ${API_BASE_URL}).`
-      };
-    }
-  },
-
-  async signIn(email, password) {
-    try {
-      const res = await client.post('/auth/signin', { email, password });
-      return res.data;
-    } catch (err) {
-      if (err.response && err.response.data && err.response.data.detail) {
-        throw new Error(err.response.data.detail);
-      }
-      // Mobile Network Error Fallback
-      if (err.message && err.message.includes('Network Error')) {
-        const userId = 'user_' + email.split('@')[0].toLowerCase();
-        return {
-          user_id: userId,
-          email,
-          full_name: email.split('@')[0].toUpperCase(),
-          token: `token_${userId}_secret`,
-          is_email_verified: true,
-          message: `Signed in via offline fallback mode (Connecting to ${API_BASE_URL}).`
-        };
-      }
-      throw new Error(err.message || 'Sign in failed. Check network connection.');
     }
   },
 
@@ -148,6 +142,51 @@ export const apiService = {
         is_alert_triggered: false,
         features_flat: [0.15, 0.85],
         message: 'Client Fallback Telemetry'
+      };
+    }
+  },
+
+  // Real-time multimodal fusion engine output, read directly from
+  // fusion_en_sessions/{user}/{session} in Firebase (bypasses the simulator).
+  async getLiveFusionTelemetry(userId = 'user_default') {
+    try {
+      const res = await client.get(`/telemetry/fusion-output?user_id=${userId}`);
+      return res.data;
+    } catch (err) {
+      return {
+        user_id: userId,
+        effective_label: 'normal',
+        is_safety_override: false,
+        is_locf_applied: false,
+        is_alert_triggered: false,
+        features_flat: [0.15, 0.85],
+        message: 'Client Fallback Telemetry (Live Fusion Unreachable)'
+      };
+    }
+  },
+
+  // Full real-time pipeline snapshot (raw per-modality probability_vector +
+  // MVH-processed result) for the Live Pipeline tab.
+  async getFusionPipeline(userId = 'user_default') {
+    try {
+      const res = await client.get(`/telemetry/pipeline?user_id=${userId}`);
+      return res.data;
+    } catch (err) {
+      return {
+        user_id: userId,
+        is_live: false,
+        is_calibrated: false,
+        raw_stress_label: null,
+        probability_vector: { eeg: null, hrv_gsr: null, behav: null, fused: null },
+        processed: {
+          user_id: userId,
+          effective_label: 'normal',
+          is_safety_override: false,
+          is_locf_applied: false,
+          is_alert_triggered: false,
+          features_flat: [0.15, 0.85],
+          message: 'Pipeline unreachable — backend offline'
+        }
       };
     }
   },

@@ -19,6 +19,12 @@ import sys
 import time
 from pathlib import Path
 
+# Forces line buffering regardless of `python -u`/PYTHONUNBUFFERED being set
+# on whatever deploys this -- see backend/psychological/mqtt_bridge.py's
+# identical line for why (stdout block-buffers by default off a real
+# terminal, which can make a live process look silent/dead in a log viewer).
+sys.stdout.reconfigure(line_buffering=True)
+
 if __package__ is None:
     repo_root = Path(__file__).resolve().parents[2]
     if str(repo_root) not in sys.path:

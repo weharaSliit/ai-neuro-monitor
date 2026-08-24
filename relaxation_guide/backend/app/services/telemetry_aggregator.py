@@ -33,6 +33,13 @@ class TelemetryAggregator:
             if raw_prob_val is None:
                 raw_prob_val = fb_prediction.get("probability")
             if raw_prob_val is None:
+                # Real fusion engine schema: fusion_en_sessions/{user}/{session}/{window}/
+                # probability_vector/{eeg,hrv_gsr,behav,fused} -- "fused" is the weighted
+                # multimodal output (see fusion_live_session.py's poll_once()).
+                prob_vector = fb_prediction.get("probability_vector")
+                if isinstance(prob_vector, dict):
+                    raw_prob_val = prob_vector.get("fused")
+            if raw_prob_val is None:
                 raw_prob_val = fb_prediction.get("prob_stress", 0.50)
 
             prob_stress = float(raw_prob_val)
@@ -40,9 +47,11 @@ class TelemetryAggregator:
                 prob_stress = prob_stress / 100.0
 
             trend_alert = bool(fb_prediction.get("trend_alert", False))
-            
-            # Map inputs to 3-state label
-            if raw_label in ["stress", "high", "acute"] or fb_prediction.get("prediction") in [1, 2]:
+
+            # Map inputs to 3-state label. raw_label is "high_stress"/"low_stress" from the
+            # real fusion engine (fusion_live_session.py's stress_label field) alongside the
+            # legacy "stress"/"high"/"acute" values from older/simulated payloads.
+            if raw_label in ["stress", "high", "acute", "high_stress"] or fb_prediction.get("prediction") in [1, 2]:
                 label = "stress"
             elif trend_alert or prob_stress > 0.60 or raw_label in ["pre-stress", "pre_stress", "medium", "moderate"]:
                 label = "pre-stress"

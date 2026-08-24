@@ -58,20 +58,13 @@ export default function PhenotypingDashboard() {
     const [userProfile, setUserProfile] = useState(() => getUserProfile());
     const [calibStatus, setCalibStatus] = useState(() => getCalibrationStatus(userProfile));
 
-    const [stressData, setStressData] = useState({ score: 0.64, label: 'Moderate' });
+    const [stressData, setStressData] = useState({ score: 0, label: 'Waiting for data' });
     const [prevScore, setPrevScore] = useState(null);
     const [liveWindow, setLiveWindow] = useState(null);
     const [baselines, setBaselines] = useState(null);
     const [lastUpdated, setLastUpdated] = useState(null);
     const [showMotionModal, setShowMotionModal] = useState(false);
-    const [alerts, setAlerts] = useState([
-        {
-            id: 1,
-            message: 'Your behavior is outside your usual pattern — 3 signals are elevated.',
-            time: '2h ago',
-            dismissed: false,
-        }
-    ]);
+    const [alerts, setAlerts] = useState([]);
 
     const userId = userProfile?.userId;
     const userName = userProfile?.name || 'Participant';
@@ -104,7 +97,7 @@ export default function PhenotypingDashboard() {
             if (val) {
                 const entries = Object.values(val);
                 const latest = entries[entries.length - 1];
-                
+
                 let newPrevScore = null;
                 if (entries.length >= 2) {
                     newPrevScore = entries[entries.length - 2].stress_score;
@@ -133,7 +126,7 @@ export default function PhenotypingDashboard() {
                 const parsed = JSON.parse(cachedLogs);
                 setLiveWindow(parsed.liveWindow);
                 setLastUpdated(parsed.lastUpdated);
-            } catch (e) {}
+            } catch (e) { }
         }
 
         const logsRef = ref(db, `phenotyping/data_logs/${userId}`);
@@ -143,7 +136,7 @@ export default function PhenotypingDashboard() {
                 const entries = Object.entries(raw);
                 entries.sort((a, b) => a[0].localeCompare(b[0]));
                 const [latestKey, latestData] = entries[entries.length - 1];
-                
+
                 setLiveWindow(latestData);
                 setLastUpdated(latestKey);
 
@@ -157,7 +150,7 @@ export default function PhenotypingDashboard() {
         // Load baselines from cache first
         const cachedBaselines = localStorage.getItem(`cache_baselines_${userId}`);
         if (cachedBaselines) {
-            try { setBaselines(JSON.parse(cachedBaselines)); } catch (e) {}
+            try { setBaselines(JSON.parse(cachedBaselines)); } catch (e) { }
         }
 
         const baselinesRef = ref(db, `phenotyping/users/${userId}/baselines`);
@@ -229,10 +222,10 @@ export default function PhenotypingDashboard() {
             : `${appSwitch.toFixed(1)} switches/min`;
 
         return [
-            { title: 'Typing pace',     value: dwellLabel,  status: dwell.status,  color: STATUS_COLOR[dwell.status]  },
-            { title: 'Flight time',     value: flightLabel, status: flight.status, color: STATUS_COLOR[flight.status] },
-            { title: 'Scroll speed',    value: scrollLabel, status: scroll.status, color: STATUS_COLOR[scroll.status] },
-            { title: 'App switching',   value: appLabel,    status: appDev.status, color: STATUS_COLOR[appDev.status] },
+            { title: 'Typing pace', value: dwellLabel, status: dwell.status, color: STATUS_COLOR[dwell.status] },
+            { title: 'Flight time', value: flightLabel, status: flight.status, color: STATUS_COLOR[flight.status] },
+            { title: 'Scroll speed', value: scrollLabel, status: scroll.status, color: STATUS_COLOR[scroll.status] },
+            { title: 'App switching', value: appLabel, status: appDev.status, color: STATUS_COLOR[appDev.status] },
         ];
     }, [liveWindow, baselines]);
 
@@ -265,7 +258,7 @@ export default function PhenotypingDashboard() {
         <div className={`min-h-screen overflow-y-auto hide-scrollbar ${t.bg} ${t.text} flex flex-col font-sans pb-24 relative`}>
             {/* Main responsive container */}
             <div className="w-full max-w-5xl mx-auto flex-1 flex flex-col">
-                
+
                 {/* Header */}
                 <header className="px-5 pt-5 pb-3 animate-fade-in flex justify-between items-start">
                     <div>
@@ -296,8 +289,8 @@ export default function PhenotypingDashboard() {
                                 <span className="text-xs font-bold text-[#7c6bf7]">{calibStatus.progressPct}%</span>
                             </div>
                             <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                                <div 
-                                    className="h-full bg-[#7c6bf7] rounded-full transition-all duration-500" 
+                                <div
+                                    className="h-full bg-[#7c6bf7] rounded-full transition-all duration-500"
                                     style={{ width: `${calibStatus.progressPct}%` }}
                                 />
                             </div>
@@ -323,7 +316,7 @@ export default function PhenotypingDashboard() {
 
                 {/* Dashboard Grid Layout (Responsive Desktop vs Mobile) */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 px-5 mb-4">
-                    
+
                     {/* Left Column: Mood & Stress Gauge */}
                     <div className={`${t.card} border ${t.cardBorder} rounded-3xl p-6 flex flex-col items-center justify-center animate-fade-in-up`}>
                         <div className="text-4xl mb-2 animate-float">{mood.emoji}</div>

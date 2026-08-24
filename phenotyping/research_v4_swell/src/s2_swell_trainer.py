@@ -5,7 +5,7 @@ from pathlib import Path
 from sklearn.svm import OneClassSVM
 from sklearn.ensemble import IsolationForest, RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import recall_score
+from sklearn.metrics import recall_score, f1_score
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data" / "processed" / "swell_v4_processed.csv"
@@ -36,16 +36,28 @@ def run_personalized_test():
         # 2. Isolation Forest
         iso = IsolationForest(contamination=0.1, random_state=42).fit(X_train)
         
-        # Calculate Recall specifically for anomalies (Escalation)
+        # Calculate F1 and Recall for anomalies (Escalation)
+        ocsvm_preds = ocsvm.predict(X_test)
+        iso_preds = iso.predict(X_test)
+        
         user_results.append({
             "User": uid,
-            "OC-SVM Recall": recall_score(y_test, ocsvm.predict(X_test), pos_label=-1),
-            "IF Recall": recall_score(y_test, iso.predict(X_test), pos_label=-1)
+            "OC-SVM F1": f1_score(y_test, ocsvm_preds, pos_label=-1),
+            "OC-SVM Recall": recall_score(y_test, ocsvm_preds, pos_label=-1),
+            "IF F1": f1_score(y_test, iso_preds, pos_label=-1),
+            "IF Recall": recall_score(y_test, iso_preds, pos_label=-1)
         })
 
     res_df = pd.DataFrame(user_results)
+    
+    # Save results for cross-dataset synthesis (s1_metric_aggregator.py)
+    out_dir = ROOT / "outputs"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    res_df.to_csv(out_dir / "swell_results.csv", index=False)
+    
     print("\n🏆 PERSONALIZED RESULTS (MEAN ACROSS USERS)")
     print("==========================================")
-    print(res_df[["OC-SVM Recall", "IF Recall"]].mean())
+    print(res_df[["OC-SVM F1", "OC-SVM Recall", "IF F1", "IF Recall"]].mean())
+    print(f"\n📊 Results saved to outputs/swell_results.csv")
 
 if __name__ == "__main__": run_personalized_test()

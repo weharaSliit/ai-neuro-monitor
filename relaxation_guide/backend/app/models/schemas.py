@@ -136,24 +136,10 @@ class ChatResponse(BaseModel):
     suggested_action: Optional[str] = None
 
 # --- Auth Schemas ---
-class SignUpRequest(BaseModel):
-    email: str
-    password: str
-    full_name: str
-
-class SignInRequest(BaseModel):
-    email: str
-    password: str
-
-class AuthResponse(BaseModel):
-    user_id: str
-    email: str
-    full_name: str
-    token: str
-    message: str
-    is_email_verified: bool = True
-    verification_code: Optional[str] = None
-
+# Sign-up/sign-in themselves are NOT modeled here -- identity comes from
+# StressApp's own login (backend/physiological's /register + /login); see
+# app/shared_auth.py, which verifies that same token instead of this
+# service minting its own.
 class UserProfileResponse(BaseModel):
     user_id: str
     email: str
