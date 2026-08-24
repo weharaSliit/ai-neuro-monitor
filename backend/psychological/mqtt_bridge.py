@@ -73,10 +73,13 @@ EEG_MQTT_CA_CERT = os.path.join(
 # PSYCHOLOGICAL_FLASK_URL is a full-URL override for a deployed target
 # (e.g. Render's public HTTPS URL, no explicit port) -- see
 # backend/physiological/mqtt_bridge.py's identical PHYSIOLOGICAL_FLASK_URL
-# comment. Takes precedence over the localhost:port construction, which
-# stays the default for local dev where this script and Flask are
-# co-located.
-PSYCHOLOGICAL_FLASK_URL="https://mindpulse-eeg.onrender.com"
+# comment. setdefault (not a bare assignment) so this actually participates
+# in the os.environ.get() lookup below -- a plain `PSYCHOLOGICAL_FLASK_URL =
+# "..."` local variable here does NOT affect os.environ.get("PSYCHOLOGICAL_
+# FLASK_URL"), so the env var read was silently still falling through to
+# the http://127.0.0.1:5001 default despite this line existing. A real
+# PSYCHOLOGICAL_FLASK_URL set in Render's dashboard still overrides this.
+os.environ.setdefault("PSYCHOLOGICAL_FLASK_URL", "https://mindpulse-eeg.onrender.com")
 
 FLASK_URL = os.environ.get("PSYCHOLOGICAL_FLASK_URL") or \
     f"http://127.0.0.1:{os.environ.get('PSYCHOLOGICAL_PORT', '5001')}"
