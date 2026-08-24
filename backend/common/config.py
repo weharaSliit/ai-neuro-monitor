@@ -77,10 +77,20 @@ EMA_ALPHA         = 0.2  # EMA learning rate
 # across calibrate_ring.py and mqtt_bridge.py, which meant every network
 # change (switching WiFi networks, re-measuring GSR_CAL) required editing
 # multiple files and kept getting missed in one of them. Update here only.
-MQTT_BROKER = os.environ.get("STRESSAPP_MQTT_BROKER", "10.180.48.56")
-MQTT_PORT   = 1883
-MQTT_TOPIC  = "mindpulse/wearable01/sensors"
-GSR_CAL     = 2872   # measured: electrodes off, raw analogRead(GSR_PIN)
+#
+# EMQX Cloud Serverless (mindpulse-broker, Asia-Pacific) — replaces the
+# local-IP broker this used to point at. Requires TLS on 8883 with
+# username/password auth, unlike the old local Mosquitto's plain-TCP/
+# allow_anonymous setup — see MQTT_CA_CERT/MQTT_USER/MQTT_PASSWORD below
+# and backend/common/mqtt_bridge.py's connect_mqtt(), which now does the
+# tls_set()/username_pw_set() calls this requires.
+MQTT_BROKER   = os.environ.get("STRESSAPP_MQTT_BROKER", "ob1f0f10.ala.asia-southeast1.emqxsl.com")
+MQTT_PORT     = 8883
+MQTT_USER     = os.environ.get("RING_MQTT_USER", "wearable01")
+MQTT_PASSWORD = os.environ.get("RING_MQTT_PASSWORD", "wearable01")
+MQTT_CA_CERT  = os.path.join(BASE_PATH, "iot_firmware", "emqxsl-ca.crt")
+MQTT_TOPIC    = "mindpulse/wearable01/sensors"
+GSR_CAL       = 2872   # measured: electrodes off, raw analogRead(GSR_PIN)
 
 WINDOW_SEC = 60
 SETTLE_SEC = 30  # discard this many seconds of data right after startup/
