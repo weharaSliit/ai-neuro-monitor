@@ -62,6 +62,15 @@ export default function ProfileScreen({ navigation }) {
           </View>
         </View>
 
+        {/* Back to Home */}
+        <TouchableOpacity
+          activeOpacity={0.8}
+          style={styles.backRow}
+          onPress={() => navigation.navigate('Home')}
+        >
+          <Text style={[styles.backText, { color: COLORS.brand }]}>← Back to Home</Text>
+        </TouchableOpacity>
+
         {/* Stats row */}
         <View style={styles.statsRow}>
           <View style={[styles.statCard, { backgroundColor: card, borderColor: border }]}>
@@ -144,4 +153,6 @@ const styles = StyleSheet.create({
   cardSub:           { fontSize: 12, marginTop: 4 },
   logoutBtn:         { marginHorizontal: 20, padding: 14, borderRadius: 14, alignItems: 'center', borderWidth: 1 },
   logoutText:        { fontSize: 14, fontWeight: '700' },
+  backRow:           { marginHorizontal: 20, marginBottom: 4, alignSelf: 'flex-start' },
+  backText:          { fontSize: 13, fontWeight: '700' },
 });
