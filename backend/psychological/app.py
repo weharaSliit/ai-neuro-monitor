@@ -53,8 +53,9 @@ if DISABLE_QUALITY_GATE:
           "NOT trustworthy while this is on.")
 
 # Raw EEG samples are logged here per session, independent of Firebase --
-# EegFirebaseSession.push_raw() no-ops without $FIREBASE_CREDENTIALS (see its
-# docstring), so this is the one raw-data path that's guaranteed to work
+# EegFirebaseSession.push_raw() no-ops without $FIREBASE_CRED_JSON/
+# $FIREBASE_CREDENTIALS (see firebase_service.py's resolve_credential()),
+# so this is the one raw-data path that's guaranteed to work
 # even with cloud sync off entirely. Same RAW_FIELDS shape as the standalone
 # phscycological/scripts/realtime_inference.py CLI's --log-raw-csv, via the
 # same CsvLogger/log_raw_block (realtime/csv_logger.py) -- not a second copy.
@@ -197,8 +198,9 @@ def calibrate():
         "csv_logger": csv_logger,
         "score_history": [],
     }
-    # firebase.enabled is False whenever FIREBASE_CREDENTIALS isn't set on
-    # THIS service -- calibration still succeeds and predictions still work
+    # firebase.enabled is False whenever neither FIREBASE_CRED_JSON nor
+    # FIREBASE_CREDENTIALS is set on THIS service -- calibration still
+    # succeeds and predictions still work
     # either way, but nothing gets written to Firebase, which otherwise
     # looks identical to a healthy deploy from the bridge/caller's side
     # (success: True either way). Surfaced here so that's visible without
