@@ -3,11 +3,11 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "web": "expo start --web",
-    "postinstall": "mkdir -p public && cp node_modules/canvaskit-wasm/bin/full/canvaskit.wasm public/canvaskit.wasm"
+    "start": "npx expo start",
+    "android": "npx expo start --android",
+    "ios": "npx expo start --ios",
+    "web": "npx expo start --web",
+    "postinstall": "node -e \"const fs=require('fs'); fs.mkdirSync('public', {recursive:true}); const src='node_modules/canvaskit-wasm/bin/full/canvaskit.wasm'; if(fs.existsSync(src)) fs.copyFileSync(src, 'public/canvaskit.wasm');\""
   },
   "dependencies": {
     "@capacitor/android": "^8.3.2",

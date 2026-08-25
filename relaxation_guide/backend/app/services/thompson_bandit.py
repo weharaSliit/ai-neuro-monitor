@@ -11,6 +11,7 @@ from typing import Dict, Tuple, List, Optional
 from app.config import TECHNIQUES, WEIGHT_PHYSIO, WEIGHT_PREF, HABITUATING_PENALTY_FACTOR
 from app.services.preference_learner import preference_learner
 from app.database.db_manager import db_manager
+from app.services import firebase_service
 
 class ThompsonBandit:
     def __init__(self):
@@ -18,13 +19,17 @@ class ThompsonBandit:
         self._user_distributions: Dict[str, Dict[int, Dict[str, Dict[str, float]]]] = {}
 
     def _get_user_cluster_dists(self, user_id: str, cluster_id: int) -> Dict[str, Dict[str, float]]:
-        """Ensures Beta(alpha, beta) priors exist for all techniques in the given cluster, loading from SQLite if saved."""
+        """Ensures Beta(alpha, beta) priors exist for all techniques in the given cluster, loading from Firebase/SQLite if saved."""
         if user_id not in self._user_distributions:
             self._user_distributions[user_id] = {}
-            # Attempt to load user-wise distributions from SQLite
-            sqlite_dists = db_manager.load_bandit_distributions(user_id)
-            if sqlite_dists:
-                self._user_distributions[user_id] = sqlite_dists
+            # Attempt to load user-wise distributions from Firebase first, then SQLite
+            fb_dists = firebase_service.get_bandit_distributions(user_id)
+            if fb_dists:
+                self._user_distributions[user_id] = fb_dists
+            else:
+                sqlite_dists = db_manager.load_bandit_distributions(user_id)
+                if sqlite_dists:
+                    self._user_distributions[user_id] = sqlite_dists
 
         if cluster_id not in self._user_distributions[user_id]:
             # Initialize default prior Beta(1.0, 1.0) for all techniques in cluster
@@ -59,8 +64,11 @@ class ThompsonBandit:
         best_pref_score = 0.0
         all_blended_scores = {}
 
+        # Check user's historical fastest stress reduction speed from relaxation_intervention in Firebase
+        history_boosts = firebase_service.get_fastest_recovery_technique_history(user_id)
+
         for tech_id, params in cluster_dists.items():
-            alpha = params["alpha"]
+            alpha = params["alpha"] + history_boosts.get(tech_id, 0.0)
             beta = params["beta"]
 
             # Draw Thompson Sample from Beta distribution for user
@@ -91,7 +99,7 @@ class ThompsonBandit:
 
     def update_distribution(self, user_id: str, cluster_id: int, technique_id: str, reward: float):
         """
-        Updates the Beta(alpha, beta) distribution for THIS user and persists to SQLite:
+        Updates the Beta(alpha, beta) distribution for THIS user and persists to Firebase + SQLite:
         - Reward R in [0.0, 1.0]: alpha += R, beta += (1 - R)
         - Reward R < 0.0: beta += abs(R)
         """
@@ -103,14 +111,29 @@ class ThompsonBandit:
             else:
                 cluster_dists[technique_id]["beta"] += abs(reward)
 
+            alpha_val = cluster_dists[technique_id]["alpha"]
+            beta_val = cluster_dists[technique_id]["beta"]
+
             # Persist user distribution update to SQLite
             db_manager.save_bandit_distribution(
                 user_id,
                 cluster_id,
                 technique_id,
-                cluster_dists[technique_id]["alpha"],
-                cluster_dists[technique_id]["beta"]
+                alpha_val,
+                beta_val
             )
+
+            # Persist user distribution update to Firebase
+            try:
+                firebase_service.save_bandit_distribution(
+                    user_id,
+                    cluster_id,
+                    technique_id,
+                    alpha_val,
+                    beta_val
+                )
+            except Exception as e:
+                print(f"[Firebase Warning] Could not save bandit distribution to Firebase: {e}")
 
     def get_user_bandit_state(self, user_id: str) -> Dict[int, Dict[str, Dict[str, float]]]:
         """Returns current Beta distribution state across all 10 clusters for a user."""

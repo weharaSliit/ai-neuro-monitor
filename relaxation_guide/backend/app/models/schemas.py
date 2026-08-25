@@ -66,6 +66,7 @@ class ValidationRequest(BaseModel):
     post_stress_label: str
     star_rating: Optional[int] = Field(5, ge=1, le=5, description="User 1 to 5 star feedback rating")
     duration_seconds: Optional[float] = Field(30.0, description="Short-time stress reduction duration in seconds")
+    context_cluster_id: Optional[int] = Field(0, description="Context cluster ID (0-9)")
 
 class UserTechniqueRanking(BaseModel):
     technique_id: str

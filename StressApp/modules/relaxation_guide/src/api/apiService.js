@@ -231,13 +231,14 @@ export const apiService = {
     }
   },
 
-  async validateIntervention(userId, techniqueId, preLabel, postLabel) {
+  async validateIntervention(userId, techniqueId, preLabel, postLabel, contextClusterId = 0) {
     try {
       const res = await client.post('/validate', {
         user_id: userId,
         technique_id: techniqueId,
         pre_stress_label: preLabel,
-        post_stress_label: postLabel
+        post_stress_label: postLabel,
+        context_cluster_id: contextClusterId
       });
       return res.data;
     } catch (err) {

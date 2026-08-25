@@ -75,8 +75,9 @@ def get_personalized_intervention(req: InterventionRequest):
     }
     try:
         firebase_service.save_intervention_session(req.user_id, session_id, session_payload)
+        firebase_service.save_relaxation_intervention(req.user_id, session_id, session_payload)
     except Exception as e:
-        print(f"[Firebase Warning] Could not save to intervention_system_sessions: {e}")
+        print(f"[Firebase Warning] Could not save to relaxation_intervention: {e}")
 
     return TechniqueRecommendation(
         technique_id=tech_id,
