@@ -46,6 +46,14 @@ export const BaselineCalibrationScreen = () => {
   // wearable on should never see it either.
   const [eegSessionId, setEegSessionId] = useState(null);
   const [eegConnected, setEegConnected] = useState(false);
+  // Outcome of backend/psychological's finalize_calibration() for this
+  // session -- {status, thresholds_personalized, baseline_shift,
+  // resting_calibrated_p, n_blocks} -- written by app.py's /calibrate via
+  // push_calibration_result() the moment mqtt_bridge.py's calibration
+  // blocks are processed server-side. Nothing else gives this screen
+  // access to that outcome, since /calibrate is never called from here
+  // directly.
+  const [calibrationResult, setCalibrationResult] = useState(null);
 
   // Breathing ring
   const breathScale  = useRef(new Animated.Value(1)).current;
@@ -155,6 +163,21 @@ export const BaselineCalibrationScreen = () => {
     return () => off(rawRef, 'value', rawHandler);
   }, [eegSessionId, userId]);
 
+  // finalize_calibration()'s outcome for this session, once mqtt_bridge.py's
+  // server-side /calibrate call actually reaches it -- see calibrationResult's
+  // own comment above for why this screen has no more direct path to it.
+  useEffect(() => {
+    if (!eegSessionId || !userId) {
+      setCalibrationResult(null);
+      return;
+    }
+    const resultRef = ref(db, `psychological/${userId}/${eegSessionId}/calibration_result`);
+    const resultHandler = onValue(resultRef, (snapshot) => {
+      setCalibrationResult(snapshot.val() || null);
+    });
+    return () => off(resultRef, 'value', resultHandler);
+  }, [eegSessionId, userId]);
+
   // Completion
   useEffect(() => {
     if (isCalibrating && secondsLeft === 0) {
@@ -166,17 +189,30 @@ export const BaselineCalibrationScreen = () => {
       // backend/psychological's finalize_calibration() ever ran; that
       // requires real blocks to have reached /calibrate via mqtt_bridge.py.
       const eegCaptured = permMember1 && eegConnected;
+      // calibrationResult may not have landed yet even when eegCaptured is
+      // true (mqtt_bridge.py's own calibration window runs on its own
+      // clock, independent of this screen's 120s timer) -- eegCaptured
+      // means "wearable02 was streaming," not "finalize_calibration()
+      // already returned." Only claim personalization once the outcome
+      // itself is actually in hand.
+      let eegLine = 'EEG was not connected during this session, so no EEG baseline was recorded -- connect wearable02 and recalibrate from the EEG tab to add it.';
+      if (eegCaptured) {
+        eegLine = 'HRV, GSR, and EEG alpha/beta ratios stored. Real-time stress stream is now active.';
+        if (calibrationResult?.status === 'ok') {
+          eegLine += calibrationResult.thresholds_personalized
+            ? ` Your EEG high-load sensitivity has been calibrated to your own resting pattern (${calibrationResult.baseline_shift >= 0 ? '+' : ''}${(calibrationResult.baseline_shift * 100).toFixed(1)}% vs. average).`
+            : ' Not enough clean EEG blocks were captured to personalize your sensitivity this time -- using the standard sensitivity for now.';
+        }
+      }
       showAlert({
         title: '🎯 Baseline Recorded!',
-        text: eegCaptured
-          ? 'Autonomic nervous system baseline captured. HRV, GSR, and EEG alpha/beta ratios stored. Real-time stress stream is now active.'
-          : 'Autonomic nervous system baseline captured (HRV, GSR). EEG was not connected during this session, so no EEG baseline was recorded -- connect wearable02 and recalibrate from the EEG tab to add it.',
+        text: `Autonomic nervous system baseline captured. ${eegLine}`,
         icon: 'success',
         confirmButtonText: 'Go to Dashboard 🚀',
         onConfirm: () => setCurrentScreen('Dashboard')
       });
     }
-  }, [isCalibrating, secondsLeft, permMember1, eegConnected]);
+  }, [isCalibrating, secondsLeft, permMember1, eegConnected, calibrationResult]);
 
   // Rotate tips
   useEffect(() => {
