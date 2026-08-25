@@ -1,20 +1,29 @@
 """
 Objective 2 Integration & Handshake Verification Suite
-Tests Flask REST API endpoints, One-Class SVM inference engine, 
+Tests Flask REST API endpoints, One-Class SVM inference engine,
 EMA baseline updates, and Ground-Truth EMA Label ingestion.
 """
 
+import sys
 import requests
 import json
 import time
 
-BASE_URL = "http://127.0.0.1:5002"
+BASE_URL = "http://127.0.0.1:5001"
 TEST_USER_ID = "chathurika_001"
 
 def run_tests():
     print("=" * 60)
     print("OBJECTIVE 2 END-TO-END INTEGRATION TEST SUITE")
     print("=" * 60)
+
+    # FIX: previously the closing banner always printed "ALL TESTS PASSED"
+    # unconditionally, even when every individual test below failed — each
+    # failure was caught and printed as [FAIL], but nothing tracked whether
+    # any failure had occurred, so the summary line could never actually
+    # report failure. all_passed now tracks real outcome across every test,
+    # and the process exits non-zero on failure so this is usable in CI.
+    all_passed = True
 
     # 1. Health Check Endpoint
     print("\n[Test 1] Testing /health endpoint...")
@@ -26,7 +35,11 @@ def run_tests():
         print("[OK] Health Check Passed!")
     except Exception as e:
         print(f"[FAIL] Health Check Failed: {e}")
-        return
+        print("\n" + "=" * 60)
+        print("SOME TESTS FAILED — health check must pass before any other")
+        print("endpoint can be reached; stopping here.")
+        print("=" * 60)
+        sys.exit(1)
 
     # 2. Real-Time Behavioral Feature Vector Prediction (/behavior/predict)
     print("\n[Test 2] Testing /behavior/predict (Inference & EMA Engine)...")
@@ -46,6 +59,7 @@ def run_tests():
         print("[OK] Behavioral Prediction Endpoint Passed!")
     except Exception as e:
         print(f"[FAIL] Prediction Endpoint Failed: {e}")
+        all_passed = False
 
     # 3. Ground-Truth EMA Label Ingestion (/behavior/label) - PSS-4 & SISS
     print("\n[Test 3] Testing /behavior/label (Ground-Truth Ingestion)...")
@@ -72,6 +86,7 @@ def run_tests():
         print("[OK] Ground-Truth Ingestion Endpoint Passed!")
     except Exception as e:
         print(f"[FAIL] Ground-Truth Ingestion Failed: {e}")
+        all_passed = False
 
     # 4. Neuroadaptive Bridge Endpoint (/behavior/stress-summary)
     print("\n[Test 4] Testing /behavior/stress-summary (Neuroadaptive Handshake)...")
@@ -83,10 +98,16 @@ def run_tests():
         print("[OK] Neuroadaptive Bridge Handshake Passed!")
     except Exception as e:
         print(f"[FAIL] Neuroadaptive Bridge Failed: {e}")
+        all_passed = False
 
     print("\n" + "=" * 60)
-    print("ALL OBJECTIVE 2 INTEGRATION TESTS PASSED SUCCESSFULLY!")
+    if all_passed:
+        print("ALL OBJECTIVE 2 INTEGRATION TESTS PASSED SUCCESSFULLY!")
+    else:
+        print("SOME TESTS FAILED — see [FAIL] lines above.")
     print("=" * 60)
+
+    sys.exit(0 if all_passed else 1)
 
 if __name__ == "__main__":
     run_tests()

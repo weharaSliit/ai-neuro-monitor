@@ -5,10 +5,13 @@ import { db } from '../firebase';
 import { ref, onValue, query, limitToLast, get } from 'firebase/database';
 import { BottomNav } from '../components/BottomNav';
 import { MotionDetectionModal } from '../components/MotionDetectionModal';
+import { EmaSurveyModal } from '../components/EmaSurveyModal';
+import { SignalDetailCard } from '../components/SignalDetailCard';
 import { useTheme } from '../context/ThemeContext';
-import { getUserProfile, getCalibrationStatus } from '../utils/userStorage';
+import { getUserProfile, getCalibrationStatus, markCalibrated } from '../utils/userStorage';
 
-
+// Same pattern already used for /behavior/label calls in EmaSurvey.jsx / EmaSurveyModal.jsx
+const FLASK_BASE_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:5001";
 
 /**
  * Computes how far a live value is from a baseline mean.
@@ -61,9 +64,12 @@ export default function PhenotypingDashboard() {
     const [stressData, setStressData] = useState({ score: 0, label: 'Waiting for data' });
     const [prevScore, setPrevScore] = useState(null);
     const [liveWindow, setLiveWindow] = useState(null);
+    const [recentLogs, setRecentLogs] = useState([]);
     const [baselines, setBaselines] = useState(null);
     const [lastUpdated, setLastUpdated] = useState(null);
     const [showMotionModal, setShowMotionModal] = useState(false);
+    const [showEmaModal, setShowEmaModal] = useState(false);
+    const [emaInitialTab, setEmaInitialTab] = useState('siss');
     const [alerts, setAlerts] = useState([]);
 
     const userId = userProfile?.userId;
@@ -78,6 +84,47 @@ export default function PhenotypingDashboard() {
         setUserProfile(p);
         setCalibStatus(getCalibrationStatus(p));
     }, []);
+
+    // ── 1b. Auto-trigger real calibration once 7 days have passed ──────────
+    // FIX: previously NOTHING in the app ever called /behavior/calibrate —
+    // the dashboard just claimed "calibrated" once 7 calendar days had
+    // elapsed, regardless of whether the backend ever computed a real
+    // personal baseline. This effect actually calls the endpoint once real
+    // conditions are plausibly met, and only updates the local "calibrated"
+    // flag (via markCalibrated()) if the backend confirms it genuinely
+    // succeeded — matching the day-count text in the UI to backend reality.
+    //
+    // Throttled to once per calendar day per user so a user who doesn't yet
+    // have enough windows (backend returns "insufficient_data") doesn't get
+    // hammered with a retry on every dashboard visit.
+    useEffect(() => {
+        if (!userId || calibStatus.isCalibrated || calibStatus.dayNumber < 7) return;
+
+        const throttleKey = `calibrate_attempt_${userId}`;
+        const today = new Date().toISOString().slice(0, 10);
+        if (localStorage.getItem(throttleKey) === today) return;
+        localStorage.setItem(throttleKey, today);
+
+        fetch(`${FLASK_BASE_URL}/behavior/calibrate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: userId, name: userName }),
+        })
+            .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+            .then(({ ok, data }) => {
+                if (ok && data.status === 'calibrated') {
+                    console.log('[Calibration] Backend confirmed real calibration:', data.window_count, 'windows');
+                    const updated = markCalibrated();
+                    if (updated) {
+                        setUserProfile(updated);
+                        setCalibStatus(getCalibrationStatus(updated));
+                    }
+                } else {
+                    console.log('[Calibration] Not ready yet:', data.status || data.message);
+                }
+            })
+            .catch((e) => console.warn('[Calibration] Auto-calibrate request failed (will retry tomorrow):', e));
+    }, [userId, userName, calibStatus.isCalibrated, calibStatus.dayNumber]);
 
     // ── 1. Live stress score from predictions ──────────────────────────────
     useEffect(() => {
@@ -125,6 +172,7 @@ export default function PhenotypingDashboard() {
             try {
                 const parsed = JSON.parse(cachedLogs);
                 setLiveWindow(parsed.liveWindow);
+                setRecentLogs(parsed.recentLogs || []);
                 setLastUpdated(parsed.lastUpdated);
             } catch (e) { }
         }
@@ -136,12 +184,15 @@ export default function PhenotypingDashboard() {
                 const entries = Object.entries(raw);
                 entries.sort((a, b) => a[0].localeCompare(b[0]));
                 const [latestKey, latestData] = entries[entries.length - 1];
+                const sliced = entries.map(e => e[1]).slice(-10);
 
                 setLiveWindow(latestData);
+                setRecentLogs(sliced);
                 setLastUpdated(latestKey);
 
                 localStorage.setItem(`cache_logs_${userId}`, JSON.stringify({
                     liveWindow: latestData,
+                    recentLogs: sliced,
                     lastUpdated: latestKey
                 }));
             }
@@ -170,64 +221,76 @@ export default function PhenotypingDashboard() {
     const gaugeColor = getGaugeColor(stressData.score, calibStatus.phase === 'calibration');
     const scorePercent = Math.round(stressData.score * 100);
 
-    // ── Compute live signal cards from Firebase data ───────────────────────
-    const signals = useMemo(() => {
-        const STATUS_COLOR = { normal: '#10b981', elevated: '#f59e0b', anomalous: '#ef4444' };
-
-        if (!liveWindow) {
+    // ── Compute 4 Digital Signal Cards (Same as Digital Signals page) ───────
+    const digitalSignals = useMemo(() => {
+        if (!liveWindow || recentLogs.length === 0) {
+            const emptyBars = Array(10).fill({ val: 0, active: false });
             return [
-                { title: 'Typing pace', value: 'Syncing…', status: 'normal', color: '#6b7280' },
-                { title: 'Flight time', value: 'Syncing…', status: 'normal', color: '#6b7280' },
-                { title: 'Scroll speed', value: 'Syncing…', status: 'normal', color: '#6b7280' },
-                { title: 'App switching', value: 'Syncing…', status: 'normal', color: '#6b7280' },
+                { signalId: 'keyboard', title: '⌨️ Keyboard Patterns', value: '-- ms', subtext: 'Typing rhythm & key press duration', colorClass: 'bg-zinc-600', bars: emptyBars, trend: null, status: 'normal' },
+                { signalId: 'screen', title: '📱 Screen Activity', value: '-- /min', subtext: 'App switching rate & multitasking rhythm', colorClass: 'bg-zinc-600', bars: emptyBars, trend: null, status: 'normal' },
+                { signalId: 'scroll', title: '📜 Screen Scrolling', value: '-- px/s', subtext: 'Scroll speed & frequency patterns', colorClass: 'bg-zinc-600', bars: emptyBars, trend: null, status: 'normal' },
+                { signalId: 'activity', title: '🚶 Activity Context', value: '--', subtext: 'Physical activity detection & noise gate', colorClass: 'bg-zinc-600', bars: emptyBars, trend: null, status: 'normal' },
             ];
         }
 
-        const bl = baselines || {};
+        const dwellHistory = recentLogs.map((e, idx) => ({ val: e.avg_dwell || 0, active: idx === recentLogs.length - 1 }));
+        const flightHistory = recentLogs.map((e, idx) => ({ val: e.avg_flight || 0, active: idx === recentLogs.length - 1 }));
+        const scrollHistory = recentLogs.map((e, idx) => ({ val: e.scroll_velocity || 0, active: idx === recentLogs.length - 1 }));
+        const switchHistory = recentLogs.map((e, idx) => ({ val: e.app_switch_rate || 0, active: idx === recentLogs.length - 1 }));
+        // FIX: was Math.random()-generated fake bars. Real signal: each
+        // window's data_valid flag (false = motion or a distraction app was
+        // in the foreground; see KeystrokeCollectorService.java's combined
+        // noise gate). Mapped to a magnitude so the chart reads the same way
+        // as the other cards (high = clean/stationary, low = noisy window).
+        const activityHistory = recentLogs.map((e, idx) => ({ val: e.data_valid === false ? 40 : 100, active: idx === recentLogs.length - 1 }));
 
-        const dwell = computeDeviation(
-            liveWindow.avg_dwell,
-            bl.avg_dwell?.mean,
-            bl.avg_dwell?.std,
-            true
-        );
-        const dwellLabel = bl.avg_dwell
-            ? dwell.label
-            : `${Math.round(liveWindow.avg_dwell)} ms dwell`;
-
-        const flight = computeDeviation(
-            liveWindow.avg_flight,
-            bl.avg_flight?.mean,
-            bl.avg_flight?.std,
-            true
-        );
-        const flightLabel = bl.avg_flight
-            ? flight.label
-            : `${Math.round(liveWindow.avg_flight)} ms flight`;
-
-        const scroll = computeDeviation(
-            liveWindow.scroll_velocity,
-            bl.scroll_velocity?.mean,
-            bl.scroll_velocity?.std,
-            false
-        );
-        const scrollLabel = bl.scroll_velocity
-            ? scroll.label
-            : `${Math.round(liveWindow.scroll_velocity)} px/s`;
-
-        const appSwitch = liveWindow.app_switch_rate ?? 0;
-        const appDev = computeDeviation(appSwitch, bl.app_switch_rate?.mean, bl.app_switch_rate?.std, true);
-        const appLabel = bl.app_switch_rate
-            ? appDev.label
-            : `${appSwitch.toFixed(1)} switches/min`;
+        const appSwitchRate = liveWindow.app_switch_rate !== undefined ? Number(liveWindow.app_switch_rate).toFixed(1) : '0.0';
 
         return [
-            { title: 'Typing pace', value: dwellLabel, status: dwell.status, color: STATUS_COLOR[dwell.status] },
-            { title: 'Flight time', value: flightLabel, status: flight.status, color: STATUS_COLOR[flight.status] },
-            { title: 'Scroll speed', value: scrollLabel, status: scroll.status, color: STATUS_COLOR[scroll.status] },
-            { title: 'App switching', value: appLabel, status: appDev.status, color: STATUS_COLOR[appDev.status] },
+            {
+                signalId: 'keyboard',
+                title: '⌨️ Keyboard Patterns',
+                value: `${Math.round(liveWindow.avg_dwell || 0)} ms`,
+                subtext: 'Typing rhythm & key press duration',
+                colorClass: 'bg-emerald-500',
+                bars: dwellHistory,
+                trend: (liveWindow.avg_dwell || 0) > 130 ? 'up' : 'down',
+                status: (liveWindow.avg_dwell || 0) > 150 ? 'anomalous' : (liveWindow.avg_dwell || 0) > 130 ? 'elevated' : 'normal',
+            },
+            {
+                signalId: 'screen',
+                title: '📱 Screen Activity: Screen On/Off & App Switching',
+                value: `${appSwitchRate} /min`,
+                subtext: 'App switching rate & multitasking rhythm',
+                colorClass: 'bg-orange-500',
+                bars: switchHistory,
+                trend: parseFloat(appSwitchRate) > 3.0 ? 'up' : 'down',
+                status: parseFloat(appSwitchRate) > 4.0 ? 'anomalous' : parseFloat(appSwitchRate) > 2.5 ? 'elevated' : 'normal',
+            },
+            {
+                signalId: 'scroll',
+                title: '📜 Screen Scrolling',
+                value: `${Math.round(liveWindow.scroll_velocity || 0)} px/s`,
+                subtext: 'Scroll speed & frequency patterns',
+                colorClass: 'bg-emerald-500',
+                bars: scrollHistory,
+                trend: (liveWindow.scroll_velocity || 0) > 50 ? 'up' : 'down',
+                status: (liveWindow.scroll_velocity || 0) > 60 ? 'elevated' : 'normal',
+            },
+            {
+                signalId: 'activity',
+                title: '🚶 Activity Context',
+                value: liveWindow.data_valid === false ? 'In motion' : 'Stationary',
+                subtext: liveWindow.data_valid === false
+                    ? 'Motion detected — window excluded from baseline'
+                    : 'Physical activity detection & noise gate',
+                colorClass: liveWindow.data_valid === false ? 'bg-orange-500' : 'bg-emerald-500',
+                bars: activityHistory,
+                trend: null,
+                status: liveWindow.data_valid === false ? 'elevated' : 'normal',
+            }
         ];
-    }, [liveWindow, baselines]);
+    }, [liveWindow, recentLogs]);
 
     const scoreDelta = prevScore !== null ? Math.round((stressData.score - prevScore) * 100) : null;
     const deltaText = scoreDelta === null
@@ -257,186 +320,120 @@ export default function PhenotypingDashboard() {
     return (
         <div className={`min-h-screen overflow-y-auto hide-scrollbar ${t.bg} ${t.text} flex flex-col font-sans pb-24 relative`}>
             {/* Main responsive container */}
-            <div className="w-full max-w-5xl mx-auto flex-1 flex flex-col">
+            <div className="w-full max-w-md md:max-w-xl mx-auto flex-1 flex flex-col">
 
                 {/* Header */}
-                <header className="px-5 pt-5 pb-3 animate-fade-in flex justify-between items-start">
+                <header className="px-5 pt-5 pb-3 animate-fade-in flex justify-between items-center">
                     <div>
                         <p className={`text-xs ${t.textMuted} mb-0.5`}>{getDateStr()}</p>
                         <h2 className={`text-xl md:text-2xl font-bold ${t.text}`}>
                             {getGreeting()}, {userName}
                         </h2>
                     </div>
-                    <button className="relative p-2 rounded-xl active:scale-90 transition-transform">
-                        <Bell size={22} className={t.textMuted} />
-                        {alerts.filter(a => !a.dismissed).length > 0 && (
-                            <div className="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-red-500 rounded-full border-2" style={{ borderColor: isDark ? '#0f0f14' : '#f5f5f7' }} />
-                        )}
+                    {/* EMA Survey Button in Top Right Corner */}
+                    <button
+                        onClick={() => { setEmaInitialTab('siss'); setShowEmaModal(true); }}
+                        className="flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-[#7c6bf7]/15 hover:bg-[#7c6bf7]/25 border border-[#7c6bf7]/35 text-white active:scale-95 transition-all shadow-sm group cursor-pointer"
+                    >
+                        <span className="text-base group-hover:scale-110 transition-transform">📝</span>
+                        <span className="text-xs font-extrabold text-[#7c6bf7]">EMA Survey</span>
                     </button>
                 </header>
 
-                {/* Calibration vs Active Phase Banner */}
-                <div className="px-5 mb-4 animate-fade-in">
-                    {calibStatus.phase === 'calibration' ? (
-                        <div className="p-4 rounded-2xl bg-[#7c6bf7]/10 border border-[#7c6bf7]/30 flex flex-col gap-2">
-                            <div className="flex justify-between items-center">
-                                <div className="flex items-center gap-2">
-                                    <Activity size={18} className="text-[#7c6bf7]" />
-                                    <span className="text-xs font-bold text-white uppercase tracking-wider">
-                                        7-Day Calibration Path — {calibStatus.displayDays}
-                                    </span>
-                                </div>
-                                <span className="text-xs font-bold text-[#7c6bf7]">{calibStatus.progressPct}%</span>
-                            </div>
-                            <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                                <div
-                                    className="h-full bg-[#7c6bf7] rounded-full transition-all duration-500"
-                                    style={{ width: `${calibStatus.progressPct}%` }}
-                                />
-                            </div>
-                            <p className="text-[11px] text-gray-400 leading-tight mt-0.5">
-                                {calibStatus.title}. PhenoCare is gathering your behavioral baseline before predictions begin.
-                            </p>
+                {/* Centered Mood & Stress Gauge (Clean, without box outline or mood icon/text) */}
+                <div className="flex flex-col items-center justify-center my-6 animate-fade-in-up">
+                    <div className="relative w-48 h-48 flex items-center justify-center">
+                        <svg className="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 160 160">
+                            <circle cx="80" cy="80" r="68" fill="transparent" stroke={isDark ? '#1e1e2e' : '#e5e5ea'} strokeWidth="10" />
+                            <circle
+                                cx="80" cy="80" r="68" fill="transparent"
+                                stroke={gaugeColor}
+                                strokeWidth="10"
+                                strokeDasharray="427"
+                                strokeDashoffset={427 - (427 * (calibStatus.phase === 'calibration' ? 0.35 : stressData.score))}
+                                strokeLinecap="round"
+                                className="animate-gauge transition-all duration-1000"
+                                style={{ filter: `drop-shadow(0 0 8px ${gaugeColor}40)` }}
+                            />
+                        </svg>
+                        <div className="text-center z-10">
+                            {calibStatus.phase === 'calibration' ? (
+                                <>
+                                    <span className="text-3xl font-extrabold text-[#7c6bf7]">DAY {calibStatus.dayNumber}</span>
+                                    <p className={`text-[9px] uppercase font-bold tracking-[0.2em] ${t.textMuted} mt-1`}>CALIBRATING</p>
+                                    <p className="text-[11px] font-bold mt-0.5 text-gray-400">Baseline Phase</p>
+                                </>
+                            ) : (
+                                <>
+                                    <span className={`text-5xl font-extrabold tracking-tighter ${t.text}`}>{scorePercent}</span>
+                                    <p className={`text-[9px] uppercase font-bold tracking-[0.2em] ${t.textMuted} mt-1`}>STRESS INDEX</p>
+                                    <p className="text-xs font-bold mt-0.5" style={{ color: gaugeColor }}>{stressData.label}</p>
+                                </>
+                            )}
                         </div>
-                    ) : (
-                        <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-between">
-                            <div className="flex items-center gap-2.5">
-                                <ShieldCheck size={18} className="text-emerald-400" />
-                                <div>
-                                    <p className="text-xs font-bold text-white">Active Monitoring (Day 8+)</p>
-                                    <p className="text-[11px] text-emerald-400/90">Baseline calibrated — real-time pre-stress active</p>
-                                </div>
-                            </div>
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 uppercase">
-                                CALIBRATED
-                            </span>
-                        </div>
+                    </div>
+
+                    {deltaText && calibStatus.phase !== 'calibration' && (
+                        <p className="text-[11px] font-bold mt-3" style={{ color: deltaColor }}>{deltaText}</p>
                     )}
                 </div>
 
-                {/* Dashboard Grid Layout (Responsive Desktop vs Mobile) */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 px-5 mb-4">
-
-                    {/* Left Column: Mood & Stress Gauge */}
-                    <div className={`${t.card} border ${t.cardBorder} rounded-3xl p-6 flex flex-col items-center justify-center animate-fade-in-up`}>
-                        <div className="text-4xl mb-2 animate-float">{mood.emoji}</div>
-                        <p className={`text-xs font-medium ${t.textSecondary} mb-4`}>{mood.label}</p>
-
-                        <div className="relative w-44 h-44 flex items-center justify-center">
-                            <svg className="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 160 160">
-                                <circle cx="80" cy="80" r="68" fill="transparent" stroke={isDark ? '#1e1e2e' : '#e5e5ea'} strokeWidth="10" />
-                                <circle
-                                    cx="80" cy="80" r="68" fill="transparent"
-                                    stroke={gaugeColor}
-                                    strokeWidth="10"
-                                    strokeDasharray="427"
-                                    strokeDashoffset={427 - (427 * (calibStatus.phase === 'calibration' ? 0.35 : stressData.score))}
-                                    strokeLinecap="round"
-                                    className="animate-gauge transition-all duration-1000"
-                                    style={{ filter: `drop-shadow(0 0 8px ${gaugeColor}40)` }}
-                                />
-                            </svg>
-                            <div className="text-center z-10">
-                                {calibStatus.phase === 'calibration' ? (
-                                    <>
-                                        <span className={`text-3xl font-extrabold text-[#7c6bf7]`}>DAY {calibStatus.dayNumber}</span>
-                                        <p className={`text-[9px] uppercase font-bold tracking-[0.2em] ${t.textMuted} mt-1`}>CALIBRATING</p>
-                                        <p className="text-[11px] font-bold mt-0.5 text-gray-400">Baseline Phase</p>
-                                    </>
-                                ) : (
-                                    <>
-                                        <span className={`text-5xl font-extrabold tracking-tighter ${t.text}`}>{scorePercent}</span>
-                                        <p className={`text-[9px] uppercase font-bold tracking-[0.2em] ${t.textMuted} mt-1`}>STRESS INDEX</p>
-                                        <p className="text-xs font-bold mt-0.5" style={{ color: gaugeColor }}>{stressData.label}</p>
-                                    </>
-                                )}
-                            </div>
+                {/* Digital Signals Section (Moved under the Circle Gauge) */}
+                <div className="px-5 mb-5 animate-fade-in-up">
+                    <div className="flex justify-between items-center mb-3">
+                        <div>
+                            <h3 className={`text-base font-bold ${t.text}`}>Digital Signals</h3>
+                            <p className={`text-xs ${t.textMuted}`}>Live behavioral metrics from your device. Tap any card for detailed breakdown.</p>
                         </div>
-
-                        {deltaText && calibStatus.phase !== 'calibration' && (
-                            <p className="text-[11px] font-bold mt-3" style={{ color: deltaColor }}>{deltaText}</p>
-                        )}
                     </div>
-
-                    {/* Right Column: Live Signal Mini Cards */}
-                    <div className="flex flex-col justify-between space-y-3">
-                        <div className="flex justify-between items-center">
-                            <h3 className={`text-xs font-bold uppercase tracking-widest ${t.textMuted}`}>Live signals</h3>
-                            <button onClick={() => navigate('/signals')} className="text-[11px] font-bold text-[#7c6bf7]">
-                                View all →
-                            </button>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-2.5">
-                            {signals.map((sig, i) => {
-                                const statusColors = {
-                                    normal: { bg: isDark ? 'rgba(16,185,129,0.08)' : 'rgba(16,185,129,0.06)', dot: '#10b981' },
-                                    elevated: { bg: isDark ? 'rgba(245,158,11,0.08)' : 'rgba(245,158,11,0.06)', dot: '#f59e0b' },
-                                    anomalous: { bg: isDark ? 'rgba(239,68,68,0.08)' : 'rgba(239,68,68,0.06)', dot: '#ef4444' },
-                                };
-                                const sc = statusColors[sig.status] || statusColors.normal;
-
-                                return (
-                                    <button
-                                        key={i}
-                                        onClick={() => navigate('/signals')}
-                                        className={`${t.card} border ${t.cardBorder} rounded-2xl p-4 text-left transition-all active:scale-[0.97] ${t.cardHover}`}
-                                    >
-                                        <div className="flex items-center gap-1.5 mb-2">
-                                            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: sc.dot }} />
-                                            <span className={`text-[11px] font-semibold ${t.text}`}>{sig.title}</span>
-                                        </div>
-                                        <p className="text-xs font-bold" style={{ color: sig.color }}>{sig.value}</p>
-                                    </button>
-                                );
-                            })}
-                        </div>
-
-                        {/* Pre-Stress Alert (if active) */}
-                        {alerts.filter(a => !a.dismissed).map(alert => (
-                            <div key={alert.id} className={`p-4 rounded-2xl border animate-fade-in-up ${isDark ? 'bg-[#1a1228] border-[#7c6bf7]/30' : 'bg-indigo-50 border-indigo-200'}`}>
-                                <div className="flex justify-between items-start mb-1">
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-sm">⚠️</span>
-                                        <span className={`text-xs font-bold ${isDark ? 'text-[#c0c0d8]' : 'text-indigo-800'}`}>Pre-stress alert</span>
-                                    </div>
-                                    <span className={`text-[10px] font-bold ${t.textDim}`}>{alert.time}</span>
-                                </div>
-                                <p className={`text-[11px] leading-relaxed mb-3 ${isDark ? 'text-gray-400' : 'text-indigo-700/80'}`}>
-                                    {alert.message}
-                                </p>
-                                <div className="flex items-center gap-3">
-                                    <button onClick={() => navigate('/alert-detail')} className="text-[11px] font-bold text-[#7c6bf7]">
-                                        See triggers →
-                                    </button>
-                                    <span className={`text-[11px] ${t.textDim}`}>|</span>
-                                    <button onClick={() => dismissAlert(alert.id)} className={`text-[11px] font-bold ${t.textDim}`}>
-                                        Dismiss
-                                    </button>
-                                </div>
-                            </div>
+                    <div className="space-y-3 stagger-children">
+                        {digitalSignals.map((s, i) => (
+                            <SignalDetailCard key={i} {...s} />
                         ))}
                     </div>
                 </div>
+
+                {/* Pre-Stress Alert (if active) */}
+                {alerts.filter(a => !a.dismissed).map(alert => (
+                    <div key={alert.id} className={`mx-5 mb-5 p-4 rounded-2xl border animate-fade-in-up ${isDark ? 'bg-[#1a1228] border-[#7c6bf7]/30' : 'bg-indigo-50 border-indigo-200'}`}>
+                        <div className="flex justify-between items-start mb-1">
+                            <div className="flex items-center gap-2">
+                                <span className="text-sm">⚠️</span>
+                                <span className={`text-xs font-bold ${isDark ? 'text-[#c0c0d8]' : 'text-indigo-800'}`}>Pre-stress alert</span>
+                            </div>
+                            <span className={`text-[10px] font-bold ${t.textDim}`}>{alert.time}</span>
+                        </div>
+                        <p className={`text-[11px] leading-relaxed mb-3 ${isDark ? 'text-gray-400' : 'text-indigo-700/80'}`}>
+                            {alert.message}
+                        </p>
+                        <div className="flex items-center gap-3">
+                            <button onClick={() => navigate('/alert-detail')} className="text-[11px] font-bold text-[#7c6bf7]">
+                                See triggers →
+                            </button>
+                            <span className={`text-[11px] ${t.textDim}`}>|</span>
+                            <button onClick={() => dismissAlert(alert.id)} className={`text-[11px] font-bold ${t.textDim}`}>
+                                Dismiss
+                            </button>
+                        </div>
+                    </div>
+                ))}
 
                 {/* Quick Actions */}
                 <div className="px-5 mb-6 animate-fade-in-up">
                     <h3 className={`text-xs font-bold uppercase tracking-widest ${t.textMuted} mb-3`}>Quick actions</h3>
                     <div className="grid grid-cols-4 gap-3">
                         {[
-                            { emoji: '📝', label: 'EMA Survey', path: '/ema-survey' },
-                            { emoji: '📊', label: 'History', path: '/analysis' },
+                            { emoji: '⚡', label: 'Quick Check', onClick: () => { setEmaInitialTab('siss'); setShowEmaModal(true); } },
+                            { emoji: '✨', label: 'Weekly PSS', onClick: () => { setEmaInitialTab('pss4'); setShowEmaModal(true); } },
+                            { emoji: '📊', label: 'Analysis', onClick: () => navigate('/analysis') },
+                            { emoji: '📈', label: 'Patterns', onClick: () => navigate('/patterns') },
                         ].map((action, i) => (
                             <button
                                 key={i}
-                                onClick={() => navigate(action.path)}
-                                className={`flex flex-col items-center gap-1.5 py-4 px-2 rounded-2xl border ${t.card} ${t.cardBorder} transition-all active:scale-95 ${t.cardHover}`}
+                                onClick={action.onClick}
+                                className={`flex flex-col items-center gap-1.5 py-4 px-2 rounded-2xl border ${t.card} ${t.cardBorder} transition-all active:scale-95 ${t.cardHover} cursor-pointer`}
                             >
-                                {action.emoji ? (
-                                    <span className="text-xl">{action.emoji}</span>
-                                ) : (
-                                    <action.icon size={20} className="text-[#7c6bf7]" />
-                                )}
+                                <span className="text-xl">{action.emoji}</span>
                                 <span className={`text-xs font-bold ${t.textSecondary} text-center`}>{action.label}</span>
                             </button>
                         ))}
@@ -454,6 +451,11 @@ export default function PhenotypingDashboard() {
                 isOpen={showMotionModal}
                 onClose={() => setShowMotionModal(false)}
                 onConfirm={(val) => console.log('Motion:', val)}
+            />
+            <EmaSurveyModal
+                isOpen={showEmaModal}
+                onClose={() => setShowEmaModal(false)}
+                initialTab={emaInitialTab}
             />
         </div>
     );
