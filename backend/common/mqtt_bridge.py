@@ -106,11 +106,21 @@ def post_json(url: str, payload: dict, headers: dict, timeout: float, label: str
     body on a 2xx response or None on any failure (network error or
     non-2xx) -- callers branch on None instead of each catching requests
     exceptions themselves."""
+    resp = None
     try:
         resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
         data = resp.json()
         print(f"[{label}] {resp.status_code} {data}")
         return data if resp.ok else None
     except Exception as e:
-        print(f"[{label}] request failed: {e}")
+        # resp.json() failing (e.g. an empty/non-JSON body) previously only
+        # printed the parse error itself, hiding the one thing that
+        # actually explains it -- the real HTTP status and raw body (a
+        # Render free-tier cold-start gateway timeout, an OOM-killed
+        # request, or a genuinely empty response all look identical as
+        # bare "Expecting value" without this).
+        if resp is not None:
+            print(f"[{label}] request failed: {e} -- status={resp.status_code} body={resp.text[:300]!r}")
+        else:
+            print(f"[{label}] request failed: {e}")
         return None

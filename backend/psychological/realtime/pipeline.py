@@ -62,7 +62,7 @@ import pandas as pd
 # drift from phscycological/src/sam40/'s originals, that's a real risk worth
 # revisiting (e.g. factoring into one shared installable package) rather
 # than a one-time copy assumed to stay correct forever.
-from backend.psychological.sam40.decision import DecisionThresholds, compute_states  # noqa: E402
+from backend.psychological.sam40.decision import DecisionThresholds, compute_states, compute_baseline_shift  # noqa: E402
 from backend.psychological.sam40.derived_features import add_baseline_relative  # noqa: E402
 from backend.psychological.sam40.features import epoch_features  # noqa: E402
 from backend.psychological.sam40.preprocess import notch_then_bandpass  # noqa: E402
@@ -306,6 +306,20 @@ class RealtimeInference:
         self.baseline_degraded: bool = False
         self.baseline_degraded_score: float | None = None
         self.adaptive_baseline = AdaptiveBaselineTracker(calm_threshold=thresholds.cooldown_low_p)
+        # task_state_score for every TRUSTED calibration block (Relax-period,
+        # same blocks calibrate_block() already processes for the feature
+        # baseline) -- feeds compute_baseline_shift() at finalize_calibration()
+        # time.
+        self._calibration_scores: list[float] = []
+        self.thresholds_personalized: bool = False
+        # Subtracted from every subsequent block's raw model score before it
+        # becomes calibrated_p (infer_block()) -- 0.0 (no correction) until
+        # finalize_calibration() sets it from this user's own resting-state
+        # scores. self.thresholds stays at the POPULATION defaults throughout;
+        # personalization lives entirely in this offset, not in the
+        # thresholds, so every consumer of calibrated_p sees a consistently
+        # corrected number (see compute_baseline_shift()'s docstring).
+        self.baseline_shift: float = 0.0
 
     def calibrate_block(self, samples: list[RawSample]) -> dict:
         """Feed one Relax-period block into this user's baseline reference,
@@ -333,7 +347,33 @@ class RealtimeInference:
         if self._itakura_baseline_filtered_ch1 is None:
             self._itakura_baseline_filtered_ch1 = filtered[0]
             self._itakura_baseline_filtered_ch2 = filtered[1]
+        score = self._score_calibration_block(feats)
+        if score is not None:
+            self._calibration_scores.append(score)
         return quality
+
+    def _score_calibration_block(self, feats: dict) -> float | None:
+        """Scores one trusted calibration block through the model, for
+        compute_baseline_shift() -- baseline-relative (_blrel/_slope3)
+        features are zero-filled, same as infer_block() does before any
+        baseline exists, and the deployed bipolar-only model doesn't read
+        them anyway (see AdaptiveBaselineTracker's docstring), so this is
+        the model's honest raw-feature read of that block. Returns None
+        (caller should just not count this block) on a feature-column
+        mismatch rather than raising -- this is a secondary signal for
+        threshold personalization, not something that should be able to
+        crash calibration itself.
+        """
+        row = dict(feats)
+        for ch in CHANNELS:
+            for suf in DERIVED_SUFFIXES:
+                row[f'{ch}_{suf}_blrel'] = 0.0
+                row[f'{ch}_{suf}_slope3'] = 0.0
+        missing = [c for c in self.feature_columns if c not in row]
+        if missing:
+            return None
+        X = np.array([[row[c] for c in self.feature_columns]])
+        return float(self.model.predict_proba(X)[:, 1][0])
 
     def finalize_calibration(self, allow_degraded: bool = False) -> dict:
         """Call once after the calibration window ends. Three outcomes:
@@ -348,7 +388,24 @@ class RealtimeInference:
         """
         if self.baseline.blocks:
             self.adaptive_baseline.initialize(self.baseline.mean())
-            return {'status': 'ok', 'baseline_degraded': False, 'n_blocks': len(self.baseline.blocks)}
+            # Personalize calibrated_p itself from this user's OWN
+            # resting-state score -- see compute_baseline_shift()'s
+            # docstring for why this corrects the score, not the
+            # thresholds. Deliberately NOT done on a degraded baseline
+            # (below): that path is already flagged untrustworthy, and
+            # compounding it with a second, also-uncertain correction would
+            # make a bad session's scores even less interpretable.
+            shift = compute_baseline_shift(self._calibration_scores)
+            if shift is not None:
+                self.baseline_shift = shift
+                self.thresholds_personalized = True
+            return {
+                'status': 'ok', 'baseline_degraded': False, 'n_blocks': len(self.baseline.blocks),
+                'thresholds_personalized': self.thresholds_personalized,
+                'resting_calibrated_p': (float(np.mean(self._calibration_scores))
+                                          if self._calibration_scores else None),
+                'baseline_shift': self.baseline_shift,
+            }
         if allow_degraded and self._calibration_attempts:
             best_score, best_feats, best_filtered_ch1, best_filtered_ch2 = max(
                 self._calibration_attempts, key=lambda t: t[0])
@@ -411,15 +468,26 @@ class RealtimeInference:
 
         X = np.array([[row[c] for c in self.feature_columns]])
         raw_score = float(self.model.predict_proba(X)[:, 1][0])
+        # calibrated_p = raw_score corrected by this user's own resting-state
+        # offset (self.baseline_shift, set once at finalize_calibration()
+        # time from calibration blocks collected while the user was guided
+        # into a calm state -- see compute_baseline_shift()'s docstring).
+        # 0.0 shift (uncalibrated / population-average resting state) makes
+        # this an exact no-op, same as before personalization existed.
+        calibrated_p = max(0.0, min(1.0, raw_score - self.baseline_shift))
 
         row['raw_score'] = raw_score
-        row['calibrated_p'] = raw_score  # see note in end_to_end_demo.py: no standalone calibrator persisted
+        row['calibrated_p'] = calibrated_p
         row['theta_ratio'] = np.mean([row['T7_theta_alpha_ratio'], row['T8_theta_alpha_ratio']])
         row['spectral_slope'] = np.mean([row['T7_spectral_slope'], row['T8_spectral_slope']])
         row['window'] = len(self._history)
         self._history.append(row)
 
-        self.adaptive_baseline.maybe_update(raw_score, raw_feats)  # monitoring only -- see class docstring
+        # calibrated_p (baseline-corrected), not raw_score -- calm_threshold
+        # is a POPULATION-referenced cooldown_low_p (see __init__), so it
+        # must be compared against the same baseline-corrected scale
+        # compute_states() below uses, not the uncorrected model output.
+        self.adaptive_baseline.maybe_update(calibrated_p, raw_feats)  # monitoring only -- see class docstring
 
         states = compute_states(pd.DataFrame(self._history), self.thresholds)
         result = states.iloc[-1].to_dict()
