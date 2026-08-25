@@ -19,6 +19,12 @@ import sys
 import time
 from pathlib import Path
 
+# Forces line buffering regardless of `python -u`/PYTHONUNBUFFERED being set
+# on whatever deploys this -- see backend/psychological/mqtt_bridge.py's
+# identical line for why (stdout block-buffers by default off a real
+# terminal, which can make a live process look silent/dead in a log viewer).
+sys.stdout.reconfigure(line_buffering=True)
+
 if __package__ is None:
     repo_root = Path(__file__).resolve().parents[2]
     if str(repo_root) not in sys.path:
@@ -29,19 +35,24 @@ from backend.physiological.firebase_service import (
 )
 from backend.common.mqtt_bridge import auth_headers, connect_mqtt, post_json
 from backend.common.config import (
-    MQTT_BROKER, MQTT_PORT, MQTT_TOPIC, GSR_CAL,
-    WINDOW_SEC, SETTLE_SEC
+    MQTT_BROKER, MQTT_PORT, MQTT_TOPIC, MQTT_USER, MQTT_PASSWORD, MQTT_CA_CERT,
+    GSR_CAL, WINDOW_SEC, SETTLE_SEC
 )
 from backend.common.firebase_config import (
     CURRENT_SESSION_ID_FIELD, CURRENT_USER_ID_FIELD, FUSION_EN_ROOT
 )
 
 # Flask's host/port is independent of MQTT_BROKER (the ring's broker address
-# can be anywhere; this script and Flask are co-located on this machine) --
-# was hardcoded as f"http://{MQTT_BROKER}:5000/predict", which silently
-# broke when Flask moved off port 5000 (macOS ControlCenter/AirPlay
-# Receiver claims that port by default) to 5050. PHYSIOLOGICAL_PORT lets it
-# track app.py's actual port without another hardcoded literal.
+# can be anywhere; this script and Flask needn't be co-located at all once
+# both run on Render) -- was hardcoded as f"http://{MQTT_BROKER}:5000/predict",
+# which silently broke when Flask moved off port 5000 (macOS ControlCenter/
+# AirPlay Receiver claims that port by default) to 5050.
+#
+# PHYSIOLOGICAL_FLASK_URL is a full-URL override for a deployed target
+# (e.g. Render's public HTTPS URL, which has no explicit port) -- takes
+# precedence over PHYSIOLOGICAL_FLASK_HOST/PHYSIOLOGICAL_PORT's
+# http://host:port construction, which stays the default for local dev
+# where this script and Flask are co-located.
 FLASK_HOST = os.environ.get("PHYSIOLOGICAL_FLASK_HOST", "127.0.0.1")
 FLASK_PORT = os.environ.get("PHYSIOLOGICAL_PORT", "5050")
 # No "Wehara" fallback -- attributing data to a specific person by default
@@ -51,7 +62,7 @@ FLASK_PORT = os.environ.get("PHYSIOLOGICAL_PORT", "5050")
 # the app-driven current_user_id pointer resolves a real logged-in user
 # (see the polling loop below) -- send_window() skips posting entirely
 # while USER_ID is None rather than guessing.
-FLASK_URL  = f"http://{FLASK_HOST}:{FLASK_PORT}/predict"
+FLASK_URL  = os.environ.get("PHYSIOLOGICAL_FLASK_URL") or f"http://{FLASK_HOST}:{FLASK_PORT}/predict"
 USER_ID    = os.environ.get("RING_USER_ID") or None
 
 AUTH_HEADERS = auth_headers(USER_ID) if USER_ID else None
@@ -142,7 +153,11 @@ def send_window():
             "gsr_calibration": GSR_CAL,
             "actual_fs":       actual_fs
         }
-        post_json(FLASK_URL, payload, AUTH_HEADERS, timeout=10, label=f"Window {window_idx}")
+        # 45s, not 10s -- Render's free-tier Flask service can take 30s+ to
+        # wake from a cold start after ~15min idle; a short timeout here
+        # silently drops the window (and its prediction) every time that
+        # happens instead of just waiting it out.
+        post_json(FLASK_URL, payload, AUTH_HEADERS, timeout=45, label=f"Window {window_idx}")
 
     window_idx += 1
     ibi_buf, gsr_buf, acc_buf = [], [], []
@@ -183,7 +198,8 @@ def on_message(client, userdata, msg):
 
 print("Starting MQTT -> Flask bridge...")
 # Already connected + looping -- see backend/common/mqtt_bridge.py::connect_mqtt().
-client = connect_mqtt(MQTT_BROKER, MQTT_PORT, MQTT_TOPIC, on_message, client_id="physio_bridge_wearable01")
+client = connect_mqtt(MQTT_BROKER, MQTT_PORT, MQTT_TOPIC, on_message, client_id="physio_bridge_wearable01",
+                       username=MQTT_USER, password=MQTT_PASSWORD, ca_cert=MQTT_CA_CERT)
 
 print(f"Letting the sensor settle for {SETTLE_SEC}s before the first "
       f"window starts (electrode contact needs a moment to stabilize)...")

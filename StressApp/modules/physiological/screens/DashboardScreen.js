@@ -415,12 +415,9 @@ export default function DashboardScreen({ navigation }) {
           <Text style={[dStyles.cardTitle, { color: t.text }]}>Quick Actions</Text>
           <View style={dStyles.actionsGrid}>
             <ActionTile icon="🎯" label="Calibrate"  color={COLORS.hrv}      isDark={isDark} onPress={() => navigation.navigate('Calibration')} />
-            <ActionTile icon="📋" label="PSS-4"      color={COLORS.normal}   isDark={isDark} onPress={() => navigation.navigate('PSS-4')} />
-            <ActionTile icon="📊" label="History"    color={COLORS.gsr}      isDark={isDark} onPress={() => navigation.navigate('History')} />
-            <ActionTile icon="💍" label="Ring"       color={COLORS.brand}    isDark={isDark} onPress={() => navigation.navigate('Ring')} />
-            <ActionTile icon="🧬" label="Fusion"     color={COLORS.stress}   isDark={isDark} onPress={() => navigation.navigate('Fusion')} />
-            <ActionTile icon="🧠" label="EEG"        color={COLORS.warning}  isDark={isDark} onPress={() => navigation.navigate('Eeg')} />
+            <ActionTile icon="📋" label="PSS-4"      color={COLORS.normal}   isDark={isDark} onPress={() => navigation.navigate('PSS4')} />
             <ActionTile icon="❤️" label="HRV/GSR"    color={COLORS.hrv}      isDark={isDark} onPress={() => navigation.navigate('HrvGsr')} />
+            <ActionTile icon="🧘" label="Relax"      color={COLORS.normal}   isDark={isDark} onPress={() => navigation.navigate('Relaxation')} />
           </View>
         </View>
 

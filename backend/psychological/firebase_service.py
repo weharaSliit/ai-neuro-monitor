@@ -1,3 +1,4 @@
+import json
 import os
 
 from backend.common.firebase_config import FIREBASE_DB_URL, FUSION_EN_ROOT, RTDB_NAMESPACES
@@ -9,7 +10,20 @@ from backend.psychological.realtime.firebase_sync import (
 RTDB_NAMESPACE = RTDB_NAMESPACES["psychological"]  # "psychological"
 
 
-def resolve_credential_path():
+def resolve_credential():
+    """Prefers FIREBASE_CRED_JSON (the full service-account JSON as an env
+    var value -- what a Render deploy needs, since there's no real
+    filesystem to point a file path at; same pattern as
+    backend/common/firebase_config.py::resolve_credential()) over
+    FIREBASE_CREDENTIALS (a real file path, for local dev outside the repo).
+    Returns None if neither is set -- this service still never falls back
+    to a checked-in key, see the module docstring below."""
+    cred_json = os.environ.get("FIREBASE_CRED_JSON")
+    if cred_json:
+        try:
+            return json.loads(cred_json)
+        except Exception as e:
+            print(f"[firebase] Failed to parse FIREBASE_CRED_JSON: {e}")
     return os.environ.get("FIREBASE_CREDENTIALS")
 
 
@@ -61,14 +75,14 @@ class EegFirebaseSession:
     def __init__(self, session_id: str, user_id: str):
         self.session_id = session_id
         self.user_id = user_id
-        self._cred_path = resolve_credential_path()
-        self.enabled = self._cred_path is not None
+        self._cred = resolve_credential()
+        self.enabled = self._cred is not None
         if not self.enabled:
             print(
-                f"[firebase] FIREBASE_CREDENTIALS not set -- Firebase sync disabled for "
-                f"session={session_id} (predictions still work; nothing is written to "
-                f"Firebase). This service never falls back to a checked-in key -- see "
-                f"firebase_service.py's module docstring."
+                f"[firebase] Neither FIREBASE_CRED_JSON nor FIREBASE_CREDENTIALS is set -- "
+                f"Firebase sync disabled for session={session_id} (predictions still work; "
+                f"nothing is written to Firebase). This service never falls back to a "
+                f"checked-in key -- see firebase_service.py's module docstring."
             )
             return
         # FirebaseSync joins root_path + session_id verbatim -- passing the
@@ -76,15 +90,15 @@ class EegFirebaseSession:
         # param) is what nests all four stores, including fusion_en, under
         # the logged-in user.
         user_session_id = f"{user_id}/{session_id}"
-        self._rtdb = FirebaseSync(self._cred_path, FIREBASE_DB_URL, session_id=user_session_id, root_path=RTDB_NAMESPACE)
+        self._rtdb = FirebaseSync(self._cred, FIREBASE_DB_URL, session_id=user_session_id, root_path=RTDB_NAMESPACE)
         self._raw_rtdb = FirebaseSync(
-            self._cred_path, FIREBASE_DB_URL, session_id=user_session_id, root_path=RTDB_NAMESPACE, extra_path="raw"
+            self._cred, FIREBASE_DB_URL, session_id=user_session_id, root_path=RTDB_NAMESPACE, extra_path="raw"
         )
         self._live_raw_rtdb = FirebaseSync(
-            self._cred_path, FIREBASE_DB_URL, session_id=user_session_id, root_path=RTDB_NAMESPACE, extra_path="live_raw"
+            self._cred, FIREBASE_DB_URL, session_id=user_session_id, root_path=RTDB_NAMESPACE, extra_path="live_raw"
         )
         self._fusion_en_rtdb = FirebaseSync(
-            self._cred_path, FIREBASE_DB_URL, session_id=user_session_id, root_path=FUSION_EN_ROOT
+            self._cred, FIREBASE_DB_URL, session_id=user_session_id, root_path=FUSION_EN_ROOT
         )
 
     def push(self, record: dict) -> None:

@@ -1,9 +1,10 @@
 import numpy as np
 from backend.phenotyping_behavior.firebase_service import get_user_baselines, update_user_baselines
 
-# Alpha = smoothing factor (0.2 as per your SMART plan)
-# High alpha = adapts quickly; Low alpha = more stable
-EMA_ALPHA = 0.2 
+# Alpha = smoothing factor — aligned with research-validated value (Meegahapola 2023)
+# 0.1 = slow, stable adaptation (validated in s2_ema_adaptive_engine.py research module)
+# High alpha = adapts quickly; Low alpha = more stable baseline (0.1 is research-proven)
+EMA_ALPHA = 0.1
 
 def update_personalized_baseline(user_id, current_window_features, is_anomaly):
     """

@@ -68,11 +68,17 @@ def _acquire_single_instance_lock(client_id: str):
     return fh
 
 
-def connect_mqtt(broker: str, port: int, topic: str, on_message, client_id: str) -> mqtt.Client:
+def connect_mqtt(broker: str, port: int, topic: str, on_message, client_id: str,
+                  username: str = None, password: str = None, ca_cert: str = None) -> mqtt.Client:
     """Connects, subscribes, and starts the network loop in a background
     thread. Caller owns calling .loop_stop()/.disconnect() on shutdown.
     Always CallbackAPIVersion.VERSION2 -- VERSION1 (paho-mqtt's implicit
-    default) is deprecated and warns on every client creation."""
+    default) is deprecated and warns on every client creation.
+
+    username/password/ca_cert are for EMQX Cloud Serverless, which
+    requires TLS + auth on port 8883 (unlike the old local Mosquitto's
+    plain-TCP/allow_anonymous setup) -- pass all three together, or omit
+    all three for a plain/anonymous connection (e.g. still-local testing)."""
     # Held for the client's lifetime via the attribute below -- garbage
     # collecting the fd would release the flock.
     lock_fh = _acquire_single_instance_lock(client_id)
@@ -86,6 +92,10 @@ def connect_mqtt(broker: str, port: int, topic: str, on_message, client_id: str)
     client._instance_lock_fh = lock_fh
     client.on_connect = on_connect
     client.on_message = on_message
+    if ca_cert:
+        client.tls_set(ca_certs=ca_cert)
+    if username:
+        client.username_pw_set(username, password)
     client.connect(broker, port, 60)
     client.loop_start()
     return client

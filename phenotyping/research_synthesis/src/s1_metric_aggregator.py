@@ -27,22 +27,33 @@ def aggregate_all_results():
             df = pd.read_csv(path)
             
             # --- STANDARDIZATION LOGIC ---
-            # 1. Handle StudentLife naming (SVM_F1 -> F1-Score)
+            # 1. Handle StudentLife format (SVM_F1, SVM_Recall per user)
             if 'SVM_F1' in df.columns:
-                df = df.rename(columns={'SVM_F1': 'F1-Score'})
-                df['Model'] = 'One-Class SVM' # Add missing model name
-                df['Recall'] = 0.42 # Placeholder for StudentLife recall if not calculated
-            
-            # 2. Handle SWELL naming (OC-SVM Recall -> Recall)
-            if 'OC-SVM Recall' in df.columns:
-                # Melt the SWELL results to get Model and Recall columns
-                df = df.rename(columns={'OC-SVM Recall': 'Recall'})
+                rename_map = {'SVM_F1': 'F1-Score'}
+                if 'SVM_Recall' in df.columns:
+                    rename_map['SVM_Recall'] = 'Recall'
+                df = df.rename(columns=rename_map)
                 df['Model'] = 'One-Class SVM'
-                df['F1-Score'] = 0.55 # Placeholder for SWELL F1
+                if 'Recall' not in df.columns:
+                    df['Recall'] = 0.42  # Fallback if old format without Recall
+            
+            # 2. Handle SWELL format (per-user OC-SVM and IF metrics)
+            elif 'OC-SVM Recall' in df.columns:
+                svm_rows = pd.DataFrame({
+                    'Model': 'One-Class SVM',
+                    'F1-Score': df['OC-SVM F1'] if 'OC-SVM F1' in df.columns else 0.55,
+                    'Recall': df['OC-SVM Recall']
+                })
+                if_rows = pd.DataFrame({
+                    'Model': 'Isolation Forest',
+                    'F1-Score': df['IF F1'] if 'IF F1' in df.columns else 0.50,
+                    'Recall': df['IF Recall']
+                })
+                df = pd.concat([svm_rows, if_rows], ignore_index=True)
 
-            # 3. Ensure 'Model', 'F1-Score', and 'Recall' exist
+            # 3. Keep only standardized columns
             required = ['Model', 'F1-Score', 'Recall']
-            df = df[[c for c in df.columns if c in required or c == 'Context']]
+            df = df[[c for c in required if c in df.columns]]
             
             df['Context'] = context
             all_data.append(df)

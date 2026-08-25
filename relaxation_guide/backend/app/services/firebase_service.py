@@ -25,10 +25,28 @@ def _ref(path: str):
     return db.reference(f"{FIREBASE_NAMESPACE}/{clean_path}")
 
 def init_firebase():
-    """Initializes Firebase Admin SDK if not already initialized."""
+    """Initializes Firebase Admin SDK if not already initialized.
+
+    Prefers $FIREBASE_CRED_JSON (credential content directly) over
+    FIREBASE_CRED_FILE's path -- a deployed target like Render has no
+    persistent file for that path to point at (see
+    backend/common/firebase_config.py's identical FIREBASE_CRED_JSON
+    handling). Falls back to the file-path behavior for local dev.
+    """
     if not firebase_admin._apps:
+        cred_json = os.environ.get("FIREBASE_CRED_JSON")
         cred_path = FIREBASE_CRED_FILE
-        if os.path.exists(cred_path):
+        if cred_json:
+            try:
+                import json
+                cred = credentials.Certificate(json.loads(cred_json))
+                firebase_admin.initialize_app(cred, {
+                    'databaseURL': FIREBASE_DB_URL
+                })
+                print("Firebase initialized [OK]")
+            except Exception as e:
+                print(f"Warning: Firebase init error from $FIREBASE_CRED_JSON ({e}). Will fallback gracefully.")
+        elif os.path.exists(cred_path):
             try:
                 cred = credentials.Certificate(cred_path)
                 firebase_admin.initialize_app(cred, {
@@ -38,7 +56,8 @@ def init_firebase():
             except Exception as e:
                 print(f"Warning: Firebase init error ({e}). Will fallback gracefully.")
         else:
-            print(f"Warning: Firebase credentials file '{cred_path}' not found. Will fallback gracefully.")
+            print(f"Warning: Firebase credentials file '{cred_path}' not found, and no "
+                  f"$FIREBASE_CRED_JSON set. Will fallback gracefully.")
 
 # Initialize upon import
 init_firebase()
@@ -51,25 +70,6 @@ def _users_ref(path: str = ""):
         return db.reference('users')
     return db.reference(f'users/{clean_path}')
 
-def create_user(user_id: str, name: str, email: str = "", password: str = "") -> Optional[str]:
-    try:
-        ref = _users_ref(user_id)
-        data = {
-            'user_id': user_id,
-            'name': name,
-            'full_name': name,
-            'email': email,
-            'password': password,
-            'created_at': datetime.now().isoformat(),
-            'is_email_verified': True,
-            'session_count': 0
-        }
-        ref.set(data)
-        return user_id
-    except Exception as e:
-        print(f"[Firebase Warning] create_user failed ({e}). Falling back to SQLite.")
-        return None
-
 def get_user(user_id: str) -> Optional[Dict[str, Any]]:
     try:
         ref = _users_ref(user_id)
@@ -80,23 +80,6 @@ def get_user(user_id: str) -> Optional[Dict[str, Any]]:
             return data
     except Exception as e:
         print(f"[Firebase Warning] get_user failed ({e}). Falling back to SQLite.")
-    return None
-
-def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
-    try:
-        ref = _users_ref()
-        all_users = ref.get() or {}
-        clean_email = email.strip().lower()
-        if isinstance(all_users, dict):
-            for uid, user_data in all_users.items():
-                if isinstance(user_data, dict):
-                    user_email = str(user_data.get('email', '')).strip().lower()
-                    if user_email == clean_email:
-                        user_data['user_id'] = user_data.get('user_id') or uid
-                        user_data['full_name'] = user_data.get('full_name') or user_data.get('name') or user_data.get('username') or 'Participant'
-                        return user_data
-    except Exception as e:
-        print(f"[Firebase Warning] get_user_by_email failed ({e}). Falling back to SQLite.")
     return None
 
 def list_users() -> Dict[str, Any]:

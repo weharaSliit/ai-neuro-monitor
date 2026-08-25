@@ -10,6 +10,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ref, update } from 'firebase/database';
 import { db } from '../firebase';
 import api, { setAuthToken, setUnauthorizedHandler } from '../modules/physiological/api/client';
+import { setAuthToken as setRelaxationAuthToken } from '../modules/relaxation_guide/src/api/apiService';
 
 const TOKEN_KEY      = '@stressapp/authToken';
 const USER_KEY       = '@stressapp/authUser';
@@ -91,6 +92,7 @@ export function AuthProvider({ children }) {
     await endLiveSession(user?.userId, sessionId);
     await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY, SESSION_ID_KEY]);
     setAuthToken(null);
+    setRelaxationAuthToken(null);
     setToken(null);
     setUser(null);
     setSessionId(null);
@@ -114,6 +116,7 @@ export function AuthProvider({ children }) {
         const sid = storedSessionId?.[1];
         if (t && u) {
           setAuthToken(t);
+          setRelaxationAuthToken(t);
           setToken(t);
           setUser(u);
           if (sid) {
@@ -135,6 +138,7 @@ export function AuthProvider({ children }) {
 
   const persistSession = async (newToken, newUser) => {
     setAuthToken(newToken);
+    setRelaxationAuthToken(newToken);
     setToken(newToken);
     setUser(newUser);
     await AsyncStorage.multiSet([

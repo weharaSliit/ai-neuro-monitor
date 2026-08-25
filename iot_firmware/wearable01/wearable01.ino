@@ -1,5 +1,6 @@
 #include <Wire.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <Adafruit_MPU6050.h>
@@ -7,21 +8,52 @@
 #include "MAX30105.h"
 #include "heartRate.h"
 
-const char* WIFI_SSID     = "Wehara's A07";
-const char* WIFI_PASSWORD = "wehara1216";
-// Direct IP for now instead of MQTT_HOSTNAME's mDNS lookup -- that
-// resolved a teammate's Mac hostname specifically ("Hirunis-MacBook-Pro-2
-// .local"), which fails outright when the broker instead runs on a
-// different machine (e.g. this one). Matches MQTT_BROKER in
-// backend/common/config.py and API_BASE in StressApp's config.js. Revert
-// to the mDNS approach (see git history) once broker location is no
-// longer per-person/per-network.
-const char* MQTT_BROKER   = "10.180.48.56";
-const int   MQTT_PORT     = 1883;
+// Tried in order in connectWiFi() -- add more pairs here as needed rather
+// than re-flashing every time the device needs a different network.
+const int WIFI_NETWORK_COUNT = 2;
+const char* WIFI_SSIDS[WIFI_NETWORK_COUNT]     = { "Wehara's A07", "Hiruni" };
+const char* WIFI_PASSWORDS[WIFI_NETWORK_COUNT] = { "wehara1216",   "Hiruni2022" };
+// EMQX Cloud Serverless broker (mindpulse-broker, Asia-Pacific) -- replaces
+// the local-IP broker this used to point at. Serverless only accepts TLS
+// on 8883 (see EMQX_CA_CERT below) with username/password auth, unlike
+// the old local Mosquitto's plain-TCP/allow_anonymous setup.
+const char* MQTT_BROKER   = "ob1f0f10.ala.asia-southeast1.emqxsl.com";
+const int   MQTT_PORT     = 8883;
+const char* MQTT_USER     = "wearable01";
+const char* MQTT_PASS     = "wearable01";
 const char* MQTT_TOPIC    = "mindpulse/wearable01/sensors";
 const char* DEVICE_ID     = "wearable01";
 
-WiFiClient espClient;
+// EMQX Cloud's CA (DigiCert Global Root G2, downloaded from the
+// mindpulse-broker Overview page, expires 2031-11-10) -- needed for
+// WiFiClientSecure to verify the TLS connection. Same cert is used by
+// wearable02.ino and saved standalone at iot_firmware/emqxsl-ca.crt.
+const char* EMQX_CA_CERT = R"EOF(
+-----BEGIN CERTIFICATE-----
+MIIDjjCCAnagAwIBAgIQAzrx5qcRqaC7KGSxHQn65TANBgkqhkiG9w0BAQsFADBh
+MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3
+d3cuZGlnaWNlcnQuY29tMSAwHgYDVQQDExdEaWdpQ2VydCBHbG9iYWwgUm9vdCBH
+MjAeFw0xMzA4MDExMjAwMDBaFw0zODAxMTUxMjAwMDBaMGExCzAJBgNVBAYTAlVT
+MRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5j
+b20xIDAeBgNVBAMTF0RpZ2lDZXJ0IEdsb2JhbCBSb290IEcyMIIBIjANBgkqhkiG
+9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuzfNNNx7a8myaJCtSnX/RrohCgiN9RlUyfuI
+2/Ou8jqJkTx65qsGGmvPrC3oXgkkRLpimn7Wo6h+4FR1IAWsULecYxpsMNzaHxmx
+1x7e/dfgy5SDN67sH0NO3Xss0r0upS/kqbitOtSZpLYl6ZtrAGCSYP9PIUkY92eQ
+q2EGnI/yuum06ZIya7XzV+hdG82MHauVBJVJ8zUtluNJbd134/tJS7SsVQepj5Wz
+tCO7TG1F8PapspUwtP1MVYwnSlcUfIKdzXOS0xZKBgyMUNGPHgm+F6HmIcr9g+UQ
+vIOlCsRnKPZzFBQ9RnbDhxSJITRNrw9FDKZJobq7nMWxM4MphQIDAQABo0IwQDAP
+BgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBhjAdBgNVHQ4EFgQUTiJUIBiV
+5uNu5g/6+rkS7QYXjzkwDQYJKoZIhvcNAQELBQADggEBAGBnKJRvDkhj6zHd6mcY
+1Yl9PMWLSn/pvtsrF9+wX3N3KjITOYFnQoQj8kVnNeyIv/iPsGEMNKSuIEyExtv4
+NeF22d+mQrvHRAiGfzZ0JFrabA0UWTW98kndth/Jsw1HKj2ZL7tcu7XUIOGZX1NG
+Fdtom/DzMNU+MeKNhJ7jitralj41E6Vf8PlwUHBHQRFXGU7Aj64GxJUTFy8bJZ91
+8rGOmaFvE7FBcf6IKshPECBV1/MUReXgRPTqh5Uykw7+U0b6LJ3/iyK5S9kJRaTe
+pLiaWN0bfVKfjllDiIGknibVb63dDcY3fe0Dkhvld1927jyNxF1WW6LZZm6zNTfl
+MrY=
+-----END CERTIFICATE-----
+)EOF";
+
+WiFiClientSecure espClient;
 PubSubClient mqttClient(espClient);
 
 Adafruit_MPU6050 mpu;
@@ -40,26 +72,30 @@ long ibiBuffer[MAX_IBI];
 int ibiCount = 0;
 
 void connectWiFi() {
-  Serial.print("Connecting to WiFi");
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 40) {
-    delay(500);
-    Serial.print(".");
-    attempts++;
+  for (int i = 0; i < WIFI_NETWORK_COUNT; i++) {
+    Serial.print("Connecting to WiFi: ");
+    Serial.println(WIFI_SSIDS[i]);
+    WiFi.begin(WIFI_SSIDS[i], WIFI_PASSWORDS[i]);
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 40) {
+      delay(500);
+      Serial.print(".");
+      attempts++;
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("\nWiFi connected to " + String(WIFI_SSIDS[i]) + ". IP: " + WiFi.localIP().toString());
+      Serial.println("WiFi signal strength (RSSI): " + String(WiFi.RSSI()) + " dBm");
+      return;
+    }
+    Serial.println("\nFailed to connect to " + String(WIFI_SSIDS[i]) + " after 20s -- trying next network");
   }
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nWiFi connected. IP: " + WiFi.localIP().toString());
-    Serial.println("WiFi signal strength (RSSI): " + String(WiFi.RSSI()) + " dBm");
-  } else {
-    Serial.println("\nWiFi connection FAILED after 20s — retrying in loop");
-  }
+  Serial.println("WiFi connection FAILED for all known networks -- retrying in loop");
 }
 
 void connectMQTT() {
   while (!mqttClient.connected()) {
     Serial.print("Connecting to MQTT broker...");
-    if (mqttClient.connect(DEVICE_ID)) {
+    if (mqttClient.connect(DEVICE_ID, MQTT_USER, MQTT_PASS)) {
       Serial.println("connected");
     } else {
       Serial.print("failed, rc=");
@@ -100,9 +136,18 @@ void setup() {
 
   connectWiFi();
 
+  espClient.setCACert(EMQX_CA_CERT);
   mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
   mqttClient.setKeepAlive(60);
   mqttClient.setSocketTimeout(10);
+  // PubSubClient's default internal buffer is only 256 bytes -- the JSON
+  // payload below (device_id, ts, gsr, ir, finger, 3x acc float, an ibi
+  // array) can legitimately exceed that once ibi has any beats in it, and
+  // publish() silently drops the message with no error when it does (see
+  // the checked return value in loop() below). 512 covers the full
+  // 384-byte payload[] with headroom. Matches wearable02.ino's identical
+  // setBufferSize() call.
+  mqttClient.setBufferSize(512);
 
   Serial.println("--- Starting sensor + MQTT loop ---");
 }
@@ -165,7 +210,12 @@ void loop() {
     char payload[384];
     serializeJson(doc, payload);
 
-    mqttClient.publish(MQTT_TOPIC, payload);
+    bool published = mqttClient.publish(MQTT_TOPIC, payload);
     Serial.println(payload);
+    if (!published) {
+      Serial.print("PUBLISH FAILED (payload ");
+      Serial.print(strlen(payload));
+      Serial.println(" bytes) -- check setBufferSize() covers this size");
+    }
   }
 }

@@ -62,6 +62,15 @@ export default function ProfileScreen({ navigation }) {
           </View>
         </View>
 
+        {/* Back to Home */}
+        <TouchableOpacity
+          activeOpacity={0.8}
+          style={styles.backRow}
+          onPress={() => navigation.navigate('Home')}
+        >
+          <Text style={[styles.backText, { color: COLORS.brand }]}>← Back to Home</Text>
+        </TouchableOpacity>
+
         {/* Stats row */}
         <View style={styles.statsRow}>
           <View style={[styles.statCard, { backgroundColor: card, borderColor: border }]}>
@@ -90,6 +99,22 @@ export default function ProfileScreen({ navigation }) {
             {baseline?.exists
               ? 'Baseline is set. Tap to view details or recalibrate.'
               : 'No personal baseline yet — tap to calibrate the ring.'}
+          </Text>
+        </TouchableOpacity>
+
+        {/* Back to Relaxation Guide -- the primary app experience; this
+            Physiological area is a supporting/sensor module reached from it */}
+        <TouchableOpacity
+          activeOpacity={0.8}
+          style={[styles.card, { backgroundColor: card, borderColor: border }]}
+          onPress={() => navigation.navigate('Relaxation')}
+        >
+          <View style={styles.cardHeaderRow}>
+            <Text style={[styles.cardTitle, { color: text }]}>🧘 Relaxation Guide</Text>
+            <Text style={[styles.chevron, { color: muted }]}>→</Text>
+          </View>
+          <Text style={[styles.cardSub, { color: muted }]}>
+            Back to your personalized stress relief dashboard.
           </Text>
         </TouchableOpacity>
 
@@ -128,4 +153,6 @@ const styles = StyleSheet.create({
   cardSub:           { fontSize: 12, marginTop: 4 },
   logoutBtn:         { marginHorizontal: 20, padding: 14, borderRadius: 14, alignItems: 'center', borderWidth: 1 },
   logoutText:        { fontSize: 14, fontWeight: '700' },
+  backRow:           { marginHorizontal: 20, marginBottom: 4, alignSelf: 'flex-start' },
+  backText:          { fontSize: 13, fontWeight: '700' },
 });

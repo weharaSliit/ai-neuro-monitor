@@ -1,22 +1,29 @@
 import React, { useContext } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
 
 export const BottomNavBar = () => {
   const { currentScreen, setCurrentScreen } = useContext(AppContext);
   const { theme } = useContext(ThemeContext);
+  // The Physiological module is a separate top-level stack screen (App.js),
+  // outside this module's own currentScreen switch, so reaching it needs
+  // the real navigation object rather than setCurrentScreen.
+  const navigation = useNavigation();
 
   const navItems = [
     { id: 'Dashboard', label: 'Home', icon: '🏠' },
+    { id: 'FusionPipeline', label: 'Pipeline', icon: '📡' },
     { id: 'Methods', label: 'Methods', icon: '📖' },
     { id: 'Intervention', label: 'Bandit', icon: '⚡' },
     { id: 'Chatbot', label: 'AI Guide', icon: '🤖' },
+    { id: 'Physiological', label: 'Sensors', icon: '📊', external: true },
     { id: 'UserProfile', label: 'Profile', icon: '👤' }
   ];
 
-  // Hide bottom nav on splash/auth screens
-  if (['Splash', 'Login', 'SignIn', 'SignUp', 'Welcome'].includes(currentScreen)) {
+  // Hide bottom nav during the one-time consent/onboarding/calibration flow
+  if (['PrivacyPolicy', 'OnboardingQuestions', 'Permissions', 'BaselineCalibration'].includes(currentScreen)) {
     return null;
   }
 
@@ -30,7 +37,7 @@ export const BottomNavBar = () => {
           <TouchableOpacity
             key={item.id}
             style={styles.tabBtn}
-            onPress={() => setCurrentScreen(item.id)}
+            onPress={() => item.external ? navigation.navigate(item.id) : setCurrentScreen(item.id)}
           >
             <Text style={[styles.tabIcon, isActive && styles.tabIconActive]}>{item.icon}</Text>
             <Text style={[styles.tabLabel, { color: isActive ? theme.accent : theme.textMuted }]}>

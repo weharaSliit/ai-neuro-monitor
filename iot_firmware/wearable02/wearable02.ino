@@ -1,20 +1,52 @@
 #include <SPI.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 
 /* ================= WIFI ================= */
 
-const char* WIFI_SSID = "Wehara's A07";
-const char* WIFI_PASS = "wehara1216";
-// Direct IP for now instead of MQTT_HOSTNAME's mDNS lookup -- see
-// iot_firmware/wearable01/wearable01.ino's identical comment. Matches
-// MQTT_BROKER in backend/common/config.py / EEG_MQTT_BROKER for
-// backend/psychological/mqtt_bridge.py and API_BASE in StressApp's
-// config.js -- all four need to point at whichever machine is actually
-// running the broker + backends.
-const char* MQTT_BROKER = "10.180.48.56";
-const int   MQTT_PORT   = 1883;
+// Tried in order in connectWiFi() -- add more pairs here as needed rather
+// than re-flashing every time the device needs a different network.
+const int WIFI_NETWORK_COUNT = 2;
+const char* WIFI_SSIDS[WIFI_NETWORK_COUNT]     = { "Wehara's A07", "Hiruni" };
+const char* WIFI_PASSWORDS[WIFI_NETWORK_COUNT] = { "wehara1216",   "Hiruni2022" };
+// EMQX Cloud Serverless broker (mindpulse-broker, Asia-Pacific) -- see
+// iot_firmware/wearable01/wearable01.ino's identical comment. Serverless
+// only accepts TLS on 8883 (see EMQX_CA_CERT below) with username/password
+// auth, unlike the old local Mosquitto's plain-TCP/allow_anonymous setup.
+const char* MQTT_BROKER = "ob1f0f10.ala.asia-southeast1.emqxsl.com";
+const int   MQTT_PORT   = 8883;
+const char* MQTT_USER   = "wearable02";
+const char* MQTT_PASS   = "wearable02";
 const char* MQTT_TOPIC  = "mindpulse/wearable02/sensors";
+
+// EMQX Cloud's CA (DigiCert Global Root G2, expires 2031-11-10) -- see
+// wearable01.ino's identical cert / comment, also saved standalone at
+// iot_firmware/emqxsl-ca.crt.
+const char* EMQX_CA_CERT = R"EOF(
+-----BEGIN CERTIFICATE-----
+MIIDjjCCAnagAwIBAgIQAzrx5qcRqaC7KGSxHQn65TANBgkqhkiG9w0BAQsFADBh
+MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3
+d3cuZGlnaWNlcnQuY29tMSAwHgYDVQQDExdEaWdpQ2VydCBHbG9iYWwgUm9vdCBH
+MjAeFw0xMzA4MDExMjAwMDBaFw0zODAxMTUxMjAwMDBaMGExCzAJBgNVBAYTAlVT
+MRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5j
+b20xIDAeBgNVBAMTF0RpZ2lDZXJ0IEdsb2JhbCBSb290IEcyMIIBIjANBgkqhkiG
+9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuzfNNNx7a8myaJCtSnX/RrohCgiN9RlUyfuI
+2/Ou8jqJkTx65qsGGmvPrC3oXgkkRLpimn7Wo6h+4FR1IAWsULecYxpsMNzaHxmx
+1x7e/dfgy5SDN67sH0NO3Xss0r0upS/kqbitOtSZpLYl6ZtrAGCSYP9PIUkY92eQ
+q2EGnI/yuum06ZIya7XzV+hdG82MHauVBJVJ8zUtluNJbd134/tJS7SsVQepj5Wz
+tCO7TG1F8PapspUwtP1MVYwnSlcUfIKdzXOS0xZKBgyMUNGPHgm+F6HmIcr9g+UQ
+vIOlCsRnKPZzFBQ9RnbDhxSJITRNrw9FDKZJobq7nMWxM4MphQIDAQABo0IwQDAP
+BgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBhjAdBgNVHQ4EFgQUTiJUIBiV
+5uNu5g/6+rkS7QYXjzkwDQYJKoZIhvcNAQELBQADggEBAGBnKJRvDkhj6zHd6mcY
+1Yl9PMWLSn/pvtsrF9+wX3N3KjITOYFnQoQj8kVnNeyIv/iPsGEMNKSuIEyExtv4
+NeF22d+mQrvHRAiGfzZ0JFrabA0UWTW98kndth/Jsw1HKj2ZL7tcu7XUIOGZX1NG
+Fdtom/DzMNU+MeKNhJ7jitralj41E6Vf8PlwUHBHQRFXGU7Aj64GxJUTFy8bJZ91
+8rGOmaFvE7FBcf6IKshPECBV1/MUReXgRPTqh5Uykw7+U0b6LJ3/iyK5S9kJRaTe
+pLiaWN0bfVKfjllDiIGknibVb63dDcY3fe0Dkhvld1927jyNxF1WW6LZZm6zNTfl
+MrY=
+-----END CERTIFICATE-----
+)EOF";
 
 /* ================= ADS1292R PINS ================= */
 
@@ -44,7 +76,7 @@ uint32_t corruptFrameCount = 0;
 
 /* ================= GLOBALS ================= */
 
-WiFiClient wifiClient;
+WiFiClientSecure wifiClient;
 PubSubClient mqtt(wifiClient);
 
 SPISettings adsSPI(100000, MSBFIRST, SPI_MODE1);
@@ -142,22 +174,42 @@ bool statusValid(byte s0) {
 /* ================================================= */
 
 void connectWiFi() {
-  Serial.println("Connecting WiFi...");
-
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
 
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  for (int i = 0; i < WIFI_NETWORK_COUNT; i++) {
+    // Without this, falling through from a failed attempt straight into
+    // the next WiFi.begin() hits the driver mid-state-machine and throws
+    // "E wifi:sta is connecting, cannot set config" -- that reconfigure
+    // is then silently dropped, so the "next network" attempt never
+    // actually takes. Also run before the very first attempt: a WiFi
+    // reconnect (called again from loop() after a drop, not just setup())
+    // can find the driver already mid-connecting from the prior failure.
+    WiFi.disconnect(true, true);
+    delay(100);
+
+    Serial.print("Connecting WiFi: ");
+    Serial.println(WIFI_SSIDS[i]);
+    WiFi.begin(WIFI_SSIDS[i], WIFI_PASSWORDS[i]);
+
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 40) {
+      delay(500);
+      Serial.print(".");
+      attempts++;
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println();
+      Serial.println("WiFi connected to " + String(WIFI_SSIDS[i]));
+      Serial.print("IP: ");
+      Serial.println(WiFi.localIP());
+      WiFi.setSleep(false);
+      return;
+    }
+    Serial.println();
+    Serial.println("Failed to connect to " + String(WIFI_SSIDS[i]) + " after 20s -- trying next network");
   }
-
-  Serial.println();
-  Serial.println("WiFi connected");
-  Serial.print("IP: ");
-  Serial.println(WiFi.localIP());
-
-  WiFi.setSleep(false);
+  Serial.println("WiFi connection FAILED for all known networks");
 }
 
 /* ================================================= */
@@ -180,11 +232,17 @@ void maintainMQTT() {
 
   Serial.print("Connecting MQTT...");
 
-  if (mqtt.connect("ESP32_EEG")) {
+  // Client ID matches the "wearable02" username/topic convention (see
+  // wearable01.ino's identical DEVICE_ID pattern) -- was hardcoded to the
+  // unrelated "ESP32_EEG" before, which is worth ruling out if the broker's
+  // ACL/authorization rules are scoped per client ID.
+  if (mqtt.connect("wearable02", MQTT_USER, MQTT_PASS)) {
     Serial.println("connected");
   }
   else {
-    Serial.println("retry in 2s");
+    Serial.print("failed, rc=");
+    Serial.print(mqtt.state());
+    Serial.println(" -- retry in 2s");
   }
 }
 
@@ -277,7 +335,20 @@ void publishBatch() {
       offset += n;
     }
 
-    mqtt.publish(MQTT_TOPIC, payload);
+    // Previously ignored -- for QoS0 this only confirms the write to the
+    // socket succeeded, not that the broker accepted it (an ACL rejection
+    // or oversized packet is silent either way), but it at least rules out
+    // the local, checkable half of "connected but no data arrives".
+    bool published = mqtt.publish(MQTT_TOPIC, payload);
+    Serial.print("Publish ");
+    Serial.print(published ? "OK" : "FAILED");
+    Serial.print(" (");
+    Serial.print(batchCount);
+    Serial.print(" samples, ");
+    Serial.print(offset);
+    Serial.println(" bytes)");
+  } else {
+    Serial.println("Skipped batch publish -- MQTT not connected");
   }
 
   batchCount = 0;
@@ -318,6 +389,7 @@ void setup() {
   connectWiFi();
 
   /* MQTT THIRD */
+  wifiClient.setCACert(EMQX_CA_CERT);
   mqtt.setServer(MQTT_BROKER, MQTT_PORT);
   mqtt.setBufferSize(1024);
   maintainMQTT();
@@ -328,6 +400,15 @@ void setup() {
 /* ================================================= */
 
 void loop() {
+  // connectWiFi() was previously only ever called once, from setup() --
+  // a WiFi drop mid-session (router hiccup, range, AP reboot) had no
+  // recovery path at all and would silently kill data collection until
+  // the device was power-cycled. Matches wearable01.ino's same check.
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi dropped, reconnecting...");
+    connectWiFi();
+  }
+
   maintainMQTT();
   mqtt.loop();
 
@@ -350,6 +431,15 @@ void loop() {
 
   if (!statusValid(r[0])) {
     corruptFrameCount++;
+    // Was tallied but never surfaced -- if the ADS is wired/seated wrong,
+    // every frame fails this check, batchCount never reaches BATCH_SIZE,
+    // and publishBatch() silently never runs, looking identical to an MQTT
+    // problem from the Serial monitor.
+    if (corruptFrameCount % 250 == 0) {
+      Serial.print("WARNING: ");
+      Serial.print(corruptFrameCount);
+      Serial.println(" corrupt ADS frames so far -- check SPI wiring/DRDY");
+    }
     return;
   }
 

@@ -53,8 +53,9 @@ if DISABLE_QUALITY_GATE:
           "NOT trustworthy while this is on.")
 
 # Raw EEG samples are logged here per session, independent of Firebase --
-# EegFirebaseSession.push_raw() no-ops without $FIREBASE_CREDENTIALS (see its
-# docstring), so this is the one raw-data path that's guaranteed to work
+# EegFirebaseSession.push_raw() no-ops without $FIREBASE_CRED_JSON/
+# $FIREBASE_CREDENTIALS (see firebase_service.py's resolve_credential()),
+# so this is the one raw-data path that's guaranteed to work
 # even with cloud sync off entirely. Same RAW_FIELDS shape as the standalone
 # phscycological/scripts/realtime_inference.py CLI's --log-raw-csv, via the
 # same CsvLogger/log_raw_block (realtime/csv_logger.py) -- not a second copy.
@@ -197,7 +198,14 @@ def calibrate():
         "csv_logger": csv_logger,
         "score_history": [],
     }
-    return jsonify({"success": True, "session_id": session_id, **outcome})
+    # firebase.enabled is False whenever neither FIREBASE_CRED_JSON nor
+    # FIREBASE_CREDENTIALS is set on THIS service -- calibration still
+    # succeeds and predictions still work
+    # either way, but nothing gets written to Firebase, which otherwise
+    # looks identical to a healthy deploy from the bridge/caller's side
+    # (success: True either way). Surfaced here so that's visible without
+    # cross-referencing this service's own startup logs.
+    return jsonify({"success": True, "session_id": session_id, "firebase_enabled": firebase.enabled, **outcome})
 
 
 # -- /predict -- one 25s block -> task_state_score --------------------
@@ -250,6 +258,9 @@ def predict():
             "high_load_alert": record.get("high_load_alert"),
             "micro_break_recommended": record.get("micro_break_recommended"),
             "fatigue_warning": record.get("fatigue_warning"),
+            # See /calibrate's identical field -- same session's Firebase
+            # handle, so this can only ever match what /calibrate reported.
+            "firebase_enabled": state["firebase"].enabled,
         }
     )
 
@@ -291,7 +302,10 @@ def live_raw():
         "ch2_uv": [round(v, 3) for v in code_to_microvolts(np.array([s.ch2_code for s in samples]))],
     })
 
-    return jsonify({"success": True, "session_id": session_id, "n_samples": len(samples)})
+    return jsonify({
+        "success": True, "session_id": session_id, "n_samples": len(samples),
+        "firebase_enabled": firebase.enabled,
+    })
 
 
 @app.route("/sessions/<session_id>", methods=["DELETE"])
@@ -326,4 +340,7 @@ if __name__ == "__main__":
     # (fushion engin/fusion_engin.py) changed during a 25s+ calibration
     # capture. debug=True's error pages are still useful, just not the
     # auto-restart-on-any-repo-change behavior.
-    app.run(host="0.0.0.0", port=5001, debug=True, use_reloader=False)
+    # Render.com injects $PORT -- use it in production; default to 5001
+    # locally (see backend/phenotyping_behavior/app.py's identical pattern).
+    port = int(os.environ.get('PORT', 5001))
+    app.run(host="0.0.0.0", port=port, debug=True, use_reloader=False)
