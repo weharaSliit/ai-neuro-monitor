@@ -46,6 +46,69 @@ class DecisionThresholds:
     cooldown_low_p: float = 0.725
 
 
+# Robust, LOSO-derived population statistics (calibrated_p_percentiles.csv,
+# results/CURRENT_SYSTEM.md Section 6) -- NOT the single-session replay-test
+# per-condition numbers (Relax=0.508, Mirror=0.594, Arithmetic=0.759,
+# Stroop=0.739) documented elsewhere in that same file, which explicitly
+# validate the code path only ("This validates the code path, not real-
+# hardware signal quality"), not real per-condition population behavior.
+POPULATION_MEDIAN_P = 0.758   # P50 -- coincides with the deployed high_load_p (see
+                               # DecisionThresholds' own docstring); used below as the
+                               # zero-point a personalized shift is measured from.
+POPULATION_P5 = 0.629
+POPULATION_P95 = 0.835
+MIN_CALIBRATION_SCORES = 2    # fewer trusted calibration blocks than this -> a resting
+                               # mean would be a single sample, not a measurement.
+MAX_THRESHOLD_SHIFT = (POPULATION_P95 - POPULATION_P5) / 2  # ~0.103
+
+
+def compute_baseline_shift(resting_scores: list[float]) -> float | None:
+    """Measures how far THIS user's own resting-state calibrated_p sits from
+    the population norm, from the blocks scored during their EXISTING
+    Relax-only calibration window (BaselineCalibrationScreen.js explicitly
+    walks the user through a guided-breathing calm-state protocol before
+    this data is collected -- calibration happening while the user is
+    actually calm is a real, deliberate premise of this app, not an
+    assumption made here). No extra calibration time: these are the same
+    blocks calibrate_block() already processes for the feature baseline,
+    just also run through the model.
+
+    The correction is applied to calibrated_p ITSELF (pipeline.py's
+    infer_block(), row['calibrated_p'] = raw_score - baseline_shift), not to
+    the decision thresholds -- so every consumer of calibrated_p (fusion's
+    prob_eeg, the live UI, history charts, compute_states() below) sees a
+    baseline-corrected number consistently, not just the alert flags. A user
+    who runs "hot" at rest would otherwise look chronically elevated to
+    every one of those consumers even while genuinely calm; subtracting
+    their own resting offset fixes that at the source instead of only at
+    the alert-threshold comparison.
+
+    POPULATION_MEDIAN_P (0.758) is used as the reference point: it's the
+    population's own OVERALL median calibrated_p (P50 in
+    calibrated_p_percentiles.csv, results/CURRENT_SYSTEM.md Section 6) --
+    high_load_p was chosen to land almost exactly on it (not by design), so
+    it doubles as a convenient, already-validated "typical" reference. A
+    user whose resting mean equals it gets shift=0 (no correction, exactly
+    today's behavior); a user who reads higher/lower than that at rest gets
+    a positive/negative correction.
+
+    shift is clamped to +-MAX_THRESHOLD_SHIFT (half the population's observed
+    P5-P95 spread) so a short, noisy calibration window can't push the
+    correction beyond the range the population data has ever actually shown
+    to be meaningful -- this bounds trust in a small sample, not a claim
+    about the "true" personal offset.
+
+    Returns None (caller should apply no correction, i.e. shift=0.0) if
+    fewer than MIN_CALIBRATION_SCORES scores are available.
+    """
+    if len(resting_scores) < MIN_CALIBRATION_SCORES:
+        return None
+
+    resting_mean = float(np.mean(resting_scores))
+    shift = resting_mean - POPULATION_MEDIAN_P
+    return max(-MAX_THRESHOLD_SHIFT, min(MAX_THRESHOLD_SHIFT, shift))
+
+
 def compute_states(series: pd.DataFrame, thresholds: DecisionThresholds = DecisionThresholds()) -> pd.DataFrame:
     """series: rows ordered by time, columns calibrated_p, spectral_slope, theta_ratio.
     Returns series with added boolean/flag columns for each trigger condition.

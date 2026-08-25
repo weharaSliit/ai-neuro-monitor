@@ -241,24 +241,70 @@ def get_physiological_predictions(user_id):
 # Firebase path: fusion_engine/{display_name}/live_session_{YYYYMMDD}/{push-key}
 # This mirrors the format used by: Wehara (physiological) and Hiruni (EEG).
 
-# Known accuracy of the One-Class SVM behavioral model (update after validation)
-BEHAVIORAL_MODEL_ACCURACY = 0.78
+# Known accuracy of the One-Class SVM behavioral model.
+#
+# HISTORY: originally hardcoded to 0.78 as an unvalidated placeholder
+# (comment said "update after validation" but nothing ever did — it turned
+# out to closely match published literature accuracy for a DIFFERENT
+# keystroke-stress study, not a number ever measured on this system).
+# Later corrected to 0.3286 (StudentLife macro F1) — but that number came
+# from a model trained on activity/motion features (stationary/walking
+# ratios), not typing data, and scored a DIFFERENT model object than the one
+# actually deployed. Neither number was ever about stress_engine.pkl, the
+# file actually shipped to production.
+#
+# CURRENT VALUE: the first-ever evaluation of the REAL deployed artifact
+# (stress_engine.pkl + feature_scaler.pkl), run in
+# phenotyping/s9_evaluate_production_model.py via an inter-subject anomaly
+# proxy on held-out CMU subjects (same proxy methodology used elsewhere in
+# this repo, since no real participant stress ground truth exists yet).
+# Result across 51 held-out subjects: accuracy=0.4998, F1=0.1804,
+# precision=0.6738, recall=0.1098.
+#
+# This is a materially weaker result than the per-user models validated
+# elsewhere in the research pipeline (e.g. SWELL personalized: F1=0.72) —
+# likely because s8_deploy_production.py fits the OC-SVM on the ENTIRE
+# population at once rather than per-user, producing a boundary loose enough
+# to contain everyone's typing style as "normal," which makes it far less
+# sensitive to any one person's deviation. Using accuracy here since that's
+# what this field name claims to represent; F1 tells a worse story still.
+#
+# TODO: replace this static constant with a live value once
+# evaluate_accuracy.py has enough PSS-4/SISS samples (MIN_SAMPLES_VALID=30+)
+# to produce a trustworthy number against real (not proxy) ground truth —
+# and consider whether stress_engine.pkl should be retrained per-user rather
+# than on the pooled population, given this result.
+BEHAVIORAL_MODEL_ACCURACY = 0.4998
 
 def get_user_display_name(user_id):
     """
-    Looks up the human-readable display_name for a user from their Firebase profile.
-    Returns the display_name if found, otherwise returns a shortened form of the UUID.
-    Used to key the fusion_engine table entry (e.g. 'Chathurika') like other components.
+    Builds the collision-safe key used to identify this user in the shared
+    fusion_engine table, e.g. 'Chathurika_3f2504e0'.
+
+    FIX: PREVIOUSLY returned the raw typed display_name alone (e.g. just
+    'Chathurika'). BaselineSurvey.jsx's name field has no uniqueness check —
+    it's free text, only required to be non-empty. Two real participants who
+    both typed the same name (e.g. two people named "Sam") would have their
+    behavioral windows written to the SAME fusion_engine/{name}/... path and
+    comingled, with no way to separate them afterward. Appending the first 8
+    hex characters of the user's UUID guarantees uniqueness while keeping the
+    key human-readable for anyone browsing the Firebase console.
+
+    NOTE: this changes the fusion_engine key format going forward. Any
+    records written before this fix used the bare name as the key and won't
+    be found under the new key — since no other component currently writes
+    to fusion_engine yet (see conversation history), this is safe to change
+    now, before other teams start integrating against this table.
     """
     try:
         profile = _ref(f'users/{user_id}').get()
         if profile and isinstance(profile, dict):
             name = profile.get('display_name') or profile.get('name')
             if name and name != 'Participant':
-                return name
+                return f"{name}_{str(user_id)[:8]}"
     except Exception:
         pass
-    # Fallback: first 8 chars of UUID so it's still readable
+    # Fallback: no usable display name — just the UUID prefix (already unique)
     return str(user_id)[:8]
 
 def save_to_fusion_engine(user_id, result, window_features, is_valid=True):
@@ -268,11 +314,16 @@ def save_to_fusion_engine(user_id, result, window_features, is_valid=True):
     Fields written (matches the group's standard format):
       label                 - 'Stress', 'Pre-Stress', or 'Normal'
       modality              - 'behavioral'  (keyboard + scroll + app switching)
-      prob_stress           - stress score from the AI model (0.0 - 1.0)
+      prob_stress           - continuous probability from predictor.py (OC-SVM
+                              decision_function blended with personal Z-score)
       prob_normal           - 1 - prob_stress
-      confidence            - certainty of prediction, derived from composite Z-score
-      signal_quality        - data completeness score (typing + scroll + app data)
-      model_accuracy        - known accuracy of the underlying One-Class SVM model
+      confidence            - certainty of prediction, derived from how far
+                              prob_stress sits from 0.5 (see predictor.py)
+      signal_quality        - completeness of the 3 features the model reads
+                              (dwell, flight, scroll), equally weighted
+      model_accuracy        - accuracy from the first real evaluation of the
+                              actual deployed model (see BEHAVIORAL_MODEL_ACCURACY
+                              and phenotyping/s9_evaluate_production_model.py)
       composite_z           - raw multi-feature Z-score deviation from personal baseline
       is_anomaly            - True when OC-SVM flagged an anomaly
       trending_toward_stress- True when prob_stress > 0.5
@@ -289,26 +340,38 @@ def save_to_fusion_engine(user_id, result, window_features, is_valid=True):
     is_anomaly   = bool(result.get('is_anomaly',   False))
 
     # -- Signal quality --
-    # How complete is this window's data? (0.0 = no data, 1.0 = all three sensors)
-    has_typing = window_features.get('avg_dwell', 0) > 0
+    # How complete is this window's data, specifically for the features the
+    # OC-SVM model actually consumes (predictor.py only ever reads avg_dwell,
+    # avg_flight, scroll_velocity — see predictor.py step 1).
+    #
+    # PREVIOUSLY this checked has_typing/has_scroll/has_apps with hand-picked
+    # weights 0.50/0.30/0.20, and "has_apps" checked interaction_rate — a
+    # field the model never reads at all, so its presence/absence had no
+    # bearing on how trustworthy the prediction actually was.
+    #
+    # FIX: check completeness of the 3 real model inputs, equally weighted.
+    # Equal weighting is used because there's no feature-importance analysis
+    # backing any other split — StandardScaler treats all 3 independently
+    # before the OC-SVM sees them, so no feature is a priori "worth more."
+    has_dwell  = window_features.get('avg_dwell', 0) > 0
+    has_flight = window_features.get('avg_flight', 0) > 0
     has_scroll = window_features.get('scroll_velocity', 0) > 0
-    has_apps   = window_features.get('interaction_rate', 0) > 0
     signal_quality = round(
-        (int(has_typing) * 0.50) +
-        (int(has_scroll) * 0.30) +
-        (int(has_apps)   * 0.20), 2
+        (int(has_dwell) + int(has_flight) + int(has_scroll)) / 3.0, 2
     )
     # Reduce quality if context filter marked data as invalid (walking/gaming)
     if not is_valid:
         signal_quality = round(signal_quality * 0.5, 2)
 
     # -- Confidence --
-    # When stressed: how far above threshold is the Z-score? (0.5 - 1.0)
-    # When normal:   how firmly below threshold?             (0.5 - 1.0)
-    if is_anomaly:
-        confidence = round(min(1.0, 0.5 + (composite_z / 6.0)), 4)
-    else:
-        confidence = round(max(0.5, 1.0 - (composite_z / 4.0)), 4)
+    # PREVIOUSLY recomputed here from composite_z alone via hardcoded divisors
+    # (/6.0, /4.0) that duplicated information the score already carries and
+    # ignored the OC-SVM signal. Now sourced directly from predictor.py,
+    # which derives it from how far `score` itself sits from 0.5 (maximum
+    # uncertainty) — one consistent signal instead of two independently
+    # hand-tuned formulas. Falls back to a neutral 0.5 only if a caller
+    # passes a result dict without it (e.g. an older/unpatched predictor).
+    confidence = round(float(result.get('confidence', 0.5)), 4)
 
     record = {
         'label':                result.get('label', 'Normal'),

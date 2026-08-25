@@ -175,6 +175,11 @@ def calibrate():
         engine.calibrate_block(samples)
 
     outcome = engine.finalize_calibration(allow_degraded=bool(data.get("allow_degraded", False)))
+    # Written regardless of status (including "failed") -- BaselineCalibrationScreen.js
+    # and EegSessionScreen.js have no other path to this outcome, since
+    # calibration is driven server-side by mqtt_bridge.py, not called by
+    # those screens directly. See push_calibration_result()'s docstring.
+    firebase.push_calibration_result(outcome)
     if outcome["status"] == "failed":
         # Never stored into eeg_sessions, so nothing else will ever close this --
         # close it here or the file handle (and its partial CSV) just leaks.
