@@ -145,8 +145,14 @@ export default function EegSessionScreen({ navigation, route }) {
     const [hasAnyWindow, setHasAnyWindow] = useState(false);
     const [latestRaw, setLatestRaw] = useState(null);
     const [hasAnyRaw, setHasAnyRaw] = useState(false);
+    // finalize_calibration()'s outcome for this session (backend/psychological/
+    // firebase_service.py's push_calibration_result()) -- whether/how this
+    // user's EEG threshold sensitivity was personalized to their own
+    // resting-state pattern during calibration.
+    const [calibrationResult, setCalibrationResult] = useState(null);
     const listenerRef = useRef(null);
     const rawListenerRef = useRef(null);
+    const calibListenerRef = useRef(null);
     const startWatching = useCallback((idOverride) => {
         if (!userId) return;
         const targetId = (idOverride ?? sessionId).trim();
@@ -157,6 +163,7 @@ export default function EegSessionScreen({ navigation, route }) {
         setHasAnyWindow(false);
         setLatestRaw(null);
         setHasAnyRaw(false);
+        setCalibrationResult(null);
         // Nested under the logged-in user (psychological/{userId}/{sessionId}/...),
         // matching backend/psychological/firebase_service.py's EegFirebaseSession --
         // see backend/psychological/app.py's /calibrate and /live_raw, both of
@@ -180,6 +187,12 @@ export default function EegSessionScreen({ navigation, route }) {
         });
         rawListenerRef.current = rawRef;
 
+        const calibRef = ref(db, `psychological/${userId}/${targetId}/calibration_result`);
+        const calibHandler = onValue(calibRef, (snapshot) => {
+            setCalibrationResult(snapshot.val() || null);
+        });
+        calibListenerRef.current = calibRef;
+
         setWatching(true);
     }, [sessionId, userId]);  // eslint-disable-line react-hooks/exhaustive-deps -- idOverride intentionally omitted, see its own comment above
 
@@ -191,6 +204,10 @@ export default function EegSessionScreen({ navigation, route }) {
         if (rawListenerRef.current) {
             off(rawListenerRef.current);
             rawListenerRef.current = null;
+        }
+        if (calibListenerRef.current) {
+            off(calibListenerRef.current);
+            calibListenerRef.current = null;
         }
         setWatching(false);
     }, []);
@@ -336,6 +353,17 @@ export default function EegSessionScreen({ navigation, route }) {
                                                 : '—'}
                                         </Text>
                                     </View>
+
+                                    {calibrationResult?.status === 'ok' && (
+                                        <View style={styles.metaRow}>
+                                            <Text style={[styles.metaLabel, { color: t.textSub }]}>Sensitivity</Text>
+                                            <Text style={[styles.metaValue, { color: t.text }]}>
+                                                {calibrationResult.thresholds_personalized
+                                                    ? `Personalized (${calibrationResult.baseline_shift >= 0 ? '+' : ''}${(calibrationResult.baseline_shift * 100).toFixed(1)}%)`
+                                                    : 'Standard (not enough clean blocks to personalize)'}
+                                            </Text>
+                                        </View>
+                                    )}
 
                                     {baselineDegraded && (
                                         <Text style={[styles.warningText, { color: '#ef4444' }]}>

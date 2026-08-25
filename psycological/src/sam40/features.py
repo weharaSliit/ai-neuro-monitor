@@ -6,6 +6,7 @@ T7/T8-only model and a full 32-channel model.
 """
 
 import numpy as np
+from scipy.integrate import trapezoid
 from scipy.signal import welch
 
 from .channels import SFREQ
@@ -22,14 +23,17 @@ BANDS = {
 def _band_powers(sig: np.ndarray, fs: int = SFREQ) -> dict:
     nperseg = min(len(sig), fs * 2)
     freqs, psd = welch(sig, fs=fs, nperseg=nperseg)
-    total = np.trapezoid(psd, freqs)
+    # trapezoid() from scipy.integrate, not np.trapezoid -- the latter only
+    # exists on numpy>=2.0, and a numpy<2.0 environment hit AttributeError
+    # on this exact call. scipy.integrate.trapezoid has existed since 1.6.0.
+    total = trapezoid(psd, freqs)
     total = total if total > 0 else np.finfo(float).eps
 
     out = {}
     band_power = {}
     for band, (lo, hi) in BANDS.items():
         mask = (freqs >= lo) & (freqs < hi)
-        power = np.trapezoid(psd[mask], freqs[mask]) if mask.any() else 0.0
+        power = trapezoid(psd[mask], freqs[mask]) if mask.any() else 0.0
         band_power[band] = power
         out[f'{band}_power'] = power
         out[f'{band}_rel_power'] = power / total
