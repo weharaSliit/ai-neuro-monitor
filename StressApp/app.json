@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "StressApp",
-    "slug": "StressApp",
+    "slug": "mindpulse-research",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -36,6 +36,12 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "e81b6dd9-7835-4911-bc63-c5214d2c8de2"
+      }
+    },
+    "owner": "mindpulse-researchs-team"
   }
 }
