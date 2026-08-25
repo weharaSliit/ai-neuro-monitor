@@ -158,7 +158,7 @@ def _post_live_raw(samples) -> None:
         resp = requests.post(
             f"{FLASK_URL}/live_raw",
             json={"session_id": SESSION_ID, **block_payload(samples)},
-            headers=AUTH_HEADERS, timeout=5,
+            headers=AUTH_HEADERS, timeout=15,
         )
         if not resp.ok:
             print(f"[live_raw] {resp.status_code} {resp.text[:200]}")
