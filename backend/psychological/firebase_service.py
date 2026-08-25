@@ -100,6 +100,10 @@ class EegFirebaseSession:
         self._fusion_en_rtdb = FirebaseSync(
             self._cred, FIREBASE_DB_URL, session_id=user_session_id, root_path=FUSION_EN_ROOT
         )
+        self._calibration_result_rtdb = FirebaseSync(
+            self._cred, FIREBASE_DB_URL, session_id=user_session_id, root_path=RTDB_NAMESPACE,
+            extra_path="calibration_result"
+        )
 
     def push(self, record: dict) -> None:
         if not self.enabled:
@@ -123,3 +127,19 @@ class EegFirebaseSession:
         if not self.enabled:
             return
         self._live_raw_rtdb.set(record)
+
+    def push_calibration_result(self, record: dict) -> None:
+        """One-shot snapshot of finalize_calibration()'s outcome (status,
+        thresholds_personalized, baseline_shift, resting_calibrated_p,
+        n_blocks) -- {RTDB_NAMESPACE}/{user_id}/{session_id}/calibration_result,
+        same latest-snapshot pattern as push_live_raw() (.set(), overwritten
+        on any recalibration, no history kept). Lets the frontend (
+        BaselineCalibrationScreen.js, EegSessionScreen.js) show whether/how
+        this user's own resting EEG shifted their thresholds, without
+        needing the /calibrate HTTP response itself -- calibration is driven
+        server-side by mqtt_bridge.py, not by these screens directly, so
+        this is the only path they have to that outcome.
+        """
+        if not self.enabled:
+            return
+        self._calibration_result_rtdb.set(record)
