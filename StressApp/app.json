@@ -42,6 +42,10 @@
         "projectId": "e81b6dd9-7835-4911-bc63-c5214d2c8de2"
       }
     },
-    "owner": "mindpulse-researchs-team"
+    "owner": "mindpulse-researchs-team",
+    "plugins": [
+      "expo-font",
+      "expo-asset"
+    ]
   }
 }
