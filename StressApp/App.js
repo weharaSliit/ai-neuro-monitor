@@ -11,6 +11,12 @@ import HrvGsrSessionScreen from './modules/hrvgsr/screens/HrvGsrSessionScreen';
 import CalibrationScreen from './modules/physiological/screens/CalibrationScreen';
 import EMAScreen from './modules/physiological/screens/EMAScreen';
 import PSS4Screen from './modules/physiological/screens/PSS4Screen';
+import PhenotypingEmaScreen from './modules/phenotyping/screens/PhenotypingEmaScreen';
+import PhenotypingSignalDetailScreen from './modules/phenotyping/screens/PhenotypingSignalDetailScreen';
+import PhenotypingSignalHistoryScreen from './modules/phenotyping/screens/PhenotypingSignalHistoryScreen';
+import PhenotypingAnalysisScreen from './modules/phenotyping/screens/PhenotypingAnalysisScreen';
+import PhenotypingAlertDetailScreen from './modules/phenotyping/screens/PhenotypingAlertDetailScreen';
+import PhenotypingOnboardingScreen from './modules/phenotyping/screens/PhenotypingOnboardingScreen';
 import RelaxationGuideModule from './modules/relaxation_guide';
 import { AppContext } from './modules/physiological/screens/AppState';
 import { ThemeProvider, useTheme } from './modules/physiological/config/ThemeContext';
@@ -29,16 +35,23 @@ const linking = {
         screens: {
           Home:     'home',
           History:  'history',
-          Ring:     'ring',
-          EEG:      'eeg-tab',
-          Fusion:   'fusion-tab',
-          Profile:  'profile',
+          Ring:         'ring',
+          EEG:          'eeg-tab',
+          Fusion:       'fusion-tab',
+          Phenotyping:  'phenotyping-tab',
+          Profile:      'profile',
         },
       },
-      Calibration: 'calibration',
-      EmaDetail:   'ema',
-      PSS4:        'pss4',
-      HrvGsr:      'hrv-gsr',
+      Calibration:            'calibration',
+      EmaDetail:              'ema',
+      PSS4:                   'pss4',
+      HrvGsr:                 'hrv-gsr',
+      PhenotypingEma:         'phenotyping-ema',
+      PhenotypingSignalDetail:  'phenotyping-signal',
+      PhenotypingSignalHistory: 'phenotyping-signal-history',
+      PhenotypingAnalysis:      'phenotyping-analysis',
+      PhenotypingAlertDetail:   'phenotyping-alert',
+      PhenotypingOnboarding:    'phenotyping-onboarding',
       Relaxation:  'relaxation',
     },
   },
@@ -53,19 +66,23 @@ function RootNavigator() {
   }
 
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }} initialRouteName={user ? 'Relaxation' : 'Login'}>
+    <Stack.Navigator screenOptions={{ headerShown: false }} initialRouteName={user ? 'Physiological' : 'Login'}>
       {user ? (
         <>
-          {/* Relaxation Guide is the primary post-login experience -- see
-              StressApp/modules/relaxation_guide/index.js. Physiological/EEG/
-              HRV-GSR/Fusion below are supporting sensor screens, reachable
-              but no longer the landing destination. */}
+          {/* Landing back on the Physiological tab bar (Home/Ring/EEG/
+              Fusion/Phenotyping/History/Profile) for now -- Relaxation
+              Guide's own one-time onboarding flow (Privacy/Onboarding
+              Questions/Permissions/Baseline Calibration, see
+              StressApp/modules/relaxation_guide/src/context/AppContext.js)
+              was popping up immediately after login, ahead of the app's
+              actual tabs. Relaxation stays reachable via the link on
+              ProfileScreen.js, just isn't the landing screen anymore. */}
+          <Stack.Screen name="Physiological" component={PhysiologicalNavigator} />
           <Stack.Screen
             name="Relaxation"
             component={RelaxationGuideModule}
             options={{ headerShown: false }}
           />
-          <Stack.Screen name="Physiological" component={PhysiologicalNavigator} />
           <Stack.Screen
             name="Calibration"
             component={CalibrationScreen}
@@ -85,6 +102,36 @@ function RootNavigator() {
             name="HrvGsr"
             component={HrvGsrSessionScreen}
             options={{ headerShown: true, title: 'HRV/GSR' }}
+          />
+          <Stack.Screen
+            name="PhenotypingEma"
+            component={PhenotypingEmaScreen}
+            options={{ headerShown: true, title: 'Stress Check-In' }}
+          />
+          <Stack.Screen
+            name="PhenotypingSignalDetail"
+            component={PhenotypingSignalDetailScreen}
+            options={{ headerShown: true, title: 'Signal Detail' }}
+          />
+          <Stack.Screen
+            name="PhenotypingSignalHistory"
+            component={PhenotypingSignalHistoryScreen}
+            options={{ headerShown: true, title: '7-Day History' }}
+          />
+          <Stack.Screen
+            name="PhenotypingAnalysis"
+            component={PhenotypingAnalysisScreen}
+            options={{ headerShown: true, title: 'Analysis & Patterns' }}
+          />
+          <Stack.Screen
+            name="PhenotypingAlertDetail"
+            component={PhenotypingAlertDetailScreen}
+            options={{ headerShown: true, title: 'Alert Detail' }}
+          />
+          <Stack.Screen
+            name="PhenotypingOnboarding"
+            component={PhenotypingOnboardingScreen}
+            options={{ headerShown: true, title: 'Set Up Tracking' }}
           />
         </>
       ) : (

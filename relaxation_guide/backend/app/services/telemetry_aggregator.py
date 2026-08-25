@@ -98,7 +98,14 @@ class TelemetryAggregator:
         """
         Parses single fused_stress_label and stress_probability inputs from teammate fusion engine output.
         """
-        clean_label = fused_stress_label.lower().strip() if fused_stress_label else "normal"
+        raw_label = fused_stress_label.lower().strip() if fused_stress_label else "normal"
+        if raw_label in ["stress", "high", "acute", "high_stress"]:
+            clean_label = "stress"
+        elif raw_label in ["pre-stress", "pre_stress", "medium", "moderate"]:
+            clean_label = "pre-stress"
+        else:
+            clean_label = "normal"
+
         clean_prob = max(0.0, min(1.0, float(stress_probability)))
         
         # Check baseline existence in Firebase if is_calibrated not explicitly passed

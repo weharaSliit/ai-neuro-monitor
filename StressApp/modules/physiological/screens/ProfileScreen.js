@@ -8,6 +8,8 @@ import { useTheme } from '../config/ThemeContext';
 import { useAuth } from '../../../context/AuthContext';
 import api from '../api/client';
 import EmaSummaryCard from './EmaSummaryCard';
+import { getCalibrationStatus as getPhenotypingCalibStatus } from '../../phenotyping/utils/calibrationStatus';
+import { isPhenotypingOnboarded } from '../../phenotyping/screens/PhenotypingOnboardingScreen';
 
 export default function ProfileScreen({ navigation }) {
   const { theme, COLORS } = useTheme();
@@ -17,6 +19,8 @@ export default function ProfileScreen({ navigation }) {
   const [baseline,     setBaseline]     = useState(null);
   const [sessionCount, setSessionCount] = useState(0);
   const [loading,       setLoading]     = useState(true);
+  const [phenoStatus,   setPhenoStatus] = useState(null);
+  const [phenoOnboarded, setPhenoOnboarded] = useState(true);
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
   const bg     = theme.bg;
@@ -44,6 +48,12 @@ export default function ProfileScreen({ navigation }) {
 
   useEffect(() => { loadProfile(); }, [userId]);
   useFocusEffect(useCallback(() => { loadProfile(); }, [userId]));
+
+  useFocusEffect(useCallback(() => {
+    if (!userId) return;
+    getPhenotypingCalibStatus(userId).then(setPhenoStatus);
+    isPhenotypingOnboarded(userId).then(setPhenoOnboarded);
+  }, [userId]));
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
@@ -115,6 +125,27 @@ export default function ProfileScreen({ navigation }) {
           </View>
           <Text style={[styles.cardSub, { color: muted }]}>
             Back to your personalized stress relief dashboard.
+          </Text>
+        </TouchableOpacity>
+
+        {/* Phenotyping (keystroke/app-usage tracking) -- folded in here
+            rather than a second competing Profile screen, per the "Bring
+            Phenotyping Into StressApp" plan. */}
+        <TouchableOpacity
+          activeOpacity={0.8}
+          style={[styles.card, { backgroundColor: card, borderColor: border }]}
+          onPress={() => navigation.navigate(phenoOnboarded ? 'PhenotypingAnalysis' : 'PhenotypingOnboarding')}
+        >
+          <View style={styles.cardHeaderRow}>
+            <Text style={[styles.cardTitle, { color: text }]}>📱 Behavioral Tracking</Text>
+            <Text style={[styles.chevron, { color: muted }]}>→</Text>
+          </View>
+          <Text style={[styles.cardSub, { color: muted }]}>
+            {!phenoOnboarded
+              ? 'Not set up yet — tap to answer a few questions and grant permissions.'
+              : phenoStatus?.phase === 'calibration'
+                ? `Calibrating: ${phenoStatus.displayDays}`
+                : 'Baseline calibrated — tap for pattern analysis.'}
           </Text>
         </TouchableOpacity>
 

@@ -30,12 +30,12 @@ def ingest_fusion_engine_telemetry(req: FusionEngineIngestRequest):
 
 @router.get("/telemetry/fusion-output", response_model=ProcessedSignalResult)
 @router.get("/telemetry/local-files", response_model=ProcessedSignalResult)
-def read_and_process_fusion_output(user_id: str = "user_default"):
+def read_and_process_fusion_output(user_id: str = "user_default", session_id: Optional[str] = None):
     """
     GET /telemetry/fusion-output (alias GET /telemetry/local-files)
-    Reads teammate multimodal fusion engine output file, extracts single fused_stress_label and stress_probability, and processes MVH.
+    Reads teammate multimodal fusion engine output from fusion_en_sessions/{user_id}/{session_id} in Firebase, extracts single fused_stress_label and stress_probability, and processes MVH.
     """
-    fusion_data = telemetry_aggregator.read_fusion_engine_output(user_id)
+    fusion_data = telemetry_aggregator.read_fusion_engine_output(user_id, session_id)
     fused_lbl = fusion_data.get("fused_stress_label", fusion_data.get("label", "normal"))
     stress_prob = float(fusion_data.get("stress_probability", fusion_data.get("probability", 0.50)))
 
@@ -48,19 +48,19 @@ def read_and_process_fusion_output(user_id: str = "user_default"):
     return missing_value_handler.process_telemetry(telemetry_payload)
 
 @router.get("/telemetry/pipeline")
-def get_fusion_pipeline(user_id: str = "user_default"):
+def get_fusion_pipeline(user_id: str = "user_default", session_id: Optional[str] = None):
     """
     GET /telemetry/pipeline
     Full real-time pipeline snapshot for the frontend's Live Pipeline tab: the raw
     per-modality probability_vector (eeg/hrv_gsr/behav/fused) read straight out of
-    fusion_en_sessions in Firebase, alongside the same MVH + Safety Override
+    fusion_en_sessions/{user_id}/{session_id} in Firebase, alongside the same MVH + Safety Override
     processed result served by /telemetry/fusion-output.
     """
-    raw_prediction = firebase_service.get_latest_prediction(user_id)
+    raw_prediction = firebase_service.get_latest_prediction(user_id, session_id)
     probability_vector = raw_prediction.get("probability_vector") or {}
     raw_stress_label = raw_prediction.get("stress_label")
 
-    fusion_data = telemetry_aggregator.read_fusion_engine_output(user_id)
+    fusion_data = telemetry_aggregator.read_fusion_engine_output(user_id, session_id)
     fused_lbl = fusion_data.get("fused_stress_label", "normal")
     stress_prob = float(fusion_data.get("stress_probability", 0.50))
 

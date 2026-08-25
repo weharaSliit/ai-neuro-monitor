@@ -2,7 +2,7 @@ import numpy as np
 import joblib
 import os
 from collections import deque
-from ema_service import calculate_z_score
+from backend.phenotyping_behavior.ema_service import calculate_z_score
 
 # --- PATH SETUP ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
