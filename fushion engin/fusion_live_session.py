@@ -60,6 +60,15 @@ def load_session_windows(session_ref) -> dict:
     return {k: v for k, v in data.items() if str(k).isdigit() and isinstance(v, dict)}
 
 
+def _modality_input(window: dict, m: str) -> dict:
+    return {
+        "prob": window.get(f"prob_{m}"),
+        "confidence": window.get(f"conf_{m}"),
+        "signal_quality": window.get(f"signal_quality_{m}"),
+        "model_acc": window.get(f"model_acc_{m}"),
+    }
+
+
 def poll_once(session_ref, session_meta_ref) -> dict:
     windows = load_session_windows(session_ref)
     if not windows:
@@ -72,12 +81,22 @@ def poll_once(session_ref, session_meta_ref) -> dict:
     ]
     fusable_keys.sort(key=lambda k: int(k))
     fused_by_key = {}
-    if fusable_keys:
-        fused_rows = fusion_engin.compute_fusion_for_records([windows[k] for k in fusable_keys])
-        for k, fused in zip(fusable_keys, fused_rows):
-            fused_by_key[k] = fused
-            windows[k]["fused_probability"] = fused["fused_probability"]
-            windows[k]["fused_label"] = fused["fused_label"]
+    for k in fusable_keys:
+        w = windows[k]
+        # compute_realtime_multimodal_fusion(): reliability-weighted fusion
+        # with each modality's signal_quality correctly normalized to 0-1
+        # before weighting (signal_quality_eeg is 0-100, the other two are
+        # already 0-1 -- see that function's docstring for the scale-
+        # mismatch bug this replaces compute_fusion_for_records() to fix).
+        fused = fusion_engin.compute_realtime_multimodal_fusion({
+            "eeg": _modality_input(w, "eeg"),
+            "hrv_gsr": _modality_input(w, "hrv_gsr"),
+            "behav": _modality_input(w, "behav"),
+        })
+        fused_by_key[k] = fused
+        if fused["fused_stress_probability"] is not None:
+            windows[k]["fused_probability"] = fused["fused_stress_probability"]
+            windows[k]["fused_label"] = int(fused["fused_stress_probability"] >= 0.5)
 
     ordered_keys = sorted(windows.keys(), key=lambda k: int(k))
     fused_history = [windows[k].get("fused_probability") for k in ordered_keys]
@@ -91,23 +110,32 @@ def poll_once(session_ref, session_meta_ref) -> dict:
     for i, k in enumerate(ordered_keys):
         if windows[k].get("fused_probability") is None:
             continue
+        # Trend stays _trend_direction()'s existing increasing/decreasing/
+        # stable vocabulary (StressApp/modules/fusion/config/config.js's
+        # FUSION_TREND_LABELS is keyed on exactly this) -- NOT
+        # recomputed by a second, differently-vocabularied trend calc.
         trend = _trend_direction(fused_history[: i + 1])
         fused = fused_by_key[k]
+        weights = fused["modality_weights"]
+        # fusion_en/{user}/{session}/{window} keeps its EXISTING field
+        # names (StressApp/modules/fusion/screens/FusionSessionScreen.js
+        # reads this path directly) -- only the VALUES now come from the
+        # corrected weighting, not a new schema here.
         write = {
             "fused_probability": windows[k]["fused_probability"],
             "fused_label": windows[k]["fused_label"],
             "stress_trend": trend,
-            "eeg_weight": fused.get("eeg_reliability_weight_norm"),
-            "hrv_gsr_weight": fused.get("hrv_gsr_reliability_weight_norm"),
-            "behav_weight": fused.get("behav_reliability_weight_norm"),
+            "eeg_weight": weights.get("eeg"),
+            "hrv_gsr_weight": weights.get("hrv_gsr"),
+            "behav_weight": weights.get("behav"),
         }
 
-        if not fused.get("eeg_missing"):
-            write["prob_eeg"] = fused.get("prob_eeg")
-        if not fused.get("hrv_gsr_missing"):
-            write["prob_hrv_gsr"] = fused.get("prob_hrv_gsr")
-        if not fused.get("behav_missing"):
-            write["prob_behav"] = fused.get("prob_behav")
+        if "eeg" in fused["active_modalities"]:
+            write["prob_eeg"] = windows[k].get("prob_eeg")
+        if "hrv_gsr" in fused["active_modalities"]:
+            write["prob_hrv_gsr"] = windows[k].get("prob_hrv_gsr")
+        if "behav" in fused["active_modalities"]:
+            write["prob_behav"] = windows[k].get("prob_behav")
 
         write["stress_deviation"] = (
             windows[k]["fused_probability"] - baseline_mean
@@ -116,17 +144,23 @@ def poll_once(session_ref, session_meta_ref) -> dict:
         )
         session_ref.child(k).update(write)
 
-        # Per-window summary mirrored into fusion_en_sessions/{user}/{session}
-        # -- probability_vector carries every modality's raw contribution
-        # (None where that modality didn't report this window) alongside the
-        # fused value, so a session-history reader doesn't need to cross
-        # back into fusion_en/ to see per-modality detail.
+        # Per-window summary mirrored into fusion_en_sessions/{user}/{session}.
+        # fused_stress_label/fused_stress_probability are the PRIMARY keys
+        # relaxation_guide/backend/app/services/firebase_service.py's
+        # get_latest_prediction() already looks for first (see its own
+        # docstring: "Reads inputs: fused_stress_label ('low_stress'/
+        # 'high_stress') and fused_stress_probability") -- stress_label/
+        # probability_vector are kept alongside, unchanged, as its
+        # documented fallback for any other reader still on the old keys.
+        stress_label = "high_stress" if windows[k]["fused_label"] == 1 else "low_stress"
         session_meta_ref.child(k).update({
-            "stress_label": "high_stress" if windows[k]["fused_label"] == 1 else "low_stress",
+            "stress_label": stress_label,
+            "fused_stress_label": stress_label,
+            "fused_stress_probability": windows[k]["fused_probability"],
             "probability_vector": {
-                "eeg": fused.get("prob_eeg"),
-                "hrv_gsr": fused.get("prob_hrv_gsr"),
-                "behav": fused.get("prob_behav"),
+                "eeg": windows[k].get("prob_eeg"),
+                "hrv_gsr": windows[k].get("prob_hrv_gsr"),
+                "behav": windows[k].get("prob_behav"),
                 "fused": windows[k]["fused_probability"],
             },
         })
@@ -244,7 +278,13 @@ def main():
         default=None,
         help="Required alongside --session-id for a manual pin -- ignored otherwise.",
     )
-    ap.add_argument("--poll-interval-sec", type=float, default=5.0)
+    ap.add_argument("--poll-interval-sec", type=float, default=3.0,
+                     help="How often the live session's fusion_en window is recomputed and "
+                          "rewritten -- kept within a 2-5s real-time range regardless of "
+                          "FUSION_WINDOW_BUCKET_SEC (backend/common/fusion.py, 60s), which "
+                          "aligns modalities' differing write cadences (EEG reports once per "
+                          "25s block) onto a shared window and is NOT this value -- shrinking "
+                          "the bucket itself would make EEG miss most windows outright.")
     ap.add_argument(
         "--firebase-cred",
         default=os.environ.get("FIREBASE_CREDENTIALS"),

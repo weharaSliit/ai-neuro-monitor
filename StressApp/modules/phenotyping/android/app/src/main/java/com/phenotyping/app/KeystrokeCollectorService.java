@@ -31,7 +31,12 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 public class KeystrokeCollectorService extends AccessibilityService {
 
@@ -41,15 +46,15 @@ public class KeystrokeCollectorService extends AccessibilityService {
     // CONFIG — Backend URL
     //   HOSTED (Render.com): use the URL below for production.
     //   LOCAL (USB tunnel):  comment out HOSTED line, uncomment LOCAL line,
-    //                        then run: adb reverse tcp:5002 tcp:5002
+    //                        then run: adb reverse tcp:5001 tcp:5001
     // -----------------------------------------------------------------------
 
     // HOSTED — Render.com deployment
     private static final String FLASK_BASE_URL   = "https://my-phenotyping-backend-2.onrender.com";
 
     // LOCAL — USB tunnel (comment out HOSTED above and uncomment this for local dev)
-    // private static final String FLASK_BASE_URL = "http://127.0.0.1:5002";
-    // private static final String FLASK_BASE_URL = "http://192.168.1.6:5002";
+    // private static final String FLASK_BASE_URL = "http://127.0.0.1:5001";
+    // private static final String FLASK_BASE_URL = "http://192.168.1.6:5001";
 
     private static final String PREDICT_ENDPOINT = FLASK_BASE_URL + "/behavior/predict";
 
@@ -57,8 +62,14 @@ public class KeystrokeCollectorService extends AccessibilityService {
     private static final String FIREBASE_BASE_URL =
         "https://stress-monitor-c39ee-default-rtdb.asia-southeast1.firebasedatabase.app/phenotyping/metrics/";
 
-    // Upload window — 15 s for demo/testing (change back to 5 * 60 * 1000L for production)
-    private static final long UPLOAD_INTERVAL_MS = 15 * 1000L;
+    // Upload window — production value. Was left at 15s (demo/testing) —
+    // that also meant ACTIVITY_POLL_MS below (derived from this constant)
+    // requested activity-recognition updates every 15s, which Android's OS
+    // batching/throttling essentially never actually honors at that
+    // granularity, so motion classifications could be stale relative to the
+    // window being flushed. 5 minutes matches what a real behavioral window
+    // is meant to represent and gives the OS a realistic interval to honor.
+    private static final long UPLOAD_INTERVAL_MS = 5 * 60 * 1000L;
 
     // -----------------------------------------------------------------------
     // T7-A: Activity Recognition — noise gate
@@ -153,7 +164,79 @@ public class KeystrokeCollectorService extends AccessibilityService {
     private String lastPackageName  = "";
     private long   sessionStartTime = System.currentTimeMillis();
 
+    // See getUserId() and flushWindow(): counts consecutive flushes with no
+    // real user_id available yet, so buffered data can be dropped instead of
+    // growing unboundedly if the identity bridge is ever permanently broken.
+    private int consecutiveIdentityFailures = 0;
+    private static final int MAX_IDENTITY_FAILURES_BEFORE_DROP = 20;
+
     private final Handler handler = new Handler(Looper.getMainLooper());
+
+    // -----------------------------------------------------------------------
+    // App-Category Quality Gate — ported from
+    // phenotyping/research_v5_continual_learning/src/s3_quality_gate_fusion.py
+    // (QualityGateFusion), which existed only as a standalone Python
+    // prototype and was never wired into the Android sensing layer. The
+    // Python prototype used a strict ALLOWLIST (only productivity/
+    // communication/email/system apps count as valid). Ported here as a
+    // DENYLIST instead: most real apps never declare an Android appCategory
+    // (ApplicationInfo.CATEGORY_UNDEFINED is extremely common), so a strict
+    // allowlist would reject the vast majority of real-world typing and
+    // starve calibration of data. Instead we positively reject only the
+    // categories/packages we can confidently call "distraction" contexts
+    // (games, social, video, audio/music) and fail OPEN for everything else,
+    // including unresolvable lookups.
+    // -----------------------------------------------------------------------
+    private volatile boolean appCategoryValid = true;
+    private final Map<String, Boolean> categoryCache = new HashMap<>();
+
+    private static final Set<String> KNOWN_DISTRACTION_PACKAGES = new HashSet<>(Arrays.asList(
+        "com.instagram.android",
+        "com.zhiliaoapp.musically",     // TikTok
+        "com.google.android.youtube",
+        "com.facebook.katana",
+        "com.twitter.android",
+        "com.snapchat.android",
+        "com.netflix.mediaclient",
+        "com.reddit.frontpage"
+    ));
+
+    /**
+     * Returns false only for foreground apps confidently identified as a
+     * "physical noise" distraction context (games/social/video/audio),
+     * mirroring QualityGateFusion's intent without its impractical strict
+     * allowlist. Results are cached per package name to avoid a
+     * PackageManager lookup on every app-switch event.
+     */
+    private boolean isAppCategoryValid(String packageName) {
+        if (packageName == null) return true;
+        Boolean cached = categoryCache.get(packageName);
+        if (cached != null) return cached;
+
+        boolean valid = true;
+        if (KNOWN_DISTRACTION_PACKAGES.contains(packageName)) {
+            valid = false;
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                android.content.pm.ApplicationInfo info =
+                    getPackageManager().getApplicationInfo(packageName, 0);
+                int cat = info.category;
+                if (cat == android.content.pm.ApplicationInfo.CATEGORY_GAME
+                    || cat == android.content.pm.ApplicationInfo.CATEGORY_SOCIAL
+                    || cat == android.content.pm.ApplicationInfo.CATEGORY_VIDEO
+                    || cat == android.content.pm.ApplicationInfo.CATEGORY_AUDIO) {
+                    valid = false;
+                }
+            } catch (Exception e) {
+                // Unresolvable (uninstalled since, restricted, etc.) — fail
+                // open rather than silently discarding real behavioral data.
+                valid = true;
+            }
+        }
+
+        categoryCache.put(packageName, valid);
+        return valid;
+    }
 
     // -----------------------------------------------------------------------
     // Periodic upload runnable
@@ -177,9 +260,9 @@ public class KeystrokeCollectorService extends AccessibilityService {
             String action = intent.getAction();
             if (Intent.ACTION_USER_PRESENT.equals(action) || Intent.ACTION_SCREEN_ON.equals(action)) {
                 isScreenOn = true;
-                if (Intent.ACTION_USER_PRESENT.equals(action)) {
+                if (Intent.ACTION_SCREEN_ON.equals(action)) {
                     unlockCount++;
-                    Log.d(TAG, "🔓 Screen unlock #" + unlockCount);
+                    Log.d(TAG, "🔓 Screen on #" + unlockCount);
                 }
             } else if (Intent.ACTION_SCREEN_OFF.equals(action)) {
                 isScreenOn = false;
@@ -211,11 +294,16 @@ public class KeystrokeCollectorService extends AccessibilityService {
         startForegroundService();
 
         // Register screen-unlock and screen-lock receiver
+        // Android 13+ (TIRAMISU) requires RECEIVER_NOT_EXPORTED for system broadcasts
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_USER_PRESENT);
         filter.addAction(Intent.ACTION_SCREEN_ON);
         filter.addAction(Intent.ACTION_SCREEN_OFF);
-        registerReceiver(unlockReceiver, filter);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(unlockReceiver, filter, RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(unlockReceiver, filter);
+        }
 
         // T7-A: Register activity recognition receiver & start updates
         startActivityRecognition();
@@ -389,30 +477,70 @@ public class KeystrokeCollectorService extends AccessibilityService {
             if (pkgName != null && !pkgName.toString().equals(lastPackageName)) {
                 appSwitchCount++;
                 lastPackageName = pkgName.toString();
-                Log.d(TAG, "🔀 App switch #" + appSwitchCount + " → " + lastPackageName);
+                appCategoryValid = isAppCategoryValid(lastPackageName);
+                Log.d(TAG, "🔀 App switch #" + appSwitchCount + " → " + lastPackageName
+                    + " (category_valid=" + appCategoryValid + ")");
             }
         }
     }
 
+    // FIX: PREVIOUSLY defaulted to the literal string "anonymous_user" when
+    // the JS↔Android identity bridge (Capacitor Preferences) hadn't been
+    // written yet — e.g. onboarding not finished, or the async
+    // Preferences.set() call on the JS side silently failed. That meant
+    // multiple different real people's behavioral data could all land under
+    // one shared Firebase key. Returns null now instead, so the caller can
+    // hold the data rather than misattribute it (see flushWindow()).
     private String getUserId() {
         SharedPreferences prefs = getSharedPreferences("CapacitorStorage", Context.MODE_PRIVATE);
-        return prefs.getString("user_id", "anonymous_user");
+        return prefs.getString("user_id", null);
     }
 
     // -----------------------------------------------------------------------
     // Flush: compute stats → POST to Flask → secondary write to Firebase UI
     // -----------------------------------------------------------------------
     private void flushWindow() {
+        // Don't skip upload when screen is off — we need to flush accumulated
+        // unlock counts and other metrics. The screen state is just context.
         if (!isScreenOn) {
-            Log.d(TAG, "🔒 Screen locked. Skipping upload.");
+            Log.d(TAG, "🔒 Screen currently locked — flushing accumulated metrics anyway.");
+        }
+
+        boolean hasInteraction = flightTimes.size() >= 3 || !scrollSpeeds.isEmpty() || appSwitchCount > 0 || unlockCount > 0;
+        if (!hasInteraction) {
+            Log.d(TAG, "⏭️ Phone idle (0 typing, 0 scrolling, 0 app switches, 0 unlocks). Skipping upload.");
             return;
         }
 
-        boolean hasInteraction = flightTimes.size() >= 3 || !scrollSpeeds.isEmpty() || appSwitchCount > 0;
-        if (!hasInteraction) {
-            Log.d(TAG, "⏭️ Phone idle (0 typing, 0 scrolling, 0 app switches). Skipping upload.");
+        // FIX: never upload behavioral data under a shared fake identity.
+        // If the real user_id isn't available yet (bridge not written yet,
+        // or onboarding not finished), hold the buffered data — do NOT clear
+        // it — and retry on the next flush cycle instead of misattributing
+        // it to "anonymous_user". If this persists for
+        // MAX_IDENTITY_FAILURES_BEFORE_DROP consecutive attempts (bridge
+        // looks permanently broken), drop the buffer to avoid unbounded
+        // memory growth rather than keep it forever.
+        String currentUserIdCheck = getUserId();
+        if (currentUserIdCheck == null || currentUserIdCheck.isEmpty()) {
+            consecutiveIdentityFailures++;
+            Log.w(TAG, "⚠️ No real user_id yet — holding " + flightTimes.size() +
+                " buffered samples instead of uploading under a shared fallback " +
+                "identity. Attempt " + consecutiveIdentityFailures + "/" +
+                MAX_IDENTITY_FAILURES_BEFORE_DROP);
+            if (consecutiveIdentityFailures >= MAX_IDENTITY_FAILURES_BEFORE_DROP) {
+                Log.e(TAG, "❌ user_id still unavailable after " +
+                    MAX_IDENTITY_FAILURES_BEFORE_DROP + " attempts — the app↔service " +
+                    "identity bridge looks permanently broken. Dropping buffered data.");
+                flightTimes.clear();
+                dwellTimes.clear();
+                scrollSpeeds.clear();
+                appSwitchCount = 0;
+                unlockCount = 0;
+                consecutiveIdentityFailures = 0;
+            }
             return;
         }
+        consecutiveIdentityFailures = 0;
 
         // Snapshot and reset buffers immediately so we don't block new events
         final List<Long> flightSnapshot    = new ArrayList<>(flightTimes);
@@ -421,10 +549,15 @@ public class KeystrokeCollectorService extends AccessibilityService {
         final int        unlockSnapshot    = unlockCount;
         final int        appSwitchSnapshot = appSwitchCount;
         final long       elapsed           = Math.max(1, (System.currentTimeMillis() - sessionStartTime) / 60000L);
-        final String     currentUserId     = getUserId();
+        final String     currentUserId     = currentUserIdCheck;
 
         // T7-A: Snapshot the current activity validity flag at upload time
-        final boolean windowDataValid = this.dataValid;
+        // Combined with the app-category gate: a window is only "valid" for
+        // baseline purposes if the user was BOTH physically stationary AND
+        // typing in a non-distraction app (see isAppCategoryValid() above).
+        final boolean windowMotionValid   = this.dataValid;
+        final boolean windowCategoryValid = this.appCategoryValid;
+        final boolean windowDataValid     = windowMotionValid && windowCategoryValid;
 
         flightTimes.clear();
         dwellTimes.clear();    // Technique 2: clear dwell buffer for next window
@@ -434,7 +567,8 @@ public class KeystrokeCollectorService extends AccessibilityService {
 
         // Log the noise-gate decision so it's visible in Logcat
         if (!windowDataValid) {
-            Log.d(TAG, "🚶 data_valid=false — window flagged as noisy (motion detected). " +
+            String reason = !windowMotionValid ? "motion detected" : "distraction app in foreground";
+            Log.d(TAG, "🚶 data_valid=false — window flagged as noisy (" + reason + "). " +
                 "Sending to Flask but EMA baseline will be frozen.");
         }
 
