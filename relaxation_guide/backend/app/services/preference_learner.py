@@ -9,6 +9,7 @@ import math
 from typing import Dict, List, Any, Optional
 from app.config import DECAY_FACTOR, DECAY_HALF_LIFE_DAYS
 from app.database.db_manager import db_manager
+from app.services import firebase_service
 
 class PreferenceLearner:
     def __init__(self):
@@ -18,18 +19,36 @@ class PreferenceLearner:
         self._preferred_sub_options: Dict[str, Dict[str, str]] = {}
 
     def _ensure_user_loaded(self, user_id: str):
-        """Loads user ratings from SQLite if not currently in memory."""
+        """Loads user ratings from Firebase/SQLite if not currently in memory."""
         if user_id not in self._user_ratings:
             self._user_ratings[user_id] = {}
             self._preferred_sub_options[user_id] = {}
+
+            # Load from Firebase first, then SQLite
+            fb_ratings = firebase_service.get_ratings(user_id)
+            if fb_ratings:
+                for r in fb_ratings:
+                    tech_id = r.get("technique_id")
+                    sub_id = r.get("sub_option_id", "")
+                    stars = r.get("stars", 5)
+                    ts = r.get("timestamp", time.time())
+                    if tech_id:
+                        if tech_id not in self._user_ratings[user_id]:
+                            self._user_ratings[user_id][tech_id] = []
+                        self._user_ratings[user_id][tech_id].append({
+                            "stars": stars,
+                            "sub_option_id": sub_id,
+                            "timestamp": ts
+                        })
+                        self._preferred_sub_options[user_id][tech_id] = sub_id
 
             saved_ratings = db_manager.load_user_ratings(user_id)
             for r in saved_ratings:
                 tech_id = r["technique_id"]
                 if tech_id not in self._user_ratings[user_id]:
                     self._user_ratings[user_id][tech_id] = []
-                self._user_ratings[user_id][tech_id].append(r)
-                self._preferred_sub_options[user_id][tech_id] = r["sub_option_id"]
+                    self._user_ratings[user_id][tech_id].append(r)
+                    self._preferred_sub_options[user_id][tech_id] = r["sub_option_id"]
 
     def record_rating(
         self,
@@ -55,6 +74,12 @@ class PreferenceLearner:
 
         # Store sub-option choice as preferred default for future game selection
         self._preferred_sub_options[user_id][technique_id] = sub_option_id
+
+        # Persist rating to Firebase
+        try:
+            firebase_service.save_rating(user_id, technique_id, sub_option_id, rating_stars, now)
+        except Exception as e:
+            print(f"[Firebase Warning] Could not save rating to Firebase: {e}")
 
         return self.get_preference_score(user_id, technique_id)
 

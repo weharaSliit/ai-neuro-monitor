@@ -175,7 +175,7 @@ export function AuthProvider({ children }) {
     try {
       const res = await api.post('/login', { user_id: userId, password });
       const { token: newToken, user_id, name } = res.data;
-      await persistSession(newToken, { userId: user_id, name });
+      await persistSession(newToken, { userId: user_id, name, isNewUser: false });
       return { success: true };
     } catch (e) {
       return { success: false, error: e.response?.data?.error || 'Login failed' };
@@ -186,7 +186,7 @@ export function AuthProvider({ children }) {
     try {
       const res = await api.post('/register', { user_id: userId, password, name });
       const { token: newToken, user_id, name: returnedName } = res.data;
-      await persistSession(newToken, { userId: user_id, name: returnedName });
+      await persistSession(newToken, { userId: user_id, name: returnedName, isNewUser: true });
       return { success: true };
     } catch (e) {
       return { success: false, error: e.response?.data?.error || 'Registration failed' };

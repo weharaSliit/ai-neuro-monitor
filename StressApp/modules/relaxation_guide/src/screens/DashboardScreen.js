@@ -264,12 +264,11 @@ export const DashboardScreen = () => {
     setLoading(true);
     try {
       setPreInterventionLabel(stressState);
-      const telemetry = await apiService.getProcessedTelemetry(userId, 0.0);
       const recommendation = await apiService.getIntervention(userId, {
         user_id: userId,
         timestamp: Date.now() / 1000,
         fused_stress_label: stressState,
-        stress_probability: stressState === 'stress' ? 0.88 : (stressState === 'pre-stress' ? 0.55 : 0.15),
+        stress_probability: stressProbability,
         seconds_since_last_packet: 0.0
       });
       setCurrentRecommendation(recommendation);

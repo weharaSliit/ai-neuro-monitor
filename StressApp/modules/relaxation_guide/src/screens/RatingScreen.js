@@ -83,7 +83,8 @@ export const RatingScreen = () => {
       await apiService.submitRating(userId, techId, subId, rating);
       const postState = preInterventionLabel === 'stress' ? 'normal' : 'normal';
       setPostInterventionLabel(postState);
-      const valRes = await apiService.validateIntervention(userId, techId, preInterventionLabel, postState);
+      const clusterId = currentRecommendation?.context_cluster_id ?? 0;
+      const valRes = await apiService.validateIntervention(userId, techId, preInterventionLabel, postState, clusterId);
       setLastValidationResult(valRes);
       showAlert({
         title: `${rating === 5 ? '⭐ Outstanding!' : '⭐ Feedback Received!'}`,
