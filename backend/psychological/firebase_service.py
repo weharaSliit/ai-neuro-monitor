@@ -1,5 +1,6 @@
 import json
 import os
+import time
 
 from backend.common.firebase_config import FIREBASE_DB_URL, FUSION_EN_ROOT, RTDB_NAMESPACES
 from backend.psychological.realtime.firebase_sync import (
@@ -8,6 +9,17 @@ from backend.psychological.realtime.firebase_sync import (
 )
 
 RTDB_NAMESPACE = RTDB_NAMESPACES["psychological"]  # "psychological"
+
+# How long a stored per-user calibration profile stays eligible for
+# skip-ahead reuse (see save_user_calibration_profile()/
+# load_user_calibration_profile()) before a fresh 3-block calibration is
+# required again, same as a brand-new user. EEG electrode placement/skin
+# contact varies enough session to session that trusting an old shift
+# indefinitely isn't safe; 7 days mirrors this project's own precedent for
+# a personal-baseline validity window (backend/phenotyping_behavior's
+# 7-day calibration protocol) -- there is no measured decay curve for
+# calibrated_p drift over time (yet) to derive a different number from.
+CALIBRATION_PROFILE_MAX_AGE_DAYS = 7.0
 
 
 def resolve_credential():
@@ -143,3 +155,56 @@ class EegFirebaseSession:
         if not self.enabled:
             return
         self._calibration_result_rtdb.set(record)
+
+
+def _calibration_profile_ref(user_id: str) -> FirebaseSync | None:
+    """{RTDB_NAMESPACE}/{user_id}/calibration_profile -- keyed by user_id
+    directly (NOT nested under a session_id like EegFirebaseSession's four
+    stores), so this is the one thing about a user's calibration that
+    actually survives across sessions/logins. Returns None (caller treats
+    this the same as 'nothing stored yet') if Firebase isn't configured,
+    same fallback EegFirebaseSession uses."""
+    cred = resolve_credential()
+    if cred is None:
+        return None
+    return FirebaseSync(cred, FIREBASE_DB_URL, session_id=user_id, root_path=RTDB_NAMESPACE,
+                         extra_path="calibration_profile")
+
+
+def save_user_calibration_profile(user_id: str, baseline_shift: float, thresholds_personalized: bool) -> None:
+    """Persists a successful, FRESH calibration's outcome for future-session
+    reuse (see load_user_calibration_profile()). Only meant to be called
+    when thresholds_personalized is True -- an unpersonalized (0.0 shift)
+    result shouldn't overwrite a real prior profile, or start a 7-day
+    'confirmed no correction needed' clock off of what's often just one
+    noisy 3-block session (see compute_baseline_shift()'s SEM check)."""
+    ref = _calibration_profile_ref(user_id)
+    if ref is None:
+        return
+    ref.set({
+        'baseline_shift': baseline_shift,
+        'thresholds_personalized': thresholds_personalized,
+        'calibrated_at': time.time(),
+    })
+
+
+def load_user_calibration_profile(user_id: str,
+                                   max_age_days: float = CALIBRATION_PROFILE_MAX_AGE_DAYS) -> dict | None:
+    """Returns this user's last saved calibration profile (baseline_shift +
+    thresholds_personalized) if one exists and is within max_age_days, else
+    None. None means the caller should run this session's own fresh
+    3-block calibration and treat the result as authoritative, exactly as
+    if this user_id had never been seen before -- covers both a genuinely
+    new user (nothing ever stored) and a returning user whose last
+    calibration is now too stale to trust (see
+    CALIBRATION_PROFILE_MAX_AGE_DAYS)."""
+    ref = _calibration_profile_ref(user_id)
+    if ref is None:
+        return None
+    profile = ref.get()
+    if not profile or 'calibrated_at' not in profile or 'baseline_shift' not in profile:
+        return None
+    age_days = (time.time() - profile['calibrated_at']) / 86400.0
+    if age_days > max_age_days:
+        return None
+    return profile
