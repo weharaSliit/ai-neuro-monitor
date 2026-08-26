@@ -48,12 +48,13 @@ class TelemetryAggregator:
 
             trend_alert = bool(fb_prediction.get("trend_alert", False))
 
-            # Map inputs to 3-state label. raw_label is "high_stress"/"low_stress" from the
-            # real fusion engine (fusion_live_session.py's stress_label field) alongside the
-            # legacy "stress"/"high"/"acute" values from older/simulated payloads.
-            if raw_label in ["stress", "high", "acute", "high_stress"] or fb_prediction.get("prediction") in [1, 2]:
+            # Exact Pipeline Color Threshold Synchronization:
+            # >= 0.60 (60% Red) -> "stress"
+            # 0.35 to 0.60 (35%-60% Orange) -> "pre-stress"
+            # < 0.35 (< 35% Green) -> "normal"
+            if raw_label in ["high_stress", "stress", "high", "acute"] or prob_stress >= 0.60:
                 label = "stress"
-            elif trend_alert or prob_stress > 0.60 or raw_label in ["pre-stress", "pre_stress", "medium", "moderate"]:
+            elif prob_stress >= 0.35 or raw_label in ["pre-stress", "pre_stress", "medium"]:
                 label = "pre-stress"
             else:
                 label = "normal"

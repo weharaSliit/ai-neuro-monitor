@@ -57,8 +57,8 @@ def get_personalized_intervention(req: InterventionRequest):
                 selected_sub = so
                 break
                 
-    # Step 5: Save intervention session details to root path: intervention_system_sessions/{user_id}/{session_id}
-    session_id = f"session_{int(req.telemetry.timestamp)}"
+    # Step 5: Save intervention session details to root path: relaxation_intervention/{user_id}/{session_id}
+    session_id = getattr(req, 'session_id', None) or getattr(req.telemetry, 'session_id', None) or f"session_{int(req.telemetry.timestamp)}"
     session_payload = {
         "user_id": req.user_id,
         "session_id": session_id,

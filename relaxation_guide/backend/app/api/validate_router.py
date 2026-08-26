@@ -52,7 +52,7 @@ def validate_intervention_outcome(req: ValidationRequest):
 
     # Import firebase_service to log outcome to relaxation_intervention
     from app.services import firebase_service
-    val_session_id = f"session_val_{int(time.time())}"
+    val_session_id = getattr(req, 'session_id', None) or f"session_{int(time.time())}"
     val_payload = {
         "user_id": req.user_id,
         "session_id": val_session_id,
