@@ -348,12 +348,18 @@ class TrustedIoTEEGValidator:
         # first epoch it's ever given (see this class's KNOWN LIMITATION docstring above) --
         # feeding it both channels through the same instance would mix two different signals
         # into that one calibration rather than giving CH2 its own independent judgment.
+        #
+        # NOT used as a rejection criterion below, for the same reason PLI was demoted to
+        # diagnostic-only above: ml_rating is a soft heuristic self-calibrated from this
+        # session's own first epoch (see the KNOWN LIMITATION docstring) rather than trained
+        # on external labeled data, so an AND'd hard gate on it can reject known-good blocks
+        # purely because the very first epoch happened to be atypical -- still returned below
+        # so callers/logs can see it, just not load-bearing for is_trusted.
         ml_rating = self.ml_classifier.classify(ch1_filt)
 
         is_trusted = bool(
             time_ok1 and time_ok2
             and (snr1 > -20.0) and (snr2 > -20.0)
-            and (ml_rating != "LOW-Q")
             and (itakura_d1 < 6.0) and (itakura_d2 < 6.0)
         )
 
