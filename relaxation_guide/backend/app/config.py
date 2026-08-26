@@ -25,21 +25,23 @@ SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 EMAIL_FROM = os.getenv("EMAIL_FROM", "noreply@caps-research.org")
 
-# --- Firebase Config (Imported from common.config) ---
-try:
-    from common.config import (
-        FIREBASE_CRED_FILE,
-        FIREBASE_DB_URL,
-        FIREBASE_NAMESPACE
-    )
-except ImportError:
-    _CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
-    _BACKEND_DIR = os.path.dirname(_CONFIG_DIR)
-    _COMMON_CRED = os.path.join(_BACKEND_DIR, "common", "serviceAccountKey.json")
-    _BACKEND_CRED = os.path.join(_BACKEND_DIR, "serviceAccountKey.json")
-    FIREBASE_CRED_FILE = os.getenv("FIREBASE_CRED_FILE", _COMMON_CRED if os.path.exists(_COMMON_CRED) else _BACKEND_CRED)
-    FIREBASE_DB_URL = os.getenv("FIREBASE_DB_URL", "https://stress-monitor-c39ee-default-rtdb.asia-southeast1.firebasedatabase.app/")
-    FIREBASE_NAMESPACE = os.getenv("FIREBASE_NAMESPACE", "physiological")
+# --- Firebase Config ---
+_CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
+_BACKEND_DIR = os.path.dirname(_CONFIG_DIR)
+_ROOT_DIR = os.path.abspath(os.path.join(_BACKEND_DIR, "../../"))
+_COMMON_CRED1 = os.path.join(_ROOT_DIR, "backend", "common", "serviceAccountKey.json")
+_COMMON_CRED2 = os.path.join(_BACKEND_DIR, "serviceAccountKey.json")
+
+if os.path.exists(_COMMON_CRED1):
+    DEFAULT_CRED = _COMMON_CRED1
+elif os.path.exists(_COMMON_CRED2):
+    DEFAULT_CRED = _COMMON_CRED2
+else:
+    DEFAULT_CRED = _COMMON_CRED1
+
+FIREBASE_CRED_FILE = os.getenv("FIREBASE_CRED_FILE", DEFAULT_CRED)
+FIREBASE_DB_URL = os.getenv("FIREBASE_DB_URL", "https://stress-monitor-c39ee-default-rtdb.asia-southeast1.firebasedatabase.app/")
+FIREBASE_NAMESPACE = os.getenv("FIREBASE_NAMESPACE", "")
 
 
 # --- Probability Vector Constants ---

@@ -28,7 +28,7 @@ const SUB_OPTION_META = {
   ocean_scene: { icon: '🌊', tag: 'Deep Ocean Waves', accent: '#3B82F6', bg: 'rgba(59, 130, 246, 0.12)' },
 
   // Breathing Garden
-  flower_meadow: { icon: '🌸', tag: 'Pollen & Petal Bloom', accent: '#EC4899', bg: 'rgba(236, 72, 153, 0.12)' },
+  flower_meadow: { icon: '🌺', tag: 'Bloom Garden · 4-7-8 Breath', accent: '#EC4899', bg: 'rgba(236, 72, 153, 0.12)' },
   zen_rock_garden: { icon: '🪨', tag: 'Sand Raking Patterns', accent: '#D97706', bg: 'rgba(217, 119, 6, 0.12)' },
   water_lily_pond: { icon: '🪷', tag: 'Koi Pond & Lilies', accent: '#8B5CF6', bg: 'rgba(139, 92, 246, 0.12)' },
   cosmic_nebula: { icon: '🌌', tag: 'Star Dust Expansion', accent: '#A78BFA', bg: 'rgba(167, 139, 250, 0.12)' },

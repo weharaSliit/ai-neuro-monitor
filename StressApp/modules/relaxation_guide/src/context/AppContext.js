@@ -8,7 +8,7 @@ export const AppContext = createContext();
 // and never mints its own identity. initialUserId is required for any of the
 // live telemetry endpoints to resolve real Firebase data (see firebase_service.py);
 // the 'guest_' fallback only exists so this module still renders standalone in dev.
-export const AppProvider = ({ children, initialUserId, initialUsername, onExit = null }) => {
+export const AppProvider = ({ children, initialUserId, initialUsername, initialIsNewUser = false, onExit = null }) => {
   const [currentScreen, setCurrentScreen] = useState('PrivacyPolicy');
   const [userId, setUserId] = useState(initialUserId || `guest_${Date.now()}`);
   const [username, setUsername] = useState(initialUsername || 'Participant');
@@ -42,17 +42,19 @@ export const AppProvider = ({ children, initialUserId, initialUsername, onExit =
     (async () => {
       const alreadyOnboarded = await apiService.getCalibrationStatus(initialUserId);
       if (cancelled) return;
-      if (alreadyOnboarded) {
+      // Skip calibration & onboarding if user is an existing registered user or already calibrated
+      if (alreadyOnboarded || initialIsNewUser === false) {
         setPrivacyAccepted(true);
         setPermissionsGranted(true);
         setIsCalibrated(true);
         setCurrentScreen('Dashboard');
+        apiService.completeCalibration(initialUserId);
       }
       setIdentityChecked(true);
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [initialUserId, initialIsNewUser]);
 
   // Live Multi-Member Telemetry & Stress State (2 inputs: fused_stress_label & stress_probability)
   const [stressState, setStressState] = useState('normal');

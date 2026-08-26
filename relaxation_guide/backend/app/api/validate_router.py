@@ -31,7 +31,7 @@ def validate_intervention_outcome(req: ValidationRequest):
     3. User 5-star feedback rating
     Updates Thompson Bandit Beta parameters and gamification XP/badges.
     """
-    cluster_id = 0
+    cluster_id = req.context_cluster_id if req.context_cluster_id is not None else 0
     star_rating = req.star_rating or 5
     duration_sec = req.duration_seconds or 30.0
 
@@ -49,6 +49,27 @@ def validate_intervention_outcome(req: ValidationRequest):
     
     # Update closed-loop tracker state
     closed_loop_tracker.update_closed_loop(req.user_id, req.post_stress_label)
+
+    # Import firebase_service to log outcome to relaxation_intervention
+    from app.services import firebase_service
+    val_session_id = getattr(req, 'session_id', None) or f"session_{int(time.time())}"
+    val_payload = {
+        "user_id": req.user_id,
+        "session_id": val_session_id,
+        "technique_id": req.technique_id,
+        "pre_stress_label": req.pre_stress_label,
+        "post_stress_label": req.post_stress_label,
+        "reward": reward,
+        "recovery_percentage": recovery_pct,
+        "recovery_duration_seconds": duration_sec,
+        "star_rating": star_rating,
+        "context_cluster_id": cluster_id,
+        "timestamp": time.time()
+    }
+    try:
+        firebase_service.save_relaxation_intervention(req.user_id, val_session_id, val_payload)
+    except Exception as e:
+        print(f"[Firebase Warning] Could not save outcome to relaxation_intervention: {e}")
 
     # Log to persistent DB
     db_manager.log_intervention(

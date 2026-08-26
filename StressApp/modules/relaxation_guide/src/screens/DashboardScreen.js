@@ -123,22 +123,45 @@ const PulseDot = ({ color }) => {
    STRESS STATE CONFIG HELPER
    ──────────────────────────────────────────────────────── */
 const getStateConfig = (stressState, stressProbability, theme) => {
-  if (stressState === 'stress') return {
-    color: theme.danger, bgTint: 'rgba(239,68,68,0.08)', label: 'ACUTE STRESS',
-    emoji: '🔴', tagline: 'High sympathetic activation detected — Intervention recommended',
-    icon: '🫀', pct: Math.min(99, 75 + Math.round(stressProbability * 25)),
-    breathDuration: 1200,
-  };
-  if (stressState === 'pre-stress') return {
-    color: theme.warning, bgTint: 'rgba(245,158,11,0.08)', label: 'PRE-STRESS',
-    emoji: '🟡', tagline: 'Elevated arousal — Early intervention window open',
-    icon: '⚡', pct: 35 + Math.round(stressProbability * 35),
-    breathDuration: 2000,
-  };
+  const normState = (stressState || '').toLowerCase();
+  const prob = typeof stressProbability === 'number' ? stressProbability : 0.15;
+
+  // Pipeline Color Synchronization:
+  // Red (>= 60% or high_stress) -> HIGH STRESS
+  // Orange (35% - 60% or pre-stress) -> PRE-STRESS
+  // Green (< 35% or normal) -> NORMAL BASELINE
+  if (normState === 'stress' || normState === 'high_stress' || normState === 'high' || normState === 'acute' || prob >= 0.60) {
+    return {
+      color: theme.danger,
+      bgTint: 'rgba(239,68,68,0.14)',
+      label: 'HIGH STRESS',
+      emoji: '🔴',
+      tagline: 'High sympathetic activation detected — Intervention recommended',
+      icon: '🫀',
+      pct: Math.min(99, Math.round(prob * 100)),
+      breathDuration: 1200,
+    };
+  }
+  if (normState === 'pre-stress' || normState === 'pre_stress' || normState === 'medium' || normState === 'moderate' || prob >= 0.35) {
+    return {
+      color: theme.warning,
+      bgTint: 'rgba(245,158,11,0.14)',
+      label: 'PRE-STRESS',
+      emoji: '🟠',
+      tagline: 'Elevated arousal detected — Early intervention window open',
+      icon: '⚡',
+      pct: Math.min(99, Math.round(prob * 100)),
+      breathDuration: 2000,
+    };
+  }
   return {
-    color: theme.success, bgTint: 'rgba(16,185,129,0.08)', label: 'NORMAL BASELINE',
-    emoji: '🟢', tagline: 'Autonomic nervous system at optimal resting state',
-    icon: '🧘', pct: Math.min(99, Math.round((1 - stressProbability) * 100)),
+    color: theme.success,
+    bgTint: 'rgba(16,185,129,0.14)',
+    label: 'NORMAL BASELINE',
+    emoji: '🟢',
+    tagline: 'Autonomic nervous system at optimal resting state',
+    icon: '🧘',
+    pct: Math.min(99, Math.round((1 - prob) * 100)),
     breathDuration: 3200,
   };
 };
@@ -264,12 +287,11 @@ export const DashboardScreen = () => {
     setLoading(true);
     try {
       setPreInterventionLabel(stressState);
-      const telemetry = await apiService.getProcessedTelemetry(userId, 0.0);
       const recommendation = await apiService.getIntervention(userId, {
         user_id: userId,
         timestamp: Date.now() / 1000,
         fused_stress_label: stressState,
-        stress_probability: stressState === 'stress' ? 0.88 : (stressState === 'pre-stress' ? 0.55 : 0.15),
+        stress_probability: stressProbability,
         seconds_since_last_packet: 0.0
       });
       setCurrentRecommendation(recommendation);
