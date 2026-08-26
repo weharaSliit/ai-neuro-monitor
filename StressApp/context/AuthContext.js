@@ -6,11 +6,31 @@
 // ============================================================
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { NativeModules, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ref, update } from 'firebase/database';
 import { db } from '../firebase';
 import api, { setAuthToken, setUnauthorizedHandler } from '../modules/physiological/api/client';
 import { setAuthToken as setRelaxationAuthToken } from '../modules/relaxation_guide/src/api/apiService';
+
+// Android-only native module (see android/app/.../phenotyping/
+// PhenotypingIdentityModule.java) -- bridges the logged-in userId into
+// KeystrokeCollectorService's native SharedPreferences read. Doesn't exist
+// on iOS/web (system-wide keystroke capture is an Android-only capability
+// to begin with), so every call site below guards on its presence.
+const { PhenotypingIdentity } = NativeModules;
+
+function setPhenotypingUserId(userId) {
+  if (Platform.OS === 'android' && PhenotypingIdentity) {
+    PhenotypingIdentity.setUserId(userId);
+  }
+}
+
+function clearPhenotypingUserId() {
+  if (Platform.OS === 'android' && PhenotypingIdentity) {
+    PhenotypingIdentity.clearUserId();
+  }
+}
 
 const TOKEN_KEY      = '@stressapp/authToken';
 const USER_KEY       = '@stressapp/authUser';
@@ -93,6 +113,7 @@ export function AuthProvider({ children }) {
     await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY, SESSION_ID_KEY]);
     setAuthToken(null);
     setRelaxationAuthToken(null);
+    clearPhenotypingUserId();
     setToken(null);
     setUser(null);
     setSessionId(null);
@@ -119,6 +140,7 @@ export function AuthProvider({ children }) {
           setRelaxationAuthToken(t);
           setToken(t);
           setUser(u);
+          setPhenotypingUserId(u.userId);
           if (sid) {
             setSessionId(sid);
           } else {
@@ -141,6 +163,7 @@ export function AuthProvider({ children }) {
     setRelaxationAuthToken(newToken);
     setToken(newToken);
     setUser(newUser);
+    setPhenotypingUserId(newUser.userId);
     await AsyncStorage.multiSet([
       [TOKEN_KEY, newToken],
       [USER_KEY, JSON.stringify(newUser)],
@@ -152,7 +175,7 @@ export function AuthProvider({ children }) {
     try {
       const res = await api.post('/login', { user_id: userId, password });
       const { token: newToken, user_id, name } = res.data;
-      await persistSession(newToken, { userId: user_id, name });
+      await persistSession(newToken, { userId: user_id, name, isNewUser: false });
       return { success: true };
     } catch (e) {
       return { success: false, error: e.response?.data?.error || 'Login failed' };
@@ -163,7 +186,7 @@ export function AuthProvider({ children }) {
     try {
       const res = await api.post('/register', { user_id: userId, password, name });
       const { token: newToken, user_id, name: returnedName } = res.data;
-      await persistSession(newToken, { userId: user_id, name: returnedName });
+      await persistSession(newToken, { userId: user_id, name: returnedName, isNewUser: true });
       return { success: true };
     } catch (e) {
       return { success: false, error: e.response?.data?.error || 'Registration failed' };

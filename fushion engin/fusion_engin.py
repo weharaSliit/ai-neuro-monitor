@@ -212,6 +212,98 @@ def compute_fusion_for_records(rows: list[dict]) -> list[dict]:
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  SINGLE-WINDOW REAL-TIME FUSION (used by fusion_live_session.py's
+#  live poll loop, as opposed to compute_fusion_for_records()'s
+#  pandas/DataFrame batch path above, which stays as-is for offline
+#  Firestore analysis).
+#
+#  Fixes the scale mismatch compute_reliability_weight() silently had:
+#  signal_quality_eeg is a SignalQualityGate score on 0-100 (see
+#  backend/psychological/realtime/quality_gate.py), while
+#  signal_quality_hrv_gsr and signal_quality_behav are already 0.0-1.0
+#  (backend/physiological/extract_features.py::compute_signal_quality,
+#  backend/phenotyping_behavior/firebase_service.py's typing/scroll/apps
+#  completeness score) -- multiplying them together unnormalized let EEG's
+#  raw weight come out ~100x inflated over the other two whenever EEG
+#  actually had a real value, drowning out HRV/GSR and behavioral almost
+#  entirely regardless of their own quality/confidence. normalize_to_unit()
+#  below fixes that at the point weights are computed, not by changing what
+#  gets stored in Firebase (signal_quality_eeg stays 0-100 everywhere else
+#  it's read -- the EEG screen's own display, SignalQualityGate's GOOD/
+#  QUESTIONABLE/POOR bands -- only this function's internal math treats it
+#  as 0-1).
+#
+#  model_acc is read from each modality's OWN model_acc_{m} field already
+#  present in modalities_data (written once, at the source, by each
+#  modality's own pipeline -- 0.706 for the deployed bipolar-only EEG
+#  model, 0.851 for HRV/GSR, 0.78 for behavioral; see
+#  backend/psychological/realtime/firebase_sync.py::MODEL_ACCURACY_AUC,
+#  backend/physiological/firebase_service.py::MODEL_ACC_HRV_GSR,
+#  backend/phenotyping_behavior/firebase_service.py::BEHAVIORAL_MODEL_ACCURACY)
+#  rather than a second hardcoded constant here that could drift out of
+#  sync with the real, measured value each pipeline already reports.
+# ═══════════════════════════════════════════════════════════════════
+
+def normalize_to_unit(val, max_val: float = 1.0) -> float:
+    """Clamps and scales a raw metric safely into [0.0, 1.0]."""
+    if val is None:
+        return 0.0
+    try:
+        val = float(val)
+    except (TypeError, ValueError):
+        return 0.0
+    if np.isnan(val):
+        return 0.0
+    return max(0.0, min(1.0, val / max_val))
+
+
+def compute_realtime_multimodal_fusion(modalities_data: dict) -> dict:
+    """
+    Reliability-weighted fusion of one already-bucketed fusion_en window
+    (see fusion_window_key()) across EEG, HRV/GSR, and behavioral streams,
+    for fusion_live_session.py's live poll loop.
+
+    modalities_data: {m: {"prob": ..., "confidence": ..., "signal_quality":
+    ..., "model_acc": ...}} for m in MODALITIES -- a modality dict missing
+    or with prob=None is treated as not reporting this window (weight 0),
+    same effect as handle_missing_values() has on the batch path above.
+    """
+    raw_weights = {}
+    probs = {}
+
+    for m in MODALITIES:
+        mod_info = modalities_data.get(m) or {}
+        prob = mod_info.get("prob")
+        if prob is None:
+            raw_weights[m] = 0.0
+            probs[m] = 0.0
+            continue
+
+        conf = normalize_to_unit(mod_info.get("confidence"), 1.0)
+        max_quality = 100.0 if m == "eeg" else 1.0
+        quality = normalize_to_unit(mod_info.get("signal_quality"), max_quality)
+        acc = normalize_to_unit(mod_info.get("model_acc"), 1.0)
+
+        raw_weights[m] = quality * conf * acc
+        probs[m] = normalize_to_unit(prob, 1.0)
+
+    total_weight = sum(raw_weights.values())
+    if total_weight > 1e-9:
+        norm_weights = {m: w / total_weight for m, w in raw_weights.items()}
+        fused_prob = sum(probs[m] * norm_weights[m] for m in MODALITIES)
+    else:
+        norm_weights = {m: 0.0 for m in MODALITIES}
+        fused_prob = None
+
+    return {
+        "fused_stress_probability": fused_prob,
+        "fused_stress_label": None if fused_prob is None else ("HIGH_STRESS" if fused_prob >= 0.5 else "NORMAL"),
+        "active_modalities": [m for m in MODALITIES if raw_weights[m] > 0],
+        "modality_weights": norm_weights,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════
 #  STAGE 8 — LEARNED LOGISTIC META-MODEL (alternative to Stage 7's
 #  fixed weighted average; requires real, labeled data)
 # ═══════════════════════════════════════════════════════════════════

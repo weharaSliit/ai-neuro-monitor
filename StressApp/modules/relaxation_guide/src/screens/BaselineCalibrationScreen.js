@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useContext, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Easing } from 'react-native';
+import { ref, onValue, off } from 'firebase/database';
+import { db } from '../../../eeg/firebase';
 import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
 import { Header } from '../components/Header';
@@ -25,13 +27,33 @@ const TIPS = [
 
 export const BaselineCalibrationScreen = () => {
   const { showAlert } = useSweetAlert();
-  const { userId, setCurrentScreen, setIsCalibrated } = useContext(AppContext);
+  const { userId, setCurrentScreen, setIsCalibrated, permMember1 } = useContext(AppContext);
   const { theme } = useContext(ThemeContext);
 
   const [secondsLeft, setSecondsLeft] = useState(CALIBRATION_DURATION);
   const [isCalibrating, setIsCalibrating] = useState(false);
   const [breathPhase, setBreathPhase] = useState(0);
   const [tipIndex, setTipIndex] = useState(0);
+
+  // permMember1 (PermissionsScreen.js) is a CONSENT toggle, not a live
+  // connectivity check -- it defaults true and has no hardware awareness.
+  // eegConnected is the real signal: whether wearable02's live_raw is
+  // actually arriving in Firebase right now for the live EEG session
+  // (backend/psychological/firebase_service.py -- same path
+  // EegSessionScreen.js already reads). Both are required: a user who
+  // declined the EEG permission should never see "EEG Recording" even if
+  // hardware happens to be streaming, and a user who granted it but has no
+  // wearable on should never see it either.
+  const [eegSessionId, setEegSessionId] = useState(null);
+  const [eegConnected, setEegConnected] = useState(false);
+  // Outcome of backend/psychological's finalize_calibration() for this
+  // session -- {status, thresholds_personalized, baseline_shift,
+  // resting_calibrated_p, n_blocks} -- written by app.py's /calibrate via
+  // push_calibration_result() the moment mqtt_bridge.py's calibration
+  // blocks are processed server-side. Nothing else gives this screen
+  // access to that outcome, since /calibrate is never called from here
+  // directly.
+  const [calibrationResult, setCalibrationResult] = useState(null);
 
   // Breathing ring
   const breathScale  = useRef(new Animated.Value(1)).current;
@@ -111,20 +133,86 @@ export const BaselineCalibrationScreen = () => {
     return () => clearInterval(timer);
   }, [isCalibrating, secondsLeft]);
 
+  // Real EEG connectivity, only while actively calibrating and only if the
+  // user hasn't declined the EEG permission -- follows the SAME
+  // current_session_id pointer + live_raw path EegSessionScreen.js reads,
+  // so this screen can never disagree with the real EEG tab about whether
+  // wearable02 is actually connected right now.
+  useEffect(() => {
+    if (!isCalibrating || !permMember1 || !userId) {
+      setEegSessionId(null);
+      setEegConnected(false);
+      return;
+    }
+    const pointerRef = ref(db, 'psychological/current_session_id');
+    const pointerHandler = onValue(pointerRef, (snapshot) => {
+      setEegSessionId(snapshot.val() || null);
+    });
+    return () => off(pointerRef, 'value', pointerHandler);
+  }, [isCalibrating, permMember1, userId]);
+
+  useEffect(() => {
+    if (!eegSessionId || !userId) {
+      setEegConnected(false);
+      return;
+    }
+    const rawRef = ref(db, `psychological/${userId}/${eegSessionId}/live_raw`);
+    const rawHandler = onValue(rawRef, (snapshot) => {
+      setEegConnected(!!snapshot.val());
+    });
+    return () => off(rawRef, 'value', rawHandler);
+  }, [eegSessionId, userId]);
+
+  // finalize_calibration()'s outcome for this session, once mqtt_bridge.py's
+  // server-side /calibrate call actually reaches it -- see calibrationResult's
+  // own comment above for why this screen has no more direct path to it.
+  useEffect(() => {
+    if (!eegSessionId || !userId) {
+      setCalibrationResult(null);
+      return;
+    }
+    const resultRef = ref(db, `psychological/${userId}/${eegSessionId}/calibration_result`);
+    const resultHandler = onValue(resultRef, (snapshot) => {
+      setCalibrationResult(snapshot.val() || null);
+    });
+    return () => off(resultRef, 'value', resultHandler);
+  }, [eegSessionId, userId]);
+
   // Completion
   useEffect(() => {
     if (isCalibrating && secondsLeft === 0) {
       setIsCalibrated(true);
       apiService.completeCalibration(userId);
+      // EEG is only claimed as captured if wearable02 was genuinely
+      // streaming live_raw at some point during this window (eegConnected) --
+      // this screen's own 2-minute timer completing doesn't by itself mean
+      // backend/psychological's finalize_calibration() ever ran; that
+      // requires real blocks to have reached /calibrate via mqtt_bridge.py.
+      const eegCaptured = permMember1 && eegConnected;
+      // calibrationResult may not have landed yet even when eegCaptured is
+      // true (mqtt_bridge.py's own calibration window runs on its own
+      // clock, independent of this screen's 120s timer) -- eegCaptured
+      // means "wearable02 was streaming," not "finalize_calibration()
+      // already returned." Only claim personalization once the outcome
+      // itself is actually in hand.
+      let eegLine = 'EEG was not connected during this session, so no EEG baseline was recorded -- connect wearable02 and recalibrate from the EEG tab to add it.';
+      if (eegCaptured) {
+        eegLine = 'HRV, GSR, and EEG alpha/beta ratios stored. Real-time stress stream is now active.';
+        if (calibrationResult?.status === 'ok') {
+          eegLine += calibrationResult.thresholds_personalized
+            ? ` Your EEG high-load sensitivity has been calibrated to your own resting pattern (${calibrationResult.baseline_shift >= 0 ? '+' : ''}${(calibrationResult.baseline_shift * 100).toFixed(1)}% vs. average).`
+            : ' Not enough clean EEG blocks were captured to personalize your sensitivity this time -- using the standard sensitivity for now.';
+        }
+      }
       showAlert({
         title: '🎯 Baseline Recorded!',
-        text: 'Autonomic nervous system baseline captured. HRV, GSR, and EEG alpha/beta ratios stored. Real-time stress stream is now active.',
+        text: `Autonomic nervous system baseline captured. ${eegLine}`,
         icon: 'success',
         confirmButtonText: 'Go to Dashboard 🚀',
         onConfirm: () => setCurrentScreen('Dashboard')
       });
     }
-  }, [isCalibrating, secondsLeft]);
+  }, [isCalibrating, secondsLeft, permMember1, eegConnected, calibrationResult]);
 
   // Rotate tips
   useEffect(() => {
@@ -189,17 +277,23 @@ export const BaselineCalibrationScreen = () => {
           </View>
         )}
 
-        {/* Sensor indicators */}
+        {/* Sensor indicators -- EEG reflects REAL connectivity (permMember1
+            consent + live_raw actually arriving), not assumed-on like
+            HRV/GSR still are here. */}
         {isCalibrating && (
           <View style={styles.sensorsRow}>
             {[
-              { label: 'HRV', color: '#10B981', active: true },
-              { label: 'GSR', color: '#F59E0B', active: true },
-              { label: 'EEG', color: '#8B5CF6', active: true },
+              { label: 'HRV', color: '#10B981', text: 'HRV Recording' },
+              { label: 'GSR', color: '#F59E0B', text: 'GSR Recording' },
+              !permMember1
+                ? { label: 'EEG', color: '#64748B', text: 'EEG Skipped' }
+                : eegConnected
+                  ? { label: 'EEG', color: '#8B5CF6', text: 'EEG Recording' }
+                  : { label: 'EEG', color: '#94A3B8', text: 'EEG Not Connected' },
             ].map((s, i) => (
               <View key={i} style={[styles.sensorChip, { borderColor: s.color + '60', backgroundColor: s.color + '12' }]}>
                 <View style={[styles.sensorDot, { backgroundColor: s.color }]} />
-                <Text style={[styles.sensorLabel, { color: s.color }]}>{s.label} Recording</Text>
+                <Text style={[styles.sensorLabel, { color: s.color }]}>{s.text}</Text>
               </View>
             ))}
           </View>

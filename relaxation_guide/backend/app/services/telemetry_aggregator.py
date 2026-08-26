@@ -48,12 +48,13 @@ class TelemetryAggregator:
 
             trend_alert = bool(fb_prediction.get("trend_alert", False))
 
-            # Map inputs to 3-state label. raw_label is "high_stress"/"low_stress" from the
-            # real fusion engine (fusion_live_session.py's stress_label field) alongside the
-            # legacy "stress"/"high"/"acute" values from older/simulated payloads.
-            if raw_label in ["stress", "high", "acute", "high_stress"] or fb_prediction.get("prediction") in [1, 2]:
+            # Exact Pipeline Color Threshold Synchronization:
+            # >= 0.60 (60% Red) -> "stress"
+            # 0.35 to 0.60 (35%-60% Orange) -> "pre-stress"
+            # < 0.35 (< 35% Green) -> "normal"
+            if raw_label in ["high_stress", "stress", "high", "acute"] or prob_stress >= 0.60:
                 label = "stress"
-            elif trend_alert or prob_stress > 0.60 or raw_label in ["pre-stress", "pre_stress", "medium", "moderate"]:
+            elif prob_stress >= 0.35 or raw_label in ["pre-stress", "pre_stress", "medium"]:
                 label = "pre-stress"
             else:
                 label = "normal"
@@ -98,7 +99,14 @@ class TelemetryAggregator:
         """
         Parses single fused_stress_label and stress_probability inputs from teammate fusion engine output.
         """
-        clean_label = fused_stress_label.lower().strip() if fused_stress_label else "normal"
+        raw_label = fused_stress_label.lower().strip() if fused_stress_label else "normal"
+        if raw_label in ["stress", "high", "acute", "high_stress"]:
+            clean_label = "stress"
+        elif raw_label in ["pre-stress", "pre_stress", "medium", "moderate"]:
+            clean_label = "pre-stress"
+        else:
+            clean_label = "normal"
+
         clean_prob = max(0.0, min(1.0, float(stress_probability)))
         
         # Check baseline existence in Firebase if is_calibrated not explicitly passed

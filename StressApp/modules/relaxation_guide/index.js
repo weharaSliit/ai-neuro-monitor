@@ -104,6 +104,7 @@ export default function RelaxationGuideModule() {
         <AppProvider
           initialUserId={user?.userId}
           initialUsername={user?.name}
+          initialIsNewUser={user?.isNewUser}
           onExit={logout}
         >
           <View style={styles.root}>

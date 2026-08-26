@@ -53,8 +53,9 @@ if DISABLE_QUALITY_GATE:
           "NOT trustworthy while this is on.")
 
 # Raw EEG samples are logged here per session, independent of Firebase --
-# EegFirebaseSession.push_raw() no-ops without $FIREBASE_CREDENTIALS (see its
-# docstring), so this is the one raw-data path that's guaranteed to work
+# EegFirebaseSession.push_raw() no-ops without $FIREBASE_CRED_JSON/
+# $FIREBASE_CREDENTIALS (see firebase_service.py's resolve_credential()),
+# so this is the one raw-data path that's guaranteed to work
 # even with cloud sync off entirely. Same RAW_FIELDS shape as the standalone
 # phscycological/scripts/realtime_inference.py CLI's --log-raw-csv, via the
 # same CsvLogger/log_raw_block (realtime/csv_logger.py) -- not a second copy.
@@ -174,6 +175,11 @@ def calibrate():
         engine.calibrate_block(samples)
 
     outcome = engine.finalize_calibration(allow_degraded=bool(data.get("allow_degraded", False)))
+    # Written regardless of status (including "failed") -- BaselineCalibrationScreen.js
+    # and EegSessionScreen.js have no other path to this outcome, since
+    # calibration is driven server-side by mqtt_bridge.py, not called by
+    # those screens directly. See push_calibration_result()'s docstring.
+    firebase.push_calibration_result(outcome)
     if outcome["status"] == "failed":
         # Never stored into eeg_sessions, so nothing else will ever close this --
         # close it here or the file handle (and its partial CSV) just leaks.
@@ -197,7 +203,14 @@ def calibrate():
         "csv_logger": csv_logger,
         "score_history": [],
     }
-    return jsonify({"success": True, "session_id": session_id, **outcome})
+    # firebase.enabled is False whenever neither FIREBASE_CRED_JSON nor
+    # FIREBASE_CREDENTIALS is set on THIS service -- calibration still
+    # succeeds and predictions still work
+    # either way, but nothing gets written to Firebase, which otherwise
+    # looks identical to a healthy deploy from the bridge/caller's side
+    # (success: True either way). Surfaced here so that's visible without
+    # cross-referencing this service's own startup logs.
+    return jsonify({"success": True, "session_id": session_id, "firebase_enabled": firebase.enabled, **outcome})
 
 
 # -- /predict -- one 25s block -> task_state_score --------------------
@@ -250,6 +263,9 @@ def predict():
             "high_load_alert": record.get("high_load_alert"),
             "micro_break_recommended": record.get("micro_break_recommended"),
             "fatigue_warning": record.get("fatigue_warning"),
+            # See /calibrate's identical field -- same session's Firebase
+            # handle, so this can only ever match what /calibrate reported.
+            "firebase_enabled": state["firebase"].enabled,
         }
     )
 
@@ -291,7 +307,10 @@ def live_raw():
         "ch2_uv": [round(v, 3) for v in code_to_microvolts(np.array([s.ch2_code for s in samples]))],
     })
 
-    return jsonify({"success": True, "session_id": session_id, "n_samples": len(samples)})
+    return jsonify({
+        "success": True, "session_id": session_id, "n_samples": len(samples),
+        "firebase_enabled": firebase.enabled,
+    })
 
 
 @app.route("/sessions/<session_id>", methods=["DELETE"])

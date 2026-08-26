@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "StressApp",
-    "slug": "StressApp",
+    "slug": "mindpulse-research",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -16,14 +16,37 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.mindpulse.stressapp",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "RECEIVE_BOOT_COMPLETED",
+        "FOREGROUND_SERVICE",
+        "POST_NOTIFICATIONS",
+        "SCHEDULE_EXACT_ALARM",
+        "USE_EXACT_ALARM",
+        "com.google.android.gms.permission.ACTIVITY_RECOGNITION",
+        "ACTIVITY_RECOGNITION"
+      ],
+      "versionCode": 2
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "e81b6dd9-7835-4911-bc63-c5214d2c8de2"
+      }
+    },
+    "owner": "mindpulse-researchs-team",
+    "plugins": [
+      "expo-font",
+      "expo-asset"
+    ]
   }
 }

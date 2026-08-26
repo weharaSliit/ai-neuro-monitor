@@ -12,7 +12,7 @@ import os
 import time
 import numpy as np
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 import firebase_admin
 from firebase_admin import credentials, db
 from app.config import FIREBASE_CRED_FILE, FIREBASE_DB_URL, FIREBASE_NAMESPACE
@@ -134,31 +134,44 @@ def baseline_exists(user_id: str) -> bool:
         return False
 
 # --- Helper to extract latest packet from nested nodes ---
+def _sort_key(k: str):
+    """Sort helper to handle window_1, window_2, window_10, timestamps, and push keys chronologically."""
+    import re
+    nums = re.findall(r'\d+', str(k))
+    if nums:
+        return (1, int(nums[-1]))
+    return (0, str(k))
+
 def _extract_latest_packet(node: Any, target_uid_clean: str = "") -> Dict[str, Any]:
     """Traverses a dict or nested dict to extract the latest telemetry packet record."""
     if not isinstance(node, dict):
         return {}
 
     # Case 1: Node itself contains direct telemetry keys
-    if any(k in node for k in ['fused_stress_label', 'fused_stress_probability', 'stress_label', 'probability', 'stress_probability', 'label']):
+    if any(k in node for k in ['fused_stress_label', 'fused_stress_probability', 'stress_label', 'probability', 'stress_probability', 'label', 'probability_vector']):
         return node
 
     latest_packet = {}
-    for key in sorted(node.keys()):
-        if key in ['current_session_id', 'current_user_id']:
+    # Sort keys chronologically using _sort_key
+    sorted_keys = sorted(node.keys(), key=_sort_key)
+    for key in sorted_keys:
+        if key in ['current_session_id', 'current_user_id', 'session_started', 'session_ended']:
             continue
         val = node[key]
         if isinstance(val, dict):
             val_uid = str(val.get('user_id', '')).strip().lower()
-            if target_uid_clean and target_uid_clean not in ['user_default', 'user_calm_ai', 'wehara', 'hiruni'] and val_uid and val_uid != target_uid_clean:
+            if target_uid_clean and val_uid and val_uid != target_uid_clean:
                 continue
 
-            if any(k in val for k in ['fused_stress_label', 'fused_stress_probability', 'stress_label', 'probability', 'stress_probability', 'label']):
+            if any(k in val for k in ['fused_stress_label', 'fused_stress_probability', 'stress_label', 'probability', 'stress_probability', 'label', 'probability_vector']):
                 latest_packet = val
             else:
-                for inner_key in sorted(val.keys()):
+                inner_keys = sorted(val.keys(), key=_sort_key)
+                for inner_key in inner_keys:
+                    if inner_key in ['session_started', 'session_ended']:
+                        continue
                     inner_val = val[inner_key]
-                    if isinstance(inner_val, dict) and any(k in inner_val for k in ['fused_stress_label', 'fused_stress_probability', 'stress_label', 'probability', 'stress_probability', 'label']):
+                    if isinstance(inner_val, dict) and any(k in inner_val for k in ['fused_stress_label', 'fused_stress_probability', 'stress_label', 'probability', 'stress_probability', 'label', 'probability_vector']):
                         latest_packet = inner_val
 
     return latest_packet
@@ -166,10 +179,37 @@ def _extract_latest_packet(node: Any, target_uid_clean: str = "") -> Dict[str, A
 # --- Prediction & Telemetry Ingestion operations ---
 def get_latest_prediction(user_id: str, session_id: Optional[str] = None) -> Dict[str, Any]:
     """
-    Fetches latest fusion prediction inputs from path: fusion_en_sessions
+    Fetches latest fusion prediction inputs from path: fusion_en_sessions -> user_id -> session
     Reads inputs: fused_stress_label ("low_stress"/"high_stress") and fused_stress_probability.
-    Supports user sub-nodes (e.g. fusion_en_sessions/Wehara/session_...) and active current_session_id.
+    Directly queries user node fusion_en_sessions/{user_id}/{session_id} for user-wise real-time adaptation.
     """
+    target_uid = str(user_id).strip()
+    target_uid_clean = target_uid.lower()
+
+    # 1. Direct fetch for fusion_en_sessions/{user_id}/{session_id}
+    if session_id:
+        try:
+            ref_session = db.reference(f'fusion_en_sessions/{target_uid}/{session_id}')
+            s_data = ref_session.get()
+            if isinstance(s_data, dict):
+                packet = _extract_latest_packet(s_data, target_uid_clean)
+                if packet:
+                    return packet
+        except Exception as e:
+            print(f"[Firebase Warning] Read fusion_en_sessions/{target_uid}/{session_id} failed: {e}")
+
+    # 2. Direct fetch for fusion_en_sessions/{user_id}
+    try:
+        ref_user = db.reference(f'fusion_en_sessions/{target_uid}')
+        u_data = ref_user.get()
+        if isinstance(u_data, dict):
+            packet = _extract_latest_packet(u_data, target_uid_clean)
+            if packet:
+                return packet
+    except Exception as e:
+        print(f"[Firebase Warning] Read fusion_en_sessions/{target_uid} failed: {e}")
+
+    # 3. Fallback: Read full fusion_en_sessions root data
     try:
         ref_fusion = db.reference('fusion_en_sessions')
         root_data = ref_fusion.get() or {}
@@ -182,28 +222,26 @@ def get_latest_prediction(user_id: str, session_id: Optional[str] = None) -> Dic
             curr_sid = root_data.get('current_session_id') or session_id
             curr_uid = root_data.get('current_user_id')
 
-            target_uid_clean = str(user_id).strip().lower()
-
-            # 1. Check direct session node under current_session_id
-            if curr_sid and curr_sid in root_data:
-                packet = _extract_latest_packet(root_data[curr_sid])
-                if packet:
-                    return packet
-
-            # 2. Check user sub-folder (e.g. fusion_en_sessions/Wehara or fusion_en_sessions/Hiruni)
-            for k in [user_id, user_id.capitalize(), user_id.lower(), curr_uid]:
+            # Check case variations of user_id or active pointer
+            for k in [target_uid, target_uid.capitalize(), target_uid.lower(), curr_uid]:
                 if k and k in root_data and isinstance(root_data[k], dict):
-                    packet = _extract_latest_packet(root_data[k])
+                    packet = _extract_latest_packet(root_data[k], target_uid_clean)
                     if packet:
                         return packet
 
-            # 3. Global scan across all keys in fusion_en_sessions
+            # Check active session pointer
+            if curr_sid and curr_sid in root_data:
+                packet = _extract_latest_packet(root_data[curr_sid], target_uid_clean)
+                if packet:
+                    return packet
+
+            # Global scan across root_data
             packet = _extract_latest_packet(root_data, target_uid_clean)
             if packet:
                 return packet
 
     except Exception as e:
-        print(f"[Firebase Warning] Read fusion_en_sessions failed ({e}).")
+        print(f"[Firebase Warning] Read fusion_en_sessions root failed ({e}).")
 
     return {}
 
@@ -217,6 +255,84 @@ def save_intervention_session(user_id: str, session_id: str, session_data: Dict[
         ref.set(session_data)
     except Exception as e:
         print(f"[Firebase Warning] save_intervention_session failed ({e}).")
+
+# Local fallback store when offline
+_local_relaxation_interventions: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+def save_relaxation_intervention(user_id: str, session_id: str, session_data: Dict[str, Any]):
+    """
+    Saves intervention session recommendations & outcomes to root folder: relaxation_intervention/{user_id}/{session_id}
+    """
+    try:
+        ref = db.reference(f'relaxation_intervention/{user_id}/{session_id}')
+        ref.update(session_data)
+    except Exception as e:
+        print(f"[Firebase Warning] save_relaxation_intervention failed ({e}).")
+
+    if user_id not in _local_relaxation_interventions:
+        _local_relaxation_interventions[user_id] = {}
+    if session_id not in _local_relaxation_interventions[user_id]:
+        _local_relaxation_interventions[user_id][session_id] = {}
+    _local_relaxation_interventions[user_id][session_id].update(session_data)
+
+    # Invalidate recovery cache on write
+    if user_id in _user_recovery_cache:
+        del _user_recovery_cache[user_id]
+
+def get_relaxation_interventions(user_id: str) -> List[Dict[str, Any]]:
+    """
+    Retrieves all past intervention records for THIS user from root folder: relaxation_intervention/{user_id}
+    """
+    try:
+        ref = db.reference(f'relaxation_intervention/{user_id}')
+        data = ref.get() or {}
+        if isinstance(data, dict) and data:
+            return list(data.values())
+    except Exception as e:
+        print(f"[Firebase Warning] get_relaxation_interventions failed ({e}).")
+
+    if user_id in _local_relaxation_interventions:
+        return list(_local_relaxation_interventions[user_id].values())
+    return []
+
+# Cache for user recovery history
+_user_recovery_cache: Dict[str, Tuple[float, Dict[str, float]]] = {}
+
+def get_fastest_recovery_technique_history(user_id: str) -> Dict[str, float]:
+    """
+    Analyzes past relaxation_intervention/{user_id} history to calculate stress reduction speed per technique.
+    Returns dict mapping technique_id -> recovery_speed_boost.
+    Uses 30-second TTL cache to guarantee Thompson Sampling execution < 200ms.
+    """
+    now = time.time()
+    if user_id in _user_recovery_cache:
+        cache_time, cache_data = _user_recovery_cache[user_id]
+        if now - cache_time < 30.0:
+            return cache_data
+
+    records = get_relaxation_interventions(user_id)
+    tech_stats = {}
+    for r in records:
+        tech_id = r.get("technique_id") or r.get("recommended_technique_id")
+        rec_pct = float(r.get("recovery_percentage", 0.0))
+        dur_sec = float(r.get("recovery_duration_seconds", r.get("duration_seconds", 30.0)))
+        dur_sec = max(5.0, dur_sec)
+
+        if tech_id and rec_pct > 0:
+            if tech_id not in tech_stats:
+                tech_stats[tech_id] = []
+            # Speed ratio: recovery percentage per 10 seconds
+            speed = (rec_pct / dur_sec) * 10.0
+            tech_stats[tech_id].append(speed)
+
+    boosts = {}
+    for t_id, speeds in tech_stats.items():
+        avg_speed = sum(speeds) / len(speeds)
+        # Convert average speed to a prior boost factor (0.1 to 0.5)
+        boosts[t_id] = min(0.5, avg_speed / 20.0)
+
+    _user_recovery_cache[user_id] = (now, boosts)
+    return boosts
 
 # --- Ratings Operations ---
 def save_rating(user_id: str, technique_id: str, sub_option_id: str, stars: int, timestamp: float):

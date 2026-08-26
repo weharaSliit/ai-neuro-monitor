@@ -12,7 +12,7 @@ if __package__ is None:
         sys.path.insert(0, str(repo_root))
 
 # Import your local services
-from firebase_service import (
+from backend.phenotyping_behavior.firebase_service import (
     init_firebase, save_behavioral_window, get_user_baselines,
     save_stress_prediction, save_validation_label,
     get_latest_stress_prediction,             # T7-B: neuroadaptive bridge
@@ -20,8 +20,8 @@ from firebase_service import (
     set_user_calibration_status, create_user_profile,
     save_to_fusion_engine                     # Shared fusion_engine table
 )
-from predictor import predictor
-from ema_service import update_personalized_baseline
+from backend.phenotyping_behavior.predictor import predictor
+from backend.phenotyping_behavior.ema_service import update_personalized_baseline
 
 app = Flask(__name__)
 CORS(app)

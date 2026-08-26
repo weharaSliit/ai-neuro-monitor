@@ -57,8 +57,8 @@ def get_personalized_intervention(req: InterventionRequest):
                 selected_sub = so
                 break
                 
-    # Step 5: Save intervention session details to root path: intervention_system_sessions/{user_id}/{session_id}
-    session_id = f"session_{int(req.telemetry.timestamp)}"
+    # Step 5: Save intervention session details to root path: relaxation_intervention/{user_id}/{session_id}
+    session_id = getattr(req, 'session_id', None) or getattr(req.telemetry, 'session_id', None) or f"session_{int(req.telemetry.timestamp)}"
     session_payload = {
         "user_id": req.user_id,
         "session_id": session_id,
@@ -75,8 +75,9 @@ def get_personalized_intervention(req: InterventionRequest):
     }
     try:
         firebase_service.save_intervention_session(req.user_id, session_id, session_payload)
+        firebase_service.save_relaxation_intervention(req.user_id, session_id, session_payload)
     except Exception as e:
-        print(f"[Firebase Warning] Could not save to intervention_system_sessions: {e}")
+        print(f"[Firebase Warning] Could not save to relaxation_intervention: {e}")
 
     return TechniqueRecommendation(
         technique_id=tech_id,

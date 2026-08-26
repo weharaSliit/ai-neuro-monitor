@@ -8,6 +8,8 @@ import { useTheme } from '../config/ThemeContext';
 import { useAuth } from '../../../context/AuthContext';
 import api from '../api/client';
 import EmaSummaryCard from './EmaSummaryCard';
+import { getCalibrationStatus as getPhenotypingCalibStatus } from '../../phenotyping/utils/calibrationStatus';
+import { isPhenotypingOnboarded } from '../../phenotyping/screens/PhenotypingOnboardingScreen';
 
 export default function ProfileScreen({ navigation }) {
   const { theme, COLORS } = useTheme();
@@ -17,6 +19,8 @@ export default function ProfileScreen({ navigation }) {
   const [baseline,     setBaseline]     = useState(null);
   const [sessionCount, setSessionCount] = useState(0);
   const [loading,       setLoading]     = useState(true);
+  const [phenoStatus,   setPhenoStatus] = useState(null);
+  const [phenoOnboarded, setPhenoOnboarded] = useState(true);
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
   const bg     = theme.bg;
@@ -45,6 +49,12 @@ export default function ProfileScreen({ navigation }) {
   useEffect(() => { loadProfile(); }, [userId]);
   useFocusEffect(useCallback(() => { loadProfile(); }, [userId]));
 
+  useFocusEffect(useCallback(() => {
+    if (!userId) return;
+    getPhenotypingCalibStatus(userId).then(setPhenoStatus);
+    isPhenotypingOnboarded(userId).then(setPhenoOnboarded);
+  }, [userId]));
+
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
       <Animated.ScrollView style={{ opacity: fadeAnim }} showsVerticalScrollIndicator={false}>
@@ -61,6 +71,15 @@ export default function ProfileScreen({ navigation }) {
             </View>
           </View>
         </View>
+
+        {/* Back to Home */}
+        <TouchableOpacity
+          activeOpacity={0.8}
+          style={styles.backRow}
+          onPress={() => navigation.navigate('Home')}
+        >
+          <Text style={[styles.backText, { color: COLORS.brand }]}>← Back to Home</Text>
+        </TouchableOpacity>
 
         {/* Stats row */}
         <View style={styles.statsRow}>
@@ -109,6 +128,27 @@ export default function ProfileScreen({ navigation }) {
           </Text>
         </TouchableOpacity>
 
+        {/* Phenotyping (keystroke/app-usage tracking) -- folded in here
+            rather than a second competing Profile screen, per the "Bring
+            Phenotyping Into StressApp" plan. */}
+        <TouchableOpacity
+          activeOpacity={0.8}
+          style={[styles.card, { backgroundColor: card, borderColor: border }]}
+          onPress={() => navigation.navigate(phenoOnboarded ? 'PhenotypingAnalysis' : 'PhenotypingOnboarding')}
+        >
+          <View style={styles.cardHeaderRow}>
+            <Text style={[styles.cardTitle, { color: text }]}>📱 Behavioral Tracking</Text>
+            <Text style={[styles.chevron, { color: muted }]}>→</Text>
+          </View>
+          <Text style={[styles.cardSub, { color: muted }]}>
+            {!phenoOnboarded
+              ? 'Not set up yet — tap to answer a few questions and grant permissions.'
+              : phenoStatus?.phase === 'calibration'
+                ? `Calibrating: ${phenoStatus.displayDays}`
+                : 'Baseline calibrated — tap for pattern analysis.'}
+          </Text>
+        </TouchableOpacity>
+
         {/* EMA summary */}
         <EmaSummaryCard navigation={navigation} />
 
@@ -144,4 +184,6 @@ const styles = StyleSheet.create({
   cardSub:           { fontSize: 12, marginTop: 4 },
   logoutBtn:         { marginHorizontal: 20, padding: 14, borderRadius: 14, alignItems: 'center', borderWidth: 1 },
   logoutText:        { fontSize: 14, fontWeight: '700' },
+  backRow:           { marginHorizontal: 20, marginBottom: 4, alignSelf: 'flex-start' },
+  backText:          { fontSize: 13, fontWeight: '700' },
 });
