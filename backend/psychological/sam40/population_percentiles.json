@@ -1,5 +1,5 @@
 {
-  "_comment": "Checked-in snapshot of SAM40 LOSO analysis's calibrated_p population percentiles -- NOT hand-typed. Copied verbatim from psycological/results/final_analysis/calibrated_p_percentiles.csv (see results/CURRENT_SYSTEM.md Section 6 for how that CSV was produced). Lives inside backend/psychological/ (not the separate psycological/ research tree) so it deploys with this service regardless of Render root-directory scoping -- see decision.py::_load_population_percentiles(). If the LOSO pipeline is ever rerun and calibrated_p_percentiles.csv changes, copy its P5/P50/P95 values here too.",
+  "_comment": "Checked-in snapshot of the SAM40 LOSO analysis's calibrated_p population percentiles -- NOT hand-typed. Copied verbatim from psycological/results/final_analysis/calibrated_p_percentiles.csv (see results/CURRENT_SYSTEM.md Section 6 for how that CSV was produced). Lives inside backend/psychological/ (not the separate psycological/ research tree) so it deploys with this service regardless of Render root-directory scoping -- see decision.py::_load_population_percentiles(). If the LOSO pipeline is ever rerun and calibrated_p_percentiles.csv changes, copy its P5/P50/P95 values here too.",
   "P5": 0.6214464242309895,
   "P50": 0.7605755829157848,
   "P95": 0.8426561933502116
