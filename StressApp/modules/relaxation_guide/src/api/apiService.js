@@ -1,34 +1,23 @@
 import axios from 'axios';
-import Constants from 'expo-constants';
-import { Platform } from 'react-native';
 
-// Dynamically resolve backend server IP address for Physical Mobile Devices & Emulators
-const getApiBaseUrl = () => {
-  try {
-    const hostUri = Constants.expoConfig?.hostUri || Constants.manifest2?.extra?.expoGo?.debuggerHost || Constants.manifest?.debuggerHost;
-    if (hostUri) {
-      const ip = hostUri.split(':')[0];
-      if (ip && ip !== 'localhost' && ip !== '127.0.0.1') {
-        return `http://${ip}:8000`;
-      }
-    }
-  } catch (e) {
-    // Ignore error
-  }
-
-  if (Platform.OS === 'android') {
-    return 'http://10.0.2.2:8000';
-  }
-
-  return 'http://localhost:8000';
-};
-
-const API_BASE_URL = getApiBaseUrl();
-console.log('[apiService] Dynamic API Base URL:', API_BASE_URL);
+// Fixed Render-hosted URL -- was previously an auto-detected local dev IP
+// (http://<metro-host>:8000 / http://10.0.2.2:8000 / http://localhost:8000),
+// which only ever worked from a phone on the exact same WiFi as whoever's
+// laptop happened to be running relaxation_guide/backend locally. On any
+// real device it was unreachable, so every apiService call below silently
+// fell through to its hardcoded catch-block fallback -- same class of bug
+// already fixed for physiological/psychological/phenotyping this session,
+// see those modules' config.js files for the same pattern.
+const API_BASE_URL = 'https://mindpulse-relaxation.onrender.com';
+console.log('[apiService] API Base URL:', API_BASE_URL);
 
 const client = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 5000,
+  // 45s, not 5s -- Render's free tier (which this service runs on) can take
+  // 28-30s to wake from a cold start; 5s guaranteed every call would hit
+  // the catch-block fallback whenever the service had gone idle. Same fix
+  // already applied to the physiological/psychological bridges.
+  timeout: 45000,
   headers: {
     'Content-Type': 'application/json',
   },
