@@ -12,7 +12,7 @@
   <uses-permission android:name="android.permission.VIBRATE"/>
   <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
   <uses-permission android:name="com.google.android.gms.permission.ACTIVITY_RECOGNITION"/>
-  <!-- Required for KeystrokeCollectorService.startForeground() on Android 14+ (API 34+) --
+  <!-- Required for KeystrokeCollectorService.startForeground() on Android 14+ (API 34+):
        without a declared foregroundServiceType, startForeground() throws
        MissingForegroundServiceTypeException, which crashes the service before
        it ever logs anything, looking identical to "the service never started". -->

@@ -33,7 +33,7 @@
         "com.google.android.gms.permission.ACTIVITY_RECOGNITION",
         "ACTIVITY_RECOGNITION"
       ],
-      "versionCode": 3
+      "versionCode": 4
     },
     "web": {
       "favicon": "./assets/favicon.png"
