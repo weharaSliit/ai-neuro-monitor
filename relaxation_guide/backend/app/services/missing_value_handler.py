@@ -41,8 +41,15 @@ class MissingValueHandler:
 
         # --- Rule 0: Handling 2-Minute Baseline Calibration Phase ---
         if not is_calibrated:
-            effective_label = "normal"
-            summary_msg = "CALIBRATION ACTIVE (2-min baseline): Processing raw baseline signals. Defaulting state to 'normal'."
+            raw_l = (telemetry.fused_stress_label or "").lower()
+            if raw_l in ["high_stress", "stress", "high", "acute"] or stress_prob >= 0.60:
+                effective_label = "stress"
+            elif stress_prob >= 0.35 or raw_l in ["pre-stress", "pre_stress"]:
+                effective_label = "pre-stress"
+            else:
+                effective_label = "normal"
+
+            summary_msg = f"CALIBRATION / STREAM ACTIVE: Effective state evaluated to '{effective_label}' (fused_prob={stress_prob:.2f})."
             self._last_observations[user_id] = telemetry
             return ProcessedSignalResult(
                 user_id=user_id,
