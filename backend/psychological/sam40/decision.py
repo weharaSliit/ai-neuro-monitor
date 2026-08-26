@@ -16,6 +16,7 @@ literal 10/30-minute targets.
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -46,20 +47,42 @@ class DecisionThresholds:
     cooldown_low_p: float = 0.725
 
 
-# Robust, LOSO-derived population statistics (calibrated_p_percentiles.csv,
-# results/CURRENT_SYSTEM.md Section 6) -- NOT the single-session replay-test
-# per-condition numbers (Relax=0.508, Mirror=0.594, Arithmetic=0.759,
-# Stroop=0.739) documented elsewhere in that same file, which explicitly
-# validate the code path only ("This validates the code path, not real-
-# hardware signal quality"), not real per-condition population behavior.
-POPULATION_MEDIAN_P = 0.758   # P50 -- coincides with the deployed high_load_p (see
-                               # DecisionThresholds' own docstring); used below as the
-                               # zero-point a personalized shift is measured from.
-POPULATION_P5 = 0.629
-POPULATION_P95 = 0.835
-MIN_CALIBRATION_SCORES = 2    # fewer trusted calibration blocks than this -> a resting
-                               # mean would be a single sample, not a measurement.
-MAX_THRESHOLD_SHIFT = (POPULATION_P95 - POPULATION_P5) / 2  # ~0.103
+# Robust, LOSO-derived population statistics -- NOT the single-session
+# replay-test per-condition numbers (Relax=0.508, Mirror=0.594,
+# Arithmetic=0.759, Stroop=0.739) documented in results/CURRENT_SYSTEM.md
+# Section 6, which explicitly validate the code path only ("This validates
+# the code path, not real-hardware signal quality"), not real per-condition
+# population behavior.
+#
+# Loaded from the analysis pipeline's own output artifact rather than
+# copy-pasted as literals here, so these track whatever the LOSO run last
+# produced instead of a snapshot that silently drifts out of sync with it.
+_PERCENTILES_CSV = (
+    Path(__file__).resolve().parents[3]
+    / "psycological" / "results" / "final_analysis" / "calibrated_p_percentiles.csv"
+)
+
+
+def _load_population_percentiles(csv_path: Path = _PERCENTILES_CSV) -> tuple[float, float, float]:
+    try:
+        row = pd.read_csv(csv_path).iloc[0]
+        return float(row["P5"]), float(row["P50"]), float(row["P95"])
+    except (FileNotFoundError, KeyError, IndexError) as e:
+        raise RuntimeError(
+            f"Could not load population calibrated_p percentiles from {csv_path} "
+            f"(expected columns P5/P50/P95, one data row) -- this file is required "
+            f"to compute personalized baseline shifts; regenerate it via the SAM40 "
+            f"LOSO analysis pipeline (see results/CURRENT_SYSTEM.md Section 6) "
+            f"rather than hardcoding a replacement value here."
+        ) from e
+
+
+POPULATION_P5, POPULATION_MEDIAN_P, POPULATION_P95 = _load_population_percentiles()
+# high_load_p (DecisionThresholds above) was chosen independently via a
+# separate sensitivity/specificity comparison and happens to land near
+# POPULATION_MEDIAN_P -- see that dataclass's own docstring; the two are not
+# derived from each other.
+MAX_THRESHOLD_SHIFT = (POPULATION_P95 - POPULATION_P5) / 2  # ~0.11, from the loaded percentiles
 
 
 def compute_baseline_shift(resting_scores: list[float]) -> float | None:
@@ -98,13 +121,28 @@ def compute_baseline_shift(resting_scores: list[float]) -> float | None:
     to be meaningful -- this bounds trust in a small sample, not a claim
     about the "true" personal offset.
 
-    Returns None (caller should apply no correction, i.e. shift=0.0) if
-    fewer than MIN_CALIBRATION_SCORES scores are available.
+    Returns None (caller should apply no correction, i.e. shift=0.0) if the
+    resting-mean estimate isn't precise enough to trust, judged by its own
+    standard error rather than a fixed block count: the calibration protocol
+    (mqtt_bridge.py's N_CALIBRATION_BLOCKS) only ever captures 3 Relax-period
+    blocks total, so a fixed minimum count high enough to mean anything in
+    the usual statistical sense (e.g. 30) would make personalization
+    unreachable by design, while a low fixed count (e.g. 2) can't tell a
+    tight, consistent pair of readings apart from two readings that
+    happened to disagree wildly. Comparing the sample's own standard error
+    against MAX_THRESHOLD_SHIFT instead asks the question that actually
+    matters here -- "is this estimate's own uncertainty smaller than the
+    correction it would produce" -- using data already in hand rather than
+    an arbitrary extra constant.
     """
-    if len(resting_scores) < MIN_CALIBRATION_SCORES:
-        return None
+    if len(resting_scores) < 2:
+        return None  # variance needs at least 2 points to exist at all
 
     resting_mean = float(np.mean(resting_scores))
+    resting_sem = float(np.std(resting_scores, ddof=1)) / np.sqrt(len(resting_scores))
+    if resting_sem > MAX_THRESHOLD_SHIFT:
+        return None
+
     shift = resting_mean - POPULATION_MEDIAN_P
     return max(-MAX_THRESHOLD_SHIFT, min(MAX_THRESHOLD_SHIFT, shift))
 
