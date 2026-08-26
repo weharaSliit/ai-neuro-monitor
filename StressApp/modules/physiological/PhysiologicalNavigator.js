@@ -18,26 +18,30 @@ import RingScreen          from './screens/Ringscreen';
 import ProfileScreen       from './screens/ProfileScreen';
 import EegSessionScreen    from '../eeg/screens/EegSessionScreen';
 import FusionSessionScreen from '../fusion/screens/FusionSessionScreen';
+import PhenotypingScreen   from '../phenotyping/screens/PhenotypingScreen';
 
 const Tab = createBottomTabNavigator();
 
-// Home, History, Profile share the neutral brand glow; Ring/EEG/Fusion --
-// the three live signal sources -- each get their own accent so the same
-// color language shows up consistently across the tab bar, Home's Quick
-// Actions, and each screen's own header (see getTabAccent() below).
+// Home, History, Profile share the neutral brand glow; Ring/EEG/Fusion/
+// Phenotyping -- the four live signal sources -- each get their own accent
+// so the same color language shows up consistently across the tab bar,
+// Home's Quick Actions, and each screen's own header (see getTabAccent()
+// below).
 const TABS = [
   { name: 'Home',        icon: '🏠' },
   { name: 'Ring',        icon: '💍' },
   { name: 'EEG',         icon: '🧠' },
   { name: 'Fusion',      icon: '🧬' },
+  { name: 'Phenotyping', icon: '📱' },
   { name: 'History',     icon: '📊' },
   { name: 'Profile',     icon: '👤' },
 ];
 
 function getTabAccent(name, COLORS) {
-  if (name === 'Ring')   return COLORS.brand;
-  if (name === 'EEG')    return COLORS.warning;
-  if (name === 'Fusion') return COLORS.stress;
+  if (name === 'Ring')         return COLORS.brand;
+  if (name === 'EEG')          return COLORS.warning;
+  if (name === 'Fusion')       return COLORS.stress;
+  if (name === 'Phenotyping')  return COLORS.gsr;
   return COLORS.brand;
 }
 
@@ -113,6 +117,7 @@ export default function PhysiologicalNavigator() {
       <Tab.Screen name="Ring"        component={RingScreen}            />
       <Tab.Screen name="EEG"         component={EegSessionScreen}      />
       <Tab.Screen name="Fusion"      component={FusionSessionScreen}   />
+      <Tab.Screen name="Phenotyping" component={PhenotypingScreen}     />
       <Tab.Screen name="History"     component={HistoryScreen}         />
       <Tab.Screen name="Profile"     component={ProfileScreen}         />
     </Tab.Navigator>

@@ -143,9 +143,33 @@ export function getCalibrationStatus(userProfile = null) {
     const daysElapsed = Math.floor(diffMs / (1000 * 60 * 60 * 24));
     const dayNumber = Math.min(daysElapsed + 1, 99);
 
-    const isCalibrated = profile.is_calibrated || dayNumber >= 8;
+    // FIX: PREVIOUSLY `isCalibrated = profile.is_calibrated || dayNumber >= 8`
+    // — the `||` meant 8 elapsed calendar days alone was enough to claim
+    // "calibrated," with zero connection to whether the backend ever
+    // actually ran /behavior/calibrate (nothing in the app called it
+    // automatically). The dashboard would show "Pre-stress predictions
+    // active" and personalized-looking baseline UI while predictor.py was
+    // still silently using generic population defaults for that user.
+    //
+    // FIX: trust ONLY the real backend-confirmed flag now. dayNumber is
+    // still used below for progress-bar display copy during the waiting
+    // period, but never as a substitute for real calibration having run.
+    // See markCalibrated() — call it after a successful /behavior/calibrate
+    // response so this flag actually gets set to true for real.
+    const isCalibrated = !!profile.is_calibrated;
 
-    if (!isCalibrated && dayNumber <= 7) {
+    if (isCalibrated) {
+        return {
+            dayNumber,
+            displayDays: `Day ${dayNumber}+`,
+            phase: 'active',
+            progressPct: 100,
+            title: 'Pre-stress predictions active',
+            isCalibrated: true
+        };
+    }
+
+    if (dayNumber <= 7) {
         return {
             dayNumber,
             displayDays: `Day ${dayNumber} of 7`,
@@ -156,12 +180,31 @@ export function getCalibrationStatus(userProfile = null) {
         };
     }
 
+    // 7+ real days have passed but the backend still hasn't confirmed
+    // calibration — most likely not enough valid behavioral windows were
+    // collected yet (the endpoint requires 50+ by default). Honest waiting
+    // state instead of pretending day-count alone means calibrated.
     return {
         dayNumber,
-        displayDays: `Day ${dayNumber}+`,
-        phase: 'active',
+        displayDays: `Day ${dayNumber} — awaiting enough data`,
+        phase: 'calibration',
         progressPct: 100,
-        title: 'Pre-stress predictions active',
-        isCalibrated: true
+        title: 'Waiting for enough usage to calibrate',
+        isCalibrated: false
     };
+}
+
+/**
+ * Call this after a successful POST /behavior/calibrate response.
+ * getUserProfile() reads from localStorage only — it never re-reads
+ * Firebase — so without this, the frontend would never learn that the
+ * backend actually calibrated the user, no matter how many times
+ * /behavior/calibrate succeeds server-side.
+ */
+export function markCalibrated() {
+    const profile = getUserProfile();
+    if (!profile) return null;
+    const updated = { ...profile, is_calibrated: true, calibrated_at: new Date().toISOString() };
+    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(updated));
+    return updated;
 }
