@@ -8,9 +8,10 @@ export const MemberTelemetryCard = ({
 }) => {
   const { theme } = useContext(ThemeContext);
 
-  const getLabelColor = (label) => {
-    if (label === 'stress') return theme.danger;
-    if (label === 'pre-stress') return theme.warning;
+  const getLabelColor = (label, prob = 0.15) => {
+    const l = (label || '').toLowerCase();
+    if (l === 'stress' || l === 'high_stress' || l === 'high' || l === 'acute' || prob >= 0.60) return theme.danger;
+    if (l === 'pre-stress' || l === 'pre_stress' || l === 'medium' || l === 'moderate' || prob >= 0.35) return theme.warning;
     return theme.success;
   };
 
