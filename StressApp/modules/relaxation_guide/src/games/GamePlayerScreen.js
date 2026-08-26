@@ -157,10 +157,10 @@ export const GamePlayerScreen = () => {
       description: 'Ride the waves with calming ocean sounds'
     },
     flower_meadow: {
-      title: 'Flower Meadow',
-      icon: '🌸',
+      title: 'Bloom Garden',
+      icon: '🌺',
       color: '#EC4899',
-      description: 'Breathe with blooming flowers'
+      description: 'Guided 4-7-8 breath relaxation with living garden ecosystem'
     },
     zen_rock_garden: {
       title: 'Zen Garden',

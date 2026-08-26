@@ -66,7 +66,7 @@ export const MethodsScreen = () => {
       title: "Breathing Garden",
       icon: "🌸",
       sub_options: [
-        { id: "flower_meadow", title: "Blooming Meadow", description: "Inhale/exhale expanding flower visuals." },
+        { id: "flower_meadow", title: "Bloom Garden", description: "Guided 4-7-8 breath relaxation with living garden ecosystem." },
         { id: "lotus_breath", title: "Lotus Cycle", description: "Rhythmic lotus petal breath syncing." },
         { id: "zen_garden", title: "Zen Garden Rake", description: "Interactive sand rake breathing focus." }
       ]

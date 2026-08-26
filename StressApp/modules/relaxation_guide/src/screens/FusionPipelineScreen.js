@@ -142,7 +142,9 @@ export const FusionPipelineScreen = () => {
           <Text style={[s.cardTitle, { color: theme.textPrimary, marginBottom: 10 }]}>Processed (MVH + Safety Override)</Text>
           <View style={s.rowBetween}>
             <Text style={[s.metaTxt, { color: theme.textSecondary }]}>Effective Label</Text>
-            <Text style={[s.effectiveLabelTxt, { color: theme.accent }]}>
+            <Text style={[s.effectiveLabelTxt, {
+              color: (processed.effective_label === 'stress' || processed.effective_label === 'high_stress') ? theme.danger : (processed.effective_label === 'pre-stress' || processed.effective_label === 'pre_stress') ? theme.warning : theme.success
+            }]}>
               {(processed.effective_label || 'normal').toUpperCase()}
             </Text>
           </View>
