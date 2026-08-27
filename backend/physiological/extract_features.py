@@ -228,7 +228,13 @@ def extract_hrv_features(ibi_array):
         ibi_array : list of RR intervals in ms
 
     Returns:
-        dict with HRV features
+        (dict with HRV features, is_fallback: bool) -- is_fallback is True
+        when there wasn't enough clean IBI data and the dict below is a
+        fixed placeholder rather than a real reading. Callers must not feed
+        a fallback dict to the model as if it were real (see /predict's
+        hrv_fallback rejection in app.py) -- this used to be silent, which
+        let a noisy/short window produce a confident-looking prediction
+        built on fabricated numbers.
     """
     ibi = np.array(ibi_array, dtype=np.float64)
 
@@ -236,11 +242,11 @@ def extract_hrv_features(ibi_array):
     ibi = ibi[(ibi >= 300) & (ibi <= 2000)]
 
     if len(ibi) < 4:
-        # Not enough data — return safe defaults
+        # Not enough data — return safe defaults, flagged as such
         return {
             'AVNN': 800.0, 'MeanHR': 75.0, 'SDHR': 5.0,
             'pNN20': 0.1, 'SD1': 30.0
-        }
+        }, True
 
     # Contextual outlier removal ±20% of local median
     ibi_clean = []
@@ -257,7 +263,7 @@ def extract_hrv_features(ibi_array):
         return {
             'AVNN': 800.0, 'MeanHR': 75.0, 'SDHR': 5.0,
             'pNN20': 0.1, 'SD1': 30.0
-        }
+        }, True
 
     # AVNN — mean RR interval
     avnn = float(np.mean(ibi))
@@ -282,7 +288,7 @@ def extract_hrv_features(ibi_array):
         'SDHR':   sdhr,
         'pNN20':  pnn20,
         'SD1':    sd1
-    }
+    }, False
 
 
 # ── GSR feature extraction ────────────────────────────────────
@@ -425,6 +431,10 @@ def extract_features(ibi_array, gsr_adc_array,
         motion_contaminated : bool, True = reject this window
         feature_dict        : dict {feature_name: value}
                               (for StressStateMachine history)
+        hrv_is_fallback     : bool, True = ibi_array had too little clean
+                              data and feature_dict's HRV values (AVNN etc.)
+                              are fixed placeholders, not a real reading --
+                              see extract_hrv_features()'s docstring
     """
 
     # ── Step 1: Motion check ──────────────────────────────────
@@ -432,7 +442,7 @@ def extract_features(ibi_array, gsr_adc_array,
         extract_acc_features(acc_array)
 
     # ── Step 2: HRV features from IBI ────────────────────────
-    hrv_features = extract_hrv_features(ibi_array)
+    hrv_features, hrv_is_fallback = extract_hrv_features(ibi_array)
 
     # ── Step 3: GSR ADC → conductance ────────────────────────
     conductance_us = adc_to_conductance(
@@ -457,7 +467,7 @@ def extract_features(ibi_array, gsr_adc_array,
         dtype=np.float64
     )
 
-    return features_array, motion_contaminated, feature_dict
+    return features_array, motion_contaminated, feature_dict, hrv_is_fallback
 
 
 # ── Signal quality ────────────────────────────────────────────
@@ -529,12 +539,13 @@ if __name__ == '__main__':
     acc_sim = np.random.normal(0.93, 0.02, 3000).tolist()
 
     # Run extraction
-    features, motion_flag, feat_dict = extract_features(
+    features, motion_flag, feat_dict, hrv_fallback_flag = extract_features(
         ibi_sim, gsr_sim, acc_sim, gsr_cal
     )
 
     print(f"\nOutput shape: {features.shape}")
     print(f"Motion contaminated: {motion_flag}")
+    print(f"HRV fallback (insufficient clean IBI): {hrv_fallback_flag}")
     print(f"\nFeature values:")
     print("-" * 40)
     for i, col in enumerate(FEATURE_COLS):

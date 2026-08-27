@@ -2,6 +2,7 @@ import json
 import os
 import time
 
+from backend.common.config import CALIBRATION_SOFT_AGE_DAYS, CALIBRATION_HARD_AGE_DAYS
 from backend.common.firebase_config import FIREBASE_DB_URL, FUSION_EN_ROOT, RTDB_NAMESPACES
 from backend.psychological.realtime.firebase_sync import (
     FirebaseSync,
@@ -15,11 +16,17 @@ RTDB_NAMESPACE = RTDB_NAMESPACES["psychological"]  # "psychological"
 # load_user_calibration_profile()) before a fresh 3-block calibration is
 # required again, same as a brand-new user. EEG electrode placement/skin
 # contact varies enough session to session that trusting an old shift
-# indefinitely isn't safe; 7 days mirrors this project's own precedent for
-# a personal-baseline validity window (backend/phenotyping_behavior's
-# 7-day calibration protocol) -- there is no measured decay curve for
-# calibrated_p drift over time (yet) to derive a different number from.
-CALIBRATION_PROFILE_MAX_AGE_DAYS = 7.0
+# indefinitely isn't safe -- but a hard cutoff at CALIBRATION_SOFT_AGE_DAYS
+# (7 days) forced a fresh 3-block calibration every week with no dismissible
+# in-between state, which is stricter than the app-wide calibration-renewal
+# UX (see StressApp/modules/shared/CalibrationGate.js): not compulsory until
+# CALIBRATION_HARD_AGE_DAYS (30 days), just nudged starting at
+# CALIBRATION_SOFT_AGE_DAYS. load_user_calibration_profile() below now keeps
+# returning (and letting /calibrate skip ahead on) a profile up to the hard
+# age, same shared constants physiological's baseline freshness check uses
+# (backend/common/config.py) so both modalities present one renewal cadence
+# to the frontend.
+CALIBRATION_PROFILE_MAX_AGE_DAYS = CALIBRATION_HARD_AGE_DAYS
 
 
 def resolve_credential():
@@ -207,4 +214,37 @@ def load_user_calibration_profile(user_id: str,
     age_days = (time.time() - profile['calibrated_at']) / 86400.0
     if age_days > max_age_days:
         return None
+    # age_days/is_stale_soft let /calibrate's skip-ahead caller (app.py)
+    # and GET /calibration/status distinguish "confidently fresh" from
+    # "still valid but due for a renewal nudge" -- profile itself is
+    # otherwise unchanged so existing callers that only read
+    # baseline_shift/thresholds_personalized are unaffected.
+    profile = dict(profile)
+    profile['age_days'] = age_days
+    profile['is_stale_soft'] = age_days > CALIBRATION_SOFT_AGE_DAYS
     return profile
+
+
+def get_calibration_status(user_id: str) -> dict:
+    """{exists, calibrated_at, age_days, is_stale_soft, is_stale_hard} for
+    StressApp/modules/shared/CalibrationGate.js -- the only place today that
+    exposes calibration freshness without actually running a calibration.
+    Mirrors physiological's load_baseline_meta()
+    (backend/physiological/firebase_service.py) so the frontend gate can
+    treat both modalities the same way."""
+    ref = _calibration_profile_ref(user_id)
+    if ref is None:
+        return {'exists': False, 'calibrated_at': None, 'age_days': None,
+                'is_stale_soft': False, 'is_stale_hard': False}
+    profile = ref.get()
+    if not profile or 'calibrated_at' not in profile:
+        return {'exists': False, 'calibrated_at': None, 'age_days': None,
+                'is_stale_soft': False, 'is_stale_hard': False}
+    age_days = (time.time() - profile['calibrated_at']) / 86400.0
+    return {
+        'exists': True,
+        'calibrated_at': profile['calibrated_at'],
+        'age_days': age_days,
+        'is_stale_soft': age_days > CALIBRATION_SOFT_AGE_DAYS,
+        'is_stale_hard': age_days > CALIBRATION_HARD_AGE_DAYS,
+    }

@@ -1,14 +1,27 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView,
-  TouchableOpacity, Animated, Alert
+  TouchableOpacity, Animated, Dimensions
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import ScreenBackground from '../../shared/ScreenBackground';
 import api from '../api/client';
 import { useTheme } from '../config/ThemeContext';
 import { COLORS } from '../config/theme';
-import { useAppState } from './AppState';
 import { useAuth } from '../../../context/AuthContext';
+import LineChart from '../../shared/LineChart';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const DRIFT_CHART_WIDTH = SCREEN_WIDTH - 40 - 36; // screen margins + card padding
+
+// The two most human-readable features to chart drift for -- AVNN/MeanHR
+// are the same pair the FeatureRow list always highlights first, and
+// unlike SCL_mean/SCR_count/SD1 they need no domain knowledge to read
+// ("your resting heart rate baseline has drifted from X to Y bpm").
+const DRIFT_FEATURES = [
+  { key: 'AVNN',   label: 'Resting AVNN',    unit: 'ms',  color: COLORS.hrv },
+  { key: 'MeanHR', label: 'Resting Heart Rate', unit: 'bpm', color: COLORS.stress },
+];
 
 function AnimatedCounter({ value, color }) {
   const anim = useRef(new Animated.Value(0)).current;
@@ -22,12 +35,12 @@ function AnimatedCounter({ value, color }) {
   );
 }
 
-export default function EMAScreen() {
-  const { theme }                          = useTheme();
-  const { user }                           = useAuth();
-  const { lastEmaResult, lastSessionId }   = useAppState();
-  const [emaData, setEmaData]  = useState(lastEmaResult);
-  const [loading, setLoading]  = useState(false);
+export default function EMAScreen({ navigation }) {
+  const { theme }               = useTheme();
+  const { user }                = useAuth();
+  const [emaData, setEmaData]         = useState(null);
+  const [driftHistory, setDriftHistory] = useState([]); // ascending by timestamp, full history
+  const [loading, setLoading]         = useState(true);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const insets   = useSafeAreaInsets();
 
@@ -40,89 +53,94 @@ export default function EMAScreen() {
   const text      = theme.text;
   const muted     = theme.textMuted;
 
-  const normalizeHistoryEntry = (entry, sessionId) => {
+  // Entries are now written by calibration_capture.py every time a
+  // recalibration blends into an existing baseline (see backend/
+  // physiological/calibration_capture.py::save_calibration_windows) --
+  // pushed with an auto-generated key, not a session_id, since a
+  // recalibration isn't tied to any one ring session. `changes` already
+  // carries the real per-feature formula string and `highlight` flag from
+  // ema_service.py's build_ema_summary(), and `interpretation` is
+  // interpret_ema_change()'s real physiological reading -- both computed
+  // once server-side at write time, not reconstructed here.
+  const normalizeHistoryEntry = (entry) => {
     if (!entry) return null;
-    if (entry.comparison) return entry;
     const changes = entry.changes || {};
-    const keyFeatures = ['AVNN','MeanHR','SCL_mean','SCR_count','SD1'];
-    const comparison = keyFeatures.filter(f => changes[f]).map(f => ({
-      feature: f, old: changes[f].old, new: changes[f].new,
-      delta: changes[f].delta, formula: `α × session + (1-α) × previous = new`,
-    }));
-    return { success: true, user_id: userId, session_id: sessionId,
-      alpha: entry.alpha, n_windows: entry.n_windows ?? null,
-      comparison, interpretation: ['Loaded from EMA history.'], updated: true,
+    const comparison = Object.entries(changes)
+      .filter(([, v]) => v && v.highlight)
+      .map(([feature, v]) => ({
+        feature, old: v.old, new: v.new, delta: v.delta, formula: v.formula,
+      }));
+    return { alpha: entry.alpha, comparison,
+      interpretation: entry.interpretation?.length
+        ? entry.interpretation
+        : ['From a real recalibration — a controlled, sit-still measurement, not everyday activity.'],
       timestamp: entry.timestamp };
   };
 
-  const loadLatestFromHistory = async () => {
+  const loadHistory = async () => {
     try {
       const res     = await api.get(`/ema/history/${userId}`);
       const history = res.data?.ema_history || {};
-      const entries = Object.entries(history).map(([sid, entry]) => ({ sid, entry })).filter(x => x.entry);
-      if (entries.length === 0) return null;
-      entries.sort((a, b) => (a.entry.timestamp || '').localeCompare(b.entry.timestamp || ''));
-      const latest = entries[entries.length - 1];
-      return normalizeHistoryEntry(latest.entry, latest.sid);
-    } catch { return null; }
+      const entries = Object.values(history).filter(Boolean);
+      entries.sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
+      return entries; // ascending -- oldest first, latest last
+    } catch { return []; }
   };
-
-  useEffect(() => {
-    if (lastEmaResult) {
-      setEmaData(lastEmaResult);
-      Animated.timing(fadeAnim, { toValue: 1, duration: 800, useNativeDriver: true }).start();
-    }
-  }, [lastEmaResult]);
 
   useEffect(() => {
     let mounted = true;
     (async () => {
-      if (emaData) return;
-      const fromHistory = await loadLatestFromHistory();
+      const entries = await loadHistory();
       if (!mounted) return;
-      if (fromHistory) {
-        setEmaData(fromHistory);
+      if (entries.length > 0) {
+        setDriftHistory(entries);
+        setEmaData(normalizeHistoryEntry(entries[entries.length - 1]));
         Animated.timing(fadeAnim, { toValue: 1, duration: 600, useNativeDriver: true }).start();
       }
+      setLoading(false);
     })();
     return () => { mounted = false; };
   }, [userId]);
 
-  const manualRefresh = async () => {
-    const sessionToUse = lastSessionId || emaData?.session_id;
-    if (!sessionToUse) { Alert.alert('No Session', 'Wear the ring and complete a session first.'); return; }
-    setLoading(true);
-    try {
-      const res = await api.post('/ema/update', { session_id: sessionToUse });
-      setEmaData(res.data);
-      Animated.timing(fadeAnim, { toValue: 1, duration: 600, useNativeDriver: true }).start();
-    } catch (e) {
-      Alert.alert('EMA Update Failed', e?.response?.data?.error || e.message);
-    }
-    setLoading(false);
-  };
+  // {value, date}[] per drift feature, from every past recalibration --
+  // not just the latest one shown in "Baseline Changes" below.
+  const driftSeries = (featureKey) =>
+    driftHistory
+      .filter((e) => e.changes?.[featureKey]?.new !== undefined && e.timestamp)
+      .map((e) => ({ value: e.changes[featureKey].new, date: new Date(e.timestamp) }));
 
   if (!emaData) {
     return (
-      <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
+      <ScreenBackground>
         <View style={styles.emptyContainer}>
           <View style={[styles.emptyIconRing, { borderColor: COLORS.brand + '40' }]}>
             <Text style={styles.emptyEmoji}>🔄</Text>
           </View>
-          <Text style={[styles.emptyTitle, { color: text }]}>No EMA Update Yet</Text>
-          <Text style={[styles.emptyText, { color: muted }]}>
-            The EMA continual learning update appears here automatically after each session.
+          <Text style={[styles.emptyTitle, { color: text }]}>
+            {loading ? 'Loading…' : 'No Baseline Updates Yet'}
           </Text>
+          <Text style={[styles.emptyText, { color: muted }]}>
+            Your baseline updates automatically each time you recalibrate — a
+            real, controlled measurement, not everyday activity.
+          </Text>
+          {!loading && (
+            <TouchableOpacity
+              style={[styles.refreshBtn, { backgroundColor: card, borderColor: border, marginTop: 8 }]}
+              onPress={() => navigation.navigate('Calibration')}
+            >
+              <Text style={[styles.refreshBtnText, { color: COLORS.brand }]}>Go to Calibration →</Text>
+            </TouchableOpacity>
+          )}
           <View style={[styles.emptyBadge, { backgroundColor: COLORS.brand + '15', borderColor: COLORS.brand + '40' }]}>
             <Text style={[styles.emptyBadgeText, { color: COLORS.brandLight }]}>Watching: {userId}</Text>
           </View>
         </View>
-      </SafeAreaView>
+      </ScreenBackground>
     );
   }
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
+    <ScreenBackground>
       <Animated.ScrollView
         style={[styles.container, { opacity: fadeAnim }]}
         contentContainerStyle={{ paddingBottom: 16 + insets.bottom + 60 }}
@@ -150,17 +168,17 @@ export default function EMAScreen() {
 
           <View style={[styles.formulaBox, { backgroundColor: card, borderColor: border }]}>
             <Text style={[styles.formulaEq, { color: COLORS.brandLight }]}>
-              new = α × session + (1-α) × previous
+              new = α × new calibration + (1-α) × previous
             </Text>
             <Text style={[styles.formulaEq, { color: text }]}>
-              new = {emaData.alpha} × session + {(1 - emaData.alpha).toFixed(1)} × previous
+              new = {emaData.alpha} × new calibration + {(1 - emaData.alpha).toFixed(1)} × previous
             </Text>
           </View>
 
           <View style={styles.alphaExplainRow}>
             <View style={[styles.alphaChip, { backgroundColor: COLORS.brand + '20', borderColor: COLORS.brand + '40' }]}>
               <Text style={[styles.alphaChipPct, { color: COLORS.brand }]}>{emaData.alpha * 100}%</Text>
-              <Text style={[styles.alphaChipLabel, { color: muted }]}>This session</Text>
+              <Text style={[styles.alphaChipLabel, { color: muted }]}>This calibration</Text>
             </View>
             <Text style={[styles.plusSign, { color: muted }]}>+</Text>
             <View style={[styles.alphaChip, { backgroundColor: COLORS.normal + '20', borderColor: COLORS.normal + '40' }]}>
@@ -175,24 +193,46 @@ export default function EMAScreen() {
           </View>
 
           <Text style={[styles.formulaNote, { color: muted }]}>
-            Adapts gradually over 10–15 sessions. Stable life = stable baseline.
+            Adapts gradually with each recalibration (every ~7–30 days), not
+            from everyday activity. Stable life = stable baseline.
           </Text>
         </View>
 
-        {/* Windows used */}
+        {/* Baseline drift over time -- every past recalibration, not just
+            the latest one (see "Baseline Changes" below for that) */}
+        <View style={[styles.card, { backgroundColor: card, borderColor: border }]}>
+          <Text style={[styles.cardTitle, { color: text }]}>Baseline Drift</Text>
+          {driftHistory.length < 2 ? (
+            <Text style={[styles.cardSub, { color: muted }]}>
+              Not enough recalibrations yet to show a trend — this fills in
+              as you recalibrate over time.
+            </Text>
+          ) : (
+            DRIFT_FEATURES.map(({ key, label, unit, color }) => {
+              const series = driftSeries(key);
+              if (series.length < 2) return null;
+              return (
+                <View key={key} style={styles.driftBlock}>
+                  <Text style={[styles.driftLabel, { color: muted }]}>
+                    {label} ({unit})
+                  </Text>
+                  <LineChart
+                    points={series}
+                    color={color}
+                    width={DRIFT_CHART_WIDTH}
+                    height={90}
+                  />
+                </View>
+              );
+            })
+          )}
+        </View>
+
+        {/* Feature changes from this recalibration */}
         <View style={[styles.card, { backgroundColor: card, borderColor: border }]}>
           <Text style={[styles.cardTitle, { color: text }]}>
-            Baseline Changes — {emaData.n_windows ?? '—'} windows
+            Baseline Changes
           </Text>
-          {emaData.n_normal_used !== undefined && (
-            <View style={styles.windowsBreakdown}>
-              <WindowChip value={emaData.n_normal_used} label="Normal used" color={COLORS.normal} muted={muted} />
-              <WindowChip
-                value={emaData.n_windows !== undefined ? emaData.n_windows - emaData.n_normal_used : undefined}
-                label="Stress excluded" color={COLORS.stress} muted={muted}
-              />
-            </View>
-          )}
           {emaData.comparison?.map((item, i) => (
             <FeatureRow key={i} item={item} muted={muted} text={text} border={border} />
           ))}
@@ -208,7 +248,7 @@ export default function EMAScreen() {
             </View>
           ))}
           <Text style={[styles.interpretNote, { color: muted }]}>
-            Next session predictions will use these updated baseline values.
+            Future predictions will use these updated baseline values.
           </Text>
         </View>
 
@@ -216,30 +256,21 @@ export default function EMAScreen() {
         <View style={[styles.researchCard, { backgroundColor: card, borderColor: COLORS.brand + '30' }]}>
           <Text style={[styles.researchTitle, { color: text }]}>Research Significance</Text>
           <Text style={[styles.researchText, { color: muted }]}>
-            This EMA update addresses a gap across the reviewed literature — no existing system adapts its baseline after deployment. Static models degrade as user physiology changes. This continual learning layer ensures accuracy across weeks and months.
+            This addresses a gap across the reviewed literature — no existing system adapts its baseline after deployment. Static models degrade as user physiology changes. Blending each real recalibration into your baseline keeps accuracy stable across weeks and months, without letting noisy everyday activity drift it.
           </Text>
         </View>
 
         <TouchableOpacity
           style={[styles.refreshBtn, { backgroundColor: card, borderColor: border }]}
-          onPress={manualRefresh}
+          onPress={() => navigation.navigate('Calibration')}
         >
           <Text style={[styles.refreshBtnText, { color: COLORS.brand }]}>
-            {loading ? '⏳ Updating...' : '🔄 Recompute EMA'}
+            Recalibrate →
           </Text>
         </TouchableOpacity>
 
       </Animated.ScrollView>
-    </SafeAreaView>
-  );
-}
-
-function WindowChip({ value, label, color, muted }) {
-  return (
-    <View style={[styles.windowChip, { backgroundColor: color + '15', borderColor: color + '40' }]}>
-      <Text style={[styles.windowChipValue, { color }]}>{value}</Text>
-      <Text style={[styles.windowChipLabel, { color: muted }]}>{label}</Text>
-    </View>
+    </ScreenBackground>
   );
 }
 
@@ -303,10 +334,9 @@ const styles = StyleSheet.create({
   formulaNote:       { fontSize: 12, lineHeight: 18 },
   card:              { marginHorizontal: 20, marginBottom: 14, padding: 18, borderRadius: 20, borderWidth: 1 },
   cardTitle:         { fontSize: 15, fontWeight: '800', marginBottom: 12 },
-  windowsBreakdown:  { flexDirection: 'row', gap: 8, marginBottom: 14 },
-  windowChip:        { flex: 1, alignItems: 'center', padding: 10, borderRadius: 12, borderWidth: 1 },
-  windowChipValue:   { fontSize: 18, fontWeight: '900' },
-  windowChipLabel:   { fontSize: 9, marginTop: 3, textAlign: 'center' },
+  cardSub:           { fontSize: 12, lineHeight: 18 },
+  driftBlock:        { marginBottom: 14 },
+  driftLabel:        { fontSize: 11, fontWeight: '700', marginBottom: 6 },
   featureRow:        { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1 },
   featureLeft:       { flex: 1 },
   featureName:       { fontSize: 14, fontWeight: '800' },

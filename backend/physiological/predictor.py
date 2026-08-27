@@ -11,7 +11,8 @@ import joblib
 from backend.common.config import (
     MODEL_FILE, SCALER_FILE, FEATURES_FILE,
     N_BASELINE_WIN, EMA_ALPHA,
-    STRESS_LABELS, TREND_RISING_THRESHOLD
+    STRESS_LABELS, TREND_RISING_THRESHOLD,
+    STRESS_DECISION_THRESHOLD
 )
 
 print("Loading model files...")
@@ -142,7 +143,9 @@ def predict_window(features_array, baseline_mean, baseline_std,
     probs = model.predict_proba(X_scaled)[0]
     prob_normal, prob_stress = float(probs[0]), float(probs[1])
 
-    prediction = 1 if prob_stress > prob_normal else 0
+    # ROC-derived cutoff, not the implicit 0.5 -- see STRESS_DECISION_THRESHOLD's
+    # docstring in backend/common/config.py.
+    prediction = 1 if prob_stress > STRESS_DECISION_THRESHOLD else 0
     confidence = max(prob_normal, prob_stress)
 
     trending_toward_stress = False
@@ -177,7 +180,7 @@ def predict_raw(features_array):
     X_scaled = scaler.transform(features_array)
     probs = model.predict_proba(X_scaled)[0]
     prob_normal, prob_stress = float(probs[0]), float(probs[1])
-    prediction = 1 if prob_stress > prob_normal else 0
+    prediction = 1 if prob_stress > STRESS_DECISION_THRESHOLD else 0
     return {
         'prediction':  prediction,
         'label':       STRESS_LABELS[prediction],

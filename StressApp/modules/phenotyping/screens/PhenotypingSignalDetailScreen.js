@@ -6,40 +6,46 @@
 // ============================================================
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import ScreenBackground from '../../shared/ScreenBackground';
 import { ref, onValue, off } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
+import { COLORS as STATIC_COLORS } from '../../physiological/config/theme';
 import { useAuth } from '../../../context/AuthContext';
 
+// STATIC_COLORS (not useTheme()'s COLORS) since this config object lives at
+// module scope, outside any component -- was previously hardcoded to the
+// old sage palette's exact hex values, which silently went stale once this
+// redesign's new "Calm Mist" palette landed. Importing the live COLORS
+// object directly keeps it correct across any future palette change.
 const SIGNAL_CONFIG = {
     keyboard: {
         title: '⌨️ Keyboard Patterns',
         measures: [
-            { id: 'dwell', name: 'Dwell Time', unit: 'ms', color: '#E0A458',
+            { id: 'dwell', name: 'Dwell Time', unit: 'ms', color: STATIC_COLORS.warning,
               explanation: "Dwell time is how long you hold each key down when typing. When you're stressed, fingers tend to press keys for longer as muscle tension increases and fine motor control becomes less precise." },
-            { id: 'flight', name: 'Flight Time', unit: 'ms', color: '#7FB596',
+            { id: 'flight', name: 'Flight Time', unit: 'ms', color: STATIC_COLORS.normal,
               explanation: 'Flight time is the gap between releasing one key and pressing the next. Longer flight times suggest slower cognitive processing, often linked to distraction or mental fatigue.' },
         ],
     },
     scroll: {
         title: '📜 Screen Scrolling',
-        measures: [{ id: 'scroll_vel', name: 'Scroll Velocity', unit: 'px/s', color: '#7FB596',
+        measures: [{ id: 'scroll_vel', name: 'Scroll Velocity', unit: 'px/s', color: STATIC_COLORS.normal,
             explanation: 'How fast you scroll through content. Faster scrolling than usual can indicate impatience or difficulty focusing — a subtle pre-stress marker.' }],
     },
     app_switch: {
         title: '🔀 App Switching Frequency',
-        measures: [{ id: 'switch_rate', name: 'Switch Rate', unit: '/min', color: '#A895C9',
+        measures: [{ id: 'switch_rate', name: 'Switch Rate', unit: '/min', color: STATIC_COLORS.gsr,
             explanation: 'How often you switch between apps. High switching indicates multitasking and fragmented attention.' }],
     },
     activity: {
         title: '🚶 Activity Context',
-        measures: [{ id: 'motion', name: 'Motion Detected', unit: '', color: '#7FB596',
+        measures: [{ id: 'motion', name: 'Motion Detected', unit: '', color: STATIC_COLORS.normal,
             explanation: 'Whether significant physical motion (like walking) is detected. Motion invalidates keystroke timing analysis for that window.' }],
     },
     screen: {
         title: '📱 Screen On/Off Times',
-        measures: [{ id: 'unlocks', name: 'Unlock Frequency', unit: 'unlocks', color: '#E0A458',
+        measures: [{ id: 'unlocks', name: 'Unlock Frequency', unit: 'unlocks', color: STATIC_COLORS.warning,
             explanation: 'How often you unlock your phone. High unlock frequency, especially for very short sessions, is a strong behavioral marker for anxiety and checking behaviors.' }],
     },
 };
@@ -47,7 +53,7 @@ const SIGNAL_CONFIG = {
 function statusColor(status, COLORS) {
     if (status === 'anomalous') return COLORS.stress;
     if (status === 'elevated') return COLORS.warning;
-    if (status === 'pending') return '#8B8478';
+    if (status === 'pending') return COLORS.light.textSub;
     return COLORS.normal;
 }
 
@@ -96,14 +102,14 @@ export default function PhenotypingSignalDetailScreen({ route }) {
 
     if (!config) {
         return (
-            <SafeAreaView style={[styles.container, { backgroundColor: t.bg }]}>
+            <ScreenBackground>
                 <Text style={{ color: t.textMuted, textAlign: 'center', marginTop: 40 }}>Signal not found</Text>
-            </SafeAreaView>
+            </ScreenBackground>
         );
     }
 
     return (
-        <SafeAreaView style={[styles.container, { backgroundColor: t.bg }]} edges={['left', 'right']}>
+        <ScreenBackground edges={['left', 'right']}>
             <ScrollView contentContainerStyle={styles.scroll}>
                 {(measures || []).map((m, i) => (
                     <View key={i} style={[styles.card, { backgroundColor: t.surface, borderColor: t.border }]}>
@@ -123,7 +129,7 @@ export default function PhenotypingSignalDetailScreen({ route }) {
                     </View>
                 ))}
             </ScrollView>
-        </SafeAreaView>
+        </ScreenBackground>
     );
 }
 

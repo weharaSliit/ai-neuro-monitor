@@ -1,125 +1,25 @@
 // ============================================================
 // PhysiologicalNavigator.js
-// WESAD simulation/calibration tabs removed — the real ring
-// (via mqtt_bridge.py -> Flask /predict, /calibrate) is the only
-// deployment target now. EMA is no longer its own tab — folded into
-// Home/Profile as a compact summary card (EmaSummaryCard), full detail
-// still reachable at the "EmaDetail" stack screen (App.js).
+// No bottom tab bar -- Overview (Fusion) is the one hub screen, with Ring/
+// EEG/Phenotyping each reached as sections/cards from it rather than tabs.
+// Phenotyping stays its own pushed screen (it's a large, self-contained
+// "phone statistics" dashboard), just no longer a tab -- Overview links to
+// it directly, same as it already links to RingSummary/EegSummary.
 // ============================================================
 
-import React, { useRef, useEffect } from 'react';
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { View, Text, Animated } from 'react-native';
-import { useTheme } from './config/ThemeContext';
+import React from 'react';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
-import DashboardScreen     from './screens/DashboardScreen';
-import HistoryScreen       from './screens/HistoryScreen';
-import RingScreen          from './screens/Ringscreen';
-import ProfileScreen       from './screens/ProfileScreen';
-import EegSessionScreen    from '../eeg/screens/EegSessionScreen';
 import FusionSessionScreen from '../fusion/screens/FusionSessionScreen';
 import PhenotypingScreen   from '../phenotyping/screens/PhenotypingScreen';
 
-const Tab = createBottomTabNavigator();
-
-// Home, History, Profile share the neutral brand glow; Ring/EEG/Fusion/
-// Phenotyping -- the four live signal sources -- each get their own accent
-// so the same color language shows up consistently across the tab bar,
-// Home's Quick Actions, and each screen's own header (see getTabAccent()
-// below).
-const TABS = [
-  { name: 'Home',        icon: '🏠' },
-  { name: 'Ring',        icon: '💍' },
-  { name: 'EEG',         icon: '🧠' },
-  { name: 'Fusion',      icon: '🧬' },
-  { name: 'Phenotyping', icon: '📱' },
-  { name: 'History',     icon: '📊' },
-  { name: 'Profile',     icon: '👤' },
-];
-
-function getTabAccent(name, COLORS) {
-  if (name === 'Ring')         return COLORS.brand;
-  if (name === 'EEG')          return COLORS.warning;
-  if (name === 'Fusion')       return COLORS.stress;
-  if (name === 'Phenotyping')  return COLORS.gsr;
-  return COLORS.brand;
-}
-
-function TabIcon({ name, focused, color, COLORS }) {
-  const scaleAnim = useRef(new Animated.Value(1)).current;
-  const glowAnim  = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.parallel([
-      Animated.spring(scaleAnim, {
-        toValue: focused ? 1.2 : 1,
-        tension: 200, friction: 8, useNativeDriver: true
-      }),
-      Animated.timing(glowAnim, {
-        toValue: focused ? 1 : 0,
-        duration: 180, useNativeDriver: true
-      }),
-    ]).start();
-  }, [focused]);
-
-  const tab = TABS.find(t => t.name === name);
-  const accent = getTabAccent(name, COLORS);
-
-  return (
-    <View style={{ alignItems: 'center', justifyContent: 'center', paddingTop: 4 }}>
-      {focused && (
-        <Animated.View style={{
-          position: 'absolute', top: -8,
-          width: 38, height: 38, borderRadius: 19,
-          backgroundColor: accent + '18',
-          opacity: glowAnim,
-        }} />
-      )}
-      <Animated.Text style={{ fontSize: focused ? 20 : 17, transform: [{ scale: scaleAnim }] }}>
-        {tab?.icon || '•'}
-      </Animated.Text>
-      {focused && (
-        <View style={{
-          width: 4, height: 4, borderRadius: 2,
-          backgroundColor: accent, marginTop: 3,
-        }} />
-      )}
-    </View>
-  );
-}
+const Stack = createNativeStackNavigator();
 
 export default function PhysiologicalNavigator() {
-  const { theme, COLORS } = useTheme();
-
   return (
-    <Tab.Navigator
-      screenOptions={({ route }) => ({
-        headerShown: false,
-        tabBarIcon: ({ focused, color }) => (
-          <TabIcon name={route.name} focused={focused} color={color} COLORS={COLORS} />
-        ),
-        tabBarActiveTintColor:   getTabAccent(route.name, COLORS),
-        tabBarInactiveTintColor: theme.textMuted,
-        tabBarStyle: {
-          backgroundColor: theme.surface,
-          borderTopColor:  theme.border,
-          borderTopWidth:  1,
-          height:          64,
-          paddingBottom:   10,
-          paddingTop:      4,
-        },
-        tabBarLabelStyle: {
-          fontSize: 9, fontWeight: '700', letterSpacing: 0.3,
-        },
-      })}
-    >
-      <Tab.Screen name="Home"        component={DashboardScreen}       />
-      <Tab.Screen name="Ring"        component={RingScreen}            />
-      <Tab.Screen name="EEG"         component={EegSessionScreen}      />
-      <Tab.Screen name="Fusion"      component={FusionSessionScreen}   />
-      <Tab.Screen name="Phenotyping" component={PhenotypingScreen}     />
-      <Tab.Screen name="History"     component={HistoryScreen}         />
-      <Tab.Screen name="Profile"     component={ProfileScreen}         />
-    </Tab.Navigator>
+    <Stack.Navigator screenOptions={{ headerShown: false }} initialRouteName="Fusion">
+      <Stack.Screen name="Fusion" component={FusionSessionScreen} />
+      <Stack.Screen name="Phenotyping" component={PhenotypingScreen} />
+    </Stack.Navigator>
   );
 }

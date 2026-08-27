@@ -7,7 +7,7 @@
 // ============================================================
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import ScreenBackground from '../../shared/ScreenBackground';
 import { ref, onValue, off } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
@@ -75,7 +75,7 @@ export default function PhenotypingSignalHistoryScreen({ route }) {
     const daysAbove = days.filter((d) => d.status === 'elevated' || d.status === 'anomalous').length;
 
     return (
-        <SafeAreaView style={[styles.container, { backgroundColor: t.bg }]} edges={['left', 'right']}>
+        <ScreenBackground edges={['left', 'right']}>
             <ScrollView contentContainerStyle={styles.scroll}>
                 <Text style={[styles.title, { color: t.text }]}>{signalName}</Text>
 
@@ -111,7 +111,7 @@ export default function PhenotypingSignalHistoryScreen({ route }) {
                     </View>
                 ))}
             </ScrollView>
-        </SafeAreaView>
+        </ScreenBackground>
     );
 }
 
