@@ -8,9 +8,10 @@
 // ============================================================
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import ScreenBackground from '../../shared/ScreenBackground';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../../physiological/config/ThemeContext';
+import { COLORS as STATIC_COLORS } from '../../physiological/config/theme';
 import { useAuth } from '../../../context/AuthContext';
 import { API_BASE } from '../config/config';
 
@@ -36,9 +37,9 @@ function currentWeekNum() {
 }
 
 function stressCategory(score) {
-    if (score <= 5) return { label: 'Low Stress', color: '#7FB596' };
-    if (score <= 11) return { label: 'Moderate Stress', color: '#E0A458' };
-    return { label: 'High Stress', color: '#D97A76' };
+    if (score <= 5) return { label: 'Low Stress', color: STATIC_COLORS.normal };
+    if (score <= 11) return { label: 'Moderate Stress', color: STATIC_COLORS.warning };
+    return { label: 'High Stress', color: STATIC_COLORS.stress };
 }
 
 export default function PhenotypingEmaScreen({ navigation, route }) {
@@ -140,7 +141,7 @@ export default function PhenotypingEmaScreen({ navigation, route }) {
     };
 
     return (
-        <SafeAreaView style={[styles.container, { backgroundColor: t.bg }]} edges={['top', 'left', 'right']}>
+        <ScreenBackground edges={['top', 'left', 'right']}>
             <View style={styles.tabRow}>
                 <TouchableOpacity
                     style={[styles.tabBtn, { backgroundColor: tab === 'siss' ? COLORS.stress + '20' : t.surface, borderColor: tab === 'siss' ? COLORS.stress + '50' : t.border }]}
@@ -250,7 +251,7 @@ export default function PhenotypingEmaScreen({ navigation, route }) {
                     </View>
                 )}
             </ScrollView>
-        </SafeAreaView>
+        </ScreenBackground>
     );
 }
 

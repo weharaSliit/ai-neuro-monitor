@@ -5,12 +5,18 @@
 // This is the SAME backend the native KeystrokeCollectorService posts to
 // (see android/app/.../phenotyping/KeystrokeCollectorService.java's
 // FLASK_BASE_URL) -- keep both in sync manually if this ever changes.
+import { COLORS } from '../../physiological/config/theme';
+
 export const API_BASE = 'https://ai-neuro-monitor-8wsv.onrender.com';
 
+// Was hardcoded to the old sage palette's exact hex values -- now reads the
+// live shared COLORS so it stays correct across any future palette change
+// instead of silently drifting out of sync (as it had after this redesign's
+// new "Calm Mist" palette landed).
 export const STRESS_LEVEL_COLORS = {
-    normal:   '#7FB596',
-    elevated: '#E0A458',
-    high:     '#D97A76',
+    normal:   COLORS.normal,
+    elevated: COLORS.warning,
+    high:     COLORS.stress,
 };
 
 export const MOOD_EMOJI = {
@@ -22,7 +28,7 @@ export const MOOD_EMOJI = {
 };
 
 export function gaugeColor(score, isCalibrating) {
-    if (isCalibrating) return '#7A9B8E';
+    if (isCalibrating) return COLORS.brand;
     if (score < 0.3) return STRESS_LEVEL_COLORS.normal;
     if (score < 0.6) return STRESS_LEVEL_COLORS.elevated;
     return STRESS_LEVEL_COLORS.high;

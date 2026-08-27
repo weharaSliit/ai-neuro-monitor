@@ -7,7 +7,7 @@
 // ============================================================
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import ScreenBackground from '../../shared/ScreenBackground';
 import { ref, onValue, off, get } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
@@ -147,7 +147,7 @@ export default function PhenotypingAnalysisScreen() {
     }, [latestWindow, baselines]);
 
     return (
-        <SafeAreaView style={[styles.container, { backgroundColor: t.bg }]} edges={['left', 'right']}>
+        <ScreenBackground edges={['left', 'right']}>
             <View style={styles.tabRow}>
                 {TABS.map((tab) => (
                     <TouchableOpacity
@@ -171,7 +171,7 @@ export default function PhenotypingAnalysisScreen() {
                             <View style={styles.barChart}>
                                 {weeklyScores.map((s, i) => {
                                     const hPct = Math.max(Math.round(s.score * 100), 8);
-                                    const color = !s.hasData ? '#8B8478' : s.score >= 0.6 ? COLORS.stress : s.score >= 0.4 ? COLORS.warning : COLORS.normal;
+                                    const color = !s.hasData ? t.textSub : s.score >= 0.6 ? COLORS.stress : s.score >= 0.4 ? COLORS.warning : COLORS.normal;
                                     return (
                                         <View key={i} style={styles.barCol}>
                                             <View style={styles.barTrack}>
@@ -287,7 +287,7 @@ export default function PhenotypingAnalysisScreen() {
                     </>
                 )}
             </ScrollView>
-        </SafeAreaView>
+        </ScreenBackground>
     );
 }
 

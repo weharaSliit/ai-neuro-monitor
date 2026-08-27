@@ -34,6 +34,7 @@ from backend.psychological.firebase_service import (
     EegFirebaseSession,
     load_user_calibration_profile,
     save_user_calibration_profile,
+    get_calibration_status,
 )
 from backend.psychological.realtime.adc import code_to_microvolts
 from backend.psychological.realtime.csv_logger import CsvLogger, RAW_FIELDS, log_raw_block
@@ -250,6 +251,30 @@ def calibrate():
     # (success: True either way). Surfaced here so that's visible without
     # cross-referencing this service's own startup logs.
     return jsonify({"success": True, "session_id": session_id, "firebase_enabled": firebase.enabled, **outcome})
+
+
+@app.route("/calibration/status", methods=["GET"])
+@require_auth
+def calibration_status():
+    """{exists, calibrated_at, age_days, is_stale_soft, is_stale_hard} for
+    this user's stored calibration_profile -- lets
+    StressApp/modules/shared/CalibrationGate.js check EEG's calibration
+    freshness without running a full 3-block calibration, mirroring
+    physiological's GET /baseline/<user_id> response shape."""
+    return jsonify(get_calibration_status(g.user_id))
+
+
+@app.route("/admin/calibration/<user_id>", methods=["GET"])
+@require_auth
+def admin_calibration_status(user_id):
+    """Same shape as GET /calibration/status, but for any user_id -- unlike
+    that route (hardcoded to g.user_id, no user_id param exists on it),
+    this takes the target user explicitly. No ownership check, only
+    @require_auth (a valid token still required) -- see
+    backend/physiological/app.py's /admin/... routes for why (StressApp's
+    Admin App, no role/permission concept exists in this backend by
+    design)."""
+    return jsonify(get_calibration_status(user_id))
 
 
 # -- /predict -- one 25s block -> task_state_score --------------------
