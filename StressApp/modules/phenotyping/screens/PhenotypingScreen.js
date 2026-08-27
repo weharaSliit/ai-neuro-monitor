@@ -13,10 +13,13 @@
 // ============================================================
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { ref, onValue, off, query, limitToLast, get } from 'firebase/database';
 import { db } from '../firebase';
+import ScreenBackground from '../../shared/ScreenBackground';
+import Card from '../../shared/Card';
+import AvatarButton from '../../shared/AvatarButton';
+import Icon, { NAMES } from '../../shared/Icon';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import { useAuth } from '../../../context/AuthContext';
 import { API_BASE, MOOD_EMOJI, gaugeColor } from '../config/config';
@@ -36,7 +39,7 @@ function getDateStr() {
 
 function SignalCard({ icon, title, value, subtext, color, t }) {
     return (
-        <View style={[styles.signalCard, { backgroundColor: t.surface, borderColor: t.border }]}>
+        <Card style={styles.signalCard} accentColor={color}>
             <View style={styles.signalTop}>
                 <Text style={styles.signalIcon}>{icon}</Text>
                 <View style={{ flex: 1 }}>
@@ -45,7 +48,7 @@ function SignalCard({ icon, title, value, subtext, color, t }) {
                 </View>
                 <Text style={[styles.signalValue, { color }]}>{value}</Text>
             </View>
-        </View>
+        </Card>
     );
 }
 
@@ -197,11 +200,19 @@ export default function PhenotypingScreen({ navigation }) {
         : `↓ ${Math.abs(scoreDelta)} pts since last reading`;
 
     return (
-        <SafeAreaView style={[styles.container, { backgroundColor: t.bg }]} edges={['top', 'left', 'right']}>
+        <ScreenBackground>
             <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backRow} activeOpacity={0.7}>
+                    <Icon name={NAMES.back} size={20} color={COLORS.brand} />
+                    <Text style={{ color: COLORS.brand, fontWeight: '700' }}>Overview</Text>
+                </TouchableOpacity>
+
                 <View style={styles.header}>
-                    <Text style={[styles.dateStr, { color: t.textMuted }]}>{getDateStr()}</Text>
-                    <Text style={[styles.greeting, { color: t.text }]}>{getGreeting()}, {userName}</Text>
+                    <View>
+                        <Text style={[styles.dateStr, { color: t.textMuted }]}>{getDateStr()}</Text>
+                        <Text style={[styles.greeting, { color: t.text }]}>{getGreeting()}, {userName}</Text>
+                    </View>
+                    <AvatarButton userId={userId} onPress={() => navigation.navigate('Profile')} />
                 </View>
 
                 {!onboarded && (
@@ -258,8 +269,6 @@ export default function PhenotypingScreen({ navigation }) {
                             onPress={() => navigation.navigate('PhenotypingEma', { initialTab: 'siss' })} />
                         <QuickAction icon="✨" label="Weekly PSS" color={COLORS.brand} isDark={isDark}
                             onPress={() => navigation.navigate('PhenotypingEma', { initialTab: 'pss4' })} />
-                        <QuickAction icon="📊" label="Analysis" color={COLORS.stress} isDark={isDark}
-                            onPress={() => navigation.navigate('PhenotypingAnalysis')} />
                         <QuickAction icon="📈" label="History" color={COLORS.hrv} isDark={isDark}
                             onPress={() => navigation.navigate('PhenotypingSignalHistory')} />
                     </View>
@@ -269,14 +278,15 @@ export default function PhenotypingScreen({ navigation }) {
                     {liveWindow ? `updated ${lastUpdated ? lastUpdated.split('_')[1]?.slice(0, 2) + ':' + lastUpdated.split('_')[1]?.slice(2, 4) : 'recently'}` : 'waiting for first reading…'}
                 </Text>
             </ScrollView>
-        </SafeAreaView>
+        </ScreenBackground>
     );
 }
 
 const styles = StyleSheet.create({
     container: { flex: 1 },
     scroll: { padding: 20, paddingBottom: 40 },
-    header: { marginBottom: 8 },
+    backRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 14 },
+    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 },
     dateStr: { fontSize: 12, marginBottom: 2 },
     greeting: { fontSize: 22, fontWeight: '900' },
     onboardBanner: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 16, borderWidth: 1, padding: 14, marginTop: 12 },

@@ -45,44 +45,44 @@ export const PrivacyPolicyScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0F172A'
+    backgroundColor: '#FAF9FC'
   },
   content: {
     padding: 20
   },
   heading: {
-    color: '#F8FAFC',
+    color: '#332F45',
     fontSize: 20,
     fontWeight: '800',
     marginBottom: 12
   },
   paragraph: {
-    color: '#CBD5E1',
+    color: '#332F45',
     fontSize: 14,
     lineHeight: 22,
     marginBottom: 16
   },
   subhead: {
-    color: '#38BDF8',
+    color: '#8B87C4',
     fontSize: 15,
     fontWeight: '700',
     marginBottom: 8
   },
   bullet: {
-    color: '#94A3B8',
+    color: '#8B86A3',
     fontSize: 13,
     lineHeight: 22,
     marginBottom: 6
   },
   acceptBtn: {
-    backgroundColor: '#38BDF8',
+    backgroundColor: '#8B87C4',
     paddingVertical: 14,
     borderRadius: 12,
     alignItems: 'center',
     marginTop: 30
   },
   acceptBtnTxt: {
-    color: '#0F172A',
+    color: '#FFFFFF',
     fontWeight: '800',
     fontSize: 16
   }

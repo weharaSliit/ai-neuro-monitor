@@ -1,17 +1,41 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    View, Text, StyleSheet, TextInput, Dimensions,
-    TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform,
+    View, Text, StyleSheet, Dimensions,
+    TouchableOpacity, ScrollView,
 } from 'react-native';
 
 const CHART_WIDTH = Dimensions.get('window').width - 2 * 20 - 2 * 18 - 40;
-import { SafeAreaView } from 'react-native-safe-area-context';
+import axios from 'axios';
+import ScreenBackground from '../../shared/ScreenBackground';
+import Card from '../../shared/Card';
+import StatusDot from '../../shared/StatusDot';
+import Icon, { NAMES } from '../../shared/Icon';
+import MoodBadge from '../../shared/MoodBadge';
+import AvatarButton from '../../shared/AvatarButton';
+import { CalibrationBanner } from '../../shared/CalibrationGate';
 import LineChart from '../../shared/LineChart';
 import { ref, onValue, off } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import { useAuth } from '../../../context/AuthContext';
-import { STRESS_COLORS, STRESS_LABELS, STRESS_EMOJI, FUSION_TREND_LABELS } from '../config/config';
+import api from '../../physiological/api/client';
+import { API_BASE, DEVICE_ID } from '../../physiological/config/config';
+import { STRESS_COLORS, STRESS_LABELS, FUSION_TREND_LABELS } from '../config/config';
+
+const DEVICE_POLL_MS = 8000;
+
+function getGreeting() {
+    const h = new Date().getHours();
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
+}
+
+function getDateStr() {
+    return new Date().toLocaleDateString('en-US', { weekday: 'short', day: 'numeric', month: 'short' });
+}
+
+const TREND_ICON = { increasing: NAMES.trendUp, decreasing: NAMES.trendDown, stable: NAMES.trendFlat };
 
 function sortedWindowKeys(windowsObj) {
     if (!windowsObj) return [];
@@ -25,26 +49,52 @@ function latestWindow(windowsObj) {
     return keys.length ? windowsObj[keys[keys.length - 1]] : null;
 }
 
-function MetricBadge({ label, value, unit, color, t }) {
+// A section card for one device/module -- Ring, EEG, Phenotyping -- each
+// tappable through to its own detail screen. Richer than a plain status
+// row: icon, connection state, and a short one-line summary of what's
+// there right now, so the hub page reads as full sections rather than a
+// thin nav list.
+function SectionCard({ icon, iconColor, title, statusText, statusColor, summary, onPress, t }) {
     return (
-        <View style={styles.metricBadge}>
-            <Text style={[styles.metricBadgeValue, { color }]}>
-                {value === undefined || value === null ? '—' : `${value.toFixed(1)}${unit || ''}`}
-            </Text>
-            <Text style={[styles.metricBadgeLabel, { color: t.textMuted }]}>{label}</Text>
-        </View>
+        <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
+            <Card>
+                <View style={styles.sectionRow}>
+                    <View style={[styles.sectionIconCircle, { backgroundColor: iconColor + '18' }]}>
+                        <Icon name={icon} size={22} color={iconColor} />
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                        <View style={styles.sectionTopRow}>
+                            <Text style={[styles.sectionTitle, { color: t.text }]}>{title}</Text>
+                            <View style={styles.sectionStatusRow}>
+                                <StatusDot color={statusColor} active={statusColor !== t.border} size={7} />
+                                <Text style={[styles.sectionStatusText, { color: statusColor }]}>{statusText}</Text>
+                            </View>
+                        </View>
+                        <Text style={[styles.sectionSummary, { color: t.textMuted }]} numberOfLines={1}>
+                            {summary}
+                        </Text>
+                    </View>
+                    <Icon name={NAMES.chevronRight} size={18} color={t.textMuted} />
+                </View>
+            </Card>
+        </TouchableOpacity>
     );
 }
 
 export default function FusionSessionScreen({ navigation }) {
-    const { isDark, theme: t, COLORS } = useTheme();
-    const { user } = useAuth();
+    const { theme: t, COLORS } = useTheme();
+    const { user, token } = useAuth();
     const userId = user?.userId;
+    const userName = user?.name || userId;
     const [sessionId, setSessionId] = useState('');
     const [watching, setWatching] = useState(false);
     const [windows, setWindows] = useState(null);
     const [hasAnyWindow, setHasAnyWindow] = useState(false);
+    const [ringConnected, setRingConnected] = useState(false);
+    const [eegConnected, setEegConnected] = useState(false);
+    const [lastKnown, setLastKnown] = useState(null);
     const listenerRef = useRef(null);
+
     const startWatching = useCallback((idOverride) => {
         if (!userId) return;
         const targetId = (idOverride ?? sessionId).trim();
@@ -86,6 +136,53 @@ export default function FusionSessionScreen({ navigation }) {
         // with an explicit liveId override here, so its own sessionId-state closure never matters.
     }, [userId]);
 
+    // Ring: real device-status poll. EEG: no equivalent device-status
+    // route exists, so "connected" is read as "a live EEG session exists
+    // right now" -- same pointer EegSummaryScreen.js watches.
+    useEffect(() => {
+        let ringTimer;
+        const pollRing = async () => {
+            try {
+                const res = await axios.get(`${API_BASE}/devices/${DEVICE_ID}/status`);
+                setRingConnected((res.data?.status || 'offline') === 'online');
+            } catch {
+                setRingConnected(false);
+            }
+        };
+        pollRing();
+        ringTimer = setInterval(pollRing, DEVICE_POLL_MS);
+
+        const eegPointerRef = ref(db, 'psychological/current_session_id');
+        const eegHandler = onValue(eegPointerRef, (snap) => setEegConnected(!!snap.val()));
+
+        return () => {
+            clearInterval(ringTimer);
+            off(eegPointerRef, 'value', eegHandler);
+        };
+    }, []);
+
+    // Fallback for "nothing live yet in this session" (a brand-new session
+    // starts empty even while the device is on, and stays empty the whole
+    // time if it's actually off) -- last known reading from history, so the
+    // screen shows something real instead of a blank waiting state.
+    useEffect(() => {
+        if (!userId) return;
+        (async () => {
+            try {
+                const h = await api.get(`/history/${userId}`);
+                const sessionIds = Object.keys(h.data?.sessions || {});
+                const latestId = sessionIds[sessionIds.length - 1];
+                if (!latestId) return;
+                const s = await api.get(`/history/${userId}/${latestId}`);
+                const preds = Object.values(s.data?.predictions || {})
+                    .sort((a, b) => (b.window_idx ?? 0) - (a.window_idx ?? 0));
+                if (preds[0]) setLastKnown(preds[0]);
+            } catch {
+                // no history yet -- leave lastKnown null, the plain waiting text covers it
+            }
+        })();
+    }, [userId]);
+
     const latest = useMemo(() => latestWindow(windows), [windows]);
     const { fusedHistory, baselinePercent } = useMemo(() => {
         const keys = sortedWindowKeys(windows);
@@ -106,225 +203,157 @@ export default function FusionSessionScreen({ navigation }) {
         return { fusedHistory: history, baselinePercent: baseline };
     }, [windows, latest]);
 
-    const stopWatching = useCallback(() => {
-        if (listenerRef.current) {
-            off(listenerRef.current.sessionRef);
-            listenerRef.current = null;
-        }
-        setWatching(false);
-    }, []);
-
     const label = latest?.fused_label;
     const prob = latest?.fused_probability;
     const trend = latest?.stress_trend;
-    const deviation = latest?.stress_deviation;
     const stateColor = label !== undefined && label !== null ? STRESS_COLORS[label] : COLORS.brand;
-    const eegProb = latest?.prob_eeg;
-    const hrvGsrProb = latest?.prob_hrv_gsr;
-    const behavProb = latest?.prob_behav;
-    const eegWeight = latest?.eeg_weight;
-    const hrvGsrWeight = latest?.hrv_gsr_weight;
-    const behavWeight = latest?.behav_weight;
-    const hrvGsr = latest?.features_hrv_gsr;
 
     return (
-        <SafeAreaView style={[styles.container, { backgroundColor: t.bg }]} edges={['top', 'left', 'right']}>
-            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-                <ScrollView contentContainerStyle={styles.scroll}>
-                    <View style={styles.header}>
-                        {navigation.canGoBack() && (
-                            <TouchableOpacity onPress={() => navigation.goBack()}>
-                                <Text style={[styles.back, { color: COLORS.stress }]}>{'←'} Back</Text>
-                            </TouchableOpacity>
-                        )}
-                        <Text style={[styles.title, { color: t.text }]}>Live Fusion</Text>
+        <ScreenBackground>
+            <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+                <View style={styles.header}>
+                    <View>
+                        <Text style={[styles.dateStr, { color: t.textMuted }]}>{getDateStr()}</Text>
+                        <Text style={[styles.greeting, { color: t.text }]}>{getGreeting()}, {userName}</Text>
                         <Text style={[styles.subtitle, { color: t.textMuted }]}>
-                            Combined EEG + HRV/GSR + Behavioral stress state, live
+                            Wear your ring and headband to see your live stress result
                         </Text>
                     </View>
+                    <AvatarButton userId={userId} onPress={() => navigation.navigate('Profile')} />
+                </View>
 
-                    <View style={[styles.card, { backgroundColor: t.surface, borderColor: t.border }]}>
-                        <Text style={[styles.label, { color: t.textSub }]}>Session ID</Text>
-                        <TextInput
-                            style={[styles.input, { color: t.text, borderColor: t.border }]}
-                            value={sessionId}
-                            editable={false}
-                            placeholder="waiting for live session…"
-                            placeholderTextColor={t.textMuted}
-                        />
-                        <Text style={[styles.hint, { color: t.textMuted }]}>
-                            Follows the current live session automatically — no manual start needed.
-                        </Text>
+                <CalibrationBanner userId={userId} token={token} />
 
-                        {watching && (
-                            <TouchableOpacity
-                                style={[styles.button, styles.buttonDanger]}
-                                onPress={stopWatching}
-                                activeOpacity={0.85}
-                            >
-                                <Text style={styles.buttonText}>Stop Watching</Text>
-                            </TouchableOpacity>
-                        )}
-                    </View>
-
-                    {watching && (
-                        <View style={[styles.card, { backgroundColor: t.surface, borderColor: t.border }]}>
-                            {!hasAnyWindow ? (
-                                <Text style={[styles.waiting, { color: t.textMuted }]}>
-                                    Waiting for first reading…
+                <Card elevated accentColor={stateColor}>
+                    {!hasAnyWindow ? (
+                        lastKnown ? (
+                            <>
+                                <Text style={[styles.hint, { color: t.textMuted, marginBottom: 10 }]}>
+                                    No live reading right now — last known state:
                                 </Text>
-                            ) : (
-                                <>
-                                    <View style={styles.gaugeRow}>
-                                        <Text style={styles.stateEmoji}>
-                                            {label !== undefined && label !== null ? STRESS_EMOJI[label] : '…'}
+                                <View style={styles.gaugeRow}>
+                                    <MoodBadge stressed={lastKnown.label === 'Stress'}
+                                        color={lastKnown.label === 'Stress' ? COLORS.stress : COLORS.normal} size={58} />
+                                    <View style={{ flex: 1, marginLeft: 14 }}>
+                                        <Text style={[styles.stateLabel, { color: lastKnown.label === 'Stress' ? COLORS.stress : COLORS.normal }]}>
+                                            {lastKnown.label || '—'}
                                         </Text>
-                                        <View style={{ flex: 1, marginLeft: 14 }}>
-                                            <Text style={[styles.stateLabel, { color: stateColor }]}>
-                                                {label !== undefined && label !== null
-                                                    ? STRESS_LABELS[label] : 'Scoring…'}
-                                            </Text>
-                                            <Text style={[styles.stateProb, { color: t.textMuted }]}>
-                                                {prob !== undefined && prob !== null
-                                                    ? `${(prob * 100).toFixed(0)}% fused stress probability` : ''}
-                                            </Text>
-                                        </View>
-                                    </View>
-
-                                    {fusedHistory.length > 1 && (
-                                        <View style={styles.trendBlock}>
-                                            <Text style={[styles.hint, { color: t.textMuted, marginTop: 0, marginBottom: 10 }]}>
-                                                Session trendline — fused stress probability per window (%)
-                                                {baselinePercent !== null ? ` — baseline ${baselinePercent}%` : ''}
-                                            </Text>
-                                            <LineChart
-                                                points={fusedHistory}
-                                                color={stateColor}
-                                                width={CHART_WIDTH}
-                                                height={130}
-                                                fallback={<Text style={[styles.waiting, { color: t.textMuted }]}>Loading chart…</Text>}
-                                            />
-                                        </View>
-                                    )}
-
-                                    <View style={styles.metaRow}>
-                                        <Text style={[styles.metaLabel, { color: t.textSub }]}>Trend</Text>
-                                        <Text style={[styles.metaValue, { color: t.text }]}>
-                                            {trend ? (FUSION_TREND_LABELS[trend] || trend) : '—'}
+                                        <Text style={[styles.stateProb, { color: t.textMuted }]}>
+                                            {lastKnown.timestamp ? new Date(lastKnown.timestamp).toLocaleString() : ''}
                                         </Text>
                                     </View>
-
-                                    <View style={styles.metaRow}>
-                                        <Text style={[styles.metaLabel, { color: t.textSub }]}>Deviation</Text>
-                                        <Text style={[styles.metaValue, { color: t.text }]}>
-                                            {deviation === undefined || deviation === null
-                                                ? 'establishing baseline…'
-                                                : `${deviation >= 0 ? '+' : ''}${deviation.toFixed(2)} `
-                                                  + `${deviation >= 0 ? 'above' : 'below'} your baseline`}
-                                        </Text>
-                                    </View>
-
-                                    <View style={styles.sourcesBlock}>
-                                        <Text style={[styles.metaLabel, { color: t.textSub, marginBottom: 10 }]}>
-                                            Sources (this reading)
-                                        </Text>
-                                        <View style={styles.sourceRow}>
-                                            <View style={[styles.sourceDot, {
-                                                backgroundColor: eegProb !== undefined && eegProb !== null
-                                                    ? (COLORS.hrv || COLORS.brand) : t.border,
-                                            }]} />
-                                            <Text style={[styles.sourceName, { color: t.text }]}>EEG</Text>
-                                            <Text style={[styles.sourceValue, { color: t.textMuted }]}>
-                                                {eegProb !== undefined && eegProb !== null
-                                                    ? `${(eegProb * 100).toFixed(0)}% · ${((eegWeight || 0) * 100).toFixed(0)}% weight`
-                                                    : 'not reporting'}
-                                            </Text>
-                                        </View>
-                                        <View style={styles.sourceRow}>
-                                            <View style={[styles.sourceDot, {
-                                                backgroundColor: hrvGsrProb !== undefined && hrvGsrProb !== null
-                                                    ? (COLORS.gsr || COLORS.brand) : t.border,
-                                            }]} />
-                                            <Text style={[styles.sourceName, { color: t.text }]}>HRV/GSR</Text>
-                                            <Text style={[styles.sourceValue, { color: t.textMuted }]}>
-                                                {hrvGsrProb !== undefined && hrvGsrProb !== null
-                                                    ? `${(hrvGsrProb * 100).toFixed(0)}% · ${((hrvGsrWeight || 0) * 100).toFixed(0)}% weight`
-                                                    : 'not reporting'}
-                                            </Text>
-                                        </View>
-                                        <View style={styles.sourceRow}>
-                                            <View style={[styles.sourceDot, {
-                                                backgroundColor: behavProb !== undefined && behavProb !== null
-                                                    ? (COLORS.behav || COLORS.brand) : t.border,
-                                            }]} />
-                                            <Text style={[styles.sourceName, { color: t.text }]}>Behavioral</Text>
-                                            <Text style={[styles.sourceValue, { color: t.textMuted }]}>
-                                                {behavProb !== undefined && behavProb !== null
-                                                    ? `${(behavProb * 100).toFixed(0)}% · ${((behavWeight || 0) * 100).toFixed(0)}% weight`
-                                                    : 'not reporting'}
-                                            </Text>
-                                        </View>
-                                    </View>
-                                </>
-                            )}
-                        </View>
-                    )}
-
-                    {watching && hasAnyWindow && (
-                        <View style={[styles.card, { backgroundColor: t.surface, borderColor: t.border }]}>
-                            <Text style={[styles.label, { color: t.textSub, marginBottom: 12 }]}>
-                                Physiological Panel (HRV/GSR)
-                            </Text>
-                            {!hrvGsr ? (
+                                </View>
+                            </>
+                        ) : (
+                            <View style={styles.emptyState}>
+                                <Icon name={NAMES.overview} size={34} color={t.textMuted} />
                                 <Text style={[styles.waiting, { color: t.textMuted }]}>
-                                    No HRV/GSR reading for this window yet.
+                                    Wear your ring and headband to see your live stress result here.
                                 </Text>
-                            ) : (
-                                <View style={styles.badgeRow}>
-                                    <MetricBadge label="AVNN (ms)" value={hrvGsr.avnn} color={COLORS.hrv || COLORS.brand} t={t} />
-                                    <MetricBadge label="SD1 (HRV)" value={hrvGsr.sd1} color={COLORS.hrv || COLORS.brand} t={t} />
-                                    <MetricBadge label="SCL (µS)" value={hrvGsr.scl_mean} unit="" color={COLORS.gsr || COLORS.brand} t={t} />
+                            </View>
+                        )
+                    ) : (
+                        <>
+                            <View style={styles.gaugeRow}>
+                                {label !== undefined && label !== null ? (
+                                    <MoodBadge stressed={label === 1} color={stateColor} size={58} />
+                                ) : (
+                                    <View style={[styles.stateIconCircle, { backgroundColor: stateColor + '18' }]}>
+                                        <Icon name={NAMES.overview} size={26} color={stateColor} />
+                                    </View>
+                                )}
+                                <View style={{ flex: 1, marginLeft: 14 }}>
+                                    <Text style={[styles.stateLabel, { color: stateColor }]}>
+                                        {label !== undefined && label !== null
+                                            ? STRESS_LABELS[label] : 'Scoring…'}
+                                    </Text>
+                                    <Text style={[styles.stateProb, { color: t.textMuted }]}>
+                                        {prob !== undefined && prob !== null
+                                            ? `${(prob * 100).toFixed(0)}%` : ''}
+                                    </Text>
+                                </View>
+                                {trend && TREND_ICON[trend] && (
+                                    <View style={styles.trendChip}>
+                                        <Icon name={TREND_ICON[trend]} size={16} color={t.textSub} />
+                                        <Text style={[styles.trendChipText, { color: t.textSub }]}>
+                                            {FUSION_TREND_LABELS[trend] || trend}
+                                        </Text>
+                                    </View>
+                                )}
+                            </View>
+
+                            {fusedHistory.length > 1 && (
+                                <View style={styles.trendBlock}>
+                                    <Text style={[styles.hint, { color: t.textMuted, marginBottom: 10 }]}>
+                                        Trend this session
+                                        {baselinePercent !== null ? ` · baseline ${baselinePercent}%` : ''}
+                                    </Text>
+                                    <LineChart
+                                        points={fusedHistory}
+                                        color={stateColor}
+                                        width={CHART_WIDTH}
+                                        height={150}
+                                        maxValue={100}
+                                        suffix="%"
+                                        fallback={<Text style={[styles.waiting, { color: t.textMuted }]}>Loading chart…</Text>}
+                                    />
                                 </View>
                             )}
-                        </View>
+                        </>
                     )}
+                </Card>
 
-                </ScrollView>
-            </KeyboardAvoidingView>
-        </SafeAreaView>
+                <Text style={[styles.sectionsLabel, { color: t.textSub }]}>Devices & Tracking</Text>
+
+                <SectionCard
+                    icon={NAMES.my} iconColor={COLORS.brand} title="My Ring"
+                    statusText={ringConnected ? 'Connected' : 'Off'}
+                    statusColor={ringConnected ? COLORS.normal : t.border}
+                    summary={ringConnected ? 'Streaming HRV & GSR readings' : 'Put the ring on to start streaming'}
+                    onPress={() => navigation.navigate('RingSummary')} t={t}
+                />
+                <SectionCard
+                    icon={NAMES.eeg} iconColor={COLORS.warning} title="EEG Headband"
+                    statusText={eegConnected ? 'Connected' : 'Off'}
+                    statusColor={eegConnected ? COLORS.normal : t.border}
+                    summary={eegConnected ? 'Reading cognitive load live' : 'Put the headband on to start a session'}
+                    onPress={() => navigation.navigate('EegSummary')} t={t}
+                />
+                <SectionCard
+                    icon={NAMES.phenotyping} iconColor={COLORS.gsr} title="Phone Statistics"
+                    statusText="Always on" statusColor={COLORS.gsr}
+                    summary="Typing rhythm, screen activity & app-switching patterns"
+                    onPress={() => navigation.navigate('Phenotyping')} t={t}
+                />
+
+                <View style={{ height: 20 }} />
+            </ScrollView>
+        </ScreenBackground>
     );
 }
 
 const styles = StyleSheet.create({
-    container:    { flex: 1 },
     scroll:       { padding: 20, paddingBottom: 40 },
-    header:       { marginBottom: 20 },
-    back:         { fontSize: 14, fontWeight: '600', marginBottom: 14 },
-    title:        { fontSize: 26, fontWeight: '900' },
-    subtitle:     { fontSize: 13, marginTop: 4 },
-    card:         { borderRadius: 18, borderWidth: 1, padding: 18, marginBottom: 16 },
-    label:        { fontSize: 12, fontWeight: '700', marginBottom: 6 },
-    input:        { borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14 },
-    hint:         { fontSize: 11, marginTop: 8, lineHeight: 16 },
-    button:       { marginTop: 14, borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
-    buttonDanger: { backgroundColor: '#ef4444' },
-    buttonText:   { color: '#fff', fontSize: 15, fontWeight: '800' },
-    waiting:      { fontSize: 13, textAlign: 'center', paddingVertical: 10 },
+    header:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18 },
+    dateStr:      { fontSize: 12, fontWeight: '600', marginBottom: 2 },
+    greeting:     { fontSize: 24, fontWeight: '900' },
+    subtitle:     { fontSize: 12, marginTop: 6, maxWidth: 240, lineHeight: 17 },
+    hint:         { fontSize: 11, lineHeight: 16 },
+    waiting:      { fontSize: 13, textAlign: 'center', marginTop: 10 },
+    emptyState:   { alignItems: 'center', paddingVertical: 16 },
     gaugeRow:     { flexDirection: 'row', alignItems: 'center', marginBottom: 18 },
-    stateEmoji:   { fontSize: 40 },
+    stateIconCircle: { width: 54, height: 54, borderRadius: 27, alignItems: 'center', justifyContent: 'center' },
     stateLabel:   { fontSize: 22, fontWeight: '900' },
     stateProb:    { fontSize: 13, marginTop: 2 },
-    trendBlock:   { marginBottom: 18 },
-    metaRow:      { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8 },
-    metaLabel:    { fontSize: 13, fontWeight: '600' },
-    metaValue:    { fontSize: 13, fontWeight: '700' },
-    badgeRow:     { flexDirection: 'row', justifyContent: 'space-between' },
-    metricBadge:      { flex: 1, alignItems: 'center' },
-    metricBadgeValue: { fontSize: 17, fontWeight: '900' },
-    metricBadgeLabel: { fontSize: 10, fontWeight: '600', marginTop: 4, textAlign: 'center' },
-    sourcesBlock: { marginTop: 4, paddingTop: 14, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(128,128,128,0.25)' },
-    sourceRow:    { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
-    sourceDot:    { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
-    sourceName:   { fontSize: 13, fontWeight: '700', width: 78 },
-    sourceValue:  { fontSize: 12, flex: 1 },
+    trendChip:    { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    trendChipText:{ fontSize: 11, fontWeight: '700', maxWidth: 70 },
+    trendBlock:   { marginBottom: 4 },
+    sectionsLabel:{ fontSize: 12, fontWeight: '800', letterSpacing: 0.4, textTransform: 'uppercase', marginTop: 6, marginBottom: 10 },
+    sectionRow:   { flexDirection: 'row', alignItems: 'center' },
+    sectionIconCircle: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center' },
+    sectionTopRow:{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    sectionTitle: { fontSize: 15, fontWeight: '800' },
+    sectionStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+    sectionStatusText: { fontSize: 11, fontWeight: '700' },
+    sectionSummary: { fontSize: 12, marginTop: 3 },
 });

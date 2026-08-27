@@ -3,11 +3,51 @@ import {
   View, Text, StyleSheet, TouchableOpacity,
   ScrollView, Alert, Animated
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import ScreenBackground from '../../shared/ScreenBackground';
+import { ref, query, orderByKey, limitToLast, get as dbGet } from 'firebase/database';
 import { useTheme } from '../config/ThemeContext';
 import { COLORS } from '../config/theme';
 import api from '../api/client';
 import { useAppState } from './AppState';
+import { useAuth } from '../../../context/AuthContext';
+import { db } from '../../../firebase';
+
+// This is the one shared self-report check-in for both modalities (EEG has
+// no survey of its own, see the "Unified Calibration + EMA" plan section 2)
+// -- reads whichever of Ring/EEG has a recent reading and tags the
+// submission with it, working fine with only one, both, or neither present.
+async function fetchRingProbStress(userId) {
+  if (!userId) return null;
+  try {
+    const h = await api.get(`/history/${userId}`);
+    const sessionIds = Object.keys(h.data?.sessions || {});
+    const latestId = sessionIds[sessionIds.length - 1];
+    if (!latestId) return null;
+    const s = await api.get(`/history/${userId}/${latestId}`);
+    const predictions = Object.values(s.data?.predictions || {})
+      .sort((a, b) => (b.window_idx ?? 0) - (a.window_idx ?? 0));
+    return predictions[0]?.prob_stress ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// EEG has no HTTP route for "latest reading" -- read fusion_en directly,
+// same path EegFirebaseSession.push() writes to
+// (backend/psychological/firebase_service.py:52-67, prob_eeg field per
+// make_eeg_fusion_record()).
+async function fetchEegProbStress(userId, sessionId) {
+  if (!userId || !sessionId) return null;
+  try {
+    const q = query(ref(db, `fusion_en/${userId}/${sessionId}`), orderByKey(), limitToLast(1));
+    const snap = await dbGet(q);
+    if (!snap.exists()) return null;
+    const [latest] = Object.values(snap.val());
+    return latest?.prob_eeg ?? null;
+  } catch {
+    return null;
+  }
+}
 
 const QUESTIONS = [
   { q: 'In the last month, how often have you felt nervous and stressed?', reverse: false },
@@ -27,6 +67,7 @@ const OPTIONS = [
 export default function PSS4Screen() {
   const { isDark, theme }        = useTheme();
   const { lastSessionId }        = useAppState();
+  const { user, sessionId }      = useAuth();
   const [answers,   setAnswers]  = useState([null, null, null, null]);
   const [submitted, setSubmitted]= useState(false);
   const [result,    setResult]   = useState(null);
@@ -57,10 +98,16 @@ export default function PSS4Screen() {
   const submit = async () => {
     if (answers.some(a => a === null)) { Alert.alert('Incomplete', 'Please answer all 4 questions.'); return; }
     const sessionToUse = lastSessionId || 'no_session';
+    const [ringProbStress, eegProbStress] = await Promise.all([
+      fetchRingProbStress(user?.userId),
+      fetchEegProbStress(user?.userId, sessionId),
+    ]);
     try {
       const res = await api.post('/pss4', {
         session_id: sessionToUse,
         q1: answers[0], q2: answers[1], q3: answers[2], q4: answers[3],
+        ring_prob_stress: ringProbStress,
+        eeg_prob_stress: eegProbStress,
       });
       setResult(res.data); setSubmitted(true);
     } catch {
@@ -79,8 +126,8 @@ export default function PSS4Screen() {
     const pct   = (result.score / (result.max_score || 16)) * 100;
 
     return (
-      <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
-        <View style={[styles.resultScreen, { backgroundColor: bg }]}>
+      <ScreenBackground>
+        <View style={styles.resultScreen}>
           <View style={[styles.resultCard, { backgroundColor: card, borderColor: color + '60', borderWidth: 2 }]}>
 
             <View style={[styles.resultIconRing, { borderColor: color + '60' }]}>
@@ -126,14 +173,14 @@ export default function PSS4Screen() {
             </TouchableOpacity>
           </View>
         </View>
-      </SafeAreaView>
+      </ScreenBackground>
     );
   }
 
   const progressWidth = progressAnim.interpolate({ inputRange: [0,1], outputRange: ['0%','100%'] });
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
+    <ScreenBackground>
       <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
 
         {/* Header */}
@@ -238,7 +285,7 @@ export default function PSS4Screen() {
 
         <View style={{ height: 80 }} />
       </ScrollView>
-    </SafeAreaView>
+    </ScreenBackground>
   );
 }
 

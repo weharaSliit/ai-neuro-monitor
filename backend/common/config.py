@@ -123,3 +123,30 @@ MIN_SIGNAL_QUALITY_FOR_RETRAIN = 0.70
 
 # Fraction of state-machine "rising" votes needed to flag trending_toward_stress
 TREND_RISING_THRESHOLD = 0.35
+
+# Normal/Stress decision cutoff on the model's P(Stress) output. Previously
+# an unvalidated implicit 0.5 (XGBoost's own default predict() cutoff, never
+# checked against real data -- no ROC analysis existed anywhere in this
+# repo). Derived from physiological_signals/notebooks/05_model_training.ipynb
+# Cell 2.5: pooled out-of-fold LOSO predict_proba() scores across all 15
+# WESAD subjects (n=913), AUC=0.9382, threshold chosen via Youden's J
+# (argmax TPR-FPR) at J=0.7287 (TPR=0.850, FPR=0.121) vs. J=0.7069 at the
+# old 0.5 cutoff (TPR=0.862, FPR=0.155) -- trades a small amount of Stress
+# recall for a meaningfully lower false-Stress-alarm rate. Re-run that
+# notebook cell and update this value whenever the model is retrained.
+STRESS_DECISION_THRESHOLD = 0.7141
+
+# Shared calibration-renewal windows -- used by both physiological's
+# baseline (backend/physiological/firebase_service.py::load_baseline_meta)
+# and psychological's calibration_profile
+# (backend/psychological/firebase_service.py::load_user_calibration_profile)
+# so both modalities present the same renewal cadence to the frontend's
+# CalibrationGate: not compulsory before CALIBRATION_SOFT_AGE_DAYS, a
+# dismissible renewal nudge between soft and hard, compulsory again past
+# CALIBRATION_HARD_AGE_DAYS. No measured decay curve exists for either
+# modality's drift over time (yet) to derive these from data -- 7/30 days
+# is a reasonable renewal cadence chosen to match this project's existing
+# 7-day precedent (phenotyping_behavior's calibration protocol) while not
+# demanding a fresh calibration every week.
+CALIBRATION_SOFT_AGE_DAYS = 7.0
+CALIBRATION_HARD_AGE_DAYS = 30.0

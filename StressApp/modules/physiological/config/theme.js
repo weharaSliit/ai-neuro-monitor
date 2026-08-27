@@ -1,47 +1,45 @@
-// Calm, soft palette — sage/teal accent, warm neutrals, muted status
-// colors instead of neon indigo/navy-tech tones. Same key structure as
-// before so no screen's property access needs to change, only values.
+// "Calm Mist" — a brand-new light-only palette (dark mode removed
+// app-wide). Soft periwinkle-violet primary, warm coral secondary,
+// high-lightness/low-saturation status hues. Same key structure as before
+// (COLORS.brand/normal/warning/stress/hrv/gsr/acc + a nested palette
+// object) so most call sites don't need to change, only values -- the one
+// structural change is COLORS.light is now the ONLY palette (COLORS.dark
+// removed) since ThemeContext.js no longer branches on isDark.
 export const COLORS = {
-  brand:         '#7A9B8E',
-  brandLight:    '#9DB8AD',
-  brandDark:     '#5F8072',
-  brandGlow:     '#7A9B8E18',
+  brand:         '#8B87C4',
+  brandLight:    '#ADA9D9',
+  brandDark:     '#6B679F',
+  brandGlow:     '#8B87C418',
 
-  normal:        '#7FB596',
-  normalLight:   '#A3CDB2',
-  normalGlow:    '#7FB59618',
-  warning:       '#E0A458',
-  warningLight:  '#EDC088',
-  warningGlow:   '#E0A45818',
-  stress:        '#D97A76',
-  stressLight:   '#E8A29E',
-  stressGlow:    '#D97A7618',
+  secondary:      '#E2A38F',
+  secondaryLight: '#EDBFAF',
 
-  hrv:           '#7FA8C9',
-  gsr:           '#A895C9',
-  acc:           '#D98FA8',
+  normal:        '#82C0A0',
+  normalLight:   '#A7D6BC',
+  normalGlow:    '#82C0A018',
+  warning:       '#E8B368',
+  warningLight:  '#F0C88F',
+  warningGlow:   '#E8B36818',
+  stress:        '#E08585',
+  stressLight:   '#EBA9A9',
+  stressGlow:    '#E0858518',
 
-  dark: {
-    bg:          '#2A2E2C',
-    surface:     '#333734',
-    card:        '#3A3F3B',
-    cardHover:   '#434944',
-    border:      '#4A5049',
-    borderSoft:  '#3F453F',
-    text:        '#E8E6E1',
-    textMuted:   '#A8A79E',
-    textSub:     '#8F8E85',
-  },
+  hrv:           '#8B87C4',
+  gsr:           '#B490C9',
+  acc:           '#E2A38F',
+  behav:         '#E2A38F',
 
   light: {
-    bg:          '#FAF7F2',
-    surface:     '#FFFFFF',
-    card:        '#FFFFFF',
-    cardHover:   '#F5F1EA',
-    border:      '#E8E1D6',
-    borderSoft:  '#F0EBE2',
-    text:        '#3A362F',
-    textMuted:   '#8B8478',
-    textSub:     '#6B6558',
+    bg:               '#FAF9FC',
+    bgGradientTop:    '#F3F0FA',
+    bgGradientBottom: '#FBF8F4',
+    surface:          '#FFFFFF',
+    card:             '#FFFFFF',
+    cardHover:        '#F5F3FA',
+    border:           '#E9E5F2',
+    borderSoft:       '#F1EEF8',
+    text:             '#332F45',
+    textMuted:        '#8B86A3',
+    textSub:          '#6F6A87',
   },
 };

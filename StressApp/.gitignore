@@ -38,7 +38,13 @@ yarn-error.*
 
 # generated native folders
 /ios
-/android
+
+# android/ is intentionally TRACKED, not ignored -- it now contains
+# hand-written native code (the phenotyping AccessibilityService and its
+# supporting files, see android/app/src/main/java/com/mindpulse/stressapp/
+# phenotyping/) that `expo prebuild` does not generate. Committing it is
+# required for EAS's GitHub-based build triggers to include that code at
+# all, since those clone straight from GitHub rather than a local disk.
 
 # copied by postinstall (see package.json) from node_modules/canvaskit-wasm --
 # @shopify/react-native-skia's web CanvasKit binary, must be served as a
