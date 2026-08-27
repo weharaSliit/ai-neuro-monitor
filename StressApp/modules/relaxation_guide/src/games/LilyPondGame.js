@@ -4,899 +4,579 @@ import {
   Text,
   StyleSheet,
   TouchableWithoutFeedback,
+  TouchableOpacity,
   Animated,
   Dimensions,
-  Easing
+  Easing,
+  Vibration,
+  Platform,
 } from 'react-native';
 
 const { width, height } = Dimensions.get('window');
+const PETAL_COUNT = 6;
+const DURATION_OPTIONS_MIN = [2, 5, 10];
+const BPM_OPTIONS = [4.5, 5, 5.5, 6, 6.5, 7];
+const AMBIENT_TICK_MS = 50;
 
-export const LilyPondGame = () => {
-  const [lilies, setLilies] = useState([]);
-  const [score, setScore] = useState(0);
-  const [combo, setCombo] = useState(0);
-  const [maxCombo, setMaxCombo] = useState(0);
-  const [totalBlooms, setTotalBlooms] = useState(0);
-  const [gameState, setGameState] = useState('playing');
-  const [pondRipples, setPondRipples] = useState([]);
-  const [particles, setParticles] = useState([]);
-  const [floatingTexts, setFloatingTexts] = useState([]);
-  const [frogs, setFrogs] = useState([]);
-  const [dragonflies, setDragonflies] = useState([]);
-  const [waterLilies, setWaterLilies] = useState([]);
+// ---------------------------------------------------------------------------
+// Two evidence-based breathing patterns, both shown as a lily blooming
+// (inhale) and settling closed (exhale) — no hold segments, matching how
+// both techniques are actually practiced.
+//
+// Extended Exhale (45:55): a longer exhale than inhale is associated with
+// increased heart-rate variability and parasympathetic activation.
+//   Zaccaro, A., et al. (2018). How breath-control can change your life: A
+//   systematic review on psycho-physiological correlates of slow breathing.
+//   Frontiers in Human Neuroscience, 12, 353.
+//
+// Coherent Breathing (50:50, ~6 bpm): smooth equal breaths near the
+// "resonance frequency" that maximizes heart-rate oscillation via the
+// baroreflex — the basis of clinical HRV biofeedback training.
+//   Lehrer, P. M., & Gevirtz, R. (2014). Heart rate variability biofeedback:
+//   How and why does it work? Frontiers in Psychology, 5, 756.
+// ---------------------------------------------------------------------------
+const PATTERNS = {
+  extended: {
+    id: 'extended',
+    label: 'Extended Exhale',
+    inhaleRatio: 0.45,
+    exhaleRatio: 0.55,
+    defaultBpm: 5.5,
+    citation: 'Zaccaro et al., 2018, Frontiers in Human Neuroscience',
+    blurb: 'A longer exhale than inhale — linked to increased heart-rate variability and a calmer autonomic state.',
+  },
+  coherent: {
+    id: 'coherent',
+    label: 'Coherent Breathing',
+    inhaleRatio: 0.5,
+    exhaleRatio: 0.5,
+    defaultBpm: 6,
+    citation: 'Lehrer & Gevirtz, 2014, Frontiers in Psychology',
+    blurb: 'Smooth, equal-length breaths near your resonance frequency — the pattern used in clinical HRV biofeedback training.',
+  },
+};
 
-  const waterAnim = useRef(new Animated.Value(0)).current;
-  const glowAnim = useRef(new Animated.Value(0)).current;
-  const shakeAnim = useRef(new Animated.Value(0)).current;
+const COLORS = {
+  background: '#0B2A1F',
+  water: '#0F3B2A',
+  pad: '#1B5E3C',
+  petalClosed: '#3E8261',
+  petalOpen: '#F472B6',
+  accent: '#6EE7B7',
+  rippleIn: '#F472B6',
+  rippleOut: '#60A5FA',
+  text: '#E7FBF1',
+};
 
-  const spawnTimer = useRef(null);
-  const gameLoop = useRef(null);
-
-  // Lily types with different properties
-  const LILY_TYPES = [
-    { emoji: '🪷', color: '#F472B6', points: 15, growthRate: 0.8, maxSize: 90 },
-    { emoji: '🌸', color: '#EC4899', points: 20, growthRate: 1, maxSize: 80 },
-    { emoji: '🌺', color: '#F43F5E', points: 25, growthRate: 1.2, maxSize: 70 },
-    { emoji: '🌷', color: '#EF4444', points: 30, growthRate: 0.7, maxSize: 85 },
-    { emoji: '🌻', color: '#F59E0B', points: 35, growthRate: 1.1, maxSize: 75 },
-  ];
-
-  // Create initial lilies
-  useEffect(() => {
-    const initialLilies = [];
-    for (let i = 0; i < 5; i++) {
-      initialLilies.push(createLily(true));
-    }
-    setLilies(initialLilies);
-  }, []);
-
-  // Create water lilies (background decoration)
-  useEffect(() => {
-    const waterLilyInterval = setInterval(() => {
-      if (waterLilies.length < 15) {
-        const newLily = {
-          id: Date.now() + Math.random(),
-          x: Math.random() * width,
-          y: Math.random() * height * 0.8,
-          size: 15 + Math.random() * 20,
-          opacity: 0.1 + Math.random() * 0.2,
-          rotation: Math.random() * 360,
-          emoji: ['🪷', '🌿', '🍃', '☘️'][Math.floor(Math.random() * 4)],
-        };
-        setWaterLilies(prev => [...prev, newLily]);
-      }
-    }, 5000);
-    return () => clearInterval(waterLilyInterval);
-  }, [waterLilies.length]);
-
-  // Create frogs
-  useEffect(() => {
-    const frogInterval = setInterval(() => {
-      if (frogs.length < 3) {
-        const newFrog = {
-          id: Date.now() + Math.random(),
-          x: Math.random() * width,
-          y: Math.random() * height * 0.7,
-          targetX: Math.random() * width,
-          targetY: Math.random() * height * 0.7,
-          size: 25 + Math.random() * 10,
-          rotation: 0,
-          jumpProgress: 0,
-          color: `hsl(${120 + Math.random() * 40}, ${60 + Math.random() * 30}%, ${30 + Math.random() * 30}%)`,
-          phase: Math.random() * Math.PI * 2,
-        };
-        setFrogs(prev => [...prev, newFrog]);
-      }
-    }, 4000);
-    return () => clearInterval(frogInterval);
-  }, [frogs.length]);
-
-  // Create dragonflies
-  useEffect(() => {
-    const dragonflyInterval = setInterval(() => {
-      if (dragonflies.length < 5) {
-        const newDragonfly = {
-          id: Date.now() + Math.random(),
-          x: Math.random() * width,
-          y: 50 + Math.random() * (height * 0.5),
-          targetX: Math.random() * width,
-          targetY: 50 + Math.random() * (height * 0.5),
-          size: 12 + Math.random() * 8,
-          wingAngle: 0,
-          color: `hsl(${200 + Math.random() * 40}, 80%, 60%)`,
-          speed: 1 + Math.random() * 2,
-        };
-        setDragonflies(prev => [...prev, newDragonfly]);
-      }
-    }, 3000);
-    return () => clearInterval(dragonflyInterval);
-  }, [dragonflies.length]);
-
-  // Create a new lily
-  const createLily = (isInitial = false) => {
-    const type = LILY_TYPES[Math.floor(Math.random() * LILY_TYPES.length)];
-    const size = 30 + Math.random() * 20;
-    const x = 30 + Math.random() * (width - 60 - size);
-    const y = isInitial ? 50 + Math.random() * (height * 0.7 - 100) : -30 - Math.random() * 50;
-
-    return {
-      id: Date.now() + Math.random(),
-      type,
-      x,
-      y,
-      size,
-      targetSize: type.maxSize,
-      growthProgress: 0,
-      rotation: Math.random() * 360,
-      opacity: 0.7 + Math.random() * 0.3,
-      isGrowing: false,
-      isFull: false,
+const LilyBreathingGame = () => {
+  const [screen, setScreen] = useState('setup'); // 'setup' | 'session' | 'complete'
+  const [patternId, setPatternId] = useState('extended');
+  const [bpm, setBpm] = useState(PATTERNS.extended.defaultBpm);
+  const [durationMin, setDurationMin] = useState(5);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [breathCount, setBreathCount] = useState(0);
+  const [phase, setPhase] = useState('idle'); // 'idle' | 'inhale' | 'exhale'
+  const [isPaused, setIsPaused] = useState(false);
+  const [ripples, setRipples] = useState([]);
+  const [dragonflies, setDragonflies] = useState(() =>
+    Array.from({ length: 2 }, (_, i) => ({
+      id: i, x: Math.random() * width, y: height * 0.15 + Math.random() * height * 0.2,
       phase: Math.random() * Math.PI * 2,
-    };
+    }))
+  );
+
+  const bloom = useRef(new Animated.Value(0)).current; // 0 closed -> 1 fully open
+  const phaseProgress = useRef(new Animated.Value(0)).current; // 0 -> 1 across current phase
+  const phaseTextOpacity = useRef(new Animated.Value(1)).current;
+  const shimmerX = useRef(new Animated.Value(0)).current;
+  const screenFade = useRef(new Animated.Value(1)).current;
+
+  const tickRef = useRef(null);
+  const ambientRef = useRef(null);
+  const isPressedRef = useRef(false);
+  const pausedRef = useRef(false);
+  const patternRef = useRef(patternId);
+  const bpmRef = useRef(bpm);
+  const currentPhaseDurationRef = useRef(0);
+  const bloomPausedValueRef = useRef(0);
+  const progressPausedValueRef = useRef(0);
+
+  const pattern = PATTERNS[patternId];
+  const totalSeconds = durationMin * 60;
+
+  useEffect(() => { patternRef.current = patternId; }, [patternId]);
+  useEffect(() => { bpmRef.current = bpm; }, [bpm]);
+  useEffect(() => { pausedRef.current = isPaused; }, [isPaused]);
+
+  const computeDurations = () => {
+    const pat = PATTERNS[patternRef.current];
+    const periodMs = (60 / bpmRef.current) * 1000;
+    return { inhaleMs: periodMs * pat.inhaleRatio, exhaleMs: periodMs * pat.exhaleRatio };
   };
 
-  // Create water ripples
-  const createRipple = (x, y) => {
-    setPondRipples(prev => [...prev, {
-      id: Date.now() + Math.random(),
-      x,
-      y,
-      radius: 10,
-      opacity: 1,
-      maxRadius: 50 + Math.random() * 50,
-    }]);
-  };
-
-  // Create particle effect
-  const createParticles = (x, y, color, count = 30) => {
-    const newParticles = [];
-    for (let i = 0; i < count; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const velocity = 1 + Math.random() * 4;
-      newParticles.push({
-        id: Date.now() + Math.random(),
-        x,
-        y,
-        vx: Math.cos(angle) * velocity,
-        vy: Math.sin(angle) * velocity - 2,
-        life: 1,
-        size: 2 + Math.random() * 6,
-        color: color || `hsl(${320 + Math.random() * 40}, 80%, 70%)`,
-        gravity: 0.05,
+  // Overall session clock.
+  useEffect(() => {
+    if (screen !== 'session') return;
+    tickRef.current = setInterval(() => {
+      if (pausedRef.current) return;
+      setElapsedSeconds(prev => {
+        const next = prev + 1;
+        if (next >= totalSeconds) {
+          clearInterval(tickRef.current);
+          setScreen('complete');
+        }
+        return next;
       });
-    }
-    setParticles(prev => [...prev, ...newParticles]);
-  };
+    }, 1000);
+    return () => clearInterval(tickRef.current);
+  }, [screen, totalSeconds]);
 
-  // Create floating text
-  const createFloatingText = (x, y, text, color = '#F472B6') => {
-    setFloatingTexts(prev => [...prev, {
-      id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}_${Math.random()}`,
-      x,
-      y,
-      text,
-      color,
-      opacity: 1,
-      vy: -2 - Math.random() * 1,
-      scale: 1,
-    }]);
-  };
-
-  // Grow lily on tap
-  const growLily = (lily) => {
-    if (lily.isFull || gameState === 'paused') return;
-
-    // Update lily
-    setLilies(prev => prev.map(l => {
-      if (l.id === lily.id) {
-        const newSize = l.size + l.type.growthRate * 5;
-        const isFull = newSize >= l.type.maxSize;
-        return {
-          ...l,
-          size: Math.min(newSize, l.type.maxSize),
-          isFull,
-          growthProgress: Math.min(newSize / l.type.maxSize, 1),
-        };
-      }
-      return l;
-    }));
-
-    // Create ripple effect
-    createRipple(lily.x + lily.size / 2, lily.y + lily.size / 2);
-
-    // Calculate score
-    const comboBonus = Math.floor(combo / 3) + 1;
-    const points = lily.type.points * comboBonus;
-    setScore(prev => prev + points);
-    setCombo(prev => prev + 1);
-    setTotalBlooms(prev => prev + 1);
-
-    if (combo + 1 > maxCombo) {
-      setMaxCombo(combo + 1);
-    }
-
-    // Floating text
-    let text = `+${points}`;
-    if (combo > 0) {
-      text += ` x${comboBonus}`;
-    }
-    createFloatingText(
-      lily.x + lily.size / 2 - 30,
-      lily.y - 10,
-      text,
-      lily.type.color
-    );
-
-    // Combo milestones
-    if (combo > 0 && combo % 5 === 0) {
-      createFloatingText(
-        lily.x + lily.size / 2 - 50,
-        lily.y - 50,
-        `🌸 ${combo + 1}x BLOOM!`,
-        '#FCD34D'
-      );
-
-      // Spawn bonus lilies
-      for (let i = 0; i < 3; i++) {
-        setTimeout(() => {
-          const bonusLily = createLily();
-          bonusLily.x = lily.x + (Math.random() - 0.5) * 150;
-          bonusLily.y = lily.y + (Math.random() - 0.5) * 150;
-          setLilies(prev => [...prev, bonusLily]);
-        }, i * 300);
-      }
-    }
-
-    // Screen shake
-    if (combo > 5) {
+  // Ambient dragonfly drift + water shimmer loop.
+  useEffect(() => {
+    Animated.loop(
       Animated.sequence([
-        Animated.timing(shakeAnim, {
-          toValue: 3,
-          duration: 50,
-          useNativeDriver: true,
-        }),
-        Animated.timing(shakeAnim, {
-          toValue: -3,
-          duration: 50,
-          useNativeDriver: true,
-        }),
-        Animated.timing(shakeAnim, {
-          toValue: 0,
-          duration: 50,
-          useNativeDriver: true,
-        }),
-      ]).start();
-    }
+        Animated.timing(shimmerX, { toValue: 1, duration: 9000, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(shimmerX, { toValue: 0, duration: 9000, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ])
+    ).start();
 
-    // Glow pulse
-    Animated.sequence([
-      Animated.timing(glowAnim, {
-        toValue: 1,
-        duration: 100,
-        useNativeDriver: true,
-      }),
-      Animated.timing(glowAnim, {
-        toValue: 0,
-        duration: 400,
-        useNativeDriver: true,
-      }),
-    ]).start();
-
-    // Check if lily is full - spawn new one
-    const updatedLily = lilies.find(l => l.id === lily.id);
-    if (updatedLily && updatedLily.isFull) {
-      // Remove after celebration
-      setTimeout(() => {
-        setLilies(prev => prev.filter(l => l.id !== lily.id));
-
-        // Spawn new lily
-        setTimeout(() => {
-          const newLily = createLily();
-          setLilies(prev => [...prev, newLily]);
-        }, 500);
-      }, 1000);
-    }
-  };
-
-  // Handle touch
-  const handleTouch = (evt) => {
-    const { locationX, locationY } = evt.nativeEvent;
-
-    // Check if touching a lily
-    const hitLily = lilies.find(l =>
-      locationX > l.x && locationX < l.x + l.size &&
-      locationY > l.y && locationY < l.y + l.size
-    );
-
-    if (hitLily) {
-      growLily(hitLily);
-    } else {
-      // Miss - create ripple on water
-      createRipple(locationX, locationY);
-      createFloatingText(locationX - 20, locationY - 20, '💧', '#60A5FA');
-      setCombo(0);
-    }
-  };
-
-  // Game loop
-  useEffect(() => {
-    gameLoop.current = setInterval(() => {
-      // Update water animation
-      waterAnim.setValue(Math.sin(Date.now() * 0.001) * 2);
-
-      // Update lilies - gentle floating
-      setLilies(prev => prev.map(l => ({
-        ...l,
-        y: l.y + Math.sin(Date.now() * 0.001 + l.phase) * 0.1,
-        rotation: l.rotation + 0.1,
-      })));
-
-      // Update ripples
-      setPondRipples(prev => prev.map(r => ({
-        ...r,
-        radius: r.radius + 0.5,
-        opacity: r.opacity - 0.01,
-      })).filter(r => r.opacity > 0));
-
-      // Update particles
-      setParticles(prev => {
-        const updated = prev.map(p => ({
-          ...p,
-          x: p.x + p.vx,
-          y: p.y + p.vy,
-          vy: p.vy + p.gravity,
-          life: p.life - 0.015,
-          size: p.size * 0.995,
-        }));
-        return updated.filter(p => p.life > 0);
-      });
-
-      // Update floating texts
-      setFloatingTexts(prev => {
-        const updated = prev.map(t => ({
-          ...t,
-          y: t.y + t.vy,
-          opacity: t.opacity - 0.015,
-          scale: t.scale + 0.01,
-        }));
-        return updated.filter(t => t.opacity > 0);
-      });
-
-      // Update frogs - jump animation
-      setFrogs(prev => prev.map(f => {
-        const dx = f.targetX - f.x;
-        const dy = f.targetY - f.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-
-        if (dist < 10) {
-          return {
-            ...f,
-            targetX: Math.random() * width,
-            targetY: 50 + Math.random() * (height * 0.7),
-            jumpProgress: 0,
-          };
-        }
-
-        return {
-          ...f,
-          x: f.x + (dx / dist) * 0.5,
-          y: f.y + (dy / dist) * 0.5,
-          rotation: Math.atan2(dy, dx),
-          jumpProgress: (f.jumpProgress + 0.02) % (Math.PI * 2),
-        };
-      }));
-
-      // Update dragonflies
-      setDragonflies(prev => prev.map(d => {
-        const dx = d.targetX - d.x;
-        const dy = d.targetY - d.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-
-        if (dist < 5) {
-          return {
-            ...d,
-            targetX: Math.random() * width,
-            targetY: 50 + Math.random() * (height * 0.5),
-          };
-        }
-
-        return {
+    ambientRef.current = setInterval(() => {
+      const t = Date.now() * 0.0005;
+      setDragonflies(prev =>
+        prev.map(d => ({
           ...d,
-          x: d.x + (dx / dist) * d.speed * 0.3,
-          y: d.y + (dy / dist) * d.speed * 0.3,
-          wingAngle: (d.wingAngle + 0.3) % (Math.PI * 2),
-        };
-      }));
+          x: (width * 0.5) + Math.cos(t + d.phase) * width * 0.35,
+          y: (height * 0.18) + Math.sin(t * 1.3 + d.phase) * height * 0.08,
+        }))
+      );
+      setRipples(prev =>
+        prev.map(r => ({ ...r, radius: r.radius + 1.1, opacity: r.opacity - 0.014 })).filter(r => r.opacity > 0)
+      );
+    }, AMBIENT_TICK_MS);
 
-    }, 16);
+    return () => clearInterval(ambientRef.current);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-    return () => clearInterval(gameLoop.current);
-  }, []);
+  const crossfadePhaseText = () => {
+    Animated.sequence([
+      Animated.timing(phaseTextOpacity, { toValue: 0, duration: 120, useNativeDriver: true }),
+      Animated.timing(phaseTextOpacity, { toValue: 1, duration: 220, useNativeDriver: true }),
+    ]).start();
+  };
 
-  // Spawn new lilies
-  useEffect(() => {
-    spawnTimer.current = setInterval(() => {
-      if (lilies.length < 7 + Math.floor(totalBlooms / 20)) {
-        const newLily = createLily();
-        setLilies(prev => [...prev, newLily]);
+  const startExhale = () => {
+    setPhase('exhale');
+    crossfadePhaseText();
+    const { exhaleMs } = computeDurations();
+    currentPhaseDurationRef.current = exhaleMs;
+    setRipples(prev => [...prev, { id: Math.random(), radius: 10, opacity: 0.5, color: COLORS.rippleOut }]);
+
+    phaseProgress.setValue(0);
+    Animated.timing(phaseProgress, { toValue: 1, duration: exhaleMs, easing: Easing.linear, useNativeDriver: false }).start();
+
+    Animated.timing(bloom, { toValue: 0, duration: exhaleMs, easing: Easing.in(Easing.ease), useNativeDriver: false }).start(
+      ({ finished }) => {
+        if (!finished) return;
+        setBreathCount(c => c + 1);
+        if (Platform.OS !== 'web') Vibration.vibrate(8);
+        setPhase('idle');
+        if (isPressedRef.current && !pausedRef.current) startInhale(); // continuous hold chains the next breath
       }
-    }, 5000);
+    );
+  };
 
-    return () => clearInterval(spawnTimer.current);
-  }, [totalBlooms]);
+  const startInhale = () => {
+    setPhase('inhale');
+    crossfadePhaseText();
+    const { inhaleMs } = computeDurations();
+    currentPhaseDurationRef.current = inhaleMs;
+    if (Platform.OS !== 'web') Vibration.vibrate(5);
+    setRipples(prev => [...prev, { id: Math.random(), radius: 10, opacity: 0.5, color: COLORS.rippleIn }]);
 
-  return (
-    <TouchableWithoutFeedback onPress={handleTouch}>
-      <Animated.View style={[
-        styles.container,
-        { transform: [{ translateX: shakeAnim }] }
-      ]}>
-        {/* Water background animation */}
-        <Animated.View style={[
-          styles.waterBackground,
-          {
-            transform: [
-              { translateY: waterAnim },
-            ]
-          }
-        ]} />
+    phaseProgress.setValue(0);
+    Animated.timing(phaseProgress, { toValue: 1, duration: inhaleMs, easing: Easing.linear, useNativeDriver: false }).start();
 
-        {/* Water lilies (decorative background) */}
-        {waterLilies.map(l => (
-          <View
-            key={l.id}
-            style={[
-              styles.waterLilyDeco,
-              {
-                left: l.x,
-                top: l.y,
-                width: l.size,
-                height: l.size,
-                opacity: l.opacity,
-                transform: [{ rotate: `${l.rotation}deg` }],
-              }
-            ]}
-          >
-            <Text style={{ fontSize: l.size }}>{l.emoji}</Text>
+    Animated.timing(bloom, { toValue: 1, duration: inhaleMs, easing: Easing.out(Easing.ease), useNativeDriver: false }).start(
+      ({ finished }) => {
+        if (finished) startExhale(); // reaching full bloom naturally starts the exhale
+      }
+    );
+  };
+
+  const handlePressIn = () => {
+    isPressedRef.current = true;
+    if (pausedRef.current) return;
+    if (phase === 'idle') startInhale();
+  };
+
+  const handlePressOut = () => {
+    isPressedRef.current = false;
+    if (phase === 'inhale') {
+      bloom.stopAnimation(() => startExhale());
+    }
+  };
+
+  // Pause genuinely freezes the animation in place and resumes it from the
+  // same point, rather than just stopping the session clock underneath it.
+  const togglePause = () => {
+    const goingToPause = !isPaused;
+    if (goingToPause) {
+      bloom.stopAnimation(v => { bloomPausedValueRef.current = v; });
+      phaseProgress.stopAnimation(v => { progressPausedValueRef.current = v; });
+    } else if (phase !== 'idle') {
+      const remainingFraction = Math.max(0, 1 - progressPausedValueRef.current);
+      const remainingMs = currentPhaseDurationRef.current * remainingFraction;
+      const targetBloom = phase === 'inhale' ? 1 : 0;
+
+      Animated.timing(phaseProgress, { toValue: 1, duration: remainingMs, easing: Easing.linear, useNativeDriver: false }).start();
+      Animated.timing(bloom, {
+        toValue: targetBloom,
+        duration: remainingMs,
+        easing: phase === 'inhale' ? Easing.out(Easing.ease) : Easing.in(Easing.ease),
+        useNativeDriver: false,
+      }).start(({ finished }) => {
+        if (!finished) return;
+        if (phase === 'inhale') {
+          startExhale();
+        } else {
+          setBreathCount(c => c + 1);
+          if (Platform.OS !== 'web') Vibration.vibrate(8);
+          setPhase('idle');
+          if (isPressedRef.current) startInhale();
+        }
+      });
+    }
+    pausedRef.current = goingToPause;
+    setIsPaused(goingToPause);
+  };
+
+  const fadeTo = (next) => {
+    Animated.timing(screenFade, { toValue: 0, duration: 180, useNativeDriver: true }).start(() => {
+      setScreen(next);
+      Animated.timing(screenFade, { toValue: 1, duration: 260, useNativeDriver: true }).start();
+    });
+  };
+
+  const startSession = () => {
+    setElapsedSeconds(0);
+    setBreathCount(0);
+    setPhase('idle');
+    setIsPaused(false);
+    pausedRef.current = false;
+    isPressedRef.current = false;
+    bloom.setValue(0);
+    phaseProgress.setValue(0);
+    fadeTo('session');
+  };
+
+  const endSessionEarly = () => {
+    clearInterval(tickRef.current);
+    fadeTo('complete');
+  };
+
+  const selectPattern = (id) => {
+    setPatternId(id);
+    setBpm(PATTERNS[id].defaultBpm);
+  };
+
+  const phaseText =
+    phase === 'inhale' ? 'Breathing in…' : phase === 'exhale' ? 'Breathing out…' : 'Press and hold the lily';
+
+  const petalColor = bloom.interpolate({ inputRange: [0, 1], outputRange: [COLORS.petalClosed, COLORS.petalOpen] });
+  const shimmerTranslate = shimmerX.interpolate({ inputRange: [0, 1], outputRange: [-width * 0.6, width * 0.6] });
+  const avgPace = breathCount > 0 && elapsedSeconds > 0 ? (breathCount / (elapsedSeconds / 60)).toFixed(1) : null;
+
+  // =========================================================================
+  // SETUP
+  // =========================================================================
+  if (screen === 'setup') {
+    return (
+      <Animated.View style={[styles.container, { backgroundColor: COLORS.background, opacity: screenFade }]}>
+        <View style={styles.setupWrap}>
+          <Text style={styles.setupTitle}>Lily Pond Breathing</Text>
+          <Text style={styles.setupSubtitle}>
+            Press and hold the lily to breathe in — it blooms open. Let go to breathe out as it
+            settles closed. Keep holding through a breath to flow straight into the next one.
+          </Text>
+
+          <Text style={styles.sectionLabel}>Pattern</Text>
+          {Object.values(PATTERNS).map(p => (
+            <TouchableOpacity
+              key={p.id}
+              onPress={() => selectPattern(p.id)}
+              style={[styles.patternCard, patternId === p.id && styles.patternCardActive]}
+            >
+              <Text style={styles.patternName}>{p.label}</Text>
+              <Text style={styles.patternBlurb}>{p.blurb}</Text>
+              <Text style={styles.patternCitation}>{p.citation}</Text>
+            </TouchableOpacity>
+          ))}
+
+          <Text style={[styles.sectionLabel, { marginTop: 18 }]}>Pace</Text>
+          <View style={styles.chipRow}>
+            {BPM_OPTIONS.map(b => (
+              <TouchableOpacity key={b} onPress={() => setBpm(b)} style={[styles.chip, bpm === b && styles.chipActive]}>
+                <Text style={[styles.chipText, bpm === b && styles.chipTextActive]}>{b}</Text>
+              </TouchableOpacity>
+            ))}
           </View>
-        ))}
+          <Text style={styles.paceHint}>breaths per minute</Text>
 
-        {/* Dragonflies */}
-        {dragonflies.map(d => (
-          <View
-            key={d.id}
-            style={[
-              styles.dragonfly,
-              {
-                left: d.x - d.size / 2,
-                top: d.y - d.size / 2,
-                width: d.size * 1.5,
-                height: d.size,
-              }
-            ]}
-          >
-            <View style={[
-              styles.dragonflyWing,
-              {
-                backgroundColor: d.color,
-                transform: [{ scaleX: Math.sin(d.wingAngle) }],
-              }
-            ]} />
-            <View style={[
-              styles.dragonflyWing,
-              {
-                backgroundColor: d.color,
-                transform: [{ scaleX: Math.cos(d.wingAngle) }],
-              }
-            ]} />
-            <View style={[styles.dragonflyBody, { backgroundColor: d.color }]} />
+          <Text style={[styles.sectionLabel, { marginTop: 18 }]}>Session length</Text>
+          <View style={styles.chipRow}>
+            {DURATION_OPTIONS_MIN.map(min => (
+              <TouchableOpacity
+                key={min}
+                onPress={() => setDurationMin(min)}
+                style={[styles.chip, durationMin === min && styles.chipActive]}
+              >
+                <Text style={[styles.chipText, durationMin === min && styles.chipTextActive]}>{min} min</Text>
+              </TouchableOpacity>
+            ))}
           </View>
-        ))}
 
-        {/* Frogs */}
-        {frogs.map(f => (
-          <View
-            key={f.id}
-            style={[
-              styles.frog,
-              {
-                left: f.x - f.size / 2,
-                top: f.y - f.size / 2 - Math.sin(f.jumpProgress) * 20,
-                width: f.size,
-                height: f.size,
-                transform: [{ rotate: `${f.rotation}rad` }],
-              }
-            ]}
-          >
-            <View style={[styles.frogBody, { backgroundColor: f.color }]}>
-              <View style={styles.frogEyes}>
-                <View style={styles.frogEye} />
-                <View style={styles.frogEye} />
-              </View>
+          <TouchableOpacity style={styles.startButton} onPress={startSession}>
+            <Text style={styles.startButtonText}>Begin</Text>
+          </TouchableOpacity>
+
+          <Text style={styles.disclaimer}>
+            A relaxation exercise, not a substitute for medical or mental health care.
+          </Text>
+        </View>
+      </Animated.View>
+    );
+  }
+
+  // =========================================================================
+  // SESSION
+  // =========================================================================
+  if (screen === 'session') {
+    const progress = Math.min(1, elapsedSeconds / totalSeconds);
+    return (
+      <View style={[styles.container, { backgroundColor: COLORS.water }]}>
+        <Animated.View
+          style={[styles.shimmer, { transform: [{ translateX: shimmerTranslate }, { rotate: '20deg' }] }]}
+        />
+
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+        </View>
+
+        <Text style={styles.sessionTime}>
+          {Math.floor(elapsedSeconds / 60)}:{String(elapsedSeconds % 60).padStart(2, '0')}
+          {'  /  '}
+          {durationMin}:00
+        </Text>
+        <Text style={styles.sessionPattern}>{pattern.label} · {bpm} bpm</Text>
+
+        <View style={styles.pondArea}>
+          {dragonflies.map(d => (
+            <View key={d.id} style={[styles.dragonfly, { left: d.x, top: d.y }]}>
+              <View style={styles.dragonflyBody} />
+              <View style={[styles.dragonflyWing, { left: -6 }]} />
+              <View style={[styles.dragonflyWing, { left: 6 }]} />
             </View>
-          </View>
-        ))}
+          ))}
 
-        {/* Pond ripples */}
-        {pondRipples.map(r => (
-          <Animated.View
-            key={r.id}
-            style={[
-              styles.ripple,
-              {
-                left: r.x - r.radius / 2,
-                top: r.y - r.radius / 2,
+          {ripples.map(r => (
+            <View
+              key={r.id}
+              style={{
+                position: 'absolute',
                 width: r.radius * 2,
                 height: r.radius * 2,
                 borderRadius: r.radius,
-                opacity: r.opacity * 0.5,
-                borderWidth: 2,
-                borderColor: `rgba(255, 255, 255, ${r.opacity * 0.5})`,
-              }
-            ]}
-          />
-        ))}
+                borderWidth: 1.5,
+                borderColor: r.color,
+                opacity: r.opacity,
+              }}
+            />
+          ))}
 
-        {/* Particles */}
-        {particles.map(p => (
-          <Animated.View
-            key={p.id}
-            style={[
-              styles.particle,
-              {
-                left: p.x - p.size / 2,
-                top: p.y - p.size / 2,
-                width: p.size,
-                height: p.size,
-                backgroundColor: p.color,
-                opacity: p.life,
-                borderRadius: p.size / 2,
-                shadowColor: p.color,
-                shadowOpacity: 0.5,
-                shadowRadius: p.size,
-              }
-            ]}
-          />
-        ))}
+          <View style={styles.pad} />
 
-        {/* Floating Texts */}
-        {floatingTexts.map(t => (
-          <Animated.Text
-            key={t.id}
-            style={[
-              styles.floatingText,
-              {
-                left: t.x,
-                top: t.y,
-                opacity: t.opacity,
-                color: t.color,
-                transform: [{ scale: t.scale }],
-              }
-            ]}
-          >
-            {t.text}
-          </Animated.Text>
-        ))}
-
-        {/* Lilies */}
-        {lilies.map(l => (
-          <Animated.View
-            key={l.id}
-            style={[
-              styles.lilyContainer,
-              {
-                left: l.x,
-                top: l.y - (l.size * 0.1),
-                width: l.size,
-                height: l.size,
-                transform: [
-                  { rotate: `${l.rotation}deg` },
-                  { scale: l.isFull ? 1.1 : 1 },
-                ],
-              }
-            ]}
-          >
-            <View style={[
-              styles.lilyPad,
-              {
-                width: l.size,
-                height: l.size * 0.5,
-                borderRadius: l.size * 0.25,
-                backgroundColor: l.isFull ? l.type.color : 'rgba(25, 135, 84, 0.4)',
-                borderColor: l.isFull ? l.type.color : '#20C997',
-                opacity: l.opacity,
-              }
-            ]}>
-              <Text style={[
-                styles.lilyEmoji,
-                {
-                  fontSize: l.size * 0.5,
-                  transform: [{ scale: l.isFull ? 1.2 : 1 }],
-                }
-              ]}>
-                {l.type.emoji}
-              </Text>
-
-              {/* Growth indicator */}
-              {!l.isFull && (
-                <View style={styles.growthIndicator}>
-                  <View style={[
-                    styles.growthFill,
+          <TouchableWithoutFeedback onPressIn={handlePressIn} onPressOut={handlePressOut}>
+            <View style={styles.lilyHitArea}>
+              {Array.from({ length: PETAL_COUNT }).map((_, i) => (
+                <Animated.View
+                  key={i}
+                  style={[
+                    styles.petal,
                     {
-                      width: `${l.growthProgress * 100}%`,
-                      backgroundColor: l.type.color,
-                    }
-                  ]} />
-                </View>
-              )}
+                      backgroundColor: petalColor,
+                      transform: [
+                        { rotate: `${(360 / PETAL_COUNT) * i}deg` },
+                        { translateY: bloom.interpolate({ inputRange: [0, 1], outputRange: [-4, -32] }) },
+                        { scale: bloom.interpolate({ inputRange: [0, 1], outputRange: [0.35, 1] }) },
+                      ],
+                    },
+                  ]}
+                />
+              ))}
+              <View style={styles.lilyCenter} />
             </View>
-          </Animated.View>
-        ))}
-
-        {/* HUD */}
-        <View style={styles.hud}>
-          <View style={styles.hudItem}>
-            <Text style={styles.hudLabel}>🪷 BLOOMS</Text>
-            <Text style={styles.hudValue}>{totalBlooms}</Text>
-          </View>
-          <View style={styles.hudItem}>
-            <Text style={styles.hudLabel}>⭐ SCORE</Text>
-            <Text style={styles.hudValue}>{score}</Text>
-          </View>
-          <View style={styles.hudItem}>
-            <Text style={styles.hudLabel}>⚡ COMBO</Text>
-            <Text style={[
-              styles.hudValue,
-              combo > 5 && styles.comboHigh,
-              combo > 10 && styles.comboSuper,
-            ]}>
-              {combo}x
-            </Text>
-          </View>
-          <View style={styles.hudItem}>
-            <Text style={styles.hudLabel}>🏆 MAX</Text>
-            <Text style={styles.hudValue}>{maxCombo}</Text>
-          </View>
+          </TouchableWithoutFeedback>
         </View>
 
-        {/* Pond status */}
-        <View style={styles.pondStatus}>
-          <Text style={styles.pondStatusText}>
-            {lilies.length < 3 ? '🌱 Pond awakening...' :
-              lilies.length < 5 ? '🌸 Lilies blooming' :
-                lilies.length < 8 ? '🪷 Peaceful pond' :
-                  '🌺 Magical garden'}
-          </Text>
+        <Animated.Text style={[styles.phaseText, { opacity: phaseTextOpacity }]}>{phaseText}</Animated.Text>
+
+        <View style={styles.phaseProgressTrack}>
+          <Animated.View
+            style={[
+              styles.phaseProgressFill,
+              { width: phaseProgress.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }) },
+            ]}
+          />
         </View>
 
-        {/* Controls */}
-        <View style={styles.controls}>
-          <View style={styles.controlGroup}>
-            <Text style={styles.controlText}>
-              👆 Tap lily pads to help them grow
-            </Text>
-            <Text style={styles.controlSubtext}>
-              Each tap makes them bloom • Build combos for bonuses
-            </Text>
+        <Text style={styles.breathCount}>{breathCount} breaths</Text>
+
+        <View style={styles.paceAdjustRow}>
+          <TouchableOpacity onPress={() => setBpm(b => Math.max(4.5, Math.round((b - 0.5) * 10) / 10))} style={styles.stepperButton}>
+            <Text style={styles.stepperText}>–</Text>
+          </TouchableOpacity>
+          <Text style={styles.paceReadout}>{bpm.toFixed(1)} bpm</Text>
+          <TouchableOpacity onPress={() => setBpm(b => Math.min(7, Math.round((b + 0.5) * 10) / 10))} style={styles.stepperButton}>
+            <Text style={styles.stepperText}>+</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.footerButtons}>
+          <TouchableOpacity onPress={togglePause}>
+            <Text style={styles.endLink}>{isPaused ? 'Resume' : 'Pause'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={endSessionEarly}>
+            <Text style={styles.endLink}>End session</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  // =========================================================================
+  // COMPLETE
+  // =========================================================================
+  const minutesDone = (elapsedSeconds / 60).toFixed(1);
+  return (
+    <Animated.View style={[styles.container, { backgroundColor: COLORS.background, opacity: screenFade }]}>
+      <Text style={styles.completeTitle}>Session complete</Text>
+      <View style={styles.completeStatsRow}>
+        <View style={styles.completeStat}>
+          <Text style={styles.completeStatValue}>{breathCount}</Text>
+          <Text style={styles.completeStatLabel}>breaths</Text>
+        </View>
+        <View style={styles.completeStat}>
+          <Text style={styles.completeStatValue}>{minutesDone}</Text>
+          <Text style={styles.completeStatLabel}>minutes</Text>
+        </View>
+        {avgPace && (
+          <View style={styles.completeStat}>
+            <Text style={styles.completeStatValue}>{avgPace}</Text>
+            <Text style={styles.completeStatLabel}>avg bpm</Text>
           </View>
-        </View>
+        )}
+      </View>
+      <Text style={styles.completeNote}>{pattern.blurb}</Text>
 
-        {/* Glow overlay */}
-        <Animated.View style={[
-          styles.glowOverlay,
-          {
-            opacity: glowAnim.interpolate({
-              inputRange: [0, 1],
-              outputRange: [0, 0.2],
-            })
-          }
-        ]} />
-      </Animated.View>
-    </TouchableWithoutFeedback>
+      <TouchableOpacity style={styles.startButton} onPress={startSession}>
+        <Text style={styles.startButtonText}>Breathe again</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.secondaryButton} onPress={() => fadeTo('setup')}>
+        <Text style={styles.secondaryButtonText}>Change pattern or pace</Text>
+      </TouchableOpacity>
+    </Animated.View>
   );
 };
 
+// Backward-compatible aliases for existing imports.
+export const LilyPondGame = LilyBreathingGame;
+export default LilyBreathingGame;
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0F5132',
-    overflow: 'hidden',
+  container: { flex: 1, alignItems: 'center', overflow: 'hidden' },
+
+  setupWrap: { flex: 1, justifyContent: 'center', paddingHorizontal: 26, width: '100%', paddingVertical: 40 },
+  setupTitle: { color: COLORS.text, fontSize: 25, fontWeight: '300', marginBottom: 10, textAlign: 'center' },
+  setupSubtitle: {
+    color: 'rgba(231,251,241,0.6)', fontSize: 13, lineHeight: 19,
+    textAlign: 'center', marginBottom: 22,
   },
-  waterBackground: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'radial-gradient(circle at center, #0D6E3E 0%, #0F5132 50%, #064E3B 100%)',
+  sectionLabel: {
+    color: 'rgba(231,251,241,0.4)', fontSize: 11, textTransform: 'uppercase',
+    letterSpacing: 1, marginBottom: 10, textAlign: 'center',
   },
-  waterLilyDeco: {
-    position: 'absolute',
-    justifyContent: 'center',
-    alignItems: 'center',
+  patternCard: {
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)', borderRadius: 14,
+    padding: 12, marginBottom: 8, backgroundColor: 'rgba(255,255,255,0.03)',
   },
-  dragonfly: {
-    position: 'absolute',
-    justifyContent: 'center',
-    alignItems: 'center',
+  patternCardActive: { borderColor: COLORS.accent, backgroundColor: 'rgba(110,231,183,0.1)' },
+  patternName: { color: COLORS.text, fontSize: 14, fontWeight: '500', marginBottom: 3 },
+  patternBlurb: { color: 'rgba(231,251,241,0.55)', fontSize: 11, lineHeight: 15, marginBottom: 4 },
+  patternCitation: { color: 'rgba(231,251,241,0.3)', fontSize: 9, fontStyle: 'italic' },
+
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center' },
+  chip: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)', borderRadius: 18, paddingVertical: 7, paddingHorizontal: 14 },
+  chipActive: { backgroundColor: COLORS.accent, borderColor: COLORS.accent },
+  chipText: { color: COLORS.text, fontSize: 13 },
+  chipTextActive: { color: COLORS.background, fontWeight: '600' },
+  paceHint: { color: 'rgba(231,251,241,0.3)', fontSize: 10, textAlign: 'center', marginTop: 6 },
+
+  startButton: {
+    backgroundColor: COLORS.accent, borderRadius: 26, paddingVertical: 15,
+    alignItems: 'center', marginTop: 24, marginBottom: 14,
   },
-  dragonflyWing: {
-    position: 'absolute',
-    width: '60%',
-    height: '40%',
-    borderRadius: 10,
-    opacity: 0.6,
+  startButtonText: { color: COLORS.background, fontSize: 16, fontWeight: '600' },
+  secondaryButton: { paddingVertical: 10, alignItems: 'center' },
+  secondaryButtonText: { color: 'rgba(231,251,241,0.5)', fontSize: 13 },
+  disclaimer: { color: 'rgba(231,251,241,0.25)', fontSize: 10, textAlign: 'center', marginTop: 4 },
+
+  shimmer: {
+    position: 'absolute', top: '30%', width: 60, height: height * 1.4,
+    backgroundColor: 'rgba(255,255,255,0.03)',
   },
-  dragonflyBody: {
-    position: 'absolute',
-    width: '20%',
-    height: '60%',
-    borderRadius: 4,
+  progressTrack: { position: 'absolute', top: 0, left: 0, right: 0, height: 3, backgroundColor: 'rgba(255,255,255,0.06)' },
+  progressFill: { height: '100%', backgroundColor: COLORS.accent },
+  sessionTime: { color: 'rgba(231,251,241,0.4)', fontSize: 12, marginTop: 46 },
+  sessionPattern: { color: 'rgba(231,251,241,0.3)', fontSize: 11, marginTop: 3 },
+
+  pondArea: { flex: 1, alignItems: 'center', justifyContent: 'center', width: '100%' },
+  dragonfly: { position: 'absolute', width: 14, height: 6 },
+  dragonflyBody: { width: 10, height: 3, borderRadius: 1.5, backgroundColor: 'rgba(96,165,250,0.6)', marginLeft: 2 },
+  dragonflyWing: { position: 'absolute', top: -1, width: 8, height: 4, borderRadius: 4, backgroundColor: 'rgba(226,232,240,0.35)' },
+  pad: {
+    position: 'absolute', width: 130, height: 130, borderRadius: 65,
+    backgroundColor: COLORS.pad, opacity: 0.6,
   },
-  frog: {
-    position: 'absolute',
-    justifyContent: 'center',
-    alignItems: 'center',
+  lilyHitArea: { width: 100, height: 100, alignItems: 'center', justifyContent: 'center' },
+  petal: { position: 'absolute', width: 12, height: 30, borderRadius: 8 },
+  lilyCenter: { width: 14, height: 14, borderRadius: 7, backgroundColor: '#FCD34D' },
+
+  phaseText: { color: COLORS.text, fontSize: 16, fontWeight: '400', marginBottom: 10 },
+  phaseProgressTrack: {
+    width: 140, height: 3, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.1)',
+    overflow: 'hidden', marginBottom: 10,
   },
-  frogBody: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 50,
-    justifyContent: 'center',
-    alignItems: 'center',
+  phaseProgressFill: { height: '100%', backgroundColor: COLORS.accent },
+  breathCount: { color: 'rgba(231,251,241,0.5)', fontSize: 13, marginBottom: 16 },
+
+  paceAdjustRow: { flexDirection: 'row', alignItems: 'center', gap: 16, marginBottom: 20 },
+  stepperButton: {
+    width: 32, height: 32, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center', justifyContent: 'center',
   },
-  frogEyes: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    width: '60%',
-    marginTop: -10,
-  },
-  frogEye: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#FFFFFF',
-  },
-  ripple: {
-    position: 'absolute',
-    borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
-  },
-  particle: {
-    position: 'absolute',
-  },
-  floatingText: {
-    position: 'absolute',
-    fontSize: 20,
-    fontWeight: 'bold',
-    textShadowColor: 'rgba(0,0,0,0.8)',
-    textShadowOffset: { width: 2, height: 2 },
-    textShadowRadius: 4,
-  },
-  lilyContainer: {
-    position: 'absolute',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  lilyPad: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    shadowColor: '#20C997',
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    elevation: 5,
-  },
-  lilyEmoji: {
-    textShadowColor: 'rgba(0,0,0,0.3)',
-    textShadowOffset: { width: 1, height: 1 },
-    textShadowRadius: 3,
-  },
-  growthIndicator: {
-    position: 'absolute',
-    bottom: -8,
-    width: '80%',
-    height: 4,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  growthFill: {
-    height: '100%',
-    borderRadius: 2,
-  },
-  hud: {
-    position: 'absolute',
-    top: 30,
-    left: 20,
-    right: 20,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    flexWrap: 'wrap',
-  },
-  hudItem: {
-    backgroundColor: 'rgba(15, 81, 50, 0.8)',
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
-    alignItems: 'center',
-    minWidth: 60,
-  },
-  hudLabel: {
-    color: '#6EE7B7',
-    fontSize: 8,
-    fontWeight: '600',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
-  hudValue: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  comboHigh: {
-    color: '#F59E0B',
-  },
-  comboSuper: {
-    color: '#FCD34D',
-    textShadowColor: '#FCD34D',
-    textShadowRadius: 10,
-  },
-  pondStatus: {
-    position: 'absolute',
-    top: 100,
-    left: 20,
-    right: 20,
-    alignItems: 'center',
-    backgroundColor: 'rgba(15, 81, 50, 0.6)',
-    paddingVertical: 4,
-    paddingHorizontal: 16,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
-  },
-  pondStatusText: {
-    color: '#A7F3D0',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  controls: {
-    position: 'absolute',
-    bottom: 30,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-  },
-  controlGroup: {
-    backgroundColor: 'rgba(15, 81, 50, 0.8)',
-    paddingVertical: 8,
-    paddingHorizontal: 20,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
-    alignItems: 'center',
-  },
-  controlText: {
-    color: '#A7F3D0',
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  controlSubtext: {
-    color: '#6EE7B7',
-    fontSize: 10,
-    marginTop: 2,
-  },
-  glowOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: '#F472B6',
-    pointerEvents: 'none',
+  stepperText: { color: COLORS.text, fontSize: 17, lineHeight: 19 },
+  paceReadout: { color: 'rgba(231,251,241,0.55)', fontSize: 12, minWidth: 70, textAlign: 'center' },
+
+  footerButtons: { flexDirection: 'row', gap: 24, marginBottom: 36 },
+  endLink: { color: 'rgba(231,251,241,0.4)', fontSize: 12, textDecorationLine: 'underline' },
+
+  completeTitle: { color: COLORS.text, fontSize: 24, fontWeight: '300', marginTop: 110, marginBottom: 26 },
+  completeStatsRow: { flexDirection: 'row', gap: 36, marginBottom: 26 },
+  completeStat: { alignItems: 'center' },
+  completeStatValue: { fontSize: 32, fontWeight: '200', color: COLORS.accent },
+  completeStatLabel: { color: 'rgba(231,251,241,0.4)', fontSize: 11, marginTop: 4 },
+  completeNote: {
+    color: 'rgba(231,251,241,0.55)', fontSize: 13, lineHeight: 19,
+    textAlign: 'center', paddingHorizontal: 36, marginBottom: 36,
   },
 });
-
-export default LilyPondGame;

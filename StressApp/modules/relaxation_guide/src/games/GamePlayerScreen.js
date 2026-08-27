@@ -16,22 +16,11 @@ import { Timer } from '../components/Timer';
 import { Ionicons } from '@expo/vector-icons';
 
 // Import Interactive Games & Guided Meditation
-import { AdaptiveRainGame } from '../games/AdaptiveRainGame';
-import { ForestGame } from '../games/ForestGame';
-import { OceanGame } from '../games/OceanGame';
 import { FlowerMeadowGame } from '../games/FlowerMeadowGame';
-import { ZenGardenGame } from '../games/ZenGardenGame';
 import { LilyPondGame } from '../games/LilyPondGame';
 import { PulseWaveGame } from '../games/PulseWaveGame';
-import { ParticleFieldGame } from '../games/ParticleFieldGame';
-import { BreathingLightGame } from '../games/BreathingLightGame';
-import { ZenRunnerGame } from '../games/ZenRunnerGame';
-import { LuminaBladeGame } from '../games/LuminaBladeGame';
-import { OrbDefenseGame } from '../games/OrbDefenseGame';
-import { PatternMatrixGame } from '../games/PatternMatrixGame';
 import { CognitiveDeStressGame } from '../games/CognitiveDeStressGame';
 import { MeditationGame } from '../games/MeditationGame';
-import { FocusArcade } from '../games/FocusArcadeGame';
 
 const { width, height } = Dimensions.get('window');
 
@@ -57,188 +46,72 @@ export const GamePlayerScreen = () => {
   const timerRef = useRef(null);
   const statsInterval = useRef(null);
 
-  const subId = selectedSubOption ? selectedSubOption.id : 'resonance_circle';
+  const subId = selectedSubOption ? selectedSubOption.id : 'box_meditation';
 
   // Game metadata
   const gameMetadata = {
-    // Focus Arcade Games
-    resonance_circle: {
-      title: 'Resonance Circle',
-      icon: '🔄',
-      color: '#60A5FA',
-      description: 'Visual biofeedback for heart rate variability training using paced resonance'
-    },
-    mindful_sweep: {
-      title: 'Mindful Sweep',
-      icon: '🧠',
-      color: '#34D399',
-      description: 'Gentle attention guidance through body awareness zones'
-    },
-    aurora_flow: {
-      title: 'Aurora Flow',
-      icon: '🌌',
-      color: '#C084FC',
-      description: 'Paced color transition training for parasympathetic activation'
-    },
-    serenity_spiral: {
-      title: 'Serenity Spiral',
-      icon: '🌀',
-      color: '#FBBF24',
-      description: 'Calming spiral meditation for attention restoration therapy'
-    },
-    stillness_dots: {
-      title: 'Stillness Dots',
-      icon: '🎯',
-      color: '#F472B6',
-      description: 'Visual anchoring technique for attention stabilization'
-    },
-
     // Guided Meditation & Breathwork
     box_meditation: {
       title: 'Box Meditation',
       icon: '📦',
       color: '#38BDF8',
-      description: 'Structured 4-4-4-4 visual pacing for rapid autonomic calm'
+      description: 'Structured 4-4-4-4 visual and auditory breathing rhythm for rapid vagal nerve activation.'
     },
-    zen_body_scan: {
-      title: 'Zen Body Scan',
-      icon: '🧘',
-      color: '#10B981',
-      description: 'Mindful muscle relaxation with expanding aura visuals'
-    },
-    chakra_meditation: {
+    chakra_harmonizer: {
       title: 'Chakra Harmonizer',
       icon: '✨',
       color: '#EC4899',
-      description: '432Hz & 528Hz frequency alignment for deep mental focus'
+      description: '432Hz & 528Hz acoustic harmonic frequency alignment for neural synchronization.'
     },
-    transcendental_mind: {
+    silent_zen_timer: {
       title: 'Silent Zen Timer',
       icon: '🔔',
       color: '#F59E0B',
-      description: 'Minimalist meditation timer with periodic singing bowl bells'
-    },
-    sound_meditation: {
-      title: 'Acoustic Meditation',
-      icon: '🎵',
-      color: '#818CF8',
-      description: 'Resonant soundscape meditation for effortless presence'
+      description: 'Minimalist open monitoring meditation timer with periodic singing bowl cues.'
     },
 
-    // Sensory & Tactile Games
-    rain_scene: {
-      title: 'Rain Meditation',
-      icon: '🌧️',
-      color: '#38BDF8',
-      description: 'Soothing rain sounds with interactive ripples'
-    },
-    sunset_glow: {
-      title: 'Sunset Glow',
-      icon: '🌅',
-      color: '#F59E0B',
-      description: 'Warm dusk horizon color transitions for circadian calming'
-    },
-    mountain_breeze: {
-      title: 'Mountain Breeze',
-      icon: '🏔️',
-      color: '#34D399',
-      description: 'Crisp mountain wind flows reacting to touch orientation'
-    },
-    forest_scene: {
-      title: 'Forest Adventure',
-      icon: '🌲',
-      color: '#10B981',
-      description: 'Collect fireflies in an enchanted forest'
-    },
-    ocean_scene: {
-      title: 'Ocean Waves',
-      icon: '🌊',
-      color: '#3B82F6',
-      description: 'Ride the waves with calming ocean sounds'
-    },
+    // Breathing Garden
     flower_meadow: {
-      title: 'Bloom Garden',
+      title: 'Flower Meadow',
       icon: '🌺',
       color: '#EC4899',
-      description: 'Guided 4-7-8 breath relaxation with living garden ecosystem'
-    },
-    zen_rock_garden: {
-      title: 'Zen Garden',
-      icon: '🪨',
-      color: '#F59E0B',
-      description: 'Rake sand patterns for mindfulness'
+      description: 'Interactive flower blooming matched to 4-7-8 parasympathetic breathing cycles.'
     },
     water_lily_pond: {
-      title: 'Lily Pond',
+      title: 'Water Lily Pond',
       icon: '🪷',
       color: '#8B5CF6',
-      description: 'Watch lilies bloom in peaceful water'
-    },
-    pulse_wave: {
-      title: 'Pulse Wave',
-      icon: '📳',
-      color: '#F472B6',
-      description: 'Synchronize with healing vibrations'
-    },
-    particle_field: {
-      title: 'Particle Field',
-      icon: '✨',
-      color: '#A78BFA',
-      description: 'Manipulate particles with touch'
-    },
-    breathing_light: {
-      title: 'Breathing Light',
-      icon: '💡',
-      color: '#818CF8',
-      description: 'Follow the light for deep relaxation'
-    },
-
-    // Cognitive De-Stress & Fidget Games
-    bubble_pop: {
-      title: 'Zen Bubble Pop',
-      icon: '🧼',
-      color: '#F43F5E',
-      description: 'Tactile stress bubble popping with satisfying visual particle bursts'
-    },
-    pattern_align: {
-      title: 'Pattern Alignment',
-      icon: '🧩',
-      color: '#3B82F6',
-      description: 'Frosted glass pattern matching puzzle to soothe overthinking'
-    },
-    stress_shatter: {
-      title: 'Stress Release Shatter',
-      icon: '💥',
-      color: '#EF4444',
-      description: 'Tap-to-shatter dark glass stress objects into harmless shards'
-    },
-    cloud_float: {
-      title: 'Cloud Floating',
-      icon: '☁️',
-      color: '#38BDF8',
-      description: 'Interact with soft drifting clouds in an open sky sanctuary'
-    },
-    sand_drop: {
-      title: 'Cascade Sand',
-      icon: '⏳',
-      color: '#F59E0B',
-      description: 'Granular sand fall physics with calming hourglass flow'
+      description: 'Expanding water lily blooms synchronized with diaphragmatic exhalations.'
     },
     cosmic_nebula: {
       title: 'Cosmic Nebula',
       icon: '🌌',
       color: '#A78BFA',
-      description: 'Deep galaxy dust particles expanding to breathing pulse'
+      description: 'Starlight galaxy expansion pacing slow 6-breaths-per-minute resonance.'
     },
-    crystal_cave: {
-      title: 'Crystal Cave',
-      icon: '💎',
-      color: '#06B6D4',
-      description: 'Resonant crystal cavern with glowing harmonic audio visualizers'
+
+    // Cognitive De-Stress Arcade
+    bubble_pop: {
+      title: 'Zen Bubble Pop',
+      icon: '🧼',
+      color: '#F43F5E',
+      description: 'Haptic and visual bubble popping providing immediate sensory grounding and tension release.'
+    },
+    pattern_align: {
+      title: 'Pattern Alignment',
+      icon: '🧩',
+      color: '#3B82F6',
+      description: 'Mindful spatial tile alignment shifting cognitive load away from stressful thoughts.'
+    },
+    cloud_float: {
+      title: 'Cloud Floating',
+      icon: '☁️',
+      color: '#38BDF8',
+      description: 'Low-demand spatial navigation steering soft clouds across gentle skies for cognitive offloading.'
     }
   };
 
-  const meta = gameMetadata[subId] || gameMetadata.resonance_circle;
+  const meta = gameMetadata[subId] || gameMetadata.box_meditation;
 
   // Pulsing animation for the game container
   useEffect(() => {
@@ -246,26 +119,30 @@ export const GamePlayerScreen = () => {
       Animated.sequence([
         Animated.timing(pulseAnim, {
           toValue: 1.02,
-          duration: 2000,
+          duration: 3000,
           useNativeDriver: true,
         }),
         Animated.timing(pulseAnim, {
           toValue: 1,
-          duration: 2000,
+          duration: 3000,
           useNativeDriver: true,
         }),
       ])
     ).start();
   }, []);
 
-  // Track game time
+  // Timer interval
   useEffect(() => {
-    statsInterval.current = setInterval(() => {
-      setGameTime(prev => prev + 1);
-    }, 1000);
+    if (gameState === 'playing') {
+      timerRef.current = setInterval(() => {
+        setGameTime(prev => prev + 1);
+      }, 1000);
+    } else {
+      clearInterval(timerRef.current);
+    }
 
-    return () => clearInterval(statsInterval.current);
-  }, []);
+    return () => clearInterval(timerRef.current);
+  }, [gameState]);
 
   // Achievement system
   const checkAchievements = (newScore) => {
@@ -294,60 +171,28 @@ export const GamePlayerScreen = () => {
 
   const renderGameCanvas = () => {
     switch (subId) {
-      // Focus Arcade
-      case 'resonance_circle':
-      case 'mindful_sweep':
-      case 'aurora_flow':
-      case 'serenity_spiral':
-      case 'stillness_dots':
-        return <FocusArcade mode={subId} initialMode={subId} />;
-
       // Guided Meditation
       case 'box_meditation':
-        return <MeditationGame mode="box_meditation" initialMode="box_meditation" />;
-      case 'zen_body_scan':
-        return <MeditationGame mode="zen_body_scan" initialMode="zen_body_scan" />;
-      case 'chakra_meditation':
-        return <MeditationGame mode="chakra_meditation" initialMode="chakra_meditation" />;
-      case 'transcendental_mind':
-        return <MeditationGame mode="transcendental_mind" initialMode="transcendental_mind" />;
-      case 'sound_meditation':
-        return <MeditationGame mode="sound_meditation" initialMode="sound_meditation" />;
+      case 'chakra_harmonizer':
+      case 'silent_zen_timer':
+        return <MeditationGame mode={subId} initialMode={subId} />;
 
-      // Nature Sensory & Ambient Environments
-      case 'rain_scene':
-      case 'sunset_glow':
-      case 'mountain_breeze':
-        return <AdaptiveRainGame mode={subId} />;
-      case 'forest_scene':
-        return <ForestGame />;
-      case 'ocean_scene':
-        return <OceanGame />;
+      // Breathing Garden
       case 'flower_meadow':
         return <FlowerMeadowGame />;
-      case 'zen_rock_garden':
-        return <ZenGardenGame />;
       case 'water_lily_pond':
         return <LilyPondGame />;
-      case 'pulse_wave':
       case 'cosmic_nebula':
-      case 'crystal_cave':
-        return <PulseWaveGame mode={subId} />;
-      case 'particle_field':
-        return <ParticleFieldGame />;
-      case 'breathing_light':
-        return <BreathingLightGame />;
+        return <PulseWaveGame mode="cosmic_nebula" />;
 
-      // Cognitive De-Stress & Fidget Arcade
+      // Cognitive De-Stress Arcade
       case 'bubble_pop':
       case 'pattern_align':
-      case 'stress_shatter':
       case 'cloud_float':
-      case 'sand_drop':
         return <CognitiveDeStressGame mode={subId} />;
 
       default:
-        return <FocusArcade mode="resonance_circle" initialMode="resonance_circle" />;
+        return <MeditationGame mode="box_meditation" initialMode="box_meditation" />;
     }
   };
 

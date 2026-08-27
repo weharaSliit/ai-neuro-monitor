@@ -10,51 +10,22 @@ export const AppContext = createContext();
 // the 'guest_' fallback only exists so this module still renders standalone in dev.
 export const AppProvider = ({ children, initialUserId, initialUsername, initialIsNewUser = false, onExit = null }) => {
   const [currentScreen, setCurrentScreen] = useState('PrivacyPolicy');
-  const [userId, setUserId] = useState(initialUserId || `guest_${Date.now()}`);
+  const [userId, setUserId] = useState(initialUserId || `user_${Date.now()}`);
   const [username, setUsername] = useState(initialUsername || 'Participant');
   const [userEmail, setUserEmail] = useState('');
   const [pendingVerificationCode, setPendingVerificationCode] = useState('');
   const [isGuest, setIsGuest] = useState(!initialUserId);
 
-  // Individual Permission Toggles (Grant Access screen)
+  // Individual Permission Toggles
   const [permissionsGranted, setPermissionsGranted] = useState(false);
   const [permMember1, setPermMember1] = useState(true);  // Member 1: EEG Earbud
   const [permMember2, setPermMember2] = useState(true);  // Member 2: Smart Ring
   const [permMember3, setPermMember3] = useState(true);  // Member 3: Smartphone Phenotype
-  const [permVoice, setPermVoice] = useState(true);      // AI Counselor Voice/Microphone
+  const [permVoice, setPermVoice] = useState(true);
 
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
-  const [isCalibrated, setIsCalibrated] = useState(false);
-
-  // Returning-user check: has this identity already finished the one-time
-  // Privacy/Onboarding/Permissions/Calibration flow before, on any device?
-  // Baseline + survey data are captured once, at first login after
-  // registration (BaselineCalibrationScreen / OnboardingQuestionsScreen).
-  // On every later login this flag is true, so the whole flow is skipped
-  // and the user lands straight on the Dashboard. Policy/Survey/Calibration
-  // remain reachable afterwards from the Profile screen if the user wants
-  // to revisit them, just never shown again automatically.
-  const [identityChecked, setIdentityChecked] = useState(!initialUserId);
-
-  useEffect(() => {
-    if (!initialUserId) return;
-    let cancelled = false;
-    (async () => {
-      const alreadyOnboarded = await apiService.getCalibrationStatus(initialUserId);
-      if (cancelled) return;
-      // Skip calibration & onboarding if user is an existing registered user or already calibrated
-      if (alreadyOnboarded || initialIsNewUser === false) {
-        setPrivacyAccepted(true);
-        setPermissionsGranted(true);
-        setIsCalibrated(true);
-        setCurrentScreen('Dashboard');
-        apiService.completeCalibration(initialUserId);
-      }
-      setIdentityChecked(true);
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialUserId, initialIsNewUser]);
+  const [isCalibrated, setIsCalibrated] = useState(true);
+  const [identityChecked, setIdentityChecked] = useState(true);
 
   // Live Multi-Member Telemetry & Stress State (2 inputs: fused_stress_label & stress_probability)
   const [stressState, setStressState] = useState('normal');
@@ -64,6 +35,7 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
   const [isSafetyOverride, setIsSafetyOverride] = useState(false);
   const [isAlertTriggered, setIsAlertTriggered] = useState(false);
   const [telemetryMessage, setTelemetryMessage] = useState('');
+  const [hasLivePacket, setHasLivePacket] = useState(true);
 
   // Active Intervention State
   const [currentRecommendation, setCurrentRecommendation] = useState(null);
@@ -76,6 +48,13 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
   const [suitabilityModalVisible, setSuitabilityModalVisible] = useState(false);
   const [suitabilityData, setSuitabilityData] = useState(null);
 
+  // Real-time Trend Line History & User Baseline (2s Polling)
+  const [stressTrendHistory, setStressTrendHistory] = useState([0.88, 0.85, 0.78, 0.65, 0.50, 0.38]);
+  const [userBaseline, setUserBaseline] = useState(null);
+  const [baselineAchievedModal, setBaselineAchievedModal] = useState({ visible: false, prob: '0.0', baseline: '0.0' });
+  const [baselineNotReachedModal, setBaselineNotReachedModal] = useState({ visible: false, alternativeRecommendation: null, prob_stress: 0.5 });
+  const hasNotifiedBaselineRef = React.useRef(false);
+
   // Intervention History
   const [historyList, setHistoryList] = useState([]);
 
@@ -85,35 +64,55 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
   const [hasShownOnboardingAlert, setHasShownOnboardingAlert] = useState(false);
 
   // Telemetry poll loop (every 2 seconds).
-  // "normal" sim mode means no manual test override is active, so we read
-  // real-time fused probability straight from fusion_en_sessions in Firebase.
-  // Any other sim mode (pre-stress/stress/safety_override_test) is a manual
-  // developer override and goes through the simulator instead.
   useEffect(() => {
     let interval = null;
-    if (isCalibrated) {
-      interval = setInterval(async () => {
-        try {
-          const telemetry = simMode === 'normal'
-            ? await apiService.getLiveFusionTelemetry(userId)
-            : await apiService.getProcessedTelemetry(userId, 0.0);
-          setStressState(telemetry.effective_label);
-          setIsSafetyOverride(telemetry.is_safety_override);
-          setIsAlertTriggered(telemetry.is_alert_triggered);
-          setTelemetryMessage(telemetry.message);
-
-          if (telemetry.features_flat && telemetry.features_flat.length >= 1) {
-            setStressProbability(telemetry.features_flat[0]);
-          }
-        } catch (e) {
-          console.warn('Telemetry polling error', e);
+    interval = setInterval(async () => {
+      try {
+        const telemetry = simMode === 'normal'
+          ? await apiService.getLiveFusionTelemetry(userId)
+          : await apiService.getProcessedTelemetry(userId, 0.0);
+        setStressState(telemetry.effective_label);
+        setIsSafetyOverride(telemetry.is_safety_override);
+        setIsAlertTriggered(telemetry.is_alert_triggered);
+        setTelemetryMessage(telemetry.message);
+        if (typeof telemetry.has_live_packet === 'boolean') {
+          setHasLivePacket(telemetry.has_live_packet);
         }
-      }, 2000);
-    }
+        const activeBaseline = (typeof telemetry.user_baseline === 'number' && telemetry.user_baseline > 0)
+          ? telemetry.user_baseline
+          : null;
+        setUserBaseline(activeBaseline);
+
+        if (telemetry.features_flat && telemetry.features_flat.length >= 1) {
+          const prob = telemetry.features_flat[0];
+          setStressProbability(prob);
+          setStressTrendHistory(prev => {
+            const nextArr = [...prev, prob];
+            return nextArr.slice(-12);
+          });
+
+          // Check if live probability has reached or dropped below personal baseline from Firebase (only when stream is live)
+          if (telemetry.has_live_packet && activeBaseline && prob <= activeBaseline) {
+            if (!hasNotifiedBaselineRef.current) {
+              hasNotifiedBaselineRef.current = true;
+              setBaselineAchievedModal({
+                visible: true,
+                prob: (prob * 100).toFixed(1),
+                baseline: (activeBaseline * 100).toFixed(1)
+              });
+            }
+          } else {
+            hasNotifiedBaselineRef.current = false;
+          }
+        }
+      } catch (e) {
+        console.warn('Telemetry polling error', e);
+      }
+    }, 2000);
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [isCalibrated, userId, simMode]);
+  }, [userId, simMode, userBaseline]);
 
   // Update simulator mode manually
   const updateSimMode = async (mode) => {
@@ -127,16 +126,18 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
     setIsAlertTriggered(telemetry.is_alert_triggered);
     setTelemetryMessage(telemetry.message);
     if (telemetry.features_flat && telemetry.features_flat.length >= 1) {
-      setStressProbability(telemetry.features_flat[0]);
+      const prob = telemetry.features_flat[0];
+      setStressProbability(prob);
+      setStressTrendHistory(prev => [...prev.slice(-11), prob]);
+    }
+    if (typeof telemetry.user_baseline === 'number') {
+      setUserBaseline(telemetry.user_baseline);
     }
   };
 
   return (
     <AppContext.Provider
       value={{
-        // The host app's (StressApp's) real logout function -- this module
-        // has no login/logout of its own, so the Profile screen's "Log Out"
-        // button calls straight through to it. Null when run standalone.
         hostExit: onExit,
         identityChecked,
         currentScreen,
@@ -169,11 +170,16 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
         setStressState,
         stressProbability,
         setStressProbability,
+        stressTrendHistory,
+        userBaseline,
+        baselineAchievedModal,
+        setBaselineAchievedModal,
         simMode,
         updateSimMode,
         isSafetyOverride,
         isAlertTriggered,
         telemetryMessage,
+        hasLivePacket,
         currentRecommendation,
         setCurrentRecommendation,
         selectedSubOption,
@@ -190,6 +196,10 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
         setSuitabilityData,
         historyList,
         setHistoryList,
+        baselineAchievedModal,
+        setBaselineAchievedModal,
+        baselineNotReachedModal,
+        setBaselineNotReachedModal,
         onboardingAnswers,
         setOnboardingAnswers,
         onboardingRecommendation,

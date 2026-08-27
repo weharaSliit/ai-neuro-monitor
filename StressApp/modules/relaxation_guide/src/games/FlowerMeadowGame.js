@@ -1163,8 +1163,10 @@ const styles = StyleSheet.create({
   // ── Central Bloom ─────────────────────────────────
   bloomCenter: {
     position: 'absolute',
-    left: CENTER_X - 100,
-    top: CENTER_Y - 100,
+    left: '50%',
+    marginLeft: -100,
+    top: '46%',
+    marginTop: -100,
     width: 200,
     height: 200,
     justifyContent: 'center',
@@ -1201,9 +1203,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   bloomGlowCircle: {
-    width: 150,
-    height: 150,
-    borderRadius: 75,
+    width: 140,
+    height: 140,
+    borderRadius: 70,
     backgroundColor: 'rgba(244,114,182,0.12)',
     justifyContent: 'center',
     alignItems: 'center',
@@ -1216,8 +1218,8 @@ const styles = StyleSheet.create({
   },
   innerPetalCircle: {
     position: 'absolute',
-    width: 150,
-    height: 150,
+    width: 140,
+    height: 140,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1229,33 +1231,33 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
   centerFlowerEmoji: {
-    fontSize: 60,
+    fontSize: 54,
     textShadowColor: 'rgba(244,114,182,0.6)',
     textShadowOffset: { width: 0, height: 0 },
     textShadowRadius: 20,
   },
   shimmerRing: {
     position: 'absolute',
-    width: 120,
-    height: 120,
-    borderRadius: 60,
+    width: 110,
+    height: 110,
+    borderRadius: 55,
     borderWidth: 1,
   },
 
   // ── Phase Card ────────────────────────────────────
   phaseCard: {
     position: 'absolute',
-    bottom: 140,
+    bottom: 50,
     alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: PALETTE.hudBg,
-    paddingVertical: 14,
-    paddingHorizontal: 22,
-    borderRadius: 24,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 20,
     borderWidth: 1.5,
-    gap: 12,
-    minWidth: 240,
+    gap: 10,
+    minWidth: 220,
     ...Platform.select({
       ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 12 },
       android: { elevation: 8 },
@@ -1265,14 +1267,14 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   phaseTitle: {
-    fontSize: 19,
+    fontSize: 17,
     fontWeight: '700',
     letterSpacing: 0.5,
   },
   phaseSub: {
     color: PALETTE.textDim,
-    fontSize: 12,
-    marginTop: 2,
+    fontSize: 11,
+    marginTop: 1,
   },
   phaseDots: {
     flexDirection: 'row',
@@ -1289,9 +1291,9 @@ const styles = StyleSheet.create({
   // ── HUD ───────────────────────────────────────────
   hud: {
     position: 'absolute',
-    top: Platform.OS === 'ios' ? 50 : 30,
-    left: 12,
-    right: 12,
+    top: 6,
+    left: 8,
+    right: 8,
   },
   hudRow: {
     flexDirection: 'row',
@@ -1301,9 +1303,9 @@ const styles = StyleSheet.create({
   hudChip: {
     flex: 1,
     backgroundColor: PALETTE.hudBg,
-    paddingVertical: 6,
+    paddingVertical: 4,
     paddingHorizontal: 4,
-    borderRadius: 14,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: PALETTE.hudBorder,
     alignItems: 'center',
@@ -1317,18 +1319,18 @@ const styles = StyleSheet.create({
   },
   hudChipValue: {
     color: PALETTE.white,
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '800',
     marginTop: 1,
   },
 
   // ── Calm Meter ────────────────────────────────────
   calmMeterContainer: {
-    marginTop: 8,
+    marginTop: 4,
     backgroundColor: PALETTE.hudBg,
-    borderRadius: 16,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
+    borderRadius: 14,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
     borderWidth: 1,
     borderColor: PALETTE.hudBorder,
   },
@@ -1384,12 +1386,12 @@ const styles = StyleSheet.create({
   // ── Garden Progress ───────────────────────────────
   gardenProgress: {
     position: 'absolute',
-    bottom: 200,
+    bottom: 105,
     left: 20,
     right: 20,
     backgroundColor: PALETTE.hudBg,
     borderRadius: 16,
-    paddingVertical: 8,
+    paddingVertical: 6,
     paddingHorizontal: 14,
     borderWidth: 1,
     borderColor: PALETTE.hudBorder,
@@ -1513,7 +1515,7 @@ const styles = StyleSheet.create({
   // ── Control Hint ──────────────────────────────────
   controlHint: {
     position: 'absolute',
-    bottom: Platform.OS === 'ios' ? 40 : 20,
+    bottom: 8,
     left: 0,
     right: 0,
     alignItems: 'center',

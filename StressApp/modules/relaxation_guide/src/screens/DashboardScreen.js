@@ -6,8 +6,6 @@ import {
 import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
 import { Header } from '../components/Header';
-import { MemberTelemetryCard } from '../components/MemberTelemetryCard';
-import { TelemetrySimulatorCard } from '../components/TelemetrySimulatorCard';
 import { apiService } from '../api/apiService';
 import { useSweetAlert } from '../context/SweetAlertContext';
 
@@ -122,13 +120,38 @@ const PulseDot = ({ color }) => {
 /* ────────────────────────────────────────────────────────
    STRESS STATE CONFIG HELPER
    ──────────────────────────────────────────────────────── */
-const getStateConfig = (stressState, stressProbability, theme) => {
+const getStateConfig = (stressState, stressProbability, theme, isCalibrated = true, hasLivePacket = true) => {
+  if (isCalibrated === false) {
+    return {
+      color: theme.warning,
+      bgTint: 'rgba(245,158,11,0.14)',
+      label: 'WAITING FOR CALIBRATION',
+      emoji: '⏳',
+      tagline: 'Waiting for 2-minute baseline calibration... Real-time stress detection active after calibration',
+      icon: '⏳',
+      pct: '--',
+      breathDuration: 2000,
+    };
+  }
+
+  if (hasLivePacket === false) {
+    return {
+      color: theme.warning,
+      bgTint: 'rgba(245,158,11,0.14)',
+      label: 'AWAITING LLIVE STREAM',
+      emoji: '📡',
+      tagline: 'Active session initialized — waiting for live fusion telemetry stream from sensors...',
+      icon: '📡',
+      pct: '--',
+      breathDuration: 2000,
+    };
+  }
+
   const normState = (stressState || '').toLowerCase();
   const prob = typeof stressProbability === 'number' ? stressProbability : 0.15;
 
   // Pipeline Color Synchronization:
   // Red (>= 60% or high_stress) -> HIGH STRESS
-  // Orange (35% - 60% or pre-stress) -> PRE-STRESS
   // Green (< 35% or normal) -> NORMAL BASELINE
   if (normState === 'stress' || normState === 'high_stress' || normState === 'high' || normState === 'acute' || prob >= 0.60) {
     return {
@@ -203,24 +226,34 @@ const ActionCard = ({ item, theme, onPress }) => {
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
   const onPressIn = () =>
-    Animated.spring(scaleAnim, { toValue: 0.93, tension: 300, friction: 10, useNativeDriver: true }).start();
+    Animated.spring(scaleAnim, { toValue: 0.94, tension: 300, friction: 10, useNativeDriver: true }).start();
   const onPressOut = () =>
     Animated.spring(scaleAnim, { toValue: 1, tension: 300, friction: 10, useNativeDriver: true }).start();
 
   return (
     <TouchableOpacity
-      style={[s.actionCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}
+      style={[
+        s.actionCard,
+        {
+          backgroundColor: theme.bgSecondary,
+          borderColor: theme.border,
+          borderTopColor: item.accent,
+          borderTopWidth: 2,
+        }
+      ]}
       onPress={onPress}
       onPressIn={onPressIn}
       onPressOut={onPressOut}
-      activeOpacity={1}
+      activeOpacity={0.9}
     >
       <Animated.View style={{ alignItems: 'center', transform: [{ scale: scaleAnim }] }}>
         <View style={[s.actionIconWrap, { backgroundColor: item.tint }]}>
           <Text style={s.actionIcon}>{item.icon}</Text>
         </View>
-        <Text style={[s.actionLabel, { color: theme.textPrimary }]}>{item.label}</Text>
-        <Text style={[s.actionSub, { color: theme.textMuted }]}>{item.sub}</Text>
+        <Text style={[s.actionLabel, { color: theme.textPrimary }]} numberOfLines={1}>{item.label}</Text>
+        <View style={[s.subBadgePill, { backgroundColor: `${item.accent}1F` }]}>
+          <Text style={[s.actionSub, { color: item.accent }]}>{item.sub}</Text>
+        </View>
       </Animated.View>
     </TouchableOpacity>
   );
@@ -236,6 +269,7 @@ export const DashboardScreen = () => {
     stressState, stressProbability,
     simMode, updateSimMode,
     isSafetyOverride, isAlertTriggered, telemetryMessage,
+    isCalibrated, hasLivePacket,
     setCurrentRecommendation, setPreInterventionLabel,
     onboardingRecommendation, hasShownOnboardingAlert, setHasShownOnboardingAlert
   } = useContext(AppContext);
@@ -276,9 +310,9 @@ export const DashboardScreen = () => {
       setHasShownOnboardingAlert(true);
       showAlert({
         title: '🎯 Personal Relaxation Plan Ready!',
-        text: `Welcome ${username}!\n\nBased on your onboarding survey & 60-second baseline calibration:\n\n• Primary Recommended Technique: ${onboardingRecommendation.title}\n• Personalized Rationale: ${onboardingRecommendation.reason}`,
+        text: `Welcome ${username}!\n\nBased on your answers:\n\n• Recommended Technique: ${onboardingRecommendation.title}\n• Why It Helps: ${onboardingRecommendation.reason}`,
         icon: 'success',
-        confirmButtonText: 'OK / Explore Dashboard 🚀'
+        confirmButtonText: 'Explore Dashboard →'
       });
     }
   }, [onboardingRecommendation, hasShownOnboardingAlert]);
@@ -315,7 +349,7 @@ export const DashboardScreen = () => {
     }
   };
 
-  const sc = getStateConfig(stressState, stressProbability, theme);
+  const sc = getStateConfig(stressState, stressProbability, theme, isCalibrated, hasLivePacket);
   const greeting = currentTime.getHours() < 12 ? 'Good Morning' : currentTime.getHours() < 18 ? 'Good Afternoon' : 'Good Evening';
   const timeStr = currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -364,7 +398,7 @@ export const DashboardScreen = () => {
               <Text style={[s.nameTxt, { color: theme.textPrimary }]}>{username}</Text>
               <View style={s.liveChip}>
                 <PulseDot color={sc.color} />
-                <Text style={[s.liveChipTxt, { color: sc.color }]}>System Active</Text>
+                <Text style={[s.liveChipTxt, { color: sc.color }]}>{isCalibrated ? (hasLivePacket ? 'System Active' : 'Awaiting Telemetry Stream') : 'Waiting for Calibration'}</Text>
               </View>
             </View>
             <View style={s.welcomeRight}>
@@ -400,17 +434,17 @@ export const DashboardScreen = () => {
             {/* Metrics bar */}
             <View style={[s.metricsRow, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
               <View style={s.metricCol}>
-                <Text style={[s.metricValue, { color: theme.textPrimary }]}>{(stressProbability * 100).toFixed(0)}%</Text>
-                <Text style={[s.metricLabel, { color: theme.textMuted }]}>P(Stress)</Text>
+                <Text style={[s.metricValue, { color: theme.textPrimary }]}>{(isCalibrated && hasLivePacket) ? `${(stressProbability * 100).toFixed(0)}%` : '--'}</Text>
+                <Text style={[s.metricLabel, { color: theme.textMuted }]}>Stress Level</Text>
               </View>
               <View style={[s.metricDivider, { backgroundColor: theme.border }]} />
               <View style={s.metricCol}>
-                <Text style={[s.metricValue, { color: sc.color }]}>{stressState.toUpperCase()}</Text>
-                <Text style={[s.metricLabel, { color: theme.textMuted }]}>Fused Label</Text>
+                <Text style={[s.metricValue, { color: sc.color }]}>{(isCalibrated && hasLivePacket) ? stressState.toUpperCase() : (isCalibrated ? 'AWAITING...' : 'CALIBRATING')}</Text>
+                <Text style={[s.metricLabel, { color: theme.textMuted }]}>Current State</Text>
               </View>
               <View style={[s.metricDivider, { backgroundColor: theme.border }]} />
               <View style={s.metricCol}>
-                <Text style={[s.metricValue, { color: theme.accent }]}>{sc.pct}%</Text>
+                <Text style={[s.metricValue, { color: theme.accent }]}>{(isCalibrated && hasLivePacket) ? (typeof sc.pct === 'number' ? `${sc.pct}%` : sc.pct) : 'WAITING...'}</Text>
                 <Text style={[s.metricLabel, { color: theme.textMuted }]}>Confidence</Text>
               </View>
             </View>
@@ -425,26 +459,38 @@ export const DashboardScreen = () => {
               <View style={[s.progressBg, { backgroundColor: theme.border }]}>
                 <Animated.View style={[s.progressFill, {
                   backgroundColor: sc.color,
-                  width: stressState === 'normal' ? '100%' : stressState === 'pre-stress' ? '50%' : '18%'
+                  width: stressState === 'normal' ? '100%' : '18%'
                 }]} />
               </View>
             </View>
 
             {isSafetyOverride && (
               <View style={[s.overrideBar, { borderColor: theme.danger }]}>
-                <Text style={[s.overrideTxt, { color: theme.danger }]}>🚨 SAFETY OVERRIDE — P(stress) exceeds 0.75 threshold</Text>
+                <Text style={[s.overrideTxt, { color: theme.danger }]}>🚨 HIGH STRESS ALERT — Instant relaxation recommended</Text>
               </View>
             )}
           </View>
+
+          {/* ═══════════ CALIBRATION STATUS BANNER ═══════════ */}
+          {!isCalibrated && (
+            <View style={[s.calibrationCard, { backgroundColor: 'rgba(245,158,11,0.12)', borderColor: '#F59E0B' }]}>
+              <View style={s.calibrationHeader}>
+                <ActivityIndicator size="small" color="#F59E0B" />
+                <Text style={[s.calibrationTitle, { color: '#F59E0B' }]}>⏳ Waiting for Baseline Calibration...</Text>
+              </View>
+              <Text style={[s.calibrationBody, { color: theme.textSecondary }]}>
+                The 2-minute baseline calibration is currently active. Real-time stress detection and adaptive relaxation recommendations will initialize automatically once baseline calibration completes.
+              </Text>
+            </View>
+          )}
 
           {/* ═══════════ 4. QUICK ACTION GRID ═══════════ */}
           <Text style={[s.sectionTitle, { color: theme.textPrimary }]}>Quick Actions</Text>
           <View style={s.actionGrid}>
             {[
-              { id: 'Intervention', icon: '🎮', label: 'Techniques', sub: '25 Games', tint: 'rgba(56,189,248,0.12)' },
-              { id: 'History', icon: '📊', label: 'History', sub: 'Sessions', tint: 'rgba(16,185,129,0.12)' },
-              { id: 'Chatbot', icon: '🤖', label: 'AI Guide', sub: 'Counselor', tint: 'rgba(139,92,246,0.12)' },
-              { id: 'UserProfile', icon: '👤', label: 'Profile', sub: 'Settings', tint: 'rgba(245,158,11,0.12)' }
+              { id: 'Intervention', icon: '🧘', label: 'Techniques', sub: '25 Games', tint: 'rgba(56,189,248,0.14)', accent: '#38BDF8' },
+              { id: 'History', icon: '📈', label: 'History', sub: 'Recovery', tint: 'rgba(16,185,129,0.14)', accent: '#10B981' },
+              { id: 'UserProfile', icon: '👤', label: 'Profile', sub: 'Account', tint: 'rgba(245,158,11,0.14)', accent: '#F59E0B' }
             ].map(item => (
               <ActionCard key={item.id} item={item} theme={theme} onPress={() => setCurrentScreen(item.id)} />
             ))}
@@ -452,18 +498,6 @@ export const DashboardScreen = () => {
 
           {/* ═══════════ 4b. DAILY TIP ═══════════ */}
           <DailyTipBanner theme={theme} />
-
-          {/* ═══════════ 5. MULTIMODAL FUSION ENGINE ═══════════ */}
-          <MemberTelemetryCard stressState={stressState} stressProbability={stressProbability} />
-
-          {/* ═══════════ 6. SIMULATOR ═══════════ */}
-          <TelemetrySimulatorCard
-            currentMode={simMode}
-            onModeChange={updateSimMode}
-            isOverride={isSafetyOverride}
-            isAlert={isAlertTriggered}
-            message={telemetryMessage}
-          />
 
           {/* ═══════════ 7. LAUNCH CTA ═══════════ */}
           <Animated.View style={{ transform: [{ scale: ctaScale }] }}>
@@ -477,8 +511,8 @@ export const DashboardScreen = () => {
                 <ActivityIndicator color={theme.accentText} size="small" />
               ) : (
                 <View style={s.ctaInner}>
-                  <Text style={[s.ctaMain, { color: theme.accentText }]}>🚀  Launch Personalized Intervention</Text>
-                  <Text style={[s.ctaSub, { color: theme.accentText }]}>Thompson Bandit selects the optimal technique for you</Text>
+                  <Text style={[s.ctaMain, { color: theme.accentText }]}>🚀  Start Relaxation Session</Text>
+                  <Text style={[s.ctaSub, { color: theme.accentText }]}>Smart AI selects the best exercise for your stress level</Text>
                 </View>
               )}
             </TouchableOpacity>
@@ -679,28 +713,37 @@ const s = StyleSheet.create({
   /* ── Quick Actions ── */
   actionGrid: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-    marginBottom: 8
+    justifyContent: 'space-between',
+    marginBottom: 16
   },
   actionCard: {
-    width: '48%',
-    flexGrow: 1,
-    flexBasis: '46%',
-    padding: 16,
+    width: '31.5%',
+    paddingVertical: 14,
+    paddingHorizontal: 6,
     borderRadius: 18,
     borderWidth: 1,
-    alignItems: 'center'
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 3
   },
   actionIconWrap: {
-    width: 48, height: 48,
-    borderRadius: 16,
+    width: 44, height: 44,
+    borderRadius: 22,
     alignItems: 'center', justifyContent: 'center',
-    marginBottom: 10
+    marginBottom: 8
   },
-  actionIcon: { fontSize: 24 },
-  actionLabel: { fontSize: 13, fontWeight: '800' },
-  actionSub: { fontSize: 10, marginTop: 2, fontWeight: '600' },
+  actionIcon: { fontSize: 22 },
+  actionLabel: { fontSize: 13, fontWeight: '800', textAlign: 'center' },
+  subBadgePill: {
+    marginTop: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10
+  },
+  actionSub: { fontSize: 10, fontWeight: '800', letterSpacing: 0.3 },
 
   /* ── Daily Tip ── */
   tipBanner: {
@@ -745,5 +788,27 @@ const s = StyleSheet.create({
   },
   ctaInner: { alignItems: 'center' },
   ctaMain: { fontWeight: '900', fontSize: 15, letterSpacing: 0.2 },
-  ctaSub: { fontWeight: '600', fontSize: 10, marginTop: 4, opacity: 0.8 }
+  ctaSub: { fontSize: 11, opacity: 0.85, marginTop: 2, fontWeight: '600' },
+
+  /* ── Calibration Banner ── */
+  calibrationCard: {
+    borderRadius: 16,
+    borderWidth: 1.5,
+    padding: 14,
+    marginBottom: 16,
+  },
+  calibrationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+    gap: 8,
+  },
+  calibrationTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  calibrationBody: {
+    fontSize: 13,
+    lineHeight: 18,
+  }
 });

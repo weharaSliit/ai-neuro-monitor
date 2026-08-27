@@ -16,12 +16,11 @@ import { AppProvider, AppContext } from './src/context/AppContext';
 import { ThemeProvider, ThemeContext } from './src/context/ThemeContext';
 import { SweetAlertProvider } from './src/context/SweetAlertContext';
 import { BottomNavBar } from './src/components/BottomNavBar';
+import { RealtimeStressTrendCard } from './src/components/RealtimeStressTrendCard';
+import { BaselineAchievedModal } from './src/components/BaselineAchievedModal';
+import { BaselineNotReachedModal } from './src/components/BaselineNotReachedModal';
 
-import { OnboardingQuestionsScreen } from './src/screens/OnboardingQuestionsScreen';
 import { UserProfileScreen } from './src/screens/UserProfileScreen';
-import { PrivacyPolicyScreen } from './src/screens/PrivacyPolicyScreen';
-import { PermissionsScreen } from './src/screens/PermissionsScreen';
-import { BaselineCalibrationScreen } from './src/screens/BaselineCalibrationScreen';
 import { DashboardScreen } from './src/screens/DashboardScreen';
 import { FusionPipelineScreen } from './src/screens/FusionPipelineScreen';
 import { MethodsScreen } from './src/screens/MethodsScreen';
@@ -31,7 +30,9 @@ import { GamePlayerScreen } from './src/screens/GamePlayerScreen';
 import { RatingScreen } from './src/screens/RatingScreen';
 import { RecoveryScreen } from './src/screens/RecoveryScreen';
 import { HistoryScreen } from './src/screens/HistoryScreen';
-import { ChatbotScreen } from './src/screens/ChatbotScreen';
+import { PrivacyPolicyScreen } from './src/screens/PrivacyPolicyScreen';
+import { OnboardingQuestionsScreen } from './src/screens/OnboardingQuestionsScreen';
+import { PermissionsScreen } from './src/screens/PermissionsScreen';
 
 LogBox.ignoreLogs(['Expo AV has been deprecated', 'Expo AV is deprecated']);
 
@@ -48,16 +49,14 @@ const MainNavigator = () => {
       );
     }
     switch (currentScreen) {
-      case 'OnboardingQuestions':
-        return <OnboardingQuestionsScreen />;
-      case 'UserProfile':
-        return <UserProfileScreen />;
       case 'PrivacyPolicy':
         return <PrivacyPolicyScreen />;
+      case 'OnboardingQuestions':
+        return <OnboardingQuestionsScreen />;
       case 'Permissions':
         return <PermissionsScreen />;
-      case 'BaselineCalibration':
-        return <BaselineCalibrationScreen />;
+      case 'UserProfile':
+        return <UserProfileScreen />;
       case 'Dashboard':
         return <DashboardScreen />;
       case 'FusionPipeline':
@@ -76,10 +75,8 @@ const MainNavigator = () => {
         return <RecoveryScreen />;
       case 'History':
         return <HistoryScreen />;
-      case 'Chatbot':
-        return <ChatbotScreen />;
       default:
-        return <PrivacyPolicyScreen />;
+        return <DashboardScreen />;
     }
   };
 
@@ -89,8 +86,11 @@ const MainNavigator = () => {
         barStyle={isDarkMode ? 'light-content' : 'dark-content'}
         backgroundColor={theme.bgSecondary}
       />
+      <RealtimeStressTrendCard />
       <View style={styles.screenContainer}>{renderScreen()}</View>
       <BottomNavBar />
+      <BaselineAchievedModal />
+      <BaselineNotReachedModal />
     </View>
   );
 };

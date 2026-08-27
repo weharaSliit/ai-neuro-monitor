@@ -83,7 +83,7 @@ export const FusionPipelineScreen = () => {
   const pv = pipeline?.probability_vector || {};
   const processed = pipeline?.processed || {};
   const isLive = !!pipeline?.is_live && !connError;
-  const fusedPct = typeof pv.fused === 'number' ? (pv.fused * 100).toFixed(1) : '—';
+  const fusedPct = (isLive && typeof pv.fused === 'number') ? (pv.fused * 100).toFixed(1) + '%' : '—';
 
   return (
     <View style={[s.container, { backgroundColor: theme.bgPrimary }]}>
@@ -99,7 +99,7 @@ export const FusionPipelineScreen = () => {
                 { backgroundColor: connError ? theme.danger : isLive ? theme.success : theme.warning, opacity: pulseAnim }
               ]} />
               <Text style={[s.cardTitle, { color: theme.textPrimary }]}>
-                {connError ? 'Backend Unreachable' : isLive ? 'Fusion Engine — Live' : 'Waiting for Fusion Data'}
+                {connError ? 'Backend Unreachable' : isLive ? 'Fusion Engine — Live Stream Active' : 'Fusion Engine — Awaiting Stream'}
               </Text>
             </View>
           </View>
@@ -115,7 +115,7 @@ export const FusionPipelineScreen = () => {
         <View style={[s.card, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
           <Text style={[s.cardTitle, { color: theme.textPrimary, marginBottom: 12 }]}>Raw Modality Probabilities</Text>
           {MODALITIES.map(m => (
-            <ModalityBar key={m.key} theme={theme} icon={m.icon} label={m.label} value={pv[m.key]} />
+            <ModalityBar key={m.key} theme={theme} icon={m.icon} label={m.label} value={isLive ? pv[m.key] : null} />
           ))}
         </View>
 
@@ -124,13 +124,13 @@ export const FusionPipelineScreen = () => {
           <Text style={[s.cardTitle, { color: theme.textPrimary }]}>Fused Output</Text>
           <View style={s.fusedRow}>
             <View style={s.fusedCol}>
-              <Text style={[s.fusedValue, { color: theme.accent }]}>{fusedPct}%</Text>
+              <Text style={[s.fusedValue, { color: isLive ? theme.accent : theme.textMuted }]}>{fusedPct}</Text>
               <Text style={[s.fusedLabel, { color: theme.textMuted }]}>fused probability</Text>
             </View>
             <View style={[s.fusedDivider, { backgroundColor: theme.border }]} />
             <View style={s.fusedCol}>
-              <Text style={[s.fusedValue, { color: theme.textPrimary, fontSize: 15 }]}>
-                {pipeline?.raw_stress_label || '—'}
+              <Text style={[s.fusedValue, { color: isLive ? theme.textPrimary : theme.warning, fontSize: 14 }]}>
+                {isLive ? (pipeline?.raw_stress_label || '—') : 'AWAITING STREAM'}
               </Text>
               <Text style={[s.fusedLabel, { color: theme.textMuted }]}>raw stress_label</Text>
             </View>
@@ -143,9 +143,9 @@ export const FusionPipelineScreen = () => {
           <View style={s.rowBetween}>
             <Text style={[s.metaTxt, { color: theme.textSecondary }]}>Effective Label</Text>
             <Text style={[s.effectiveLabelTxt, {
-              color: (processed.effective_label === 'stress' || processed.effective_label === 'high_stress') ? theme.danger : (processed.effective_label === 'pre-stress' || processed.effective_label === 'pre_stress') ? theme.warning : theme.success
+              color: !isLive ? theme.warning : (processed.effective_label === 'stress' || processed.effective_label === 'high_stress') ? theme.danger : (processed.effective_label === 'pre-stress' || processed.effective_label === 'pre_stress') ? theme.warning : theme.success
             }]}>
-              {(processed.effective_label || 'normal').toUpperCase()}
+              {!isLive ? 'AWAITING STREAM' : (processed.effective_label || 'AWAITING STREAM').toUpperCase()}
             </Text>
           </View>
           <View style={s.pillRow}>

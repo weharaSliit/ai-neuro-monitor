@@ -11,8 +11,6 @@ import {
   Platform,
   Vibration,
 } from 'react-native';
-import { soundEngine } from '../utils/SoundEngine';
-
 const { width, height } = Dimensions.get('window');
 
 /**
@@ -33,25 +31,11 @@ export const MeditationGame = ({ initialMode, mode }) => {
   const [cyclesCompleted, setCyclesCompleted] = useState(0);
   const [activeBodyNode, setActiveBodyNode] = useState(0);
 
-  const defaultSounds = {
-    box_meditation: 'piano_rain',
-    zen_body_scan: 'zen_flute',
-    chakra_meditation: 'chakra_breath',
-    transcendental_mind: 'singing_bowl',
-    sound_meditation: 'ocean_harp',
-  };
-
-  const [selectedSound, setSelectedSound] = useState(defaultSounds[startingMode] || 'piano_rain');
-  const [isPlayingSound, setIsPlayingSound] = useState(true);
-
   // Sync mode state when prop changes
   useEffect(() => {
     const target = mode || initialMode;
     if (target && target !== activeMode) {
       setActiveMode(target);
-      if (defaultSounds[target]) {
-        setSelectedSound(defaultSounds[target]);
-      }
     }
   }, [mode, initialMode]);
 
@@ -77,18 +61,7 @@ export const MeditationGame = ({ initialMode, mode }) => {
       artworkTitle: 'ZEN WATER BOX',
     },
     {
-      id: 'zen_body_scan',
-      title: 'Zen Body Scan',
-      badge: 'PMR Scan',
-      icon: '🧘',
-      color: '#10B981',
-      bgGradient: ['#051A10', '#0D3322'],
-      desc: 'Progressive muscle relaxation sequentially scanning awareness to release somatic tension',
-      emojis: ['🧘', '💆', '🌿', '🌟', '🦶', '💚'],
-      artworkTitle: 'EMERALD AURA SCAN',
-    },
-    {
-      id: 'chakra_meditation',
+      id: 'chakra_harmonizer',
       title: 'Chakra Harmonizer',
       badge: '432Hz Align',
       icon: '✨',
@@ -99,7 +72,7 @@ export const MeditationGame = ({ initialMode, mode }) => {
       artworkTitle: 'LOTUS ENERGY MANDALA',
     },
     {
-      id: 'transcendental_mind',
+      id: 'silent_zen_timer',
       title: 'Silent Zen Timer',
       badge: 'Quiet Presence',
       icon: '🔔',
@@ -109,26 +82,8 @@ export const MeditationGame = ({ initialMode, mode }) => {
       emojis: ['🔔', '🪨', '⛩️', '🪵', '🌙', '☯️'],
       artworkTitle: 'BRONZE SINGING BOWL',
     },
-    {
-      id: 'sound_meditation',
-      title: 'Acoustic Meditation',
-      badge: 'Binaural Sound',
-      icon: '🎵',
-      color: '#818CF8',
-      bgGradient: ['#090D2A', '#1E1B4B'],
-      desc: 'Celestial ocean soundwaves & acoustic instrumental music for deep mental calm',
-      emojis: ['🎵', '🎶', '🌊', '🎧', '🌌', '🔮'],
-      artworkTitle: 'CELESTIAL SOUNDWAVES',
-    },
   ];
 
-  const soundTracks = [
-    { id: 'piano_rain', name: 'Ambient Piano & Rain', icon: '🎹', desc: 'Acoustic piano + soft rain (Lowers Cortisol)' },
-    { id: 'zen_flute', name: 'Bamboo Zen Flute', icon: '🎋', desc: 'Shakuhachi bamboo melodies (Alpha Wave Boost)' },
-    { id: 'ocean_harp', name: 'Acoustic Harp & Waves', icon: '🪕', desc: 'Plucked harp over sea tides (Baroreflex Sync)' },
-    { id: 'chakra_breath', name: '432Hz Chakra Breath', icon: '🕉️', desc: 'Dynamic Solfeggio pad swelling on Inhale/Exhale' },
-    { id: 'singing_bowl', name: 'Tibetan Bronze Bowl', icon: '🔔', desc: '528Hz bronze bell with decay (Vagal Tone)' },
-  ];
 
   const bodyScanNodes = [
     { id: 0, label: 'Crown & Mind', icon: '💆' },
@@ -150,17 +105,6 @@ export const MeditationGame = ({ initialMode, mode }) => {
 
   const currentConfig = meditationModes.find(m => m.id === activeMode) || meditationModes[0];
 
-  useEffect(() => {
-    if (isPlayingSound && !isPaused) {
-      soundEngine.playSoundTrack(selectedSound);
-    } else {
-      soundEngine.stopSound();
-    }
-    return () => {
-      soundEngine.stopSound();
-    };
-  }, [selectedSound, isPlayingSound, isPaused]);
-
   // Ambient soundwave bar animation loop
   useEffect(() => {
     Animated.loop(
@@ -181,7 +125,7 @@ export const MeditationGame = ({ initialMode, mode }) => {
     ).start();
   }, []);
 
-  // Pacing cycle logic for different modes with Audio Bio-feedback
+  // Pacing cycle logic for different modes
   useEffect(() => {
     if (isPaused) return;
 
@@ -198,9 +142,6 @@ export const MeditationGame = ({ initialMode, mode }) => {
         setPhaseText(curr.label);
         setSecondsLeft(curr.sec);
 
-        // Modulate Smartphone Audio in Real-Time to guide breath
-        soundEngine.updateBreathPhase(curr.phase, curr.sec);
-
         Animated.parallel([
           Animated.timing(auraScale, { toValue: curr.scale, duration: curr.sec * 1000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
           Animated.timing(auraGlow, { toValue: curr.glow, duration: curr.sec * 1000, useNativeDriver: true }),
@@ -209,30 +150,10 @@ export const MeditationGame = ({ initialMode, mode }) => {
         cycleStep++;
         if (cycleStep % 4 === 0) setCyclesCompleted(c => c + 1);
 
-      } else if (activeMode === 'zen_body_scan') {
-        setActiveBodyNode(prev => (prev + 1) % bodyScanNodes.length);
-        const currNode = bodyScanNodes[cycleStep % bodyScanNodes.length];
-        setPhaseText(`${currNode.icon} Relax ${currNode.label}`);
-        setSecondsLeft(5);
-
-        const phase = cycleStep % 2 === 0 ? 'inhale' : 'exhale';
-        soundEngine.updateBreathPhase(phase, 5);
-
-        Animated.sequence([
-          Animated.timing(auraScale, { toValue: 1.3, duration: 2500, useNativeDriver: true }),
-          Animated.timing(auraScale, { toValue: 1.0, duration: 2500, useNativeDriver: true }),
-        ]).start();
-
-        cycleStep++;
-        if (cycleStep % bodyScanNodes.length === 0) setCyclesCompleted(c => c + 1);
-
-      } else if (activeMode === 'chakra_meditation') {
+      } else if (activeMode === 'chakra_harmonizer') {
         const currChakra = chakraRings[cycleStep % chakraRings.length];
         setPhaseText(`✨ ${currChakra.name} Chakra (${currChakra.freq})`);
         setSecondsLeft(6);
-
-        const phase = cycleStep % 2 === 0 ? 'inhale' : 'exhale';
-        soundEngine.updateBreathPhase(phase, 6);
 
         Animated.sequence([
           Animated.timing(auraScale, { toValue: 1.35, duration: 3000, useNativeDriver: true }),
@@ -242,10 +163,10 @@ export const MeditationGame = ({ initialMode, mode }) => {
         cycleStep++;
         if (cycleStep % chakraRings.length === 0) setCyclesCompleted(c => c + 1);
 
-      } else if (activeMode === 'transcendental_mind') {
+      } else {
+        // silent_zen_timer
         setPhaseText('🔔 Silent Zen Presence');
         setSecondsLeft(8);
-        soundEngine.updateBreathPhase('hold', 8);
 
         Animated.sequence([
           Animated.timing(auraScale, { toValue: 1.15, duration: 4000, useNativeDriver: true }),
@@ -254,34 +175,17 @@ export const MeditationGame = ({ initialMode, mode }) => {
 
         cycleStep++;
         setCyclesCompleted(c => c + 1);
-
-      } else {
-        // Acoustic Meditation
-        setPhaseText('🎵 Resonant Soundwave Flow');
-        setSecondsLeft(6);
-        soundEngine.updateBreathPhase('inhale', 6);
-
-        Animated.sequence([
-          Animated.timing(auraScale, { toValue: 1.25, duration: 3000, useNativeDriver: true }),
-          Animated.timing(auraScale, { toValue: 1.0, duration: 3000, useNativeDriver: true }),
-        ]).start();
-
-        cycleStep++;
-        setCyclesCompleted(c => c + 1);
       }
     };
 
     runCycle();
-    const intervalTime = activeMode === 'box_meditation' ? 4000 : activeMode === 'zen_body_scan' ? 5000 : 6000;
+    const intervalTime = activeMode === 'box_meditation' ? 4000 : activeMode === 'chakra_harmonizer' ? 6000 : 8000;
     const timer = setInterval(runCycle, intervalTime);
     return () => clearInterval(timer);
   }, [activeMode, isPaused]);
 
   // Handle Canvas Tap Interaction
   const handleCanvasTap = (evt) => {
-    const locX = evt && evt.nativeEvent ? evt.nativeEvent.locationX : width / 2;
-    soundEngine.playTouchChime(locX / width);
-
     if (Platform.OS !== 'web') {
       Vibration.vibrate(10);
     }
@@ -375,32 +279,8 @@ export const MeditationGame = ({ initialMode, mode }) => {
           </View>
         )}
 
-        {/* MODE 2: Zen Body Scan Emerald Aura Nodes */}
-        {activeMode === 'zen_body_scan' && (
-          <View style={styles.artworkBoxContainer}>
-            <Animated.View style={[styles.auraCircle, { backgroundColor: `${currentConfig.color}20`, transform: [{ scale: auraScale }] }]}>
-              <View style={styles.bodyNodeColumn}>
-                {bodyScanNodes.map(node => (
-                  <View
-                    key={node.id}
-                    style={[
-                      styles.bodyNodePill,
-                      activeBodyNode === node.id && { backgroundColor: currentConfig.color, borderColor: '#FFFFFF', scale: 1.1 }
-                    ]}
-                  >
-                    <Text style={styles.bodyNodeIcon}>{node.icon}</Text>
-                    <Text style={[styles.bodyNodeText, activeBodyNode === node.id && styles.bodyNodeTextActive]}>
-                      {node.label}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-            </Animated.View>
-          </View>
-        )}
-
-        {/* MODE 3: Chakra Harmonizer Energy Mandala Rings */}
-        {activeMode === 'chakra_meditation' && (
+        {/* MODE 2: Chakra Harmonizer Energy Mandala Rings */}
+        {activeMode === 'chakra_harmonizer' && (
           <View style={styles.artworkBoxContainer}>
             <Animated.View style={[styles.auraCircle, { transform: [{ scale: auraScale }] }]}>
               {chakraRings.map((c, idx) => (
@@ -422,8 +302,8 @@ export const MeditationGame = ({ initialMode, mode }) => {
           </View>
         )}
 
-        {/* MODE 4: Silent Zen Bronze Bowl Timer */}
-        {activeMode === 'transcendental_mind' && (
+        {/* MODE 3: Silent Zen Bronze Bowl Timer */}
+        {activeMode === 'silent_zen_timer' && (
           <View style={styles.artworkBoxContainer}>
             <Animated.View style={[styles.singingBowlOuter, { borderColor: currentConfig.color, transform: [{ scale: auraScale }] }]}>
               <View style={[styles.singingBowlInner, { backgroundColor: `${currentConfig.color}30` }]}>
@@ -432,50 +312,12 @@ export const MeditationGame = ({ initialMode, mode }) => {
             </Animated.View>
           </View>
         )}
-
-        {/* MODE 5: Acoustic Meditation Soundwave Bar Visualizer */}
-        {activeMode === 'sound_meditation' && (
-          <View style={styles.artworkBoxContainer}>
-            <View style={styles.waveBarContainer}>
-              <Animated.View style={[styles.waveBar, { height: 80, backgroundColor: currentConfig.color, transform: [{ scaleY: waveAnim1 }] }]} />
-              <Animated.View style={[styles.waveBar, { height: 100, backgroundColor: '#A7F3D0', transform: [{ scaleY: waveAnim2 }] }]} />
-              <Animated.View style={[styles.waveBar, { height: 120, backgroundColor: currentConfig.color, transform: [{ scaleY: waveAnim3 }] }]} />
-              <Animated.View style={[styles.waveBar, { height: 95, backgroundColor: '#FDE68A', transform: [{ scaleY: waveAnim1 }] }]} />
-              <Animated.View style={[styles.waveBar, { height: 70, backgroundColor: currentConfig.color, transform: [{ scaleY: waveAnim2 }] }]} />
-            </View>
-          </View>
-        )}
       </TouchableOpacity>
 
       {/* Central Guidance Phase Text */}
       <View style={styles.guidanceBox}>
         <Text style={[styles.phaseTextDisplay, { color: currentConfig.color }]}>{phaseText}</Text>
-        <Text style={styles.subtextInstruction}>Tap screen to release tension • Sync breath with smartphone audio</Text>
-      </View>
-
-      {/* Instrumental Relaxation Sound Controls */}
-      <View style={styles.soundControlCard}>
-        <Text style={styles.soundControlHeader}>🎵 Instrumental Relaxation Soundscape</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.soundScrollRow}>
-          {soundTracks.map(st => (
-            <TouchableOpacity
-              key={st.id}
-              style={[
-                styles.soundChip,
-                selectedSound === st.id && { backgroundColor: currentConfig.color, borderColor: currentConfig.color }
-              ]}
-              onPress={() => {
-                setSelectedSound(st.id);
-                setIsPlayingSound(true);
-              }}
-            >
-              <Text style={styles.soundChipIcon}>{st.icon}</Text>
-              <Text style={[styles.soundChipText, selectedSound === st.id && styles.soundChipTextActive]}>
-                {st.name}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
+        <Text style={styles.subtextInstruction}>Tap screen to release tension • Sync breath with visual guide</Text>
       </View>
 
       {/* Play/Pause Control Footer */}
@@ -485,12 +327,6 @@ export const MeditationGame = ({ initialMode, mode }) => {
           onPress={() => setIsPaused(!isPaused)}
         >
           <Text style={styles.playBtnText}>{isPaused ? '▶ Resume' : '⏸ Pause'}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.audioToggleBtn}
-          onPress={() => setIsPlayingSound(!isPlayingSound)}
-        >
-          <Text style={styles.audioToggleText}>{isPlayingSound ? '🔊 Speaker On' : '🔇 Audio Muted'}</Text>
         </TouchableOpacity>
       </View>
     </ScrollView>
@@ -680,39 +516,6 @@ const styles = StyleSheet.create({
     fontSize: 10,
     marginTop: 2,
   },
-  soundControlCard: {
-    width: width * 0.9,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    padding: 8,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-    marginVertical: 4,
-  },
-  soundControlHeader: {
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: 11,
-    fontWeight: '700',
-    marginBottom: 6,
-  },
-  soundScrollRow: {
-    flexDirection: 'row',
-    gap: 6,
-  },
-  soundChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 5,
-    paddingHorizontal: 10,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-    gap: 5,
-  },
-  soundChipIcon: { fontSize: 13 },
-  soundChipText: { color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: '500' },
-  soundChipTextActive: { color: '#FFFFFF', fontWeight: '700' },
   footerControls: {
     flexDirection: 'row',
     gap: 10,
@@ -736,20 +539,5 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '700',
-  },
-  audioToggleBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 18,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  audioToggleText: {
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: 12,
-    fontWeight: '600',
   },
 });
