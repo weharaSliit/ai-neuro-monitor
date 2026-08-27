@@ -9,37 +9,27 @@ const SUB_OPTION_META = {
   // Focus Arcade
   resonance_circle: { icon: '🔄', tag: 'Heart Rhythm Coherence', accent: '#60A5FA', bg: 'rgba(96, 165, 250, 0.12)' },
   mindful_sweep: { icon: '🧠', tag: 'Attention Scanning', accent: '#34D399', bg: 'rgba(52, 211, 153, 0.12)' },
-  aurora_flow: { icon: '🌌', tag: 'Relaxation Calibration', accent: '#C084FC', bg: 'rgba(192, 132, 252, 0.12)' },
   serenity_spiral: { icon: '🌀', tag: 'Visual Flow State', accent: '#FBBF24', bg: 'rgba(251, 191, 36, 0.12)' },
-  stillness_dots: { icon: '🎯', tag: 'Centering Practice', accent: '#F472B6', bg: 'rgba(244, 114, 182, 0.12)' },
 
   // Guided Meditation & Breathwork
   box_meditation: { icon: '📦', tag: '4-4-4-4 Rhythm', accent: '#38BDF8', bg: 'rgba(56, 189, 248, 0.12)' },
-  zen_body_scan: { icon: '🧘', tag: 'Body Awareness', accent: '#10B981', bg: 'rgba(16, 185, 129, 0.12)' },
-  chakra_meditation: { icon: '✨', tag: '432Hz Sound Harmonics', accent: '#EC4899', bg: 'rgba(236, 72, 153, 0.12)' },
-  transcendental_mind: { icon: '🔔', tag: 'Singing Bowl Zen', accent: '#F59E0B', bg: 'rgba(245, 158, 11, 0.12)' },
-  sound_meditation: { icon: '🎵', tag: 'Acoustic Soundscape', accent: '#818CF8', bg: 'rgba(129, 140, 248, 0.12)' },
+  chakra_harmonizer: { icon: '✨', tag: 'Energy Alignment', accent: '#EC4899', bg: 'rgba(236, 72, 153, 0.12)' },
+  silent_zen_timer: { icon: '🔔', tag: 'Minimalist Zen Timer', accent: '#F59E0B', bg: 'rgba(245, 158, 11, 0.12)' },
 
   // Nature Sensory Environments
   rain_scene: { icon: '🌧️', tag: 'Raindrops & Ripples', accent: '#0284C7', bg: 'rgba(2, 132, 199, 0.12)' },
-  sunset_glow: { icon: '🌅', tag: 'Circadian Horizon', accent: '#F59E0B', bg: 'rgba(245, 158, 11, 0.12)' },
-  mountain_breeze: { icon: '🏔️', tag: 'Wind Flow & Fog', accent: '#34D399', bg: 'rgba(52, 211, 153, 0.12)' },
   forest_scene: { icon: '🌲', tag: 'Firefly Forest', accent: '#10B981', bg: 'rgba(16, 185, 129, 0.12)' },
   ocean_scene: { icon: '🌊', tag: 'Deep Ocean Waves', accent: '#3B82F6', bg: 'rgba(59, 130, 246, 0.12)' },
 
   // Breathing Garden
   flower_meadow: { icon: '🌺', tag: 'Bloom Garden · 4-7-8 Breath', accent: '#EC4899', bg: 'rgba(236, 72, 153, 0.12)' },
-  zen_rock_garden: { icon: '🪨', tag: 'Sand Raking Patterns', accent: '#D97706', bg: 'rgba(217, 119, 6, 0.12)' },
   water_lily_pond: { icon: '🪷', tag: 'Koi Pond & Lilies', accent: '#8B5CF6', bg: 'rgba(139, 92, 246, 0.12)' },
   cosmic_nebula: { icon: '🌌', tag: 'Star Dust Expansion', accent: '#A78BFA', bg: 'rgba(167, 139, 250, 0.12)' },
-  crystal_cave: { icon: '💎', tag: 'Crystal Resonant Glow', accent: '#06B6D4', bg: 'rgba(6, 182, 212, 0.12)' },
 
   // Cognitive De-Stress Arcade
-  bubble_pop: { icon: '🧼', tag: 'Tactile Stress Pop', accent: '#F43F5E', bg: 'rgba(244, 63, 94, 0.12)' },
-  pattern_align: { icon: '🧩', tag: 'Frosted Glass Align', accent: '#3B82F6', bg: 'rgba(59, 130, 246, 0.12)' },
-  stress_shatter: { icon: '💥', tag: 'Glass Crack Release', accent: '#EF4444', bg: 'rgba(239, 68, 68, 0.12)' },
-  cloud_float: { icon: '☁️', tag: 'Sky Cloud Drift', accent: '#38BDF8', bg: 'rgba(56, 189, 248, 0.12)' },
-  sand_drop: { icon: '⏳', tag: 'Granular Sand Drop', accent: '#F59E0B', bg: 'rgba(245, 158, 11, 0.12)' }
+  muscle: { icon: '🧘', tag: 'Progressive Muscle Relaxation', accent: '#D97706', bg: 'rgba(217, 119, 6, 0.12)' },
+  pattern: { icon: '🧩', tag: 'Pattern Alignment (Visuospatial)', accent: '#7E57C2', bg: 'rgba(126, 87, 194, 0.12)' },
+  nature: { icon: '🌿', tag: 'Soft Fascination Nature Viewing', accent: '#2E7D5B', bg: 'rgba(46, 125, 91, 0.12)' },
 };
 
 export const SubOptionSelectorScreen = () => {

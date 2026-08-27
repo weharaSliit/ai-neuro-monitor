@@ -7,12 +7,8 @@ import { Header } from '../components/Header';
 import { apiService } from '../api/apiService';
 
 export const UserProfileScreen = () => {
-  const { userId, username, hostExit, setCurrentScreen } = useContext(AppContext);
+  const { userId, username, hostExit, setCurrentScreen, onboardingAnswers } = useContext(AppContext);
   const { isDarkMode, toggleTheme, theme } = useContext(ThemeContext);
-  // Relaxation Guide's own screens are all reached via setCurrentScreen
-  // (in-module switch, see AppContext). The Physiological module is a
-  // separate top-level stack screen (App.js), so reaching its Dashboard
-  // needs the actual React Navigation object, not the in-module switch.
   const navigation = useNavigation();
 
   const [profileData, setProfileData] = useState(null);
@@ -32,6 +28,11 @@ export const UserProfileScreen = () => {
     };
     fetchProfile();
   }, [userId]);
+
+  const formatAnswer = (val) => {
+    if (!val) return 'Default (Not Set)';
+    return val.replace(/_/g, ' ').toUpperCase();
+  };
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
@@ -66,6 +67,51 @@ export const UserProfileScreen = () => {
                 <Text style={[styles.statLbl, { color: theme.textMuted }]}>Completed</Text>
               </View>
             </View>
+          </View>
+
+          {/* User-Wise Questionnaire Summary Card */}
+          <Text style={[styles.secTitle, { color: theme.textPrimary }]}>📋 Personal Stress Profile Summary</Text>
+          <View style={[styles.summaryCard, { backgroundColor: theme.bgSecondary, borderColor: theme.accent }]}>
+            <View style={styles.summaryItem}>
+              <Text style={styles.summaryIcon}>💼</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.summaryLabel, { color: theme.textMuted }]}>PRIMARY STRESS TRIGGER</Text>
+                <Text style={[styles.summaryVal, { color: theme.textPrimary }]}>
+                  {formatAnswer(onboardingAnswers?.stress_source || 'Work & Deadlines')}
+                </Text>
+              </View>
+            </View>
+
+            <View style={[styles.summaryDivider, { backgroundColor: theme.border }]} />
+
+            <View style={styles.summaryItem}>
+              <Text style={styles.summaryIcon}>🧘</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.summaryLabel, { color: theme.textMuted }]}>PREFERRED RELAXATION STYLE</Text>
+                <Text style={[styles.summaryVal, { color: theme.accent }]}>
+                  {formatAnswer(onboardingAnswers?.relaxation_style || 'Guided Meditation')}
+                </Text>
+              </View>
+            </View>
+
+            <View style={[styles.summaryDivider, { backgroundColor: theme.border }]} />
+
+            <View style={styles.summaryItem}>
+              <Text style={styles.summaryIcon}>⚡</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.summaryLabel, { color: theme.textMuted }]}>STRESS FREQUENCY</Text>
+                <Text style={[styles.summaryVal, { color: theme.warning }]}>
+                  {formatAnswer(onboardingAnswers?.stress_frequency || 'Daily Peak Hours')}
+                </Text>
+              </View>
+            </View>
+
+            <TouchableOpacity
+              style={[styles.retakeBtn, { borderColor: theme.accent }]}
+              onPress={() => setCurrentScreen('OnboardingQuestions')}
+            >
+              <Text style={[styles.retakeBtnTxt, { color: theme.accent }]}>✏️ Retake Personalization Survey</Text>
+            </TouchableOpacity>
           </View>
 
           {/* Theme Settings Switcher */}
@@ -106,35 +152,8 @@ export const UserProfileScreen = () => {
             ))}
           </View>
 
-          {/* Onboarding steps, revisitable instead of forced on every login */}
+          {/* Setup & Preferences */}
           <Text style={[styles.secTitle, { color: theme.textPrimary }]}>Setup & Preferences</Text>
-          <TouchableOpacity
-            style={[styles.settingCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}
-            onPress={() => setCurrentScreen('PrivacyPolicy')}
-          >
-            <View style={styles.settingText}>
-              <Text style={[styles.settingTitle, { color: theme.textPrimary }]}>🔒 Privacy & Data Ethics</Text>
-              <Text style={[styles.settingSub, { color: theme.textMuted }]}>Review the research data consent policy.</Text>
-            </View>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.settingCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}
-            onPress={() => setCurrentScreen('OnboardingQuestions')}
-          >
-            <View style={styles.settingText}>
-              <Text style={[styles.settingTitle, { color: theme.textPrimary }]}>📋 Personalization Survey</Text>
-              <Text style={[styles.settingSub, { color: theme.textMuted }]}>Retake the relaxation-style questionnaire.</Text>
-            </View>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.settingCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}
-            onPress={() => setCurrentScreen('BaselineCalibration')}
-          >
-            <View style={styles.settingText}>
-              <Text style={[styles.settingTitle, { color: theme.textPrimary }]}>🎯 Baseline Calibration</Text>
-              <Text style={[styles.settingSub, { color: theme.textMuted }]}>Recalibrate your HRV / GSR / EEG baseline.</Text>
-            </View>
-          </TouchableOpacity>
           <TouchableOpacity
             style={[styles.settingCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}
             onPress={() => navigation.navigate('Physiological')}
@@ -286,5 +305,45 @@ const styles = StyleSheet.create({
   logoutTxt: {
     fontWeight: '800',
     fontSize: 14
+  },
+  summaryCard: {
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    marginBottom: 20
+  },
+  summaryItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 6
+  },
+  summaryIcon: {
+    fontSize: 22
+  },
+  summaryLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5
+  },
+  summaryVal: {
+    fontSize: 13,
+    fontWeight: '800',
+    marginTop: 2
+  },
+  summaryDivider: {
+    height: 1,
+    marginVertical: 8
+  },
+  retakeBtn: {
+    marginTop: 10,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center'
+  },
+  retakeBtnTxt: {
+    fontSize: 12,
+    fontWeight: '800'
   }
 });

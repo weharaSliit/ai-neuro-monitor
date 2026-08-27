@@ -30,8 +30,6 @@ const QUESTIONS = [
     question: '2. Which relaxation style works best for you?',
     options: [
       { label: '🧘 Guided Meditation & Breathwork', value: 'guided_meditation' },
-      { label: '🎮 Focus & Flow Arcade Mini-Games', value: 'focus_arcade' },
-      { label: '🌧️ Nature Sensory Environments', value: 'adaptive_environment' },
       { label: '🌸 Visual Breathing Gardens', value: 'breathing_garden' },
       { label: '🧼 Tactile De-Stress Popping & Sand', value: 'cognitive_destress' }
     ]
@@ -45,16 +43,6 @@ const QUESTIONS = [
       { label: '🔥 Multiple Times a Day', value: 'frequent' },
       { label: '🌊 Constant High Tension', value: 'constant' }
     ]
-  },
-  {
-    id: 'sensory_preference',
-    question: '4. What sensory elements soothe you most?',
-    options: [
-      { label: '🌧️ Rainfall & Ocean Soundscapes', value: 'rain_ocean' },
-      { label: '🎵 432Hz Sound Frequency Harmonics', value: 'sound_harmonics' },
-      { label: '🌺 Flower Blooming & Particle Patterns', value: 'flower_particles' },
-      { label: '🧘 Silent Minimalist Pacing', value: 'silent_zen' }
-    ]
   }
 ];
 
@@ -66,8 +54,7 @@ export const OnboardingQuestionsScreen = () => {
   const [answers, setAnswers] = useState({
     stress_source: 'work',
     relaxation_style: 'guided_meditation',
-    stress_frequency: 'daily',
-    sensory_preference: 'rain_ocean'
+    stress_frequency: 'daily'
   });
 
   const [loading, setLoading] = useState(false);
@@ -85,24 +72,16 @@ export const OnboardingQuestionsScreen = () => {
       // Determine initial tailored recommendation
       let recTitle = 'Guided Meditation & Breathwork';
       let recTechId = 'guided_meditation';
-      let recReason = 'Ideal for general autonomic nervous system baseline reset.';
+      let recReason = 'Ideal for quick stress relief and restoring body calm.';
 
-      if (answers.relaxation_style === 'focus_arcade' || answers.stress_source === 'anxiety') {
-        recTitle = 'Focus & Flow Arcade (Zen Wave Runner)';
-        recTechId = 'focus_arcade';
-        recReason = 'Engineered to replace overthinking loops with deep flow state.';
-      } else if (answers.relaxation_style === 'adaptive_environment' || answers.sensory_preference === 'rain_ocean') {
-        recTitle = 'Adaptive Environment (Rain & Ocean Scenes)';
-        recTechId = 'adaptive_environment';
-        recReason = 'Calming raindrop acoustics to rapidly reduce skin conductance.';
-      } else if (answers.relaxation_style === 'breathing_garden') {
+      if (answers.relaxation_style === 'breathing_garden' || answers.stress_source === 'anxiety') {
         recTitle = 'Breathing Garden (Flower Meadow)';
         recTechId = 'breathing_garden';
-        recReason = 'Gamified 4-7-8 breathing matched with nature blooming.';
+        recReason = 'Guided 4-7-8 breathing with soothing blooming visuals.';
       } else if (answers.relaxation_style === 'cognitive_destress') {
-        recTitle = 'Cognitive De-Stress Arcade (Zen Bubble Pop)';
+        recTitle = 'Cognitive De-Stress Arcade';
         recTechId = 'cognitive_destress';
-        recReason = 'Tactile tension release mini-games for acute physical relief.';
+        recReason = 'Simple interactive exercises to quickly release physical tension.';
       }
 
       const recommendationData = {

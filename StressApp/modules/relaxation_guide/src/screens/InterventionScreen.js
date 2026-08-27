@@ -34,7 +34,8 @@ export const InterventionScreen = () => {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(0.95)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
-  const confidenceAnim = useRef(new Animated.Value(0)).current;
+  const confidenceFadeAnim = useRef(new Animated.Value(0)).current;
+  const confidenceWidthAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     // Entrance animation
@@ -49,6 +50,16 @@ export const InterventionScreen = () => {
         friction: 8,
         tension: 40,
         useNativeDriver: true,
+      }),
+      Animated.timing(confidenceFadeAnim, {
+        toValue: 1,
+        duration: 600,
+        useNativeDriver: true,
+      }),
+      Animated.timing(confidenceWidthAnim, {
+        toValue: 1,
+        duration: 1500,
+        useNativeDriver: false,
       })
     ]).start();
 
@@ -67,13 +78,6 @@ export const InterventionScreen = () => {
         })
       ])
     ).start();
-
-    // Confidence meter animation
-    Animated.timing(confidenceAnim, {
-      toValue: 1,
-      duration: 1500,
-      useNativeDriver: false,
-    }).start();
 
     // Auto-show confidence meter after 2 seconds
     setTimeout(() => setShowConfidenceMeter(true), 2000);
@@ -133,9 +137,9 @@ export const InterventionScreen = () => {
       <Animated.View style={[
         styles.confidenceContainer,
         {
-          opacity: confidenceAnim,
+          opacity: confidenceFadeAnim,
           transform: [{
-            translateY: confidenceAnim.interpolate({
+            translateY: confidenceFadeAnim.interpolate({
               inputRange: [0, 1],
               outputRange: [20, 0]
             })
@@ -153,7 +157,7 @@ export const InterventionScreen = () => {
             style={[
               styles.confidenceBarFill,
               {
-                width: confidenceAnim.interpolate({
+                width: confidenceWidthAnim.interpolate({
                   inputRange: [0, 1],
                   outputRange: ['0%', `${score}%`]
                 }),
@@ -190,7 +194,7 @@ export const InterventionScreen = () => {
             We've analyzed your context to suggest the best technique
           </Text>
           <Text style={styles.subHeadline}>
-            Based on physiological data (70%) and your history (30%)
+            Based on your body sensors (70%) and past preferences (30%)
           </Text>
         </Animated.View>
 
@@ -215,7 +219,7 @@ export const InterventionScreen = () => {
               style={styles.infoButton}
               onPress={() => Alert.alert(
                 'How this works',
-                'This recommendation combines real-time physiological data (70%) with your past preferences (30%) using Bayesian optimization.',
+                'This recommendation combines your real-time body sensor data (70%) with your past exercise choices (30%) to pick what works best for you.',
                 [{ text: 'Got it' }]
               )}
             >
@@ -234,21 +238,21 @@ export const InterventionScreen = () => {
             style={styles.breakdownBox}
             activeOpacity={0.7}
             onPress={() => Alert.alert(
-              'Score Breakdown',
-              `Physiological: ${(currentRecommendation.physiological_sample * 100).toFixed(1)}%\n` +
-              `History: ${(currentRecommendation.preference_score * 100).toFixed(1)}%\n` +
-              `Blended: ${(currentRecommendation.blended_score * 100).toFixed(1)}%`
+              'Match Details',
+              `Body Signals: ${(currentRecommendation.physiological_sample * 100).toFixed(1)}%\n` +
+              `Past Favorites: ${(currentRecommendation.preference_score * 100).toFixed(1)}%\n` +
+              `Overall Match: ${(currentRecommendation.blended_score * 100).toFixed(1)}%`
             )}
           >
             <View style={styles.breakdownHeader}>
-              <Text style={styles.breakdownTitle}>📊 Algorithm Score Breakdown</Text>
+              <Text style={styles.breakdownTitle}>📊 Why This Was Chosen</Text>
               <Text style={styles.breakdownTap}>Tap for details</Text>
             </View>
 
             <View style={styles.scoreRow}>
               <View style={styles.scoreLabelContainer}>
                 <Text style={styles.scoreEmoji}>🧬</Text>
-                <Text style={styles.scoreLbl}>Physiological Sample (70%)</Text>
+                <Text style={styles.scoreLbl}>Body Signals Match (70%)</Text>
               </View>
               <View style={styles.scoreBarContainer}>
                 <View style={styles.scoreBar}>
@@ -266,7 +270,7 @@ export const InterventionScreen = () => {
             <View style={styles.scoreRow}>
               <View style={styles.scoreLabelContainer}>
                 <Text style={styles.scoreEmoji}>📝</Text>
-                <Text style={styles.scoreLbl}>Preference History (30%)</Text>
+                <Text style={styles.scoreLbl}>Past Favorites Match (30%)</Text>
               </View>
               <View style={styles.scoreBarContainer}>
                 <View style={styles.scoreBar}>
@@ -282,7 +286,7 @@ export const InterventionScreen = () => {
             </View>
 
             <View style={[styles.scoreRow, styles.totalRow]}>
-              <Text style={styles.totalLbl}>🏆 Blended Bandit Score</Text>
+              <Text style={styles.totalLbl}>🏆 Overall Match Score</Text>
               <Text style={styles.totalVal}>
                 {(currentRecommendation.blended_score * 100).toFixed(1)}%
               </Text>
@@ -290,7 +294,7 @@ export const InterventionScreen = () => {
 
             <View style={styles.latencyContainer}>
               <Text style={styles.latencyTxt}>
-                ⚡ {currentRecommendation.execution_time_ms} ms latency
+                ⚡ Calculated instantly ({currentRecommendation.execution_time_ms} ms)
               </Text>
               <View style={styles.latencyDot} />
             </View>
@@ -329,116 +333,7 @@ export const InterventionScreen = () => {
               </>
             )}
           </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.rejectBtn, isRejecting && styles.rejectBtnDisabled]}
-            onPress={handleRejectFallback}
-            disabled={isRejecting}
-          >
-            {isRejecting ? (
-              <ActivityIndicator color="#F59E0B" size="small" />
-            ) : (
-              <>
-                <Text style={styles.rejectBtnTxt}>🤔 Not feeling this?</Text>
-                <Text style={styles.rejectBtnSub}>See alternative options</Text>
-              </>
-            )}
-          </TouchableOpacity>
         </Animated.View>
-
-        {/* Fallback Cascade */}
-        {fallbackData && (
-          <Animated.View
-            style={[
-              styles.fallbackBox,
-              {
-                opacity: fadeAnim,
-                transform: [{ scale: scaleAnim }]
-              }
-            ]}
-          >
-            <View style={styles.fallbackHeader}>
-              <Text style={styles.fallbackTitle}>
-                🌀 Level {fallbackData.fallback_level} Alternative
-              </Text>
-              <View style={styles.fallbackLevelBadge}>
-                <Text style={styles.fallbackLevelText}>FALLBACK</Text>
-              </View>
-            </View>
-
-            {fallbackData.fallback_level === 1 && (
-              <View>
-                <Text style={styles.fallbackSub}>
-                  Here are 2 alternatives (we've noted your preference)
-                </Text>
-                {fallbackData.level1_alternatives.map((alt, index) => (
-                  <TouchableOpacity
-                    key={alt.technique_id}
-                    style={[styles.altCard, { marginTop: index > 0 ? 8 : 0 }]}
-                    onPress={() => {
-                      Vibration.vibrate(15);
-                      setSelectedSubOption(alt.selected_sub_option);
-                      setCurrentScreen('SubOptionSelector');
-                    }}
-                  >
-                    <View style={styles.altCardHeader}>
-                      <Text style={styles.altNumber}>#{index + 1}</Text>
-                      <Text style={styles.altTitle}>{alt.title}</Text>
-                    </View>
-                    <Text style={styles.altDesc}>{alt.description}</Text>
-                    <Text style={styles.altAction}>Tap to select →</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-
-            {fallbackData.fallback_level === 2 && (
-              <View style={styles.level2Box}>
-                <View style={styles.breathingIcon}>
-                  <Text style={styles.breathingIconEmoji}>🌊</Text>
-                </View>
-                <Text style={styles.level2Title}>30-Second Breathing Reset</Text>
-                <Text style={styles.level2Desc}>
-                  {fallbackData.level2_breathing_reset.instructions}
-                </Text>
-                <TouchableOpacity
-                  style={styles.breathingResetBtn}
-                  onPress={() => {
-                    Vibration.vibrate(30);
-                    setCurrentScreen('GamePlayer');
-                  }}
-                >
-                  <Text style={styles.breathingResetTxt}>🌬️ Start Breathing Exercise</Text>
-                  <Text style={styles.breathingResetSub}>Guided, 30 seconds</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {fallbackData.fallback_level === 3 && (
-              <View>
-                <Text style={styles.level3Title}>💭 What would help you right now?</Text>
-                {fallbackData.level3_prompt_options.map((opt) => (
-                  <TouchableOpacity
-                    key={opt.id}
-                    style={styles.promptBtn}
-                    onPress={() => {
-                      Vibration.vibrate(20);
-                      Alert.alert(
-                        "✅ Preference Noted",
-                        `Applied selection: ${opt.label}`,
-                        [{ text: "Got it", onPress: () => setCurrentScreen('Dashboard') }]
-                      );
-                    }}
-                  >
-                    <Text style={styles.promptEmoji}>{opt.emoji || '💡'}</Text>
-                    <Text style={styles.promptTxt}>{opt.label}</Text>
-                    <Text style={styles.promptArrow}>→</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-          </Animated.View>
-        )}
       </ScrollView>
     </View>
   );

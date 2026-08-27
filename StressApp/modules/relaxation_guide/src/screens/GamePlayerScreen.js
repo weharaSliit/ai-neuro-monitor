@@ -6,16 +6,9 @@ import { Header } from '../components/Header';
 import { Timer } from '../components/Timer';
 
 // Import Games
-import { AdaptiveRainGame } from '../games/AdaptiveRainGame';
-import { ForestGame } from '../games/ForestGame';
-import { OceanGame } from '../games/OceanGame';
 import { FlowerMeadowGame } from '../games/FlowerMeadowGame';
-import { ZenGardenGame } from '../games/ZenGardenGame';
 import { LilyPondGame } from '../games/LilyPondGame';
 import { PulseWaveGame } from '../games/PulseWaveGame';
-import { ParticleFieldGame } from '../games/ParticleFieldGame';
-import { BreathingLightGame } from '../games/BreathingLightGame';
-import { SoundscapeGame } from '../games/SoundscapeGame';
 import { CognitiveDeStressGame } from '../games/CognitiveDeStressGame';
 import { MeditationGame } from '../games/MeditationGame';
 
@@ -23,64 +16,46 @@ export const GamePlayerScreen = () => {
   const { selectedSubOption, setCurrentScreen } = useContext(AppContext);
   const { theme } = useContext(ThemeContext);
 
-  const subId = selectedSubOption ? selectedSubOption.id : 'rain_scene';
+  const subId = selectedSubOption ? selectedSubOption.id : 'box_meditation';
 
   const renderGameCanvas = () => {
     switch (subId) {
+      // Guided Meditation & Breathwork
       case 'box_meditation':
-        return <MeditationGame mode="box_meditation" initialMode="box_meditation" />;
-      case 'zen_body_scan':
-        return <MeditationGame mode="zen_body_scan" initialMode="zen_body_scan" />;
-      case 'chakra_meditation':
-        return <MeditationGame mode="chakra_meditation" initialMode="chakra_meditation" />;
-      case 'transcendental_mind':
-        return <MeditationGame mode="transcendental_mind" initialMode="transcendental_mind" />;
-      case 'sound_meditation':
-        return <MeditationGame mode="sound_meditation" initialMode="sound_meditation" />;
-      case 'rain_scene':
-      case 'sunset_glow':
-      case 'mountain_breeze':
-        return <AdaptiveRainGame />;
-      case 'forest_scene':
-        return <ForestGame />;
-      case 'ocean_scene':
-        return <OceanGame />;
+      case 'chakra_harmonizer':
+      case 'silent_zen_timer':
+        return <MeditationGame mode={subId} initialMode={subId} />;
+
+      // Breathing Garden
       case 'flower_meadow':
-      case 'cosmic_nebula':
-      case 'crystal_cave':
         return <FlowerMeadowGame />;
-      case 'zen_rock_garden':
-        return <ZenGardenGame />;
       case 'water_lily_pond':
         return <LilyPondGame />;
-      case 'pulse_wave':
-      case 'ripple_matrix':
-      case 'bio_pulse_ring':
-        return <PulseWaveGame />;
-      case 'particle_field':
-        return <ParticleFieldGame />;
-      case 'breathing_light':
-        return <BreathingLightGame />;
-      case 'singing_bowls':
-      case 'forest_stream':
-      case 'solfeggio_528':
-      case 'alpha_waves':
-      case 'cosmic_frequency':
-        return <SoundscapeGame />;
+      case 'cosmic_nebula':
+        return <PulseWaveGame mode="cosmic_nebula" />;
+
+      // Cognitive De-Stress Arcade
+      case 'muscle':
+      case 'pattern':
+      case 'nature':
       case 'bubble_pop':
       case 'pattern_align':
-      case 'stress_shatter':
       case 'cloud_float':
-      case 'sand_drop':
-        return <CognitiveDeStressGame />;
+        return <CognitiveDeStressGame mode={subId} subOptionId={subId} onFinish={handleFinishGame} />;
+
       default:
-        return <AdaptiveRainGame />;
+        return <MeditationGame mode="box_meditation" initialMode="box_meditation" />;
     }
   };
 
   const handleFinishGame = () => {
     setCurrentScreen('Rating');
   };
+
+  const isSelfTimedGame = [
+    // Cognitive De-Stress Arcade
+    'muscle', 'pattern', 'nature', 'bubble_pop', 'pattern_align', 'cloud_float'
+  ].includes(subId);
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
@@ -90,9 +65,11 @@ export const GamePlayerScreen = () => {
         onBack={() => setCurrentScreen('SubOptionSelector')}
       />
 
-      <View style={styles.timerBar}>
-        <Timer initialSeconds={60} onComplete={handleFinishGame} />
-      </View>
+      {!isSelfTimedGame && (
+        <View style={styles.timerBar}>
+          <Timer initialSeconds={60} onComplete={handleFinishGame} />
+        </View>
+      )}
 
       <View style={styles.canvasContainer}>
         {renderGameCanvas()}
@@ -112,24 +89,25 @@ const styles = StyleSheet.create({
     flex: 1
   },
   timerBar: {
-    paddingVertical: 4
+    paddingVertical: 2
   },
   canvasContainer: {
     flex: 1,
-    padding: 12
+    padding: 2
   },
   footer: {
-    padding: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     borderTopWidth: 1
   },
   finishBtn: {
-    paddingVertical: 14,
+    paddingVertical: 12,
     borderRadius: 12,
     alignItems: 'center'
   },
   finishBtnTxt: {
     color: '#FFFFFF',
     fontWeight: '800',
-    fontSize: 15
+    fontSize: 14
   }
 });

@@ -31,34 +31,9 @@ export const MethodsScreen = () => {
       title: "Guided Meditation & Breathwork",
       icon: "🧘",
       sub_options: [
-        { id: "box_meditation", title: "Box Meditation", description: "Structured 4-4-4-4 visual pacing for rapid calm." },
-        { id: "zen_body_scan", title: "Zen Body Scan", description: "Mindful muscle relaxation with expanding aura visuals." },
-        { id: "chakra_meditation", title: "Chakra Harmonizer", description: "432Hz & 528Hz frequency alignment for mental focus." },
-        { id: "transcendental_mind", title: "Silent Zen Timer", description: "Minimalist meditation timer with periodic bells." },
-        { id: "sound_meditation", title: "Acoustic Meditation", description: "Resonant soundscape meditation for presence." }
-      ]
-    },
-    {
-      id: "focus_arcade",
-      title: "Focus & Flow Arcade",
-      icon: "🎮",
-      sub_options: [
-        { id: "resonance_circle", title: "Resonance Circle", description: "Visual biofeedback for heart rate variability training using paced resonance." },
-        { id: "mindful_sweep", title: "Mindful Sweep", description: "Gentle attention guidance through body awareness zones." },
-        { id: "aurora_flow", title: "Aurora Flow", description: "Paced color transition training for parasympathetic activation." },
-        { id: "serenity_spiral", title: "Serenity Spiral", description: "Calming spiral meditation for attention restoration therapy." },
-        { id: "stillness_dots", title: "Stillness Dots", description: "Visual anchoring technique for attention stabilization." }
-      ]
-    },
-    {
-      id: "adaptive_environment",
-      title: "Adaptive Ambient Soundscapes",
-      icon: "🌧️",
-      sub_options: [
-        { id: "gentle_rain", title: "Gentle Rain Acoustics", description: "Real-time synthesized raindrops." },
-        { id: "ocean_waves", title: "Ocean Tides", description: "Low frequency binaural wave rhythm." },
-        { id: "forest_stream", title: "Forest Stream", description: "Chirping acoustics and water soundscape." },
-        { id: "healing_tones", title: "432Hz Healing Tones", description: "Deep harmonic meditation frequency." }
+        { id: "box_meditation", title: "Box Meditation", description: "Structured 4-4-4-4 visual and auditory breathing rhythm." },
+        { id: "chakra_harmonizer", title: "Chakra Harmonizer", description: "432Hz & 528Hz acoustic harmonic frequency alignment." },
+        { id: "silent_zen_timer", title: "Silent Zen Timer", description: "Minimalist open monitoring meditation timer." }
       ]
     },
     {
@@ -66,21 +41,19 @@ export const MethodsScreen = () => {
       title: "Breathing Garden",
       icon: "🌸",
       sub_options: [
-        { id: "flower_meadow", title: "Bloom Garden", description: "Guided 4-7-8 breath relaxation with living garden ecosystem." },
-        { id: "lotus_breath", title: "Lotus Cycle", description: "Rhythmic lotus petal breath syncing." },
-        { id: "zen_garden", title: "Zen Garden Rake", description: "Interactive sand rake breathing focus." }
+        { id: "flower_meadow", title: "Flower Meadow", description: "Interactive flower blooming matched to 4-7-8 breathing cycles." },
+        { id: "water_lily_pond", title: "Water Lily Pond", description: "Expanding water lily blooms synchronized with exhalations." },
+        { id: "cosmic_nebula", title: "Cosmic Nebula", description: "Starlight galaxy expansion pacing slow 6-breaths-per-minute." }
       ]
     },
     {
       id: "cognitive_destress",
-      title: "Cognitive Destress & Fidget",
+      title: "Cognitive De-Stress Arcade",
       icon: "🧩",
       sub_options: [
-        { id: "bubble_pop", title: "Zen Bubble Pop", description: "Tactile bubble tension release." },
-        { id: "pattern_align", title: "Pattern Alignment", description: "Mindful geometric alignment." },
-        { id: "stress_shatter", title: "Stress Release Shatter", description: "Touch glass shatter physics." },
-        { id: "cloud_float", title: "Cloud Floating", description: "Drifting cloud steering." },
-        { id: "sand_drop", title: "Cascade Sand", description: "Flowing sand physics focus." }
+        { id: "muscle", title: "Progressive Muscle Relaxation", description: "Tense & release muscle cycling for physical tension discharge." },
+        { id: "pattern", title: "Pattern Alignment", description: "Visuospatial working memory tile matching for cognitive offloading." },
+        { id: "nature", title: "Soft Fascination Viewing", description: "Low-demand passive nature viewing for attention restoration." }
       ]
     }
   ];

@@ -118,66 +118,35 @@ BADGES_CATALOG = [
     }
 ]
 
-# --- Expanded 25-Game & Meditation Technique Catalog (5 Categories) ---
 TECHNIQUES = {
     "guided_meditation": {
         "id": "guided_meditation",
         "title": "Guided Meditation & Breathwork",
-        "description": "Immersive mindfulness sessions, box breathing, 432Hz chakra harmonics, and deep meditation timers.",
+        "description": "Mindfulness practice, structured box breathing, acoustic frequency alignment, and silent meditation timers.",
         "sub_options": [
-            {"id": "box_meditation", "title": "Box Meditation", "description": "Structured 4-4-4-4 visual pacing for rapid autonomic calm."},
-            {"id": "zen_body_scan", "title": "Zen Body Scan", "description": "Mindful muscle relaxation with expanding aura visuals."},
-            {"id": "chakra_meditation", "title": "Chakra Harmonizer", "description": "432Hz & 528Hz frequency alignment for deep mental focus."},
-            {"id": "transcendental_mind", "title": "Silent Zen Timer", "description": "Minimalist meditation timer with periodic singing bowl bells."},
-            {"id": "sound_meditation", "title": "Acoustic Meditation", "description": "Resonant soundscape meditation for effortless presence."}
-        ]
-    },
-   "focus_arcade": {
-        "id": "focus_arcade",
-        "title": "Focus & Flow Arcade",
-        "description": "High-engagement, focus-inducing mini games engineered to replace stress loops with deep flow state.",
-        "sub_options": [
-            {"id": "resonance_circle", "title": "Resonance Circle", "description": "Visual biofeedback for heart rate variability training using paced resonance."},
-            {"id": "mindful_sweep", "title": "Mindful Sweep", "description": "Gentle attention guidance through body awareness zones."},
-            {"id": "aurora_flow", "title": "Aurora Flow", "description": "Paced color transition training for parasympathetic activation."},
-            {"id": "serenity_spiral", "title": "Serenity Spiral", "description": "Calming spiral meditation for attention restoration therapy."},
-            {"id": "stillness_dots", "title": "Stillness Dots", "description": "Visual anchoring technique for attention stabilization."}
-        ]
-    },
-    "adaptive_environment": {
-        "id": "adaptive_environment",
-        "title": "Adaptive Environment",
-        "description": "Dynamic sensory scenes that adapt colors, sounds, and visuals to soothe your nervous system.",
-        "sub_options": [
-            {"id": "rain_scene", "title": "Rain Scene", "description": "Calming raindrop acoustics and interactive touch ripples."},
-            {"id": "forest_scene", "title": "Forest Scene", "description": "Gentle forest canopy with glowing fireflies touch interaction."},
-            {"id": "ocean_scene", "title": "Ocean Scene", "description": "Rhythmic sea tides sync'd with soft bubble acoustics."},
-            {"id": "sunset_glow", "title": "Sunset Glow", "description": "Warm dusk horizon color transitions for circadian calming."},
-            {"id": "mountain_breeze", "title": "Mountain Breeze", "description": "Crisp mountain wind flows reacting to touch orientation."}
+            {"id": "box_meditation", "title": "Box Meditation", "description": "Structured 4-4-4-4 visual and auditory breathing rhythm for rapid vagal nerve activation."},
+            {"id": "chakra_harmonizer", "title": "Chakra Harmonizer", "description": "432Hz & 528Hz acoustic harmonic frequency alignment for neural synchronization."},
+            {"id": "silent_zen_timer", "title": "Silent Zen Timer", "description": "Minimalist open monitoring meditation timer with periodic singing bowl cues."}
         ]
     },
     "breathing_garden": {
         "id": "breathing_garden",
         "title": "Breathing Garden",
-        "description": "Gamified pacing exercises guided by nature blooming animations.",
+        "description": "Gamified physiological pacing exercises guided by interactive organic nature animations.",
         "sub_options": [
-            {"id": "flower_meadow", "title": "Flower Meadow", "description": "Interactive flower blooming matched to 4-7-8 breathing cycles."},
-            {"id": "zen_rock_garden", "title": "Zen Rock Garden", "description": "Rake zen sand patterns and stack balancing stones."},
-            {"id": "water_lily_pond", "title": "Water Lily Pond", "description": "Expand floating water lilies through deep exhalations."},
-            {"id": "cosmic_nebula", "title": "Cosmic Nebula", "description": "Starlight galaxy expansion sync'd to slow 6s breathing."},
-            {"id": "crystal_cave", "title": "Crystal Cave", "description": "Resonant crystal pulses illuminating calm neural pathways."}
+            {"id": "flower_meadow", "title": "Flower Meadow", "description": "Interactive flower blooming matched to 4-7-8 parasympathetic breathing cycles."},
+            {"id": "water_lily_pond", "title": "Water Lily Pond", "description": "Expanding water lily blooms synchronized with diaphragmatic exhalations."},
+            {"id": "cosmic_nebula", "title": "Cosmic Nebula", "description": "Starlight galaxy expansion pacing slow 6-breaths-per-minute resonance."}
         ]
     },
     "cognitive_destress": {
         "id": "cognitive_destress",
         "title": "Cognitive De-Stress Arcade",
-        "description": "Interactive tactile mini-games designed to interrupt ruminative stress loops.",
+        "description": "Tactile micro-interventions designed to disrupt active cognitive stress loops and release tension.",
         "sub_options": [
-            {"id": "bubble_pop", "title": "Zen Bubble Pop", "description": "Satisfying tactile bubble popping to release muscle tension."},
-            {"id": "pattern_align", "title": "Pattern Alignment", "description": "Mindful geometric alignment guiding focused presence."},
-            {"id": "stress_shatter", "title": "Stress Release Shatter", "description": "Touch-to-shatter glass physics dumping pent-up mental stress."},
-            {"id": "cloud_float", "title": "Cloud Floating", "description": "Steer soft drifting clouds through calm azure skies."},
-            {"id": "sand_drop", "title": "Cascade Sand", "description": "Flowing colorful sand physics providing hypnotic focus."}
+            {"id": "bubble_pop", "title": "Zen Bubble Pop", "description": "Haptic and visual bubble popping providing immediate sensory grounding and tension release."},
+            {"id": "pattern_align", "title": "Pattern Alignment", "description": "Mindful spatial tile alignment shifting cognitive load away from stressful thoughts."},
+            {"id": "cloud_float", "title": "Cloud Floating", "description": "Low-demand spatial navigation steering soft clouds across gentle skies for cognitive offloading."}
         ]
     }
 }

@@ -115,7 +115,8 @@ const pStyles = StyleSheet.create({
 
 export const RecoveryScreen = () => {
   const {
-    lastValidationResult, preInterventionLabel, postInterventionLabel, setCurrentScreen
+    lastValidationResult, preInterventionLabel, postInterventionLabel,
+    setCurrentRecommendation, setSelectedSubOption, setCurrentScreen
   } = useContext(AppContext);
   const { theme } = useContext(ThemeContext);
 
@@ -125,6 +126,19 @@ export const RecoveryScreen = () => {
   const alpha      = lastValidationResult?.alpha_updated ?? 2.0;
   const beta       = lastValidationResult?.beta_updated ?? 1.0;
   const isNormal   = lastValidationResult?.is_normal_reached ?? (postInterventionLabel === 'normal');
+  const altRec     = lastValidationResult?.alternative_recommendation;
+
+  const handleStartAlt = () => {
+    if (altRec) {
+      setCurrentRecommendation(altRec);
+      if (altRec.selected_sub_option) {
+        setSelectedSubOption(altRec.selected_sub_option);
+      }
+      setCurrentScreen('GamePlayer');
+    } else {
+      setCurrentScreen('Methods');
+    }
+  };
 
   const [showCelebration, setShowCelebration] = useState(isNormal);
   const [showParticles, setShowParticles] = useState(isNormal);
@@ -206,19 +220,27 @@ export const RecoveryScreen = () => {
           </View>
         </Animated.View>
 
-        {/* Guidance if not fully recovered */}
+        {/* Guidance if baseline not yet reached */}
         {!isNormal && (
           <View style={[styles.guidanceCard, { backgroundColor: theme.warning + '12', borderColor: theme.warning }]}>
-            <Text style={[styles.guidanceTitle, { color: theme.warning }]}>⚡ Closed-Loop Guidance</Text>
+            <Text style={[styles.guidanceTitle, { color: theme.warning }]}>⚡ Closed-Loop Adaptive Guidance</Text>
             <Text style={[styles.guidanceText, { color: theme.textSecondary }]}>
-              You're in Pre-Stress — try 1 quick Soundscape session to reach full Normal baseline.
+              {altRec?.reason ||
+                lastValidationResult?.closed_loop_status?.guidance_message ||
+                "Baseline not yet reached. Smart AI selected an alternative technique for your recovery."}
             </Text>
             <TouchableOpacity
               style={[styles.guidanceBtn, { backgroundColor: theme.warning }]}
-              onPress={() => setCurrentScreen('Dashboard')}
+              onPress={handleStartAlt}
               activeOpacity={0.85}
             >
-              <Text style={[styles.guidanceBtnTxt, { color: '#0F172A' }]}>Try Another Session  →</Text>
+              <Text style={[styles.guidanceBtnTxt, { color: '#0F172A' }]}>
+                {altRec?.title
+                  ? `⚡ Start ${altRec.title} Now  →`
+                  : lastValidationResult?.closed_loop_status?.next_recommended_technique_name
+                  ? `⚡ Start ${lastValidationResult.closed_loop_status.next_recommended_technique_name} Now  →`
+                  : 'Try Another Technique  →'}
+              </Text>
             </TouchableOpacity>
           </View>
         )}
