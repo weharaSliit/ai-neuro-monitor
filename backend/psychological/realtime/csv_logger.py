@@ -7,10 +7,11 @@ can log raw samples without duplicating the writer.
 
 import csv
 
-from .adc import code_to_microvolts
-from .mqtt_client import RawSample
+from .adc import bipolar_code_to_microvolts, code_to_microvolts
+from .mqtt_client import BipolarRawSample, RawSample
 
 RAW_FIELDS = ['millis', 'ch1_code', 'ch2_code', 'ch1_uv', 'ch2_uv']
+RAW_FIELDS_BIPOLAR = ['millis', 'code', 'uv']
 
 
 class CsvLogger:
@@ -43,4 +44,15 @@ def log_raw_block(logger: CsvLogger, block: list[RawSample]) -> None:
         logger.write({
             'millis': s.millis, 'ch1_code': s.ch1_code, 'ch2_code': s.ch2_code,
             'ch1_uv': f'{code_to_microvolts(s.ch1_code):.3f}', 'ch2_uv': f'{code_to_microvolts(s.ch2_code):.3f}',
+        })
+
+
+def log_raw_block_bipolar(logger: CsvLogger, block: list[BipolarRawSample]) -> None:
+    """log_raw_block()'s wearable02 counterpart -- ONE hardware T7-T8
+    differential channel per sample, decoded via bipolar_code_to_microvolts()
+    (a different gain/formula than code_to_microvolts(), see adc.py)."""
+    for s in block:
+        logger.write({
+            'millis': s.millis, 'code': s.code,
+            'uv': f'{bipolar_code_to_microvolts(s.code):.3f}',
         })

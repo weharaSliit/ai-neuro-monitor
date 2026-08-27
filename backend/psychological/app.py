@@ -35,10 +35,10 @@ from backend.psychological.firebase_service import (
     load_user_calibration_profile,
     save_user_calibration_profile,
 )
-from backend.psychological.realtime.adc import code_to_microvolts
-from backend.psychological.realtime.csv_logger import CsvLogger, RAW_FIELDS, log_raw_block
+from backend.psychological.realtime.adc import bipolar_code_to_microvolts
+from backend.psychological.realtime.csv_logger import CsvLogger, RAW_FIELDS_BIPOLAR, log_raw_block_bipolar
 from backend.psychological.realtime.firebase_sync import make_eeg_output_record
-from backend.psychological.realtime.mqtt_client import RawSample
+from backend.psychological.realtime.mqtt_client import BipolarRawSample
 from backend.psychological.realtime.pipeline import BLOCK_SEC, RealtimeInference
 
 app = create_app(__name__)
@@ -85,39 +85,38 @@ eeg_sessions = {}  # session_id -> {'engine': RealtimeInference, 'firebase': Eeg
 live_raw_sessions: dict[str, EegFirebaseSession] = {}
 
 
-def _samples_from_payload(data: dict) -> list[RawSample]:
-    """Parses {'millis': [...], 'ch1_code': [...], 'ch2_code': [...]} into
-    RawSample rows -- same shape the MQTT firmware payload parses into
-    (see realtime/mqtt_client.py::parse_payload), just delivered over HTTP
-    instead of MQTT here."""
+def _samples_from_payload(data: dict) -> list[BipolarRawSample]:
+    """Parses {'millis': [...], 'code': [...]} into BipolarRawSample rows --
+    same shape wearable02's real MQTT payload parses into (see
+    realtime/mqtt_client.py::parse_bipolar_payload), just delivered over
+    HTTP instead of MQTT here. ONE hardware T7-T8 differential channel per
+    sample, not two separate ch1/ch2 codes -- see mqtt_client.py's module
+    docstring for why the old ch1_code/ch2_code shape never matched what
+    this device actually sends."""
     millis = data.get("millis", [])
-    ch1 = data.get("ch1_code", [])
-    ch2 = data.get("ch2_code", [])
-    if not (len(millis) == len(ch1) == len(ch2)):
+    code = data.get("code", [])
+    if len(millis) != len(code):
         raise ValueError(
-            f"millis/ch1_code/ch2_code must be the same length "
-            f"(got {len(millis)}, {len(ch1)}, {len(ch2)})"
+            f"millis/code must be the same length (got {len(millis)}, {len(code)})"
         )
     if len(millis) == 0:
-        raise ValueError("empty block -- millis/ch1_code/ch2_code must be non-empty")
+        raise ValueError("empty block -- millis/code must be non-empty")
     return [
-        RawSample(millis=int(m), ch1_code=int(c1), ch2_code=int(c2))
-        for m, c1, c2 in zip(millis, ch1, ch2)
+        BipolarRawSample(millis=int(m), code=int(c))
+        for m, c in zip(millis, code)
     ]
 
 
-def _raw_signal_record(window: int, samples: list[RawSample]) -> dict:
-    """One record per block: raw ADC codes + decoded uV, same RAW_FIELDS
+def _raw_signal_record(window: int, samples: list[BipolarRawSample]) -> dict:
+    """One record per block: raw ADC codes + decoded uV, same RAW_FIELDS_BIPOLAR
     shape as realtime/csv_logger.py's local CSV logging -- see
     EegFirebaseSession.push_raw()'s docstring for why this is a sibling
     RTDB path rather than nested into the derived-output record."""
     return {
         "window": window,
         "millis": [s.millis for s in samples],
-        "ch1_code": [s.ch1_code for s in samples],
-        "ch2_code": [s.ch2_code for s in samples],
-        "ch1_uv": [round(code_to_microvolts(s.ch1_code), 3) for s in samples],
-        "ch2_uv": [round(code_to_microvolts(s.ch2_code), 3) for s in samples],
+        "code": [s.code for s in samples],
+        "uv": [round(bipolar_code_to_microvolts(s.code), 3) for s in samples],
     }
 
 
@@ -141,7 +140,7 @@ def health():
 #     "session_id": "live_session_1",
 #     "allow_degraded": false,
 #     "blocks": [
-#       {"millis": [...], "ch1_code": [...], "ch2_code": [...]},
+#       {"millis": [...], "code": [...]},
 #       ...
 #     ]
 #   }
@@ -166,7 +165,7 @@ def calibrate():
     # whether calibration happened to pass; reused below as this session's
     # firebase/csv handles rather than constructing second instances.
     firebase = EegFirebaseSession(session_id, g.user_id)
-    csv_logger = CsvLogger(str(_raw_csv_path(session_id)), RAW_FIELDS)
+    csv_logger = CsvLogger(str(_raw_csv_path(session_id)), RAW_FIELDS_BIPOLAR)
 
     engine = RealtimeInference(MODEL_DIR, disable_quality_gate=DISABLE_QUALITY_GATE)
     for i, block in enumerate(blocks):
@@ -175,10 +174,10 @@ def calibrate():
         except ValueError as e:
             return jsonify({"error": f"block {i}: {e}"}), 400
         firebase.push_raw(_raw_signal_record(i, samples))
-        log_raw_block(csv_logger, samples)
-        engine.calibrate_block(samples)
+        log_raw_block_bipolar(csv_logger, samples)
+        engine.calibrate_bipolar_block(samples)
 
-    outcome = engine.finalize_calibration(allow_degraded=bool(data.get("allow_degraded", False)))
+    outcome = engine.finalize_calibration_bipolar(allow_degraded=bool(data.get("allow_degraded", False)))
 
     # "You've done this before, skip ahead": a returning user (g.user_id
     # already has a recent calibration on file) reuses that baseline_shift
@@ -257,7 +256,7 @@ def calibrate():
 # REQUEST FORMAT:
 #   {
 #     "session_id": "live_session_1",
-#     "millis": [...], "ch1_code": [...], "ch2_code": [...]
+#     "millis": [...], "code": [...]
 #   }
 @app.route("/predict", methods=["POST"])
 @require_auth
@@ -274,10 +273,10 @@ def predict():
         return jsonify({"error": str(e)}), 400
 
     state = eeg_sessions[session_id]
-    result = state["engine"].infer_block(samples)
+    result = state["engine"].infer_bipolar_block(samples)
     state["score_history"].append(result.get("calibrated_p") if not result.get("skipped") else None)
     state["firebase"].push_raw(_raw_signal_record(result.get("window"), samples))
-    log_raw_block(state["csv_logger"], samples)
+    log_raw_block_bipolar(state["csv_logger"], samples)
 
     record = make_eeg_output_record(
         result,
@@ -316,7 +315,7 @@ def predict():
 # {session_id}/live_raw node rather than accumulating history there.
 #
 # REQUEST FORMAT: same shape as /predict, just a much smaller batch
-#   {"session_id": "live_session_1", "millis": [...], "ch1_code": [...], "ch2_code": [...]}
+#   {"session_id": "live_session_1", "millis": [...], "code": [...]}
 @app.route("/live_raw", methods=["POST"])
 @require_auth
 def live_raw():
@@ -342,8 +341,7 @@ def live_raw():
     firebase.push_live_raw({
         "timestamp": time.time(),
         "millis": [s.millis for s in samples],
-        "ch1_uv": [round(v, 3) for v in code_to_microvolts(np.array([s.ch1_code for s in samples]))],
-        "ch2_uv": [round(v, 3) for v in code_to_microvolts(np.array([s.ch2_code for s in samples]))],
+        "uv": [round(v, 3) for v in bipolar_code_to_microvolts(np.array([s.code for s in samples]))],
     })
 
     return jsonify({

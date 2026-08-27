@@ -1,33 +1,9 @@
-# ============================================================
-# mqtt_bridge.py
-#
-# Subscribes to the wearable02 EEG firmware's batched MQTT stream
-# (mindpulse/wearable02/sensors, see
-# iot_firmware/wearable02/wearable02.ino::publishBatch()), accumulates raw
-# ADC samples into 25s/6250-sample blocks (BLOCK_SEC @
-# SOURCE_FS, matching backend/psychological/realtime/pipeline.py), and
-# POSTs them to this module's own Flask API (/calibrate then /predict) --
-# same shape as backend/physiological/mqtt_bridge.py's MQTT-to-Flask
-# bridge, adapted for EEG's block-based (not fixed-window) contract.
-#
-# Run from repo root:
-#   python -m backend.psychological.mqtt_bridge
-# ============================================================
-
 import os
 import sys
 import time
 from pathlib import Path
-
 import requests
 
-# Python block-buffers stdout by default whenever it isn't attached to a
-# real terminal -- exactly the case for a Render worker's log collector.
-# Without this, every print() below can sit invisible for a long time
-# (looking identical to "nothing is happening") even while the process is
-# actually running fine, until the buffer happens to fill. Forcing line
-# buffering here makes logs show up immediately regardless of whether
-# whoever deploys this remembers `python -u` / PYTHONUNBUFFERED=1.
 sys.stdout.reconfigure(line_buffering=True)
 
 if __package__ is None:
@@ -39,28 +15,15 @@ from backend.common.firebase_config import (
     CURRENT_SESSION_ID_FIELD, CURRENT_USER_ID_FIELD, FIREBASE_DB_URL, RTDB_NAMESPACES
 )
 from backend.common.mqtt_bridge import auth_headers, post_json
-from backend.psychological.realtime.mqtt_client import RawSampleBuffer, make_client
+from backend.psychological.realtime.mqtt_client import RawSampleBuffer, make_bipolar_client
 from backend.psychological.realtime.resample import SOURCE_FS
 
 BLOCK_SEC = 25.0
-BLOCK_SAMPLES = int(BLOCK_SEC * SOURCE_FS)  # 6250 raw samples per block @ 250 SPS
-N_CALIBRATION_BLOCKS = 3  # Relax-period blocks before live prediction starts
-
-# Raw-preview push to /live_raw, independent of the 25s block cycle above --
-# gives the dashboard waveform a genuinely live feel (updates ~1x/sec) instead
-# of only refreshing once per 25s block. LIVE_RAW_SAMPLES is deliberately
-# small (~1s of data): enough for a smooth-looking sparkline update, far
-# short of a full inference block.
-LIVE_RAW_SAMPLES = 250  # ~1s @ 250 SPS
+BLOCK_SAMPLES = int(BLOCK_SEC * SOURCE_FS)  
+N_CALIBRATION_BLOCKS = 3 
+LIVE_RAW_SAMPLES = 250
 LIVE_RAW_INTERVAL_SEC = 1.0
 EMPTY_BUFFER_WARN_INTERVAL_SEC = 5.0
-
-# This device's own broker/topic -- independent of the ring's MQTT_BROKER/
-# MQTT_TOPIC in backend/common/config.py (different hardware, different
-# topic: mindpulse/wearable02/sensors vs the ring's mindpulse/wearable01/sensors).
-# Same EMQX Cloud Serverless deployment (mindpulse-broker) as the ring,
-# just a different device credential -- see wearable02.ino's identical
-# MQTT_BROKER/MQTT_USER/MQTT_PASS.
 EEG_MQTT_BROKER = os.environ.get("EEG_MQTT_BROKER", "ob1f0f10.ala.asia-southeast1.emqxsl.com")
 EEG_MQTT_PORT = int(os.environ.get("EEG_MQTT_PORT", "8883"))
 EEG_MQTT_TOPIC = os.environ.get("EEG_MQTT_TOPIC", "mindpulse/wearable02/sensors")
@@ -70,39 +33,11 @@ EEG_MQTT_CA_CERT = os.path.join(
     Path(__file__).resolve().parents[2], "iot_firmware", "emqxsl-ca.crt"
 )
 
-# PSYCHOLOGICAL_FLASK_URL is a full-URL override for a deployed target
-# (e.g. Render's public HTTPS URL, no explicit port) -- see
-# backend/physiological/mqtt_bridge.py's identical PHYSIOLOGICAL_FLASK_URL
-# comment. setdefault (not a bare assignment) so this actually participates
-# in the os.environ.get() lookup below -- a plain `PSYCHOLOGICAL_FLASK_URL =
-# "..."` local variable here does NOT affect os.environ.get("PSYCHOLOGICAL_
-# FLASK_URL"), so the env var read was silently still falling through to
-# the http://127.0.0.1:5001 default despite this line existing. A real
-# PSYCHOLOGICAL_FLASK_URL set in Render's dashboard still overrides this.
 os.environ.setdefault("PSYCHOLOGICAL_FLASK_URL", "https://mindpulse-eeg.onrender.com")
 
 FLASK_URL = os.environ.get("PSYCHOLOGICAL_FLASK_URL") or \
     f"http://127.0.0.1:{os.environ.get('PSYCHOLOGICAL_PORT', '5001')}"
-# No "Wehara" fallback -- see backend/physiological/mqtt_bridge.py's
-# identical USER_ID comment. Unset until EEG_BRIDGE_USER_ID is explicitly
-# pinned or the app-driven current_user_id pointer resolves a real user
-# (see _poll_user_pointer() and run()'s main loop below); calibration and
-# predict posting are both skipped while USER_ID is None.
 USER_ID = os.environ.get("EEG_BRIDGE_USER_ID") or None
-# Mutable, not a one-time-read constant: StressApp (App.js) is the actual
-# authority on the current session_id now, written to
-# {psychological}/current_session_id when the app opens/reuses a session --
-# this process polls that field (see run()'s main loop,
-# POINTER_POLL_INTERVAL_SEC) and rotates onto whatever it says, since a
-# long-running MQTT bridge process has no other way to learn a new app
-# session started. Lives inside the psychological/ root itself (this
-# bridge's own namespace), not a separate shared "pointer" store -- see
-# backend/common/firebase_config.py's CURRENT_SESSION_ID_FIELD docstring.
-# EEG_SESSION_ID (if set) is a manual override/fallback for standalone
-# debugging without the app -- the field still wins once it's ever set to
-# something different. `or`, not .get(key, default): see
-# backend/physiological/mqtt_bridge.py's identical SESSION_ID line for why
-# an empty (but present) env var must also fall through to the default.
 SESSION_ID = os.environ.get("EEG_SESSION_ID") or "wearable02_" + time.strftime("%Y%m%dT%H%M%S")
 POINTER_POLL_INTERVAL_SEC = 10.0
 
@@ -110,11 +45,6 @@ AUTH_HEADERS = auth_headers(USER_ID) if USER_ID else None
 
 
 def _poll_session_pointer() -> str | None:
-    """GET {psychological}/current_session_id -- plain REST, not
-    firebase_admin: this bridge has no firebase_admin dependency anywhere
-    else in its import graph (it only ever talks to its own Flask API via
-    requests), so REST keeps that true instead of adding a new, heavier
-    dependency just for this one read."""
     try:
         resp = requests.get(
             f"{FIREBASE_DB_URL}{RTDB_NAMESPACES['psychological']}/{CURRENT_SESSION_ID_FIELD}.json", timeout=5
@@ -126,9 +56,6 @@ def _poll_session_pointer() -> str | None:
 
 
 def _poll_user_pointer() -> str | None:
-    """REST equivalent of _poll_session_pointer(), for current_user_id --
-    lets this bridge attribute EEG data to whoever is actually logged into
-    the app right now, same as backend/physiological/mqtt_bridge.py."""
     try:
         resp = requests.get(
             f"{FIREBASE_DB_URL}{RTDB_NAMESPACES['psychological']}/{CURRENT_USER_ID_FIELD}.json", timeout=5
@@ -142,8 +69,7 @@ def _poll_user_pointer() -> str | None:
 def block_payload(samples) -> dict:
     return {
         "millis": [s.millis for s in samples],
-        "ch1_code": [s.ch1_code for s in samples],
-        "ch2_code": [s.ch2_code for s in samples],
+        "code": [s.code for s in samples],
     }
 
 
@@ -181,8 +107,9 @@ def run():
 
     buffer = RawSampleBuffer()
     # Already connected + looping -- see backend/common/mqtt_bridge.py::connect_mqtt().
-    client = make_client(EEG_MQTT_BROKER, EEG_MQTT_PORT, EEG_MQTT_TOPIC, buffer, client_id="eeg_bridge_wearable02",
-                          username=EEG_MQTT_USER, password=EEG_MQTT_PASSWORD, ca_cert=EEG_MQTT_CA_CERT)
+    client = make_bipolar_client(EEG_MQTT_BROKER, EEG_MQTT_PORT, EEG_MQTT_TOPIC, buffer,
+                                  client_id="eeg_bridge_wearable02", username=EEG_MQTT_USER,
+                                  password=EEG_MQTT_PASSWORD, ca_cert=EEG_MQTT_CA_CERT)
 
     calibration_blocks = []
     calibrated = False
