@@ -11,7 +11,7 @@ import ScreenBackground from '../../shared/ScreenBackground';
 import { ref, onValue, off, get } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
-import { useAuth } from '../../../context/AuthContext';
+import { usePhenotypingDeviceId } from '../utils/deviceIdentity';
 import { getCalibrationStatus } from '../utils/calibrationStatus';
 
 function buildWeeklyChart(predictions) {
@@ -46,8 +46,7 @@ const TABS = [
 
 export default function PhenotypingAnalysisScreen() {
     const { isDark, theme: t, COLORS } = useTheme();
-    const { user } = useAuth();
-    const userId = user?.userId;
+    const deviceId = usePhenotypingDeviceId();
 
     const [activeTab, setActiveTab] = useState('overview');
     const [predictions, setPredictions] = useState(null);
@@ -58,31 +57,31 @@ export default function PhenotypingAnalysisScreen() {
     const [calibStatus, setCalibStatus] = useState(null);
 
     useEffect(() => {
-        if (!userId) return;
-        getCalibrationStatus(userId).then(setCalibStatus);
-    }, [userId]);
+        if (!deviceId) return;
+        getCalibrationStatus(deviceId).then(setCalibStatus);
+    }, [deviceId]);
 
     useEffect(() => {
-        if (!userId) return;
-        const predRef = ref(db, `phenotyping/predictions/${userId}`);
+        if (!deviceId) return;
+        const predRef = ref(db, `phenotyping/predictions/${deviceId}`);
         const handler = onValue(predRef, (snap) => {
             const raw = snap.val();
             setPredictions(raw ? Object.values(raw) : []);
         });
         return () => off(predRef, 'value', handler);
-    }, [userId]);
+    }, [deviceId]);
 
     useEffect(() => {
-        if (!userId) return;
-        get(ref(db, `phenotyping/users/${userId}/baselines`)).then((s) => { if (s.exists()) setBaselines(s.val()); });
-        get(ref(db, `phenotyping/data_logs/${userId}`)).then((s) => {
+        if (!deviceId) return;
+        get(ref(db, `phenotyping/users/${deviceId}/baselines`)).then((s) => { if (s.exists()) setBaselines(s.val()); });
+        get(ref(db, `phenotyping/data_logs/${deviceId}`)).then((s) => {
             if (!s.exists()) return;
             const entries = Object.entries(s.val()).sort((a, b) => a[0].localeCompare(b[0]));
             setDataLogCount(entries.length);
             setLatestWindow(entries[entries.length - 1][1]);
             setRecentWindows(entries.slice(-10).map((e) => ({ ts: e[0], data: e[1] })));
         });
-    }, [userId]);
+    }, [deviceId]);
 
     const { weeklyScores, avgScore, peakDay, calmDay } = useMemo(() => {
         if (!predictions || predictions.length === 0) {

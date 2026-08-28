@@ -11,7 +11,7 @@ import ScreenBackground from '../../shared/ScreenBackground';
 import { ref, onValue, off } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
-import { useAuth } from '../../../context/AuthContext';
+import { usePhenotypingDeviceId } from '../utils/deviceIdentity';
 
 const SIGNAL_NAMES = {
     keyboard: '⌨️ Keyboard Patterns', screen: '📱 Screen On/Off',
@@ -35,8 +35,7 @@ function generateEmptyDays() {
 
 export default function PhenotypingSignalHistoryScreen({ route }) {
     const { theme: t, COLORS } = useTheme();
-    const { user } = useAuth();
-    const userId = user?.userId;
+    const deviceId = usePhenotypingDeviceId();
     const signalId = route?.params?.signalId || 'keyboard';
     const [days, setDays] = useState(generateEmptyDays());
 
@@ -44,8 +43,8 @@ export default function PhenotypingSignalHistoryScreen({ route }) {
     const unit = SIGNAL_UNITS[signalId] || '';
 
     useEffect(() => {
-        if (!userId) return;
-        const metricsRef = ref(db, `phenotyping/data_logs/${userId}`);
+        if (!deviceId) return;
+        const metricsRef = ref(db, `phenotyping/data_logs/${deviceId}`);
         const handler = onValue(metricsRef, (snapshot) => {
             const raw = snapshot.val();
             const processed = generateEmptyDays();
@@ -68,7 +67,7 @@ export default function PhenotypingSignalHistoryScreen({ route }) {
             setDays(processed);
         });
         return () => off(metricsRef, 'value', handler);
-    }, [userId, signalId]);
+    }, [deviceId, signalId]);
 
     const validAvgs = days.map((d) => d.avg).filter((a) => typeof a === 'number');
     const weekAvg = validAvgs.length ? Math.round(validAvgs.reduce((a, b) => a + b, 0) / validAvgs.length) : '--';

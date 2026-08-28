@@ -7,14 +7,17 @@
 // DashboardScreen.js) instead of the original's Tailwind classes.
 //
 // Data sources unchanged from the original: phenotyping/predictions/
-// {userId} and phenotyping/data_logs/{userId} in Firebase RTDB, both
+// {deviceId} and phenotyping/data_logs/{deviceId} in Firebase RTDB, both
 // written by KeystrokeCollectorService.java (see that file) and by
-// backend/phenotyping_behavior/app.py's /behavior/predict route.
+// backend/phenotyping_behavior/app.py's /behavior/predict route. {deviceId}
+// is this device's own randomly-generated Digital Phenotyping tracking id
+// (see modules/phenotyping/utils/deviceIdentity.js) -- NOT the shared
+// account login id, since behavioral biometrics are inherently per-device.
 // ============================================================
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, NativeModules, Platform } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { ref, onValue, off } from 'firebase/database';
+import { ref, onValue, off, get, update } from 'firebase/database';
 import { db } from '../firebase';
 import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
@@ -26,6 +29,7 @@ import { useAuth } from '../../../context/AuthContext';
 import { API_BASE } from '../config/config';
 import { getCalibrationStatus, markCalibrated, shouldAttemptCalibrateToday } from '../utils/calibrationStatus';
 import { isPhenotypingOnboarded } from './PhenotypingOnboardingScreen';
+import { usePhenotypingDeviceId } from '../utils/deviceIdentity';
 
 function getGreeting() {
     const h = new Date().getHours();
@@ -70,55 +74,98 @@ function QuickAction({ icon, label, color, isDark, onPress }) {
 export default function PhenotypingScreen({ navigation }) {
     const { isDark, theme: t, COLORS } = useTheme();
     const { user } = useAuth();
-    const userId = user?.userId;
     const userName = user?.name || 'there';
+    // This device's own Digital Phenotyping tracking id -- created
+    // automatically (once, ever) the first time this screen mounts on this
+    // device. See modules/phenotyping/utils/deviceIdentity.js.
+    const deviceId = usePhenotypingDeviceId();
 
     const [calibStatus, setCalibStatus] = useState(null);
     const [onboarded, setOnboarded] = useState(true); // assume true until checked, avoids a flash
     const [liveWindow, setLiveWindow] = useState(null);
     const [recentLogs, setRecentLogs] = useState([]);
     const [lastUpdated, setLastUpdated] = useState(null);
+    // Whether the PhenoCare AccessibilityService is actually enabled right now.
+    // Checked on every screen focus so users know immediately if they revoked it.
+    const [accessibilityOn, setAccessibilityOn] = useState(true); // optimistic until first check
+
+    // Seed this device's phenotyping profile in Firebase the first time its
+    // tracking id resolves -- guarantees phenotyping/users/{deviceId}/name
+    // exists from day 1 (backend/phenotyping_behavior/firebase_service.py's
+    // get_user_display_name() reads it for the shared fusion_engine key),
+    // instead of only appearing after 7-day calibration.
+    useEffect(() => {
+        if (!deviceId) return;
+        (async () => {
+            try {
+                const profileRef = ref(db, `phenotyping/users/${deviceId}`);
+                const snapshot = await get(profileRef);
+                if (!snapshot.exists()) {
+                    await update(profileRef, {
+                        name: userName,
+                        is_calibrated: false,
+                        created_at: new Date().toISOString(),
+                    });
+                }
+            } catch (err) {
+                console.log('[phenotyping_init] failed:', err.message);
+            }
+        })();
+    }, [deviceId, userName]);
 
     const refreshCalibStatus = useCallback(async () => {
-        if (!userId) return;
-        setCalibStatus(await getCalibrationStatus(userId));
-    }, [userId]);
+        if (!deviceId) return;
+        setCalibStatus(await getCalibrationStatus(deviceId));
+    }, [deviceId]);
 
     useFocusEffect(useCallback(() => { refreshCalibStatus(); }, [refreshCalibStatus]));
 
     useFocusEffect(useCallback(() => {
-        if (!userId) return;
-        isPhenotypingOnboarded(userId).then(setOnboarded);
-    }, [userId]));
+        if (!deviceId) return;
+        isPhenotypingOnboarded(deviceId).then(setOnboarded);
+    }, [deviceId]));
+
+    // Live Accessibility check — re-runs every time the screen comes into focus
+    // so that users who revoke the permission in Settings see an immediate warning.
+    // Uses Android's AccessibilityManager via NativeModules.PhenotypingIdentity;
+    // the method is a no-op on iOS (accessibility capture is Android-only).
+    useFocusEffect(useCallback(() => {
+        if (Platform.OS !== 'android') return;
+        const { PhenotypingIdentity } = NativeModules;
+        if (!PhenotypingIdentity?.isAccessibilityServiceEnabled) return;
+        PhenotypingIdentity.isAccessibilityServiceEnabled()
+            .then((enabled) => setAccessibilityOn(!!enabled))
+            .catch(() => setAccessibilityOn(true)); // assume OK if method missing
+    }, []));
 
     // Auto-trigger real calibration once 7+ days have passed and the
     // backend hasn't confirmed it yet -- same logic/throttle as the
     // original PhenotypingDashboard.jsx.
     useEffect(() => {
-        if (!userId || !calibStatus || calibStatus.isCalibrated || calibStatus.dayNumber < 7) return;
+        if (!deviceId || !calibStatus || calibStatus.isCalibrated || calibStatus.dayNumber < 7) return;
         (async () => {
-            if (!(await shouldAttemptCalibrateToday(userId))) return;
+            if (!(await shouldAttemptCalibrateToday(deviceId))) return;
             try {
                 const res = await fetch(`${API_BASE}/behavior/calibrate`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ user_id: userId, name: userName }),
+                    body: JSON.stringify({ user_id: deviceId, name: userName }),
                 });
                 const data = await res.json();
                 if (res.ok && data.status === 'calibrated') {
-                    await markCalibrated(userId);
+                    await markCalibrated(deviceId);
                     refreshCalibStatus();
                 }
             } catch {
                 // will retry tomorrow via shouldAttemptCalibrateToday
             }
         })();
-    }, [userId, userName, calibStatus, refreshCalibStatus]);
+    }, [deviceId, userName, calibStatus, refreshCalibStatus]);
 
     // Live behavioral window
     useEffect(() => {
-        if (!userId) return;
-        const logsRef = ref(db, `phenotyping/data_logs/${userId}`);
+        if (!deviceId) return;
+        const logsRef = ref(db, `phenotyping/data_logs/${deviceId}`);
         const handler = onValue(logsRef, (snapshot) => {
             const raw = snapshot.val();
             if (!raw) return;
@@ -129,7 +176,7 @@ export default function PhenotypingScreen({ navigation }) {
             setLastUpdated(latestKey);
         });
         return () => off(logsRef, 'value', handler);
-    }, [userId]);
+    }, [deviceId]);
 
 
     const digitalSignals = useMemo(() => {
@@ -212,6 +259,31 @@ export default function PhenotypingScreen({ navigation }) {
                             <Text style={[styles.onboardSub, { color: t.textMuted }]}>Passive typing rhythm & activity context setup</Text>
                         </View>
                         <Icon name={NAMES.chevronRight} size={18} color={COLORS.brand} />
+                    </TouchableOpacity>
+                )}
+
+                {/* Accessibility-disabled warning — shown when user has completed
+                    onboarding but then revoked the Accessibility permission in Settings.
+                    Data capture is silently stopped in that state without this banner. */}
+                {onboarded && !accessibilityOn && Platform.OS === 'android' && (
+                    <TouchableOpacity
+                        style={[styles.onboardBanner, { backgroundColor: COLORS.stress + '15', borderColor: COLORS.stress + '40' }]}
+                        onPress={() => {
+                            // Deep-link to Android Accessibility settings so the user
+                            // can re-enable PhenoCare Sensor with one tap.
+                            const { Linking } = require('react-native');
+                            Linking.openSettings();
+                        }}
+                        activeOpacity={0.85}
+                    >
+                        <Text style={{ fontSize: 22 }}>⚠️</Text>
+                        <View style={{ flex: 1 }}>
+                            <Text style={[styles.onboardTitle, { color: COLORS.stress }]}>Data capture paused</Text>
+                            <Text style={[styles.onboardSub, { color: t.textMuted }]}>
+                                PhenoCare Sensor is off — go to Settings → Accessibility to re-enable it
+                            </Text>
+                        </View>
+                        <Icon name={NAMES.chevronRight} size={18} color={COLORS.stress} />
                     </TouchableOpacity>
                 )}
 
