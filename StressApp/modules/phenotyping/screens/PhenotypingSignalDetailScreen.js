@@ -11,6 +11,7 @@ import { ref, onValue, off } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import { COLORS as STATIC_COLORS } from '../../physiological/config/theme';
+import Icon, { NAMES } from '../../shared/Icon';
 import { usePhenotypingDeviceId } from '../utils/deviceIdentity';
 
 // STATIC_COLORS (not useTheme()'s COLORS) since this config object lives at
@@ -67,7 +68,7 @@ function statusColor(status, COLORS) {
     return COLORS.normal;
 }
 
-export default function PhenotypingSignalDetailScreen({ route }) {
+export default function PhenotypingSignalDetailScreen({ navigation, route }) {
     const { theme: t, COLORS } = useTheme();
     const deviceId = usePhenotypingDeviceId();
     const signalId = route?.params?.signalId || 'keyboard';
@@ -180,6 +181,17 @@ export default function PhenotypingSignalDetailScreen({ route }) {
 
     return (
         <ScreenBackground edges={['left', 'right']}>
+            {/* Header row */}
+            <View style={styles.header}>
+                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} activeOpacity={0.7}>
+                    <Icon name={NAMES.back} size={22} color={COLORS.brand} />
+                </TouchableOpacity>
+                <Text style={[styles.headerTitle, { color: t.text }]}>
+                    {config?.title || 'Signal Detail'}
+                </Text>
+                <View style={{ width: 22 }} />
+            </View>
+
             <ScrollView contentContainerStyle={styles.scroll}>
                 {(measures || []).map((m, i) => (
                     <View key={i} style={[styles.card, { backgroundColor: t.surface, borderColor: t.border }]}>
@@ -215,4 +227,7 @@ const styles = StyleSheet.create({
     statusPill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
     explainBox: { borderRadius: 12, padding: 12 },
     explainText: { fontSize: 12, lineHeight: 18 },
+    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 10 },
+    backBtn: { padding: 4 },
+    headerTitle: { fontSize: 16, fontWeight: '900', letterSpacing: -0.2 },
 });

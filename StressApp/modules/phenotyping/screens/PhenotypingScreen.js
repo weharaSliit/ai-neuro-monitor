@@ -22,6 +22,7 @@ import { db } from '../firebase';
 import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
 import AvatarButton from '../../shared/AvatarButton';
+import StatusDot from '../../shared/StatusDot';
 import Icon, { NAMES } from '../../shared/Icon';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import { COLORS } from '../../physiological/config/theme';
@@ -235,57 +236,113 @@ export default function PhenotypingScreen({ navigation }) {
         ];
     }, [liveWindow, COLORS, t.textMuted]);
 
+    const { statusMainColor, statusLabel, statusEmoji } = useMemo(() => {
+        if (!calibStatus?.isCalibrated) {
+            return {
+                statusMainColor: COLORS.brand,
+                statusLabel: 'CALIBRATING',
+                statusEmoji: '⚖️',
+            };
+        }
+        const avgDwell = liveWindow?.avg_dwell || 0;
+        if (avgDwell > 150) {
+            return {
+                statusMainColor: COLORS.stress,
+                statusLabel: 'STRESS',
+                statusEmoji: '😰',
+            };
+        } else if (avgDwell > 130) {
+            return {
+                statusMainColor: COLORS.warning,
+                statusLabel: 'PRE-STRESS',
+                statusEmoji: '😐',
+            };
+        } else {
+            return {
+                statusMainColor: COLORS.normal,
+                statusLabel: 'NORMAL',
+                statusEmoji: '😊',
+            };
+        }
+    }, [calibStatus, liveWindow, COLORS]);
+
     return (
         <ScreenBackground>
-            <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+            {/* Top custom header bar */}
+            <View style={styles.topHeader}>
                 <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backRow} activeOpacity={0.7}>
                     <Icon name={NAMES.back} size={20} color={COLORS.brand} />
                     <Text style={{ color: COLORS.brand, fontWeight: '700' }}>Overview</Text>
                 </TouchableOpacity>
+                <TouchableOpacity
+                    onPress={() => navigation.navigate('PhenotypingEma', { initialTab: 'siss' })}
+                    style={[styles.emaHeaderBtn, { backgroundColor: COLORS.brandSoft }]}
+                    activeOpacity={0.8}
+                >
+                    <Icon name="clipboard-text-outline" size={16} color={COLORS.brand} />
+                    <Text style={[styles.emaHeaderBtnText, { color: COLORS.brand }]}>EMA Survey</Text>
+                </TouchableOpacity>
+            </View>
 
-                {/* Plain title -- no fusion-style stress-colored hero here,
-                    phenotyping is a separate non-physiological signal. */}
+            <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
                 <Text style={[styles.plainTitle, { color: t.text }]}>Digital Phenotyping</Text>
 
-                {!onboarded && (
-                    <TouchableOpacity
-                        style={[styles.onboardBanner, { backgroundColor: COLORS.brandSoft, borderColor: COLORS.brand + '30' }]}
-                        onPress={() => navigation.navigate('PhenotypingOnboarding')}
-                        activeOpacity={0.85}
-                    >
-                        <Icon name="cellphone-check" size={24} color={COLORS.brand} />
-                        <View style={{ flex: 1 }}>
-                            <Text style={[styles.onboardTitle, { color: t.text }]}>Set up phone statistics</Text>
-                            <Text style={[styles.onboardSub, { color: t.textMuted }]}>Passive typing rhythm & activity context setup</Text>
+                {/* Behavioral Sensor Telemetry Status Card (matches Ring/EEG Summary Screens) */}
+                <Card accentColor={accessibilityOn ? COLORS.normal : COLORS.warning} elevated style={styles.hwCard}>
+                    <View style={styles.rowBetween}>
+                        <View style={styles.rowGap}>
+                            <Icon name="cellphone-cog" size={18} color={accessibilityOn ? COLORS.normal : COLORS.warning} />
+                            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 0 }]}>Behavioral Sensor Status</Text>
                         </View>
-                        <Icon name={NAMES.chevronRight} size={18} color={COLORS.brand} />
-                    </TouchableOpacity>
-                )}
-
-                {/* Accessibility-disabled warning — shown when user has completed
-                    onboarding but then revoked the Accessibility permission in Settings.
-                    Data capture is silently stopped in that state without this banner. */}
-                {onboarded && !accessibilityOn && Platform.OS === 'android' && (
-                    <TouchableOpacity
-                        style={[styles.onboardBanner, { backgroundColor: COLORS.stress + '15', borderColor: COLORS.stress + '40' }]}
-                        onPress={() => {
-                            // Deep-link to Android Accessibility settings so the user
-                            // can re-enable PhenoCare Sensor with one tap.
-                            const { Linking } = require('react-native');
-                            Linking.openSettings();
-                        }}
-                        activeOpacity={0.85}
-                    >
-                        <Text style={{ fontSize: 22 }}>⚠️</Text>
-                        <View style={{ flex: 1 }}>
-                            <Text style={[styles.onboardTitle, { color: COLORS.stress }]}>Data capture paused</Text>
-                            <Text style={[styles.onboardSub, { color: t.textMuted }]}>
-                                PhenoCare Sensor is off — go to Settings → Accessibility to re-enable it
+                        <View style={[styles.statusPill, { backgroundColor: accessibilityOn ? COLORS.normalSoft : COLORS.warningSoft }]}>
+                            <StatusDot color={accessibilityOn ? COLORS.normal : COLORS.warning} active={accessibilityOn} size={8} />
+                            <Text style={[styles.statusPillText, { color: accessibilityOn ? COLORS.normalDark : COLORS.warningDark }]}>
+                                {accessibilityOn ? 'Streaming' : 'Offline'}
                             </Text>
                         </View>
-                        <Icon name={NAMES.chevronRight} size={18} color={COLORS.stress} />
-                    </TouchableOpacity>
-                )}
+                    </View>
+                    <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 10 }]}>
+                        {accessibilityOn 
+                            ? `PhenoCare Sensor is actively recording typing cadence & window switching rate (Device: ${deviceId?.slice(0, 8) || 'unknown'}...)`
+                            : 'PhenoCare Sensor is offline. Please enable the service in Settings → Accessibility.'}
+                    </Text>
+                </Card>
+
+                {/* Calibration / Stress State Circle Card */}
+                <Card style={styles.scoreCard} accentColor={statusMainColor}>
+                    <View style={styles.gaugeWrap}>
+                        <View style={[styles.scoreHalo, { borderColor: statusMainColor + '40' }]}>
+                            {calibStatus?.isCalibrated ? (
+                                <View style={styles.centerAlign}>
+                                    <Text style={styles.gaugeEmoji}>{statusEmoji}</Text>
+                                    <Text style={[styles.gaugeStatusLabel, { color: statusMainColor }]}>
+                                        {statusLabel}
+                                    </Text>
+                                </View>
+                            ) : (
+                                <View style={styles.centerAlign}>
+                                    <Text style={[styles.gaugeDay, { color: COLORS.brand }]}>
+                                        Day {calibStatus?.dayNumber || 1}
+                                    </Text>
+                                    <Text style={[styles.gaugeSub, { color: t.textMuted }]}>
+                                        of 7
+                                    </Text>
+                                </View>
+                            )}
+                        </View>
+                        
+                        <View style={styles.gaugeInfoBlock}>
+                            <Text style={[styles.gaugeTitle, { color: t.text }]}>
+                                {calibStatus?.isCalibrated ? "Calibrated User Status" : "Calibration Progress"}
+                            </Text>
+                            <Text style={[styles.gaugeDesc, { color: t.textMuted }]}>
+                                {calibStatus?.isCalibrated 
+                                    ? `Current status is ${statusLabel.toLowerCase()} based on real-time keystroke rhythm & app multitasking.`
+                                    : `Currently gathering your baseline behavioral signals. Day ${calibStatus?.dayNumber || 1} calibration active.`}
+                            </Text>
+                        </View>
+                    </View>
+                </Card>
 
                 {/* Digital Signals Section */}
                 <View style={styles.section}>
@@ -297,7 +354,7 @@ export default function PhenotypingScreen({ navigation }) {
                         <TouchableOpacity
                             key={i}
                             activeOpacity={0.8}
-                            onPress={() => navigation.navigate('PhenotypingSignalDetail', { signalId: s.id })}
+                            onPress={() => navigation.navigate('PhenotypingSignalHistory', { signalId: s.id })}
                         >
                             <SignalCard {...s} t={t} />
                         </TouchableOpacity>
@@ -306,14 +363,12 @@ export default function PhenotypingScreen({ navigation }) {
 
                 {/* Quick Actions */}
                 <View style={styles.section}>
-                    <Text style={[styles.sectionTitle, { color: t.text }]}>Self-Report Check-Ins</Text>
+                    <Text style={[styles.sectionTitle, { color: t.text }]}>Quick Action</Text>
                     <View style={styles.actionsRow}>
-                        <QuickAction icon="⚡" label="Quick Check" color={COLORS.warning} isDark={isDark}
-                            onPress={() => navigation.navigate('PhenotypingEma', { initialTab: 'siss' })} />
-                        <QuickAction icon="✨" label="Weekly PSS" color={COLORS.brand} isDark={isDark}
-                            onPress={() => navigation.navigate('PhenotypingEma', { initialTab: 'pss4' })} />
-                        <QuickAction icon="📈" label="Signal History" color={COLORS.normal} isDark={isDark}
-                            onPress={() => navigation.navigate('PhenotypingSignalHistory')} />
+                        <QuickAction icon="📈" label="Patterns" color={COLORS.brand} isDark={isDark}
+                            onPress={() => navigation.navigate('PhenotypingAnalysis', { initialTab: 'patterns' })} />
+                        <QuickAction icon="⚡" label="Analysis" color={COLORS.normal} isDark={isDark}
+                            onPress={() => navigation.navigate('PhenotypingAnalysis', { initialTab: 'overview' })} />
                     </View>
                 </View>
 
@@ -327,29 +382,36 @@ export default function PhenotypingScreen({ navigation }) {
 
 const styles = StyleSheet.create({
     container: { flex: 1 },
-    scroll: { padding: 20, paddingBottom: 40 },
-    backRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 14 },
-    plainTitle: { fontSize: 22, fontWeight: '900', letterSpacing: -0.2, marginBottom: 14 },
+    scroll: { paddingBottom: 40 },
+    topHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginHorizontal: 20, marginTop: 12, marginBottom: 8 },
+    emaHeaderBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12 },
+    emaHeaderBtnText: { fontSize: 11, fontWeight: '800' },
+    backRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    plainTitle: { fontSize: 22, fontWeight: '900', letterSpacing: -0.2, marginHorizontal: 20, marginBottom: 14 },
     header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 },
     dateStr: { fontSize: 12, fontWeight: '700', marginBottom: 2 },
     greeting: { fontSize: 24, fontWeight: '900', letterSpacing: -0.3 },
-    onboardBanner: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 18, borderWidth: 1, padding: 14, marginTop: 12, marginBottom: 4 },
+    onboardBanner: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 18, borderWidth: 1, padding: 14, marginHorizontal: 20, marginTop: 8, marginBottom: 4 },
     onboardTitle: { fontSize: 13, fontWeight: '800' },
     onboardSub: { fontSize: 11, marginTop: 2 },
-    scoreCard: { padding: 20, borderRadius: 24, marginVertical: 10 },
-    gaugeWrap: { alignItems: 'center', justifyContent: 'center', paddingVertical: 10 },
-    scoreHalo: { width: 110, height: 110, borderRadius: 55, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
-    dayHalo: { paddingHorizontal: 20, paddingVertical: 12, borderRadius: 20 },
-    gaugeEmoji: { fontSize: 26, marginBottom: 2 },
-    gaugeScore: { fontSize: 36, fontWeight: '900', letterSpacing: -1 },
-    gaugeDay: { fontSize: 24, fontWeight: '900' },
-    gaugeSub: { fontSize: 14, fontWeight: '800', letterSpacing: 0.2 },
-    gaugeDelta: { fontSize: 11, fontWeight: '700', marginTop: 4 },
-    dayBarsRow: { flexDirection: 'row', gap: 8, marginTop: 16 },
-    dayBarWrap: { alignItems: 'center' },
-    dayBarFill: { width: 10, height: 30, borderRadius: 5 },
-    dayBarLabel: { fontSize: 10, fontWeight: '700', marginTop: 5 },
-    section: { marginBottom: 20 },
+    hwCard: { marginHorizontal: 20, marginVertical: 8, padding: 18, borderRadius: 22 },
+    rowGap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    statusPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
+    statusPillText: { fontSize: 11, fontWeight: '800' },
+    cardTitle: { fontSize: 15, fontWeight: '800' },
+    cardSub: { fontSize: 12 },
+    scoreCard: { marginHorizontal: 20, marginVertical: 8, padding: 18, borderRadius: 22 },
+    gaugeWrap: { flexDirection: 'row', alignItems: 'center', gap: 16, paddingVertical: 4 },
+    scoreHalo: { width: 90, height: 90, borderRadius: 45, borderWidth: 3, alignItems: 'center', justifyContent: 'center' },
+    centerAlign: { alignItems: 'center', justifyContent: 'center' },
+    gaugeEmoji: { fontSize: 22 },
+    gaugeStatusLabel: { fontSize: 11, fontWeight: '900', letterSpacing: -0.2, marginTop: 2 },
+    gaugeDay: { fontSize: 18, fontWeight: '900' },
+    gaugeSub: { fontSize: 10, fontWeight: '800' },
+    gaugeInfoBlock: { flex: 1 },
+    gaugeTitle: { fontSize: 14, fontWeight: '800', marginBottom: 4 },
+    gaugeDesc: { fontSize: 11.5, lineHeight: 16 },
+    section: { marginHorizontal: 20, marginVertical: 10 },
     sectionTitle: { fontSize: 15, fontWeight: '800', marginBottom: 2 },
     sectionSub: { fontSize: 12, marginBottom: 12 },
     signalCard: { borderRadius: 20, borderWidth: 1, padding: 16, marginBottom: 10 },
@@ -360,6 +422,7 @@ const styles = StyleSheet.create({
     signalValue: { fontSize: 14, fontWeight: '800' },
     actionsRow: { flexDirection: 'row', gap: 10 },
     actionTile: { borderRadius: 18, borderWidth: 1, paddingVertical: 16, alignItems: 'center', gap: 6 },
+    actionIcon: { fontSize: 20 },
     actionLabel: { fontSize: 11, fontWeight: '800', textAlign: 'center' },
-    lastUpdated: { textAlign: 'center', fontSize: 10, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 8 },
+    lastUpdated: { textAlign: 'center', fontSize: 10, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 12 },
 });

@@ -22,6 +22,7 @@ import PhenotypingSignalDetailScreen from './modules/phenotyping/screens/Phenoty
 import PhenotypingSignalHistoryScreen from './modules/phenotyping/screens/PhenotypingSignalHistoryScreen';
 import PhenotypingAlertDetailScreen from './modules/phenotyping/screens/PhenotypingAlertDetailScreen';
 import PhenotypingOnboardingScreen from './modules/phenotyping/screens/PhenotypingOnboardingScreen';
+import PhenotypingAnalysisScreen from './modules/phenotyping/screens/PhenotypingAnalysisScreen';
 import { AppContext } from './modules/physiological/screens/AppState';
 import { ThemeProvider, useTheme } from './modules/physiological/config/ThemeContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -41,21 +42,21 @@ const linking = {
       Physiological: {
         path: '',
         screens: {
-          Fusion:       'fusion-tab',
-          Phenotyping:  'phenotyping-tab',
+          Fusion: 'fusion-tab',
+          Phenotyping: 'phenotyping-tab',
         },
       },
-      Calibration:            'calibration',
-      RingSummary:            'ring',
-      EegSummary:             'eeg',
-      EmaDetail:              'ema',
-      PSS4:                   'pss4',
-      Profile:                'profile',
-      PhenotypingEma:         'phenotyping-ema',
-      PhenotypingSignalDetail:  'phenotyping-signal',
+      Calibration: 'calibration',
+      RingSummary: 'ring',
+      EegSummary: 'eeg',
+      EmaDetail: 'ema',
+      PSS4: 'pss4',
+      Profile: 'profile',
+      PhenotypingEma: 'phenotyping-ema',
+      PhenotypingSignalDetail: 'phenotyping-signal',
       PhenotypingSignalHistory: 'phenotyping-signal-history',
-      PhenotypingAlertDetail:   'phenotyping-alert',
-      PhenotypingOnboarding:    'phenotyping-onboarding',
+      PhenotypingAlertDetail: 'phenotyping-alert',
+      PhenotypingOnboarding: 'phenotyping-onboarding',
     },
   },
 };
@@ -163,6 +164,11 @@ function RootNavigator() {
             component={PhenotypingOnboardingScreen}
             options={{ headerShown: true, title: 'Set Up Tracking' }}
           />
+          <Stack.Screen
+            name="PhenotypingAnalysis"
+            component={PhenotypingAnalysisScreen}
+            options={{ headerShown: false, title: 'Pattern Charts' }}
+          />
         </>
       ) : (
         <>
@@ -181,10 +187,10 @@ function ThemedStatusBar() {
 }
 
 export default function App() {
-  const [lastSessionId,   setLastSessionId]   = useState(null);
+  const [lastSessionId, setLastSessionId] = useState(null);
 
   const sharedState = {
-    lastSessionId,   setLastSessionId,
+    lastSessionId, setLastSessionId,
   };
 
   return (
