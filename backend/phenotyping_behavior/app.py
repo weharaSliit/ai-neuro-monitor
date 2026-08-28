@@ -1,9 +1,13 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import numpy as np
+import joblib
 import sys
 import os
 from pathlib import Path
+from sklearn.svm import OneClassSVM
+from sklearn.preprocessing import StandardScaler
+
 
 # --- MODULE PATH FIX ---
 if __package__ is None:
@@ -56,6 +60,8 @@ def predict_behavioral_stress():
         'flight_std': flight_std,
         'interaction_rate': data.get('interaction_rate', 0),
         'scroll_velocity': data.get('scroll_velocity', 0),
+        'tilt_angle': data.get('tilt_angle', 0),
+        'cpm': data.get('cpm', 0),
         'app_switch_rate': data.get('app_switch_rate', 0),
         'unlocks_count': data.get('unlocks_count', 0)
     }
@@ -242,7 +248,8 @@ def calibrate_baseline():
     feature_keys = [
         'avg_dwell', 'dwell_std',
         'avg_flight', 'flight_std',
-        'interaction_rate', 'scroll_velocity', 'app_switch_rate'
+        'interaction_rate', 'scroll_velocity',
+        'tilt_angle', 'cpm', 'app_switch_rate'
     ]
 
     baselines = {}
@@ -265,13 +272,73 @@ def calibrate_baseline():
     create_user_profile(user_id, name, baselines)
     set_user_calibration_status(user_id, is_calibrated=True, window_count=window_count)
 
+    # ── 4. Train Personalized OC-SVM on this user's calibration data ──────────
+    # v4.1: Instead of relying solely on the global 20-user model, we train a
+    # personal OC-SVM fitted ONLY on this user's normal typing. This is the
+    # single most impactful change for accuracy: per-user models consistently
+    # outperform population models in all research phases (SWELL F1=0.72 vs
+    # pooled accuracy=0.49). The global model remains as a fallback.
+    personal_model_msg = "skipped"
+    try:
+        # Extract the 5 features the model consumes from calibration windows
+        model_features = ['avg_dwell', 'avg_flight', 'scroll_velocity', 'tilt_angle', 'cpm']
+        # Population defaults for imputation (from Kaggle Mobile stats)
+        pop_defaults = {'avg_dwell': 145, 'avg_flight': 230, 'scroll_velocity': 45, 'tilt_angle': 59.09, 'cpm': 39.40}
+
+        rows = []
+        for w in windows:
+            row = [float(w.get(f, pop_defaults.get(f, 0)) or pop_defaults.get(f, 0)) for f in model_features]
+            rows.append(row)
+
+        if len(rows) >= 20:  # Need enough data for a meaningful personal boundary
+            X_personal = np.array(rows)
+            personal_scaler = StandardScaler()
+            X_scaled = personal_scaler.fit_transform(X_personal)
+
+            # Grid search for best nu (same approach as s8_deploy_production.py)
+            best_nu, best_gamma = 0.05, 'scale'
+            for nu_cand in [0.01, 0.03, 0.05, 0.08, 0.10, 0.15]:
+                for gamma_cand in ['scale', 'auto', 0.01, 0.05, 0.1]:
+                    clf = OneClassSVM(kernel='rbf', nu=nu_cand, gamma=gamma_cand).fit(X_scaled)
+                    if (clf.predict(X_scaled) == 1).mean() >= (1.0 - nu_cand * 1.5):
+                        best_nu = nu_cand
+                        best_gamma = gamma_cand
+                        break
+
+            personal_model = OneClassSVM(kernel='rbf', nu=best_nu, gamma=best_gamma)
+            personal_model.fit(X_scaled)
+
+            # Save personalized model and scaler
+            models_dir = os.path.abspath(os.path.join(
+                os.path.dirname(__file__), '..', '..', 'phenotyping', 'models', 'personalized'
+            ))
+            os.makedirs(models_dir, exist_ok=True)
+            joblib.dump(personal_model, os.path.join(models_dir, f"{user_id}_model.pkl"))
+            joblib.dump(personal_scaler, os.path.join(models_dir, f"{user_id}_scaler.pkl"))
+
+            # Invalidate predictor cache so it picks up the new model
+            from backend.phenotyping_behavior.predictor import predictor as pred_instance
+            if user_id in pred_instance._personal_models:
+                del pred_instance._personal_models[user_id]
+
+            personal_model_msg = f"trained (nu={best_nu}, gamma={best_gamma}, {len(rows)} samples)"
+            print(f"[✅ PERSONAL MODEL] {user_id}: OC-SVM {personal_model_msg}")
+        else:
+            personal_model_msg = f"skipped (only {len(rows)} samples, need 20+)"
+            print(f"[⚠️  PERSONAL MODEL] {user_id}: {personal_model_msg}")
+
+    except Exception as e:
+        personal_model_msg = f"failed ({e})"
+        print(f"[WARN] Personal model training failed for {user_id}: {e}")
+
     print(f"[✅ CALIBRATE] {user_id} calibrated on {window_count} windows → {baselines}")
 
     return jsonify({
-        "status":       "calibrated",
-        "user_id":      user_id,
-        "window_count": window_count,
-        "baselines":    baselines
+        "status":           "calibrated",
+        "user_id":          user_id,
+        "window_count":     window_count,
+        "baselines":        baselines,
+        "personal_model":   personal_model_msg
     })
 
 @app.route('/behavior/evaluate', methods=['GET'])

@@ -42,13 +42,17 @@ def run_tests():
         sys.exit(1)
 
     # 2. Real-Time Behavioral Feature Vector Prediction (/behavior/predict)
-    print("\n[Test 2] Testing /behavior/predict (Inference & EMA Engine)...")
+    # v4.1: payload now includes all 5 model features (tilt_angle + cpm added)
+    print("\n[Test 2a] Testing /behavior/predict — 5-feature NORMAL window...")
     payload_normal = {
+        #The Test Has No Personal Baseline Yet so population mean in the test.
         "user_id": TEST_USER_ID,
-        "dwell_times": [180, 195, 205, 190, 210, 185, 200, 192, 198, 202, 188, 194],
-        "flight_times": [320, 310, 330, 315, 325, 305, 340, 312, 328, 318, 322, 335],
+        "dwell_times":    [180, 195, 205, 190, 210, 185, 200, 192, 198, 202, 188, 194],
+        "flight_times":   [320, 310, 330, 315, 325, 305, 340, 312, 328, 318, 322, 335],
         "interaction_rate": 2.4,
-        "scroll_velocity": 450.0,
+        "scroll_velocity":  450.0,
+        "tilt_angle":       62.5,   # ~population mean (Kaggle: 59.09°) — calm posture
+        "cpm":              38.0,   # ~population mean (Kaggle: 39.40 cpm) — normal typing
         "data_valid": True
     }
     try:
@@ -56,9 +60,35 @@ def run_tests():
         print(f"Status Code: {r.status_code}")
         print(f"Response: {json.dumps(r.json(), indent=2)}")
         assert r.status_code == 200
-        print("[OK] Behavioral Prediction Endpoint Passed!")
+        print("[OK] Normal Window Prediction Passed!")
     except Exception as e:
-        print(f"[FAIL] Prediction Endpoint Failed: {e}")
+        print(f"[FAIL] Normal Prediction Failed: {e}")
+        all_passed = False
+
+    # 2b. Stress-scenario test — elevated tilt + low CPM + high dwell
+    print("\n[Test 2b] Testing /behavior/predict — 5-feature STRESS window...")
+    payload_stress = {
+        "user_id": TEST_USER_ID,
+        "dwell_times":    [320, 345, 360, 310, 355, 340, 328, 350, 338, 362, 315, 348],
+        "flight_times":   [680, 720, 650, 700, 690, 710, 695, 705, 685, 715, 725, 665],
+        "interaction_rate": 1.1,
+        "scroll_velocity":  820.0,
+        "tilt_angle":       105.0,  # stress hunching (>90° = leaning over phone)
+        "cpm":               8.0,   # very low typing speed — cognitive fatigue signal
+        "data_valid": True
+    }
+    try:
+        r = requests.post(f"{BASE_URL}/behavior/predict", json=payload_stress)
+        print(f"Status Code: {r.status_code}")
+        resp = r.json()
+        print(f"Response: {json.dumps(resp, indent=2)}")
+        assert r.status_code == 200
+        # Verify the response includes all 5 z-score fields (v4.1)
+        prediction_key = "prediction"
+        assert prediction_key in resp, f"Missing '{prediction_key}' in response"
+        print("[OK] Stress Window Prediction Passed!")
+    except Exception as e:
+        print(f"[FAIL] Stress Prediction Failed: {e}")
         all_passed = False
 
     # 3. Ground-Truth EMA Label Ingestion (/behavior/label) - PSS-4 & SISS

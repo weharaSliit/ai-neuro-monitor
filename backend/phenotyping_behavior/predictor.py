@@ -6,10 +6,11 @@ from backend.phenotyping_behavior.ema_service import calculate_z_score
 
 # --- PATH SETUP ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# Updated to point to the Step 8 Production Model
-MODEL_PATH = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "phenotyping", "models", "stress_engine.pkl"))
-# v3.0: StandardScaler saved by s8_deploy_production.py
-SCALER_PATH = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "phenotyping", "models", "feature_scaler.pkl"))
+# Global fallback model (trained on all 20 Kaggle users pooled together)
+GLOBAL_MODEL_PATH = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "phenotyping", "models", "stress_engine.pkl"))
+GLOBAL_SCALER_PATH = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "phenotyping", "models", "feature_scaler.pkl"))
+# Directory where personalized per-user models are saved by /behavior/calibrate
+PERSONAL_MODELS_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "phenotyping", "models", "personalized"))
 
 # v3.1: Continuous probability blend weights (see predict() step 5).
 # Reasonable defaults chosen without labeled ground truth; retune with
@@ -37,78 +38,104 @@ DRIFT_CONFIRM_WINDOWS = 3
 
 class StressPredictor:
     def __init__(self):
-        print(f"[INFO] Initializing Production Brain: {MODEL_PATH}")
+        # ── Load global fallback model ────────────────────────────────────────
+        print(f"[INFO] Initializing Production Brain: {GLOBAL_MODEL_PATH}")
         try:
-            self.model = joblib.load(MODEL_PATH)
-            print("[OK] Winner Model (One-Class SVM) loaded successfully")
+            self.global_model = joblib.load(GLOBAL_MODEL_PATH)
+            print("[OK] Global OC-SVM model loaded successfully")
         except Exception as e:
-            print(f"[WARN] Warning: Could not load production model. Error: {e}")
-            self.model = None
+            print(f"[WARN] Could not load global model. Error: {e}")
+            self.global_model = None
 
-        # v3.0: Load the StandardScaler that was fitted on CMU training data.
-        # This scaler transforms raw ms values to mean=0, std=1 so the OC-SVM
-        # boundary works on relative deviations, not absolute millisecond values.
+        # v4.1: Load the StandardScaler fitted on Kaggle Mobile Behavioral Biometrics
+        # data (20 participants, real touchscreen: dwell/flight/scroll/tilt/cpm).
+        # This scaler transforms raw values to mean=0, std=1 so the OC-SVM
+        # boundary works on relative deviations, not absolute values.
         try:
-            self.scaler = joblib.load(SCALER_PATH)
-            print(f"[OK] Feature scaler loaded (means: dwell={self.scaler.mean_[0]:.1f}ms, "
-                  f"flight={self.scaler.mean_[1]:.1f}ms, scroll={self.scaler.mean_[2]:.1f})")
+            self.global_scaler = joblib.load(GLOBAL_SCALER_PATH)
+            n_feats = len(self.global_scaler.mean_)
+            print(f"[OK] Global scaler loaded ({n_feats} features)")
         except Exception as e:
-            print(f"[WARN] Warning: Could not load feature scaler. Error: {e}")
-            self.scaler = None
+            print(f"[WARN] Could not load global scaler. Error: {e}")
+            self.global_scaler = None
+
+        # v4.1: Cache for personalized per-user models (lazy-loaded on first predict)
+        self._personal_models = {}   # user_id -> (model, scaler)
 
         # v3.2: Per-user rolling buffer of "in escalation band" flags, for
         # DriftTrendAnalyzer-style temporal confirmation (see DRIFT_CONFIRM_
-        # WINDOWS above). In-memory only — resets on process restart (e.g.
-        # Render.com free-tier sleep/wake) and is NOT shared across multiple
-        # worker processes if the backend ever scales beyond one. Acceptable
-        # for now since the whole point is debouncing noise within a single
-        # live session; move this to Firebase-backed storage (a short rolling
-        # history under data_logs) if multi-worker deployment or restart
-        # persistence becomes necessary.
+        # WINDOWS above). In-memory only — resets on process restart.
         self._drift_buffers = {}
+
+    def _get_user_model(self, user_id):
+        """
+        v4.1: Returns (model, scaler) for the given user. Checks for a
+        personalized model first; if not found, falls back to the global model.
+        Personalized models are cached in memory after first load.
+        """
+        if user_id in self._personal_models:
+            return self._personal_models[user_id]
+
+        # Check if personalized model exists on disk
+        user_model_path = os.path.join(PERSONAL_MODELS_DIR, f"{user_id}_model.pkl")
+        user_scaler_path = os.path.join(PERSONAL_MODELS_DIR, f"{user_id}_scaler.pkl")
+
+        if os.path.exists(user_model_path) and os.path.exists(user_scaler_path):
+            try:
+                model = joblib.load(user_model_path)
+                scaler = joblib.load(user_scaler_path)
+                self._personal_models[user_id] = (model, scaler)
+                print(f"[OK] Loaded personalized model for {user_id}")
+                return (model, scaler)
+            except Exception as e:
+                print(f"[WARN] Failed to load personalized model for {user_id}: {e}")
+
+        # Fallback to global
+        return (self.global_model, self.global_scaler)
 
     def predict(self, firebase_metrics, user_baselines, user_id=None):
         """
         Decision Logic: Maps Android Sensors to Deployed Model Features.
-        v3.0: Applies StandardScaler before OC-SVM prediction so that
-              both desktop (CMU) and phone users are on the same scale.
+        v4.1: Uses 5 features (dwell, flight, scroll, tilt, cpm) and loads
+              a personalized per-user OC-SVM if available (trained by /calibrate).
+              Falls back to the global 5-feature model otherwise.
         v3.2: user_id (optional) enables temporal drift confirmation — pass
               it to gate "Pre-Stress" behind DRIFT_CONFIRM_WINDOWS consecutive
               escalated windows instead of a single noisy one.
         """
-        if not self.model:
+        # Select model (personalized or global)
+        model, scaler = self._get_user_model(user_id) if user_id else (self.global_model, self.global_scaler)
+
+        if not model:
             return {"label": "Error", "score": 0.0, "confidence": 0.0, "is_anomaly": False}
-            
+
         if not user_baselines:
             user_baselines = {}
 
         # 1. Feature Mapping (Android -> Deployed Model logic)
-        # s8_deploy_production.py expected: ["dwell_time", "flight_time", "scroll_velocity"]
-        dwell_time = float(firebase_metrics.get('avg_dwell', 0))
-        flight_time = float(firebase_metrics.get('avg_flight', 0))
+        # v4.1: 5 features — dwell, flight, scroll, tilt, cpm
+        dwell_time      = float(firebase_metrics.get('avg_dwell', 0))
+        flight_time     = float(firebase_metrics.get('avg_flight', 0))
         scroll_velocity = float(firebase_metrics.get('scroll_velocity', 0))
+        tilt_angle      = float(firebase_metrics.get('tilt_angle', 0))
+        cpm             = float(firebase_metrics.get('cpm', 0))
 
-        feat_array = np.array([[dwell_time, flight_time, scroll_velocity]])
+        feat_array = np.array([[dwell_time, flight_time, scroll_velocity, tilt_angle, cpm]])
 
         # 2. Anomaly Detection (Objective 1 Winner)
-        # v3.0: Scale features BEFORE prediction so the OC-SVM sees the same
+        # Scale features BEFORE prediction so the OC-SVM sees the same
         # distribution it was trained on (mean=0, std=1 per feature).
-        # Without scaling: phone user at 145ms would be flagged as anomaly
-        # because CMU desktop mean is 89ms. With scaling: both are compared
-        # on the same relative scale.
-        if self.scaler:
-            feat_scaled = self.scaler.transform(feat_array)
+        if scaler:
+            feat_scaled = scaler.transform(feat_array)
         else:
             feat_scaled = feat_array  # Fallback if scaler not available
 
         # Output: 1 (Normal), -1 (Anomaly/Stress)
-        model_prediction = self.model.predict(feat_scaled)[0]
+        model_prediction = model.predict(feat_scaled)[0]
         is_anomaly = bool(model_prediction == -1)
 
         # 3. Z-Score Validation — Multi-Feature Composite (Idiographic Baseline)
-        # Research Gap 4: We check how far ALL three key signals deviate from
-        # THIS user's personal baseline, then use the average deviation.
-        # This is more sensitive than checking a single feature alone.
+        # v4.1: Now averages across all 5 feature deviations for higher sensitivity.
 
         # Dwell deviation from personal baseline
         # Default = typical mobile typing mean (145ms) and std (15ms) for uncalibrated users (Day 1-7)
@@ -128,9 +155,20 @@ class StressPredictor:
         std_scroll  = user_baselines.get('scroll_velocity', {}).get('std',  12)
         z_scroll    = abs(calculate_z_score(scroll_velocity, mean_scroll, std_scroll))
 
-        # Composite Z-score: average of all three deviations
-        # If the user has no scroll data yet (z_scroll=0), still works correctly
-        composite_z = round((z_dwell + z_flight + z_scroll) / 3.0, 4)
+        # Tilt angle deviation from personal baseline
+        # Default = Kaggle population mean (59.09 deg, std 38.81) for uncalibrated users
+        mean_tilt = user_baselines.get('tilt_angle', {}).get('mean', 59.09)
+        std_tilt  = user_baselines.get('tilt_angle', {}).get('std',  38.81)
+        z_tilt    = abs(calculate_z_score(tilt_angle, mean_tilt, std_tilt))
+
+        # Typing speed (CPM) deviation from personal baseline
+        # Default = Kaggle population mean (39.40 cpm, std 30.36) for uncalibrated users
+        mean_cpm = user_baselines.get('cpm', {}).get('mean', 39.40)
+        std_cpm  = user_baselines.get('cpm', {}).get('std',  30.36)
+        z_cpm    = abs(calculate_z_score(cpm, mean_cpm, std_cpm))
+
+        # Composite Z-score: average of all 5 feature deviations
+        composite_z = round((z_dwell + z_flight + z_scroll + z_tilt + z_cpm) / 5.0, 4)
 
         # 4. Final Stress Label (Dual-Layer Gate) — explainable, rule-based
         # v3.0 FIX: Changed from OR to AND for Pre-Stress.
@@ -196,7 +234,7 @@ class StressPredictor:
         # average of the two terms was tested and DOES produce that false positive
         # (a user sitting exactly at their calibrated baseline scored 0.59 — above
         # the 0.5 guidance-trigger threshold); the multiplicative form does not.
-        decision = float(self.model.decision_function(feat_scaled)[0])
+        decision = float(model.decision_function(feat_scaled)[0])
         svm_term = 1.0 / (1.0 + np.exp(SVM_STEEPNESS * decision))
         z_term   = 1.0 / (1.0 + np.exp(-(composite_z - Z_CENTER)))
         score    = round(float(z_term * (0.5 + 0.5 * svm_term)), 4)
@@ -213,16 +251,34 @@ class StressPredictor:
         # near 1.0. No separate constants to justify or maintain.
         confidence = round(float(0.5 + abs(score - 0.5)), 4)
 
+        # 7. Signal Quality
+        # Computed same as fusion engine: fraction of the 3 primary OC-SVM inputs present
+        has_dwell  = dwell_time > 0
+        has_flight = flight_time > 0
+        has_scroll = scroll_velocity > 0
+        signal_quality = round((int(has_dwell) + int(has_flight) + int(has_scroll)) / 3.0, 2)
+        if not firebase_metrics.get('data_valid', True):
+            signal_quality = round(signal_quality * 0.5, 2)
+
         return {
             "label":            label,
             "score":            score,
             "confidence":       confidence,
+            "signal_quality":   signal_quality,
             "composite_z":      composite_z,
             "z_dwell":          round(z_dwell, 4),
             "z_flight":         round(z_flight, 4),
             "z_scroll":         round(z_scroll, 4),
+            "z_tilt":           round(z_tilt, 4),
+            "z_cpm":            round(z_cpm, 4),
+            "raw_dwell":        dwell_time,
+            "raw_flight":       flight_time,
+            "raw_scroll":       scroll_velocity,
+            "raw_tilt":         tilt_angle,
+            "raw_cpm":          cpm,
             "is_anomaly":       is_anomaly,
-            "phenotype_metric": "Composite (Dwell + Flight + Scroll)"
+            "model_type":       "personalized" if user_id and user_id in self._personal_models else "global",
+            "phenotype_metric": "Composite (Dwell + Flight + Scroll + Tilt + CPM)"
         }
 
 predictor = StressPredictor()

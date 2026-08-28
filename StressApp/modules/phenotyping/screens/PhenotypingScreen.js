@@ -138,6 +138,8 @@ export default function PhenotypingScreen({ navigation }) {
                 { id: 'keyboard', icon: '⌨️', title: 'Keyboard Patterns', value: '— ms', subtext: 'Typing rhythm & key press duration' },
                 { id: 'app_switch', icon: '📱', title: 'Screen Activity', value: '— /min', subtext: 'App switching rate & multitasking' },
                 { id: 'scroll', icon: '📜', title: 'Screen Scrolling', value: '— px/s', subtext: 'Scroll speed & frequency patterns' },
+                { id: 'tilt', icon: '📐', title: 'Device Tilt', value: '— °', subtext: 'Phone holding angle from accelerometer' },
+                { id: 'cpm', icon: '🔡', title: 'Typing Speed', value: '— cpm', subtext: 'Characters per minute this window' },
                 { id: 'activity', icon: '🚶', title: 'Activity Context', value: '—', subtext: 'Physical activity detection & noise gate' },
             ].map((s) => ({ ...s, color: t.textMuted }));
         }
@@ -160,6 +162,20 @@ export default function PhenotypingScreen({ navigation }) {
                 value: `${Math.round(liveWindow.scroll_velocity || 0)} px/s`,
                 subtext: 'Scroll speed & frequency patterns',
                 color: (liveWindow.scroll_velocity || 0) > 60 ? COLORS.warning : COLORS.normal,
+            },
+            {
+                // Tilt angle from accelerometer: population mean ~59°, stressed = more hunched (higher angle)
+                id: 'tilt', icon: '📐', title: 'Device Tilt',
+                value: `${Math.round(liveWindow.tilt_angle || 0)}°`,
+                subtext: 'Phone holding angle — stress hunching >80°',
+                color: (liveWindow.tilt_angle || 0) > 90 ? COLORS.warning : COLORS.normal,
+            },
+            {
+                // CPM: typing speed; low CPM during a normally-active window can signal cognitive fatigue
+                id: 'cpm', icon: '🔡', title: 'Typing Speed',
+                value: `${Math.round(liveWindow.cpm || 0)} cpm`,
+                subtext: 'Characters/min — drop may indicate fatigue',
+                color: (liveWindow.cpm || 0) < 10 && (liveWindow.avg_dwell || 0) > 0 ? COLORS.warning : COLORS.normal,
             },
             {
                 id: 'activity', icon: '🚶', title: 'Activity Context',
