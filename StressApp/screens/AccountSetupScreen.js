@@ -3,13 +3,16 @@
 //
 // Shown exactly once, right after registration (App.js routes here when
 // user.isNewUser is true -- see AuthContext.js's register()/
-// completeOnboarding()). Two things, same order requested: (1) device
-// connectivity status for Ring + EEG, (2) the same Calibrate — Calm
-// Breathing flow already used on Fusion (CalibrateBreathingCard) --
-// reused as-is, not rebuilt, so calibration behaves identically wherever
-// it's shown. Skippable at any point ("if not can skip as well") --
-// finishing or skipping both just mark onboarding done and continue into
-// the app; there's no dead end here.
+// completeOnboarding()). Three things, in order: (1) device connectivity
+// status for Ring + EEG, (2) the same Calibrate — Calm Breathing flow
+// already used on Fusion (CalibrateBreathingCard) -- reused as-is, not
+// rebuilt, so baseline calibration behaves identically wherever it's
+// shown, (3) on baseline success, navigates into ThresholdCalibration
+// (EegThresholdTaskScreen.js) for the personal high-load/stress threshold
+// task -- that screen (not this one) is what actually calls
+// completeOnboarding(). Skippable at any point ("if not can skip as
+// well") -- finishing or skipping either step just marks onboarding done
+// and continues into the app; there's no dead end here.
 // ============================================================
 
 import React, { useEffect, useState } from 'react';
@@ -57,10 +60,17 @@ export default function AccountSetupScreen({ navigation }) {
     };
   }, []);
 
+  // "Skip for now" (below) still goes straight to the dashboard --
+  // skipping baseline calibration makes the threshold task meaningless
+  // too (it needs a resting baseline to compare against), so there's
+  // nothing useful to navigate into. Only a completed baseline
+  // (CalibrateBreathingCard's onComplete) proceeds to ThresholdCalibration.
   const finish = () => {
     completeOnboarding();
     navigation.replace('Physiological');
   };
+
+  const proceedToThreshold = () => navigation.navigate('ThresholdCalibration');
 
   return (
     <ScreenBackground>
@@ -110,7 +120,7 @@ export default function AccountSetupScreen({ navigation }) {
             token={token}
             ringOnline={ringConnected}
             eegDb={db}
-            onComplete={finish}
+            onComplete={proceedToThreshold}
           />
         </Card>
 

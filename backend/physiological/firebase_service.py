@@ -156,7 +156,52 @@ def load_baseline_meta(user_id):
     return {'exists': True, 'updated_at': updated_at, 'age_days': age_days}
 
 
-# Session operations 
+# -- Personal stress-decision threshold (deliberate onboarding task) ------
+# Deliberately a SEPARATE node from baselines/{user_id} above, not a few
+# more keys mixed into it -- save_baseline() above does a full .set() on
+# that whole node every time the Ring is recalibrated, which would wipe
+# out resting_scores/personal_stress_threshold if they lived there too.
+# This node is owned exclusively by this feature, so .update() here is
+# always safe (nothing else ever .set()s over it).
+def save_resting_scores(user_id, resting_scores: list) -> None:
+    """Persists this baseline capture's per-window prob_stress scores (via
+    predictor.predict_window(), the SAME scoring path /predict actually
+    uses -- not predict_raw(), which the deployed pipeline never calls for
+    physiological, since it always baseline-normalizes first) -- read back
+    by run_task_calibration_capture() once the task phase runs, which may
+    be a separate later request/process from the one that captured these."""
+    ref = _ref(f'personal_thresholds/{user_id}')
+    ref.set({
+        'resting_scores': [float(s) for s in resting_scores],
+        'resting_scores_updated_at': datetime.now(timezone.utc).isoformat(),
+    })
+
+
+def load_resting_scores(user_id):
+    data = _ref(f'personal_thresholds/{user_id}').get()
+    if not data or 'resting_scores' not in data:
+        return None
+    return [float(s) for s in data['resting_scores']]
+
+
+def save_personal_stress_threshold(user_id, threshold: float) -> None:
+    """.update(), not .set() -- merges alongside resting_scores (written
+    moments earlier by save_resting_scores() above) without clobbering it."""
+    ref = _ref(f'personal_thresholds/{user_id}')
+    ref.update({
+        'personal_stress_threshold': float(threshold),
+        'threshold_updated_at': datetime.now(timezone.utc).isoformat(),
+    })
+
+
+def load_personal_stress_threshold(user_id):
+    data = _ref(f'personal_thresholds/{user_id}').get()
+    if not data or 'personal_stress_threshold' not in data:
+        return None
+    return float(data['personal_stress_threshold'])
+
+
+# Session operations
 def start_session(user_id):
     sessions_ref = _ref(f'sessions/{user_id}')
     new_session  = sessions_ref.push({
