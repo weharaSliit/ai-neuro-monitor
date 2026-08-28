@@ -1,6 +1,8 @@
 import threading
+import itertools
 from collections import deque
 from dataclasses import dataclass
+from typing import Union, List
 
 @dataclass(frozen=True)
 class RawSample:
@@ -13,17 +15,19 @@ class BipolarRawSample:
     millis: int
     code: int
 
+# Define a type alias so the buffer knows it can expect either type of sample
+AnySample = Union[RawSample, BipolarRawSample]
 
 class RawSampleBuffer:
     def __init__(self, maxlen: int = 250 * 60):  # 60s of raw 250 SPS data as a safety cap
         self._buf = deque(maxlen=maxlen)
         self._lock = threading.Lock()
 
-    def append(self, sample: RawSample) -> None:
+    def append(self, sample: AnySample) -> None:
         with self._lock:
             self._buf.append(sample)
 
-    def drain(self, n: int) -> list[RawSample]:
+    def drain(self, n: int) -> List[AnySample]:
         with self._lock:
             n = min(n, len(self._buf))
             return [self._buf.popleft() for _ in range(n)]
@@ -32,14 +36,16 @@ class RawSampleBuffer:
         with self._lock:
             return len(self._buf)
 
-    def peek_recent(self, n: int) -> list:
+    def peek_recent(self, n: int) -> List[AnySample]:
         with self._lock:
-            if n >= len(self._buf):
+            length = len(self._buf)
+            if n >= length:
                 return list(self._buf)
-            return list(self._buf)[-n:]
+            # Highly optimized memory read using itertools
+            return list(itertools.islice(self._buf, length - n, length))
 
 
-def parse_payload(payload: str) -> list[RawSample]:
+def parse_payload(payload: str) -> List[RawSample]:
     samples = []
     for record in payload.strip().split(';'):
         record = record.strip()
@@ -56,7 +62,7 @@ def parse_payload(payload: str) -> list[RawSample]:
     return samples
 
 
-def parse_bipolar_payload(payload: str) -> list[BipolarRawSample]:
+def parse_bipolar_payload(payload: str) -> List[BipolarRawSample]:
     samples = []
     for record in payload.strip().split(';'):
         record = record.strip()

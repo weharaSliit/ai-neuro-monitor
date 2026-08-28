@@ -16,7 +16,7 @@ from .adc import (  # noqa: E402
 )
 from .mqtt_client import BipolarRawSample, RawSample  # noqa: E402
 from .quality_gate import TrustedIoTEEGValidator  # noqa: E402
-from .raw_cleaning import clean_raw_channel  # noqa: E402
+from .raw_cleaning import clean_raw_channel, timing_ok  # noqa: E402
 from .resample import SOURCE_FS, TARGET_FS, resample_to_target  # noqa: E402
 
 CHANNELS = ['T7', 'T8']
@@ -92,6 +92,21 @@ def preprocess_block(samples: list[RawSample], duration_sec: float | None = None
 
 WIDE_DESPIKE_UV = 2000.0  # hard pre-filter bound -- see preprocess_bipolar_block()'s docstring
 
+# SAM40 (the model's training corpus) uses a 0.5Hz bandpass low edge, which
+# notch_then_bandpass() defaults to. On real wearable02 captures this
+# session, the live signal carries far more slow drift/residual-offset
+# energy than SAM40's clean lab recordings do (attributed to imperfect
+# electrode contact + the single hardware-bipolar channel having no
+# reference channel to cancel drift against) -- a 0.5Hz cutoff lets enough
+# of that drift through to still clamp a meaningful fraction of samples at
+# CLIP_UV even after filtering. Empirically raising the cutoff to 1.0Hz
+# measurably reduced the clamped-sample fraction (39% -> 21%) on a real
+# capture with no observed downside on prediction stability. This is a
+# real-time-only deviation from SAM40's 0.5Hz training assumption -- traded
+# off deliberately since the alternative (feeding the model a signal that's
+# 39% flat-clamped) is worse than a slightly-mismatched high-pass edge.
+BIPOLAR_HIGHPASS_HZ = 1.0
+
 
 def preprocess_bipolar_block(samples: list[BipolarRawSample], duration_sec: float | None = None) -> np.ndarray:
     """Order matters here: detrend -> WIDE despike (hard, unconditional) ->
@@ -131,7 +146,7 @@ def preprocess_bipolar_block(samples: list[BipolarRawSample], duration_sec: floa
     # filter's input sane, since wide_despiked_uv already guarantees that.
     clean, _ = clean_raw_channel(millis, wide_despiked_uv, target_fs=SOURCE_FS, duration_sec=duration_sec)
     resampled = resample_to_target(clean, source_fs=SOURCE_FS, target_fs=TARGET_FS)  # -> 128Hz
-    filtered = notch_then_bandpass(resampled, fs=TARGET_FS)
+    filtered = notch_then_bandpass(resampled, fs=TARGET_FS, low=BIPOLAR_HIGHPASS_HZ)  # see BIPOLAR_HIGHPASS_HZ docstring
 
     # Tight physiological clamp LAST -- a final safety net against residual
     # filter-transient excursions, not the first thing the raw signal sees.
@@ -278,6 +293,12 @@ class RealtimeInference:
             return {
                 "is_trusted": False, "gate_rating": "POOR", "quality_score": 0.0,
                 "reason": f"raw signal exceeds MAX_RAW_UV -- unambiguous hardware fault, filter chain skipped",
+            }
+        millis = np.array([s.millis for s in samples], dtype=float)
+        if not (self.disable_quality_gate or timing_ok(millis)):
+            return {
+                "is_trusted": False, "gate_rating": "POOR", "quality_score": 0.0,
+                "reason": "dropped-packet gap exceeds MAX_GAP_SEC -- interpolation would fabricate signal, filter chain skipped",
             }
 
         filtered = preprocess_bipolar_block(samples)  # the ACTUAL signal the model would see
@@ -426,6 +447,19 @@ class RealtimeInference:
                 'baseline_degraded': self.baseline_degraded,
                 'quality_is_trusted': False, 'quality_gate_rating': 'POOR', 'quality_quality_score': 0.0,
                 'quality_reason': 'raw signal exceeds MAX_RAW_UV -- unambiguous hardware fault',
+                **{f'session_{k}': v for k, v in health.items()},
+            }
+        millis = np.array([s.millis for s in samples], dtype=float)
+        if not (self.disable_quality_gate or timing_ok(millis)):
+            print(f"[quality_gate] rejected: dropped-packet gap exceeds MAX_GAP_SEC, filter chain skipped")
+            health = self.session_quality.update(False)
+            return {
+                'window': len(self._history), 'skipped': True, 'calibrated_p': None,
+                'high_load_alert': False, 'micro_break_recommended': False,
+                'fatigue_warning': False, 'cooldown_logged': False,
+                'baseline_degraded': self.baseline_degraded,
+                'quality_is_trusted': False, 'quality_gate_rating': 'POOR', 'quality_quality_score': 0.0,
+                'quality_reason': 'dropped-packet gap exceeds MAX_GAP_SEC -- interpolation would fabricate signal',
                 **{f'session_{k}': v for k, v in health.items()},
             }
 

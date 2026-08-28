@@ -83,6 +83,28 @@ class SignalQualityGate:
     these two didn't match).
     """
 
+    # A block collapsed to a handful of repeated values (almost always from
+    # upstream clamping on wildly out-of-range raw input) can still score
+    # well on the 7 factors below -- a near-flat signal has LOW variance
+    # and LOW kurtosis-deviation, which amp_score/stat_score/var_score
+    # reward rather than penalize. Confirmed repeatedly against real
+    # captured hardware data this project has tested: false-positive GOOD
+    # blocks had 1-28 distinct filtered values out of 3200-6250 samples
+    # (<1% unique); genuinely clean blocks captured later in the same
+    # testing had 2900+ distinct values (>90% unique) with near-Gaussian
+    # kurtosis. This is a more direct and reliable discriminator than raw
+    # clip-fraction, which was tried first and found NOT to reliably
+    # predict post-filter degeneracy -- a heavily-clamped-looking raw
+    # block can still filter down to a genuinely rich signal (real EEG
+    # riding on top of a large-but-linear offset the bandpass legitimately
+    # removes), and a raw block that looks only moderately clamped can
+    # still collapse to near-flat after filtering. Checked on the
+    # FILTERED signal specifically, and treated as an outright fail (not
+    # just another averaged factor) -- 7-factor averaging alone was
+    # observed to only partially discount a degenerate block (e.g. an
+    # 87.9 "GOOD" score with everything else passing), not exclude it.
+    MIN_UNIQUE_RATIO = 0.5
+
     def __init__(self, fs_raw=250, fs_filtered=128, max_adc_counts=1_000_000.0, max_uv=7000.0):
         self.fs_raw = fs_raw
         self.fs_filtered = fs_filtered
@@ -102,6 +124,13 @@ class SignalQualityGate:
 
         if len(raw_arr) < self.fs_raw or np.isnan(raw_arr).any() or np.isinf(raw_arr).any():
             return None
+
+        # Degeneracy hard-fail -- see MIN_UNIQUE_RATIO's docstring above.
+        # Checked before the 7 factors below since a degenerate signal can
+        # otherwise pass several of them individually.
+        unique_ratio = len(np.unique(filt_uv.round(4))) / len(filt_uv)
+        if unique_ratio < self.MIN_UNIQUE_RATIO:
+            return 0.0
 
         clipping_ratio = np.mean(np.abs(raw_arr) >= self.max_adc_counts)
         clip_score = max(0.0, 100.0 * (1.0 - clipping_ratio * 10.0))

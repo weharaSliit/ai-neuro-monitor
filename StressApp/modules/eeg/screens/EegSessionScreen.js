@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-    View, Text, StyleSheet, TextInput, Dimensions,
+    View, Text, StyleSheet, Dimensions,
     TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -245,18 +245,47 @@ export default function EegSessionScreen({ navigation, route }) {
     const baselineDegraded = latest?.baseline_degraded;
     const stateColor = label !== undefined && label !== null ? STRESS_COLORS[label] : COLORS.brand;
 
-    const ch1Uv = latestRaw?.ch1_uv;
-    const ch2Uv = latestRaw?.ch2_uv;
-    const bipolarUv = (ch1Uv && ch2Uv && ch1Uv.length === ch2Uv.length)
-        ? ch1Uv.map((v, i) => v - ch2Uv[i])
-        : null;
+    // wearable02 has exactly one physical channel (the ADS1292R's T7-T8
+    // hardware differential, see iot_firmware/wearable02/wearable02.ino --
+    // only CH2 is enabled, CH1 is powered down/shorted), and
+    // backend/psychological/app.py's /live_raw route pushes that single
+    // channel as `uv`, already in microvolts (bipolar_code_to_microvolts()
+    // already applied server-side). `ch1_uv`/`ch2_uv` were names from an
+    // earlier 2-channel hardware design and are never actually written by
+    // the backend -- reading them here always produced empty charts.
+    const bipolarUv = latestRaw?.uv;
     const rawMillis = latestRaw?.millis;
-    const ch1Chart = ch1Uv ? chartRange(ch1Uv, rawMillis) : { points: [], min: 0, max: 1 };
-    const ch2Chart = ch2Uv ? chartRange(ch2Uv, rawMillis) : { points: [], min: 0, max: 1 };
     const bipolarChart = bipolarUv ? chartRange(bipolarUv, rawMillis) : { points: [], min: 0, max: 1 };
-    const lastCh1 = ch1Uv?.[ch1Uv.length - 1];
-    const lastCh2 = ch2Uv?.[ch2Uv.length - 1];
     const lastBipolar = bipolarUv?.[bipolarUv.length - 1];
+
+    // Connection status pill: driven purely by how long ago the last
+    // live_raw push landed (latestRaw.timestamp, epoch seconds -- written
+    // by backend/psychological/app.py's /live_raw route on every push).
+    // mqtt_bridge.py pushes ~1x/sec (LIVE_RAW_INTERVAL_SEC) while samples
+    // are actually arriving over MQTT, so a growing gap here means the
+    // bridge/hardware isn't reachable right now, not just "quiet" --
+    // ticks locally (nowTick) since Firebase only notifies on NEW data,
+    // never on data going stale.
+    const [nowTick, setNowTick] = useState(Date.now());
+    useEffect(() => {
+        if (!watching) return;
+        const id = setInterval(() => setNowTick(Date.now()), 1000);
+        return () => clearInterval(id);
+    }, [watching]);
+    const lastRawTimestamp = latestRaw?.timestamp;
+    const secsSinceRaw = lastRawTimestamp != null ? (nowTick / 1000) - lastRawTimestamp : null;
+    const connectionStatus = !watching
+        ? null
+        : secsSinceRaw === null ? 'waiting'
+        : secsSinceRaw < 3 ? 'connected'
+        : secsSinceRaw < 15 ? 'stale'
+        : 'disconnected';
+    const CONNECTION_STATUS_META = {
+        waiting:      { label: 'Waiting for hardware…', color: '#9ca3af' },
+        connected:    { label: 'Connected',             color: '#22c55e' },
+        stale:        { label: 'Signal stale',          color: '#f59e0b' },
+        disconnected: { label: 'Disconnected',          color: '#ef4444' },
+    };
     const signedLog = (v) => Math.sign(v) * Math.log10(1 + Math.abs(v));
     const bipolarFeatures = latest?.features_eeg?.bipolar;
     // Synthetic sequential dates -- react-native-graph's GraphPoint always
@@ -287,14 +316,22 @@ export default function EegSessionScreen({ navigation, route }) {
                     </View>
 
                     <View style={[styles.card, { backgroundColor: t.surface, borderColor: t.border }]}>
-                        <Text style={[styles.label, { color: t.textSub }]}>Session ID</Text>
-                        <TextInput
-                            style={[styles.input, { color: t.text, borderColor: t.border }]}
-                            value={sessionId}
-                            editable={false}
-                            placeholder="waiting for live session…"
-                            placeholderTextColor={t.textMuted}
-                        />
+                        <View style={styles.sessionRow}>
+                            <View style={{ flex: 1 }}>
+                                <Text style={[styles.label, { color: t.textSub }]}>Session ID</Text>
+                                <Text style={[styles.sessionIdText, { color: t.text }]} numberOfLines={1}>
+                                    {sessionId || 'waiting for live session…'}
+                                </Text>
+                            </View>
+                            {connectionStatus && (
+                                <View style={[styles.statusPill, { backgroundColor: CONNECTION_STATUS_META[connectionStatus].color + '22' }]}>
+                                    <View style={[styles.statusDot, { backgroundColor: CONNECTION_STATUS_META[connectionStatus].color }]} />
+                                    <Text style={[styles.statusText, { color: CONNECTION_STATUS_META[connectionStatus].color }]}>
+                                        {CONNECTION_STATUS_META[connectionStatus].label}
+                                    </Text>
+                                </View>
+                            )}
+                        </View>
                         <Text style={[styles.hint, { color: t.textMuted }]}>
                             Follows the current live session automatically — no manual start needed.
                         </Text>
@@ -311,33 +348,52 @@ export default function EegSessionScreen({ navigation, route }) {
                     </View>
 
                     {watching && (
-                        <View style={[styles.card, { backgroundColor: t.surface, borderColor: t.border }]}>
+                        <View style={[styles.card, styles.heroCard, { backgroundColor: t.surface, borderColor: t.border }]}>
+                            <Text style={[styles.label, { color: t.textSub }]}>Cognitive Load</Text>
                             {!hasAnyWindow ? (
-                                <Text style={[styles.waiting, { color: t.textMuted }]}>
+                                <Text style={[styles.waiting, { color: t.textMuted, paddingVertical: 20 }]}>
                                     Waiting for first reading… (calibration takes ~75s)
                                 </Text>
                             ) : skipped ? (
-                                <Text style={[styles.waiting, { color: t.textMuted }]}>
+                                <Text style={[styles.waiting, { color: t.textMuted, paddingVertical: 20 }]}>
                                     Latest block skipped by the signal-quality gate — check electrode contact.
                                 </Text>
                             ) : (
                                 <>
-                                    <View style={styles.stateRow}>
-                                        <Text style={styles.stateEmoji}>
+                                    <View style={styles.heroRow}>
+                                        <Text style={styles.heroEmoji}>
                                             {label !== undefined && label !== null ? STRESS_EMOJI[label] : '…'}
                                         </Text>
                                         <View style={{ flex: 1 }}>
-                                            <Text style={[styles.stateLabel, { color: stateColor }]}>
+                                            <Text style={[styles.heroLabel, { color: stateColor }]}>
                                                 {label !== undefined && label !== null
                                                     ? TASK_STATE_LABELS[label] : 'Scoring…'}
                                             </Text>
-                                            <Text style={[styles.stateProb, { color: t.textMuted }]}>
+                                            <Text style={[styles.heroScore, { color: stateColor }]}>
                                                 {score !== undefined && score !== null
-                                                    ? `${(score * 100).toFixed(0)}% task_state_score` : ''}
+                                                    ? `${(score * 100).toFixed(0)}%` : '—'}
                                             </Text>
                                         </View>
                                     </View>
+                                    {score !== undefined && score !== null && (
+                                        <View style={[styles.heroBarTrack, { backgroundColor: t.border }]}>
+                                            <View style={[styles.heroBarFill, {
+                                                width: `${Math.max(0, Math.min(100, Math.round(score * 100)))}%`,
+                                                backgroundColor: stateColor,
+                                            }]} />
+                                        </View>
+                                    )}
+                                    <Text style={[styles.hint, { color: t.textMuted, marginTop: 12 }]}>
+                                        task_state_score — P(cognitively demanding task | EEG). Not a
+                                        validated subjective-stress probability on its own.
+                                    </Text>
+                                </>
+                            )}
+                        </View>
+                    )}
 
+                    {watching && hasAnyWindow && !skipped && (
+                        <View style={[styles.card, { backgroundColor: t.surface, borderColor: t.border }]}>
                                     <View style={styles.metaRow}>
                                         <Text style={[styles.metaLabel, { color: t.textSub }]}>Trend</Text>
                                         <Text style={[styles.metaValue, { color: t.text }]}>
@@ -386,15 +442,13 @@ export default function EegSessionScreen({ navigation, route }) {
                                             😴 Fatigue warning
                                         </Text>
                                     )}
-                                </>
-                            )}
                         </View>
                     )}
 
                     {watching && (
                         <View style={[styles.card, { backgroundColor: t.surface, borderColor: t.border }]}>
                             <Text style={[styles.label, { color: t.textSub, marginBottom: 12 }]}>
-                                Raw Signal (live, ~1s)
+                                Raw Bipolar Signal (T7 − T8, live)
                             </Text>
                             {!hasAnyRaw ? (
                                 <Text style={[styles.waiting, { color: t.textMuted }]}>
@@ -403,25 +457,7 @@ export default function EegSessionScreen({ navigation, route }) {
                             ) : (
                                 <>
                                     <SignalChart
-                                        title="Channel 1 (T7)"
-                                        lastValue={lastCh1}
-                                        points={ch1Chart.points}
-                                        min={ch1Chart.min}
-                                        max={ch1Chart.max}
-                                        color={COLORS.hrv || COLORS.brand}
-                                        t={t}
-                                    />
-                                    <SignalChart
-                                        title="Channel 2 (T8)"
-                                        lastValue={lastCh2}
-                                        points={ch2Chart.points}
-                                        min={ch2Chart.min}
-                                        max={ch2Chart.max}
-                                        color={COLORS.gsr || COLORS.brand}
-                                        t={t}
-                                    />
-                                    <SignalChart
-                                        title="Bipolar (T7 − T8)"
+                                        title="T7 − T8 (wearable02's one hardware channel)"
                                         lastValue={lastBipolar}
                                         points={bipolarChart.points}
                                         min={bipolarChart.min}
@@ -434,6 +470,7 @@ export default function EegSessionScreen({ navigation, route }) {
                                         Decoded µV, updates ~1x/sec straight from the MQTT stream — independent of
                                         the 25s inference block below. Full-resolution per-block samples are
                                         separately stored in Firebase and the backend's raw CSV log either way.
+                                        {secsSinceRaw !== null ? ` Last update ${Math.max(0, Math.round(secsSinceRaw))}s ago.` : ''}
                                     </Text>
                                 </>
                             )}
@@ -497,16 +534,23 @@ const styles = StyleSheet.create({
     subtitle:     { fontSize: 13, marginTop: 4 },
     card:         { borderRadius: 18, borderWidth: 1, padding: 18, marginBottom: 16 },
     label:        { fontSize: 12, fontWeight: '700', marginBottom: 6 },
-    input:        { borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14 },
     hint:         { fontSize: 11, marginTop: 8, lineHeight: 16 },
+    sessionRow:   { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    sessionIdText:{ fontSize: 15, fontWeight: '700' },
+    statusPill:   { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999 },
+    statusDot:    { width: 7, height: 7, borderRadius: 4 },
+    statusText:   { fontSize: 11, fontWeight: '700' },
     button:       { marginTop: 14, borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
     buttonDanger: { backgroundColor: '#ef4444' },
     buttonText:   { color: '#fff', fontSize: 15, fontWeight: '800' },
     waiting:      { fontSize: 13, textAlign: 'center', paddingVertical: 10 },
-    stateRow:     { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 18 },
-    stateEmoji:   { fontSize: 40 },
-    stateLabel:   { fontSize: 22, fontWeight: '900' },
-    stateProb:    { fontSize: 13, marginTop: 2 },
+    heroCard:     { paddingVertical: 22 },
+    heroRow:      { flexDirection: 'row', alignItems: 'center', gap: 16 },
+    heroEmoji:    { fontSize: 56 },
+    heroLabel:    { fontSize: 24, fontWeight: '900' },
+    heroScore:    { fontSize: 44, fontWeight: '900', marginTop: 2 },
+    heroBarTrack: { height: 10, borderRadius: 6, overflow: 'hidden', marginTop: 16 },
+    heroBarFill:  { height: '100%', borderRadius: 6 },
     metaRow:      { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8 },
     metaLabel:    { fontSize: 13, fontWeight: '600' },
     metaValue:    { fontSize: 13, fontWeight: '700' },
