@@ -22,7 +22,7 @@ if __package__ is None:
         sys.path.insert(0, str(repo_root))
 
 from backend.psychological.realtime.adc import (
-    BIPOLAR_UV_PER_COUNT, bipolar_code_to_microvolts, clip_physiological_uv, microvolts_to_code,
+    BIPOLAR_UV_PER_COUNT, bipolar_code_to_microvolts, clip_physiological_uv, microvolts_to_bipolar_code,
     raw_magnitude_ok,
 )
 from backend.psychological.realtime.mqtt_client import BipolarRawSample
@@ -30,6 +30,9 @@ from backend.psychological.realtime.pipeline import BLOCK_SEC, RealtimeInference
 from backend.psychological.realtime.quality_gate import SignalQualityGate
 from backend.psychological.realtime.raw_cleaning import interpolate_to_uniform_grid, remove_spikes, timing_ok
 from backend.psychological.realtime.resample import SOURCE_FS, TARGET_FS, resample_to_target
+from backend.psychological.sam40.decision import (
+    MAX_THRESHOLD_SHIFT, POPULATION_P5, POPULATION_P95, compute_personal_threshold,
+)
 
 MODEL_DIR = Path(__file__).resolve().parent / "models"
 
@@ -38,9 +41,12 @@ def make_synthetic_block(duration_sec: float = BLOCK_SEC, fs: int = SOURCE_FS,
                           start_millis: int = 0, seed: int = 0) -> list[BipolarRawSample]:
     """A plausible T7-T8 bipolar block: theta+alpha+beta sines plus small
     measurement noise, in a physiological uV range, converted to ADC codes
-    via the real microvolts_to_code() (adc.py) rather than a hand-rolled
-    conversion -- so this exercises the same round-trip the real hardware's
-    code->uV decoding does."""
+    via the real microvolts_to_bipolar_code() (adc.py) -- NOT
+    microvolts_to_code(), which inverts the 2-channel code_to_microvolts()
+    instead and silently produces a ~4x-wrong code for this bipolar path
+    (see microvolts_to_bipolar_code()'s own docstring) -- so this exercises
+    the same round-trip preprocess_bipolar_block()'s
+    bipolar_code_to_microvolts() call actually does."""
     rng = np.random.default_rng(seed)
     n = int(duration_sec * fs)
     t = np.arange(n) / fs
@@ -48,7 +54,7 @@ def make_synthetic_block(duration_sec: float = BLOCK_SEC, fs: int = SOURCE_FS,
           + 20.0 * np.sin(2 * np.pi * 10.0 * t)   # alpha
           + 10.0 * np.sin(2 * np.pi * 20.0 * t)   # beta
           + rng.normal(0.0, 2.0, n))               # measurement noise
-    codes = microvolts_to_code(uv)
+    codes = microvolts_to_bipolar_code(uv)
     millis = start_millis + (t * 1000).astype(int)
     return [BipolarRawSample(millis=int(m), code=int(c)) for m, c in zip(millis, codes)]
 
@@ -142,6 +148,52 @@ def main() -> bool:
               p is not None and 0.0 <= p <= 1.0, f"calibrated_p={p}")
     except Exception as e:
         check("RealtimeInference end-to-end smoke test raised no exception", False, repr(e))
+
+    # 6. compute_personal_threshold() -- the onboarding task-calibration math -
+    print("\n[6] sam40/decision.py compute_personal_threshold()")
+    # Chosen to sit inside [POPULATION_P5, POPULATION_P95] so the clamp
+    # doesn't kick in here -- clamping itself is checked separately below.
+    resting = [0.65, 0.67, 0.64, 0.66]
+    clearly_separated_task = [0.65 + MAX_THRESHOLD_SHIFT + 0.05] * 2  # comfortably past the separation floor
+    threshold = compute_personal_threshold(resting, clearly_separated_task)
+    expected_midpoint = (np.mean(resting) + np.mean(clearly_separated_task)) / 2.0
+    check("clear Rest/Task separation returns the midpoint",
+          threshold is not None and abs(threshold - expected_midpoint) < 1e-9,
+          f"got {threshold}, expected {expected_midpoint}")
+    check("the returned threshold is clamped within the observed population range",
+          threshold is not None and POPULATION_P5 <= threshold <= POPULATION_P95, f"got {threshold}")
+
+    noisy_task = [0.66, 0.68, 0.65]  # barely different from resting -- not real separation
+    check("overlapping/noisy Rest vs Task scores return None (not personalized)",
+          compute_personal_threshold(resting, noisy_task) is None)
+    check("compute_personal_threshold requires at least one score per group",
+          compute_personal_threshold([], [0.9]) is None and compute_personal_threshold([0.2], []) is None)
+
+    below_range = compute_personal_threshold([0.05], [0.05 + MAX_THRESHOLD_SHIFT + 0.05])
+    check("a midpoint below POPULATION_P5 is clamped up to it",
+          below_range == POPULATION_P5, f"got {below_range}, expected {POPULATION_P5}")
+
+    # 7. Onboarding task-calibration flow, on the same engine as [5] --------
+    print("\n[7] pipeline.py score_threshold_task_block() -> finalize_personal_threshold()")
+    try:
+        task_block = make_synthetic_block(start_millis=3 * int(BLOCK_SEC * 1000), seed=30)
+        task_quality = engine.score_threshold_task_block(task_block)
+        check("score_threshold_task_block returns a quality dict with is_trusted",
+              "is_trusted" in task_quality, f"got keys={list(task_quality.keys())}")
+
+        threshold_outcome = engine.finalize_personal_threshold()
+        check("finalize_personal_threshold returns a well-formed outcome",
+              threshold_outcome.get("status") in ("ok", "not_separated"), f"outcome={threshold_outcome}")
+        if threshold_outcome["status"] == "ok":
+            p = threshold_outcome["personal_high_load_p"]
+            check("a successful personal threshold is applied to engine.thresholds",
+                  engine.thresholds.high_load_p == p and engine.thresholds.cooldown_high_p == p,
+                  f"personal_high_load_p={p} thresholds={engine.thresholds}")
+        else:
+            print(f"       (not_separated on this synthetic run -- structurally fine, "
+                  f"outcome={threshold_outcome})")
+    except Exception as e:
+        check("Onboarding task-calibration flow raised no exception", False, repr(e))
 
     print("\n" + "=" * 60)
     print("ALL CHECKS PASSED" if all_passed else "SOME CHECKS FAILED")

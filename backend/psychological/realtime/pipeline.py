@@ -1,12 +1,14 @@
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import joblib
 import numpy as np
 import pandas as pd
 
-from backend.psychological.sam40.decision import DecisionThresholds, compute_states, compute_baseline_shift  # noqa: E402
+from backend.psychological.sam40.decision import (  # noqa: E402
+    DecisionThresholds, compute_baseline_shift, compute_personal_threshold, compute_states,
+)
 from backend.psychological.sam40.derived_features import add_baseline_relative  # noqa: E402
 from backend.psychological.sam40.features import channel_features, epoch_features  # noqa: E402
 from backend.psychological.sam40.preprocess import notch_then_bandpass  # noqa: E402
@@ -221,6 +223,8 @@ class RealtimeInference:
         self._itakura_baseline_filtered_bipolar: np.ndarray | None = None
         self._calibration_attempts_bipolar: list[tuple[float, dict, np.ndarray]] = []
         self._bipolar_blocks_processed: int = 0
+        self._task_scores: list[float] = []
+        self.personal_high_load_p: float | None = None
 
     def calibrate_block(self, samples: list[RawSample]) -> dict:
         ch1_codes, ch2_codes = _raw_codes(samples)
@@ -361,6 +365,79 @@ class RealtimeInference:
             self.adaptive_baseline.initialize(self.baseline.mean())
             return {'status': 'degraded', 'baseline_degraded': True, 'score': best_score}
         return {'status': 'failed', 'baseline_degraded': None}
+
+    def score_threshold_task_block(self, samples: list[BipolarRawSample]) -> dict:
+        """Scores one block captured during a DELIBERATE high-load task
+        (e.g. a timed mental-arithmetic quiz) run immediately after
+        resting-baseline calibration -- used only to derive this user's
+        personal high_load_p (see finalize_personal_threshold() /
+        sam40.decision.compute_personal_threshold()). Never added to
+        self.baseline or the Itakura reference -- this is deliberately
+        NOT resting data. Same quality-gating shape as
+        calibrate_bipolar_block() (raw-magnitude/timing early-rejects,
+        then the quality gate) so a task block that's actually just
+        signal noise can't masquerade as evidence the user reached high
+        load; unlike calibrate_bipolar_block(), there's no settling-window
+        check here since this always runs after calibration already
+        cleared it (elapsed_sec is already comfortably > SETTLING_TIME_SEC
+        by construction)."""
+        raw_code = _raw_bipolar_codes(samples)
+        if not (self.disable_quality_gate or raw_magnitude_ok(bipolar_code_to_microvolts(raw_code))):
+            return {
+                "is_trusted": False, "gate_rating": "POOR", "quality_score": 0.0,
+                "reason": "raw signal exceeds MAX_RAW_UV -- unambiguous hardware fault, filter chain skipped",
+            }
+        millis = np.array([s.millis for s in samples], dtype=float)
+        if not (self.disable_quality_gate or timing_ok(millis)):
+            return {
+                "is_trusted": False, "gate_rating": "POOR", "quality_score": 0.0,
+                "reason": "dropped-packet gap exceeds MAX_GAP_SEC -- interpolation would fabricate signal, filter chain skipped",
+            }
+
+        filtered = preprocess_bipolar_block(samples)
+        feats = channel_features(filtered, fs=TARGET_FS)
+        quality = self.quality_validator.assess_only_single(raw_code, filtered)
+
+        meets_bar = self.disable_quality_gate or (
+            RATING_ORDER.get(quality['gate_rating'], -1) >= RATING_ORDER[self.calibration_min_rating])
+        quality['is_trusted'] = meets_bar
+        if not meets_bar:
+            return quality
+
+        score = self._score_calibration_bipolar_block(feats)
+        if score is not None:
+            self._task_scores.append(score)
+        quality['score'] = score
+        return quality
+
+    def finalize_personal_threshold(self) -> dict:
+        """Computes and APPLIES this user's personal high_load_p from
+        resting (self._calibration_scores, already populated by
+        calibrate_bipolar_block()) vs. task (self._task_scores, from
+        score_threshold_task_block() above) scores -- see
+        compute_personal_threshold()'s docstring for the method. Call
+        after calibration is finalized and all task blocks are scored.
+
+        On success, REPLACES self.thresholds' high_load_p/cooldown_high_p
+        (the same coupling threshold_set_B already uses -- see
+        DecisionThresholds' own docstring) with the personal value,
+        immediately effective for every infer_bipolar_block() call on
+        this engine from here on. On failure (not enough separation --
+        see compute_personal_threshold()), self.thresholds is left
+        untouched, i.e. still whatever population default it was
+        constructed with."""
+        threshold = compute_personal_threshold(self._calibration_scores, self._task_scores)
+        outcome = {
+            'status': 'ok' if threshold is not None else 'not_separated',
+            'personal_high_load_p': threshold,
+            'resting_mean': float(np.mean(self._calibration_scores)) if self._calibration_scores else None,
+            'task_mean': float(np.mean(self._task_scores)) if self._task_scores else None,
+            'n_task_blocks': len(self._task_scores),
+        }
+        if threshold is not None:
+            self.personal_high_load_p = threshold
+            self.thresholds = replace(self.thresholds, high_load_p=threshold, cooldown_high_p=threshold)
+        return outcome
 
     def infer_block(self, samples: list[RawSample]) -> dict:
         ch1_codes, ch2_codes = _raw_codes(samples)

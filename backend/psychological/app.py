@@ -23,6 +23,7 @@
 import os
 import re
 import time
+from dataclasses import replace as replace_thresholds
 from pathlib import Path
 
 import numpy as np
@@ -34,6 +35,7 @@ from backend.psychological.firebase_service import (
     EegFirebaseSession,
     load_user_calibration_profile,
     save_user_calibration_profile,
+    save_user_personal_threshold,
 )
 from backend.psychological.realtime.adc import bipolar_code_to_microvolts
 from backend.psychological.realtime.csv_logger import CsvLogger, RAW_FIELDS_BIPOLAR, log_raw_block_bipolar
@@ -199,6 +201,18 @@ def calibrate():
             outcome["baseline_shift"] = engine.baseline_shift
             outcome["thresholds_personalized"] = engine.thresholds_personalized
             outcome["skip_ahead_used"] = True
+            # A previously-computed personal high_load_p (see /calibrate/threshold
+            # below) also carries forward here -- same skip-ahead spirit as
+            # baseline_shift just above, so a returning user's personal
+            # threshold applies immediately without redoing the task phase
+            # every session.
+            personal_high_load_p = stored_profile.get("personal_high_load_p")
+            if personal_high_load_p is not None:
+                engine.personal_high_load_p = personal_high_load_p
+                engine.thresholds = replace_thresholds(
+                    engine.thresholds, high_load_p=personal_high_load_p, cooldown_high_p=personal_high_load_p
+                )
+                outcome["personal_high_load_p"] = personal_high_load_p
         else:
             # New user, or this user's stored profile is now too stale to
             # trust -- this session's own fresh result (already in outcome/
@@ -249,6 +263,60 @@ def calibrate():
     # (success: True either way). Surfaced here so that's visible without
     # cross-referencing this service's own startup logs.
     return jsonify({"success": True, "session_id": session_id, "firebase_enabled": firebase.enabled, **outcome})
+
+
+# -- /calibrate/threshold -- personal high_load_p from a deliberate task --
+#
+# Call AFTER /calibrate has succeeded for this session_id. Submits blocks
+# captured during a short, deliberate high-load task (e.g. a timed mental-
+# arithmetic quiz) run right after the resting baseline -- see
+# sam40/decision.py::compute_personal_threshold()'s docstring for the
+# method. Personalizes high_load_p/cooldown_high_p on the SAME engine this
+# session_id's /predict calls already use -- takes effect immediately, no
+# re-/calibrate needed. If the task scores aren't separated enough from
+# resting to be trustworthy, this no-ops (status: "not_separated") and the
+# session keeps using whatever population/skip-ahead threshold it already had.
+#
+# REQUEST FORMAT:
+#   {
+#     "session_id": "live_session_1",
+#     "blocks": [
+#       {"millis": [...], "code": [...]},
+#       ...
+#     ]
+#   }
+@app.route("/calibrate/threshold", methods=["POST"])
+@require_auth
+def calibrate_threshold():
+    data = request.json or {}
+    session_id = data.get("session_id", "session_001")
+    blocks = data.get("blocks", [])
+
+    if session_id not in eeg_sessions:
+        return jsonify({"error": f"Session {session_id!r} not calibrated -- call /calibrate first"}), 400
+    if not blocks:
+        return jsonify({"error": "No task blocks provided"}), 400
+
+    state = eeg_sessions[session_id]
+    engine = state["engine"]
+    for i, block in enumerate(blocks):
+        try:
+            samples = _samples_from_payload(block)
+        except ValueError as e:
+            return jsonify({"error": f"block {i}: {e}"}), 400
+        engine.score_threshold_task_block(samples)
+
+    outcome = engine.finalize_personal_threshold()
+    if outcome["status"] == "ok":
+        save_user_personal_threshold(g.user_id, outcome["personal_high_load_p"])
+
+    # Written regardless of status (including "not_separated") -- the
+    # onboarding threshold screen has no other path to this outcome, since
+    # the actual capture+POST is driven by mqtt_bridge.py, not the screen
+    # itself. See push_threshold_result()'s docstring.
+    state["firebase"].push_threshold_result(outcome)
+
+    return jsonify({"success": True, "session_id": session_id, **outcome})
 
 
 # -- /predict -- one 25s block -> task_state_score --------------------
@@ -369,6 +437,7 @@ if __name__ == "__main__":
     print("Endpoints:")
     print("  GET    /health")
     print("  POST   /calibrate          <- baseline capture (Relax-period blocks)")
+    print("  POST   /calibrate/threshold <- personal high_load_p from a deliberate task")
     print("  POST   /predict            <- one 25s block -> task_state_score")
     print("  POST   /live_raw           <- ~1s raw preview -> live dashboard waveform")
     print("  DELETE /sessions/<id>      <- drop session state")
