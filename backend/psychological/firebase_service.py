@@ -47,15 +47,15 @@ def resolve_credential():
 
 
 class EegFirebaseSession:
-    """Per-session Firebase writer. Four RTDB stores:
-      - {RTDB_NAMESPACE}/{user_id}/{session_id}/{window}        derived output (see push())
-      - {RTDB_NAMESPACE}/{user_id}/{session_id}/raw/{window}     full-resolution raw ADC codes +
-                                                        uV per 25s block (see push_raw())
-      - {RTDB_NAMESPACE}/{user_id}/{session_id}/live_raw         latest ~1s raw preview, overwritten
-                                                        every push (see push_live_raw()) --
-                                                        for a genuinely live dashboard
-                                                        waveform, independent of the 25s
-                                                        block/quality-gate cadence above
+    """Per-session Firebase writer. Raw ADC codes/millis are never written
+    to Firebase from here -- only the derived, per-block model output
+    (preprocessed features + task_state_score/label, see push() below);
+    raw signal only ever exists in this process's memory (to get
+    processed) and in the local CSV log (realtime/csv_logger.py), never in
+    the shared database. Two RTDB stores:
+      - {RTDB_NAMESPACE}/{user_id}/{session_id}/{window}        derived output -- preprocessed
+                                                        features + task_state_score/label for
+                                                        this 25s block (see push())
       - {FUSION_EN_ROOT}/{user_id}/{session_id}/{window}   EEG's raw contribution to live
                                                         fusion -- user-scoped like the three
                                                         stores above (a "session" now means one
@@ -110,12 +110,6 @@ class EegFirebaseSession:
         # the logged-in user.
         user_session_id = f"{user_id}/{session_id}"
         self._rtdb = FirebaseSync(self._cred, FIREBASE_DB_URL, session_id=user_session_id, root_path=RTDB_NAMESPACE)
-        self._raw_rtdb = FirebaseSync(
-            self._cred, FIREBASE_DB_URL, session_id=user_session_id, root_path=RTDB_NAMESPACE, extra_path="raw"
-        )
-        self._live_raw_rtdb = FirebaseSync(
-            self._cred, FIREBASE_DB_URL, session_id=user_session_id, root_path=RTDB_NAMESPACE, extra_path="live_raw"
-        )
         self._fusion_en_rtdb = FirebaseSync(
             self._cred, FIREBASE_DB_URL, session_id=user_session_id, root_path=FUSION_EN_ROOT
         )
@@ -141,16 +135,6 @@ class EegFirebaseSession:
         # docstring.
         self._fusion_en_rtdb.merge(make_eeg_fusion_record(record))
 
-    def push_raw(self, record: dict) -> None:
-        if not self.enabled:
-            return
-        self._raw_rtdb.push(record)
-
-    def push_live_raw(self, record: dict) -> None:
-        if not self.enabled:
-            return
-        self._live_raw_rtdb.set(record)
-
     def push_threshold_result(self, record: dict) -> None:
         """One-shot snapshot of finalize_personal_threshold()'s outcome
         (status, personal_high_load_p, resting_mean, task_mean,
@@ -172,8 +156,8 @@ class EegFirebaseSession:
         """One-shot snapshot of finalize_calibration()'s outcome (status,
         thresholds_personalized, baseline_shift, resting_calibrated_p,
         n_blocks) -- {RTDB_NAMESPACE}/{user_id}/{session_id}/calibration_result,
-        same latest-snapshot pattern as push_live_raw() (.set(), overwritten
-        on any recalibration, no history kept). Lets the frontend (
+        same latest-snapshot pattern as push_threshold_result() (.set(),
+        overwritten on any recalibration, no history kept). Lets the frontend (
         BaselineCalibrationScreen.js, EegSessionScreen.js) show whether/how
         this user's own resting EEG shifted their thresholds, without
         needing the /calibrate HTTP response itself -- calibration is driven
@@ -265,20 +249,29 @@ def load_user_calibration_profile(user_id: str,
 
 
 def get_calibration_status(user_id: str) -> dict:
-    """{exists, calibrated_at, age_days, is_stale_soft, is_stale_hard} for
-    StressApp/modules/shared/CalibrationGate.js -- the only place today that
-    exposes calibration freshness without actually running a calibration.
-    Mirrors physiological's load_baseline_meta()
-    (backend/physiological/firebase_service.py) so the frontend gate can
-    treat both modalities the same way."""
+    """{exists, calibrated_at, age_days, is_stale_soft, is_stale_hard,
+    personal_high_load_p} for StressApp/modules/shared/CalibrationGate.js --
+    the only place today that exposes calibration freshness without
+    actually running a calibration. Mirrors physiological's
+    load_baseline_meta() (backend/physiological/firebase_service.py) so the
+    frontend gate can treat both modalities the same way.
+
+    personal_high_load_p is None until the onboarding threshold task
+    (finalize_personal_threshold() / save_user_personal_threshold() above)
+    has actually separated Rest from Task for this user -- same node,
+    just merged in later than baseline_shift/thresholds_personalized, so
+    it's naturally absent for a user who's only done baseline calibration
+    so far. Exposed here (not just written) so the Fusion dashboard can
+    display what this user's threshold actually got personalized to.
+    """
     ref = _calibration_profile_ref(user_id)
     if ref is None:
         return {'exists': False, 'calibrated_at': None, 'age_days': None,
-                'is_stale_soft': False, 'is_stale_hard': False}
+                'is_stale_soft': False, 'is_stale_hard': False, 'personal_high_load_p': None}
     profile = ref.get()
     if not profile or 'calibrated_at' not in profile:
         return {'exists': False, 'calibrated_at': None, 'age_days': None,
-                'is_stale_soft': False, 'is_stale_hard': False}
+                'is_stale_soft': False, 'is_stale_hard': False, 'personal_high_load_p': None}
     age_days = (time.time() - profile['calibrated_at']) / 86400.0
     return {
         'exists': True,
@@ -286,4 +279,5 @@ def get_calibration_status(user_id: str) -> dict:
         'age_days': age_days,
         'is_stale_soft': age_days > CALIBRATION_SOFT_AGE_DAYS,
         'is_stale_hard': age_days > CALIBRATION_HARD_AGE_DAYS,
+        'personal_high_load_p': profile.get('personal_high_load_p'),
     }

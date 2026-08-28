@@ -213,12 +213,19 @@ def calibrate_threshold_start():
     _threshold_sessions[user_id] = {'status': 'capturing'}
 
     def on_progress(status, extra):
-        entry = {'status': status}
         if status == 'error':
-            entry['error'] = extra.get('message', 'Unknown error')
-        else:
-            entry.update(extra)
-            entry['status'] = status
+            entry = {'status': 'error', 'error': extra.get('message', 'Unknown error')}
+        elif status == 'done':
+            # extra IS run_task_calibration_capture()'s outcome dict, which
+            # already carries its own semantic 'status' ('ok'/'not_separated')
+            # -- that must win over the generic phase-status 'done', not get
+            # overwritten by it (an earlier version of this line did
+            # entry.update(extra) THEN entry['status']=status, which clobbered
+            # 'ok'/'not_separated' back to 'done' every time, so the frontend
+            # could never actually see a successful personalization).
+            entry = {'status': status, **extra}
+        else:  # 'capturing' / 'window_skipped' / 'saving'
+            entry = {'status': status, **extra}
         _threshold_sessions[user_id] = entry
 
     def worker():
@@ -464,6 +471,11 @@ def _baseline_response(user_id):
         'age_days': age_days,
         'is_stale_soft': age_days is not None and age_days > CALIBRATION_SOFT_AGE_DAYS,
         'is_stale_hard': age_days is not None and age_days > CALIBRATION_HARD_AGE_DAYS,
+        # None until the onboarding threshold task has actually separated
+        # Rest from Task for this user (see compute_personal_stress_threshold()) --
+        # exposed here (not just written) so the Fusion dashboard can show
+        # what this user's stress threshold actually got personalized to.
+        'personal_stress_threshold': load_personal_stress_threshold(user_id),
         'baseline': {
             feature_cols[i]: {
                 'mean': float(b_mean[i]),
