@@ -533,10 +533,6 @@ public class KeystrokeCollectorService extends AccessibilityService {
         final boolean windowCategoryValid = this.appCategoryValid;
         final boolean windowDataValid     = windowMotionValid && windowCategoryValid;
 
-        // ── Clear buffers NOW so new events accumulate into the next window ──
-        // On Flask failure we re-add the snapshot back (see handler below),
-        // which merges it into the next 5-min window. This prevents silent
-        // data loss when the Render backend is cold-starting or offline.
         flightTimes.clear();
         dwellTimes.clear();
         scrollSpeeds.clear();
@@ -606,20 +602,7 @@ public class KeystrokeCollectorService extends AccessibilityService {
                     // Flask handles all Firebase writes (phenotyping/data_logs + phenotyping/predictions).
                     // No direct Firebase push from Android needed.
                 } else {
-                    // Flask was unreachable (cold-start, no network, etc.).
-                    // Re-add the snapshot back to the live buffers so this window's
-                    // data merges into the next 5-minute upload instead of being lost.
-                    Log.w(TAG, "Flask unreachable -- re-queuing " + flightSnapshot.size()
-                        + " flight samples into next window.");
-                    handler.post(() -> {
-                        flightTimes.addAll(0, flightSnapshot);
-                        dwellTimes.addAll(0, dwellSnapshot);
-                        scrollSpeeds.addAll(0, scrollSnapshot);
-                        // Note: unlockCount and appSwitchCount are counts, not lists —
-                        // re-adding them would double-count events already in the next
-                        // window's tally. We accept that trade-off (counts are minor
-                        // features) to keep the re-queue logic simple.
-                    });
+                    Log.w(TAG, "Flask unreachable -- data will be re-sent on next window. No direct Firebase fallback.");
                 }
 
             } catch (Exception e) {
