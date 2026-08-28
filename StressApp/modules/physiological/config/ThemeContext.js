@@ -1,15 +1,30 @@
 import React, { createContext, useContext } from 'react';
 import { COLORS } from './theme';
 
-// Dark mode removed app-wide -- COLORS.light is now the only palette.
-// isDark/toggle are kept as harmless no-op stubs (rather than deleted
-// outright) so any screen not yet swept in this redesign pass that still
-// destructures/calls them doesn't crash; they do nothing and should be
-// dropped from call sites as each screen is touched.
-const ThemeContext = createContext(null);
+export { COLORS };
+export const colors = COLORS;
+
+const defaultThemeValue = {
+  isDark: false,
+  toggle: () => {},
+  theme: { ...COLORS.light, colors: { ...COLORS, ...COLORS.light } },
+  COLORS,
+  colors: { ...COLORS, ...COLORS.light },
+};
+
+const ThemeContext = createContext(defaultThemeValue);
 
 export function ThemeProvider({ children }) {
-  const value = { isDark: false, toggle: () => {}, theme: COLORS.light, COLORS };
+  const value = {
+    isDark: false,
+    toggle: () => {},
+    theme: {
+      ...COLORS.light,
+      colors: { ...COLORS, ...COLORS.light },
+    },
+    COLORS,
+    colors: { ...COLORS, ...COLORS.light },
+  };
   return (
     <ThemeContext.Provider value={value}>
       {children}
@@ -17,4 +32,8 @@ export function ThemeProvider({ children }) {
   );
 }
 
-export function useTheme() { return useContext(ThemeContext); }
+export function useTheme() {
+  const ctx = useContext(ThemeContext);
+  return ctx || defaultThemeValue;
+}
+

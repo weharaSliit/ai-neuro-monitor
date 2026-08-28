@@ -139,6 +139,23 @@ def _poll_user_pointer() -> str | None:
         return None
 
 
+def _poll_calibrated() -> bool:
+    """GET {FLASK_URL}/calibration/status -- cheap, auth'd, already exists
+    for StressApp/modules/shared/CalibrationGate.js. Used here only as a
+    cheap gate to avoid hammering /predict during obvious "never
+    calibrated" stretches -- /predict already returns a clean,
+    side-effect-free 400 for an uncalibrated session_id regardless, so this
+    doesn't need to be perfectly authoritative, just cheap and right most
+    of the time. Calibration itself is triggered on-demand by the user (see
+    app.py's POST /calibrate/start), not automatically by this bridge."""
+    try:
+        resp = requests.get(f"{FLASK_URL}/calibration/status", headers=AUTH_HEADERS, timeout=5)
+        data = resp.json()
+        return bool(data.get("exists") and not data.get("is_stale_hard"))
+    except Exception:
+        return False
+
+
 def block_payload(samples) -> dict:
     return {
         "millis": [s.millis for s in samples],
@@ -175,8 +192,9 @@ def run():
     print(f"Flask target: {FLASK_URL}")
     print(f"Session id:   {SESSION_ID}")
     print("  (enter this exact session id in the StressApp EEG screen to watch it live)")
-    print(f"Calibration:  {N_CALIBRATION_BLOCKS} Relax-period blocks "
-          f"({N_CALIBRATION_BLOCKS * BLOCK_SEC:.0f}s) -- stay still and relaxed until this completes.")
+    print("Calibration:  on-demand only now -- triggered from the app's Calibrate flow "
+          "(POST /calibrate/start), not automatically by this bridge. Predictions no-op "
+          "(clean 400) until the user runs it.")
     print("=" * 60)
 
     buffer = RawSampleBuffer()
@@ -184,7 +202,6 @@ def run():
     client = make_client(EEG_MQTT_BROKER, EEG_MQTT_PORT, EEG_MQTT_TOPIC, buffer, client_id="eeg_bridge_wearable02",
                           username=EEG_MQTT_USER, password=EEG_MQTT_PASSWORD, ca_cert=EEG_MQTT_CA_CERT)
 
-    calibration_blocks = []
     calibrated = False
     block_idx = 0
     last_live_raw_push = 0.0
@@ -202,10 +219,9 @@ def run():
                 pointer_session_id = _poll_session_pointer()
                 if pointer_session_id and pointer_session_id != SESSION_ID:
                     print(f"[session] rotating {SESSION_ID!r} -> {pointer_session_id!r} "
-                          f"(app started a new session) -- recalibrating")
+                          f"(app started a new session)")
                     SESSION_ID = pointer_session_id
                     calibrated = False
-                    calibration_blocks = []
                     block_idx = 0
 
                 pointer_user_id = _poll_user_pointer()
@@ -214,6 +230,13 @@ def run():
                           f"(app is now logged in as a different user)")
                     USER_ID = pointer_user_id
                     AUTH_HEADERS = auth_headers(USER_ID)
+                    calibrated = False
+
+                if USER_ID is not None:
+                    was_calibrated = calibrated
+                    calibrated = _poll_calibrated()
+                    if calibrated and not was_calibrated:
+                        print(f"[calibrate] session {SESSION_ID!r} is now calibrated -- predictions starting")
 
                 last_pointer_poll = now
 
@@ -247,22 +270,13 @@ def run():
                 continue
 
             if not calibrated:
-                calibration_blocks.append(block_payload(samples))
-                print(f"[calibrate] captured block {len(calibration_blocks)}/{N_CALIBRATION_BLOCKS}")
-                if len(calibration_blocks) >= N_CALIBRATION_BLOCKS:
-                    # 45s, not 30s -- see the identical comment in
-                    # backend/physiological/mqtt_bridge.py: Render's
-                    # free-tier Flask can take 30s+ to wake from a cold
-                    # start, and 30s was cutting it too close.
-                    data = post_json(
-                        f"{FLASK_URL}/calibrate",
-                        {"session_id": SESSION_ID, "blocks": calibration_blocks},
-                        AUTH_HEADERS, timeout=45, label="calibrate",
-                    )
-                    calibrated = bool(data and data.get("success"))
-                    if not calibrated:
-                        print("[calibrate] failed -- retrying with a fresh set of blocks")
-                        calibration_blocks = []
+                # No auto-calibration anymore -- calibration is on-demand
+                # now (app.py's POST /calibrate/start, triggered from
+                # BreathingLightGame.js's Calibrate flow). Just drop this
+                # block; /predict would no-op with a clean 400 anyway, this
+                # just avoids the wasted round-trip. The next
+                # POINTER_POLL_INTERVAL_SEC calibration-status poll above
+                # picks up calibrated=True once the user runs it.
                 continue
 
             data = post_json(

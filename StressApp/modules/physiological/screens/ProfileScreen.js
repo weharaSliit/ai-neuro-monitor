@@ -10,9 +10,9 @@ import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
 import Icon, { NAMES } from '../../shared/Icon';
 import { useTheme } from '../config/ThemeContext';
+import { COLORS } from '../config/theme';
 import { useAuth } from '../../../context/AuthContext';
 import api from '../api/client';
-import EmaSummaryCard from './EmaSummaryCard';
 
 // Avatar stored as a compressed base64 image directly in the Realtime
 // Database (users/{userId}/avatar_base64) rather than Firebase Storage --
@@ -27,9 +27,9 @@ const AVATAR_SIZE = 96;
 // (raw baseline numbers, session distribution, PSS-4 score list, recent
 // sessions) per the earlier redesign pass. Per the User-App/Admin-App
 // split, all of that moved to the Admin app (modules/admin/), which any
-// registered account can reach via the App Mode chooser
-// (AppModeScreen.js) if they want the raw detail -- this screen only
-// keeps what a real user actually needs day to day.
+// registered account can reach via this screen's "Clinical & Admin Suite"
+// card below if they want the raw detail -- this screen only keeps what a
+// real user actually needs day to day.
 function AvatarPicker({ userId, avatarUri, uploading, onPick, accentColor }) {
   return (
     <TouchableOpacity onPress={onPick} activeOpacity={0.85} style={styles.avatarWrap}>
@@ -135,9 +135,9 @@ export default function ProfileScreen({ navigation }) {
         {/* Identity header */}
         <View style={styles.header}>
           <AvatarPicker userId={userId} avatarUri={avatarUri} uploading={uploading} onPick={pickAvatar} accentColor={COLORS.brand} />
-          <View style={{ flex: 1 }}>
+          <View style={{ flex: 1, marginLeft: 6 }}>
             <Text style={[styles.name, { color: text }]}>{user?.name || userId}</Text>
-            <View style={[styles.userBadge, { backgroundColor: COLORS.brand + '15', borderColor: COLORS.brand + '40' }]}>
+            <View style={[styles.userBadge, { backgroundColor: COLORS.brandSoft, borderColor: COLORS.brand + '30' }]}>
               <Text style={[styles.userBadgeText, { color: COLORS.brandDark }]}>@{userId}</Text>
             </View>
           </View>
@@ -147,96 +147,100 @@ export default function ProfileScreen({ navigation }) {
         <View style={styles.statsRow}>
           <Card style={styles.statCard}>
             <Text style={[styles.statValue, { color: COLORS.brand }]}>{sessionCount}</Text>
-            <Text style={[styles.statLabel, { color: muted }]}>Sessions</Text>
+            <Text style={[styles.statLabel, { color: muted }]}>Total Sessions</Text>
           </Card>
           <Card style={styles.statCard}>
             <Text style={[styles.statValue, { color: baseline?.exists ? COLORS.normal : COLORS.warning }]}>
-              {baseline?.exists ? 'Set' : 'None'}
+              {baseline?.exists ? 'Calibrated' : 'Pending'}
             </Text>
-            <Text style={[styles.statLabel, { color: muted }]}>Calibration</Text>
+            <Text style={[styles.statLabel, { color: muted }]}>Ring Baseline</Text>
           </Card>
         </View>
 
         {/* Calibration -- plain language only, no raw baseline numbers */}
-        <Card onPress={() => navigation.navigate('Calibration')}>
+        <Card onPress={() => navigation.navigate('Calibration')} style={styles.navCard}>
           <View style={styles.cardHeaderRow}>
             <View style={styles.rowGap}>
-              <Icon name={NAMES.calibration} size={18} color={COLORS.brand} />
-              <Text style={[styles.cardTitle, { color: text }]}>Calibration</Text>
+              <View style={[styles.actionIconCircle, { backgroundColor: COLORS.brandSoft }]}>
+                <Icon name={NAMES.calibration} size={18} color={COLORS.brand} />
+              </View>
+              <Text style={[styles.cardTitle, { color: text }]}>Calibration & Baseline</Text>
             </View>
             <Icon name={NAMES.chevronRight} size={18} color={muted} />
           </View>
           <Text style={[styles.cardSub, { color: muted }]}>
             {baseline?.exists
-              ? 'Your personal baseline is set and up to date. Tap to renew it.'
-              : 'No personal baseline yet — tap to calibrate the ring.'}
+              ? 'Your personal baseline is active and calibrated. Tap to recalibrate.'
+              : 'No personal baseline yet — tap to calibrate the smart ring.'}
           </Text>
         </Card>
 
-        {/* Continual learning summary */}
-        <EmaSummaryCard navigation={navigation} />
-
-        {/* Quick Actions -- a genuine self-report the user provides, not
-            raw sensor data, so it stays here. */}
-        <Card>
-          <Text style={[styles.cardTitle, { color: text, marginBottom: 12 }]}>Quick Actions</Text>
+        {/* Quick Actions */}
+        <Card style={styles.navCard}>
+          <Text style={[styles.cardTitle, { color: text, marginBottom: 12 }]}>Self-Report & Check-In</Text>
           <TouchableOpacity onPress={() => navigation.navigate('PSS4')} activeOpacity={0.85}>
-            <View style={[styles.actionTile, { backgroundColor: COLORS.normal + '10', borderColor: COLORS.normal + '30' }]}>
-              <Icon name={NAMES.pss4} size={22} color={COLORS.normal} />
-              <Text style={[styles.actionLabel, { color: COLORS.normal }]}>Check-In (PSS-4)</Text>
+            <View style={[styles.actionTile, { backgroundColor: COLORS.normalSoft, borderColor: COLORS.normal + '30' }]}>
+              <Icon name={NAMES.pss4} size={22} color={COLORS.normalDark} />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.actionLabel, { color: COLORS.normalDark }]}>PSS-4 Stress Assessment</Text>
+                <Text style={[styles.actionSub, { color: muted }]}>Answer 4 quick self-check questions</Text>
+              </View>
+              <Icon name={NAMES.chevronRight} size={16} color={COLORS.normalDark} />
             </View>
           </TouchableOpacity>
         </Card>
 
-        {/* Switch to Admin App without logging out -- the same account can
-            browse any registered user's raw/technical data (see the
-            User-App/Admin-App split); this is the way back to that chooser
-            once you've already landed on the user side. */}
-        <Card onPress={() => navigation.navigate('AppMode')}>
+        {/* Switch to Admin App without logging out */}
+        <Card onPress={() => navigation.navigate('Admin')} style={styles.navCard}>
           <View style={styles.cardHeaderRow}>
             <View style={styles.rowGap}>
-              <Icon name={NAMES.admin} size={18} color={COLORS.gsr} />
-              <Text style={[styles.cardTitle, { color: text }]}>Admin App</Text>
+              <View style={[styles.actionIconCircle, { backgroundColor: COLORS.brandSoft }]}>
+                <Icon name={NAMES.admin} size={18} color={COLORS.brand} />
+              </View>
+              <Text style={[styles.cardTitle, { color: text }]}>Clinical & Admin Suite</Text>
             </View>
             <Icon name={NAMES.chevronRight} size={18} color={muted} />
           </View>
           <Text style={[styles.cardSub, { color: muted }]}>
-            Switch to the admin view — no need to log out.
+            Access raw sensor signals, multi-user logs, and relaxation research labs.
           </Text>
         </Card>
 
-        <TouchableOpacity style={[styles.logoutBtn, { borderColor: COLORS.stress + '50' }]} onPress={logout}>
-          <Icon name={NAMES.logout} size={16} color={COLORS.stress} />
-          <Text style={[styles.logoutText, { color: COLORS.stress }]}>Log Out</Text>
+        <TouchableOpacity style={[styles.logoutBtn, { borderColor: COLORS.stress + '40', backgroundColor: '#FFFFFF' }]} onPress={logout}>
+          <Icon name={NAMES.logout} size={18} color={COLORS.stress} />
+          <Text style={[styles.logoutText, { color: COLORS.stress }]}>Sign Out of MindPulse</Text>
         </TouchableOpacity>
 
-        <View style={{ height: 80 }} />
+        <View style={{ height: 60 }} />
       </Animated.ScrollView>
     </ScreenBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  backRow:      { flexDirection: 'row', alignItems: 'center', marginHorizontal: 20, marginTop: 12, marginBottom: 4 },
-  backText:     { fontSize: 13, fontWeight: '700', marginLeft: 2 },
-  header:       { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 12 },
-  avatarWrap:   { position: 'relative' },
-  avatarCircle: { width: AVATAR_SIZE * 0.7, height: AVATAR_SIZE * 0.7, borderRadius: AVATAR_SIZE * 0.35, borderWidth: 2, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
-  avatarImage:  { width: '100%', height: '100%' },
-  cameraBadge:  { position: 'absolute', bottom: -2, right: -2, width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#FFFFFF' },
-  name:         { fontSize: 22, fontWeight: '900' },
-  userBadge:    { alignSelf: 'flex-start', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1, marginTop: 4 },
-  userBadgeText:{ fontSize: 11, fontWeight: '700' },
-  statsRow:     { flexDirection: 'row', gap: 10, marginHorizontal: 20, marginBottom: 4 },
-  statCard:     { flex: 1, alignItems: 'center' },
-  statValue:    { fontSize: 20, fontWeight: '900' },
-  statLabel:    { fontSize: 11, marginTop: 3 },
-  cardHeaderRow:{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  rowGap:       { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  cardTitle:    { fontSize: 16, fontWeight: '800' },
-  cardSub:      { fontSize: 12, marginTop: 4 },
-  actionTile:   { flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 16, borderWidth: 1, padding: 14 },
-  actionLabel:  { fontSize: 13, fontWeight: '700' },
-  logoutBtn:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginHorizontal: 20, marginTop: 8, padding: 14, borderRadius: 14, borderWidth: 1 },
-  logoutText:   { fontSize: 14, fontWeight: '700' },
+  backRow: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 20, marginTop: 12, marginBottom: 6 },
+  backText: { fontSize: 13, fontWeight: '700', marginLeft: 2 },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 20, paddingTop: 10, paddingBottom: 14 },
+  avatarWrap: { position: 'relative' },
+  avatarCircle: { width: 72, height: 72, borderRadius: 36, borderWidth: 2, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  avatarImage: { width: '100%', height: '100%' },
+  cameraBadge: { position: 'absolute', bottom: -2, right: -2, width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#FFFFFF' },
+  name: { fontSize: 22, fontWeight: '900', letterSpacing: -0.2 },
+  userBadge: { alignSelf: 'flex-start', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1, marginTop: 4 },
+  userBadgeText: { fontSize: 11, fontWeight: '800' },
+  statsRow: { flexDirection: 'row', gap: 10, marginHorizontal: 20, marginBottom: 4 },
+  statCard: { flex: 1, alignItems: 'center', padding: 16, borderRadius: 20 },
+  statValue: { fontSize: 22, fontWeight: '900' },
+  statLabel: { fontSize: 11, marginTop: 3, fontWeight: '600' },
+  navCard: { padding: 18, borderRadius: 22 },
+  actionIconCircle: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  cardHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  rowGap: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  cardTitle: { fontSize: 15, fontWeight: '800' },
+  cardSub: { fontSize: 12, marginTop: 6, lineHeight: 17 },
+  actionTile: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 16, borderWidth: 1, padding: 14 },
+  actionLabel: { fontSize: 13, fontWeight: '800' },
+  actionSub: { fontSize: 11, marginTop: 2 },
+  logoutBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginHorizontal: 20, marginTop: 12, paddingVertical: 14, borderRadius: 28, borderWidth: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.03, shadowRadius: 6, elevation: 1 },
+  logoutText: { fontSize: 14, fontWeight: '800' },
 });

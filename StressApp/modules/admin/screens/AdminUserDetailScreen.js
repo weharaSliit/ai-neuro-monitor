@@ -20,7 +20,7 @@ import Icon, { NAMES } from '../../shared/Icon';
 import MoodBadge from '../../shared/MoodBadge';
 import LineChart from '../../shared/LineChart';
 import { COLORS } from '../../physiological/config/theme';
-import { API_BASE, DEVICE_ID } from '../../physiological/config/config';
+import { API_BASE, DEVICE_ID, STRESS_DECISION_THRESHOLD_PERCENT } from '../../physiological/config/config';
 import api from '../../physiological/api/client';
 import { useAuth } from '../../../context/AuthContext';
 
@@ -286,6 +286,14 @@ export default function AdminUserDetailScreen({ route, navigation }) {
     .filter((w) => w.timestamp && w.prob_stress !== undefined && w.prob_stress !== null)
     .map((w) => ({ value: Math.round(w.prob_stress * 100), date: new Date(w.timestamp) }));
 
+  // Session baseline -- mean of the earliest readings currently loaded for
+  // this session (ringTrend is oldest-first), same derivation the user app
+  // used to show on its own Ring chart before that moved here per request
+  // (deviation/baseline detail belongs in Admin, not the user-facing app).
+  const ringSessionBaseline = ringTrend.length >= 3
+    ? Math.round(ringTrend.slice(0, 3).reduce((sum, p) => sum + p.value, 0) / 3)
+    : null;
+
   return (
     <ScreenBackground edges={['top', 'left', 'right']}>
       <View style={styles.header}>
@@ -379,6 +387,10 @@ export default function AdminUserDetailScreen({ route, navigation }) {
                     height={130}
                     maxValue={100}
                     suffix="%"
+                    baselineValue={STRESS_DECISION_THRESHOLD_PERCENT}
+                    baselineLabel="Stress level"
+                    baseline2Value={ringSessionBaseline}
+                    baseline2Label="Session start"
                   />
                 </Card>
               )}
@@ -409,7 +421,7 @@ export default function AdminUserDetailScreen({ route, navigation }) {
               </Card>
 
               <Card>
-                <Text style={[styles.cardTitle, { color: text }]}>Baseline Adaptation History ({emaEntries.length})</Text>
+                <Text style={[styles.cardTitle, { color: text }]}>Continuous Stress Adaptation — Learning ({emaEntries.length})</Text>
                 {emaEntries.length === 0 ? (
                   <Text style={{ color: muted }}>No recalibration-driven updates yet.</Text>
                 ) : (
