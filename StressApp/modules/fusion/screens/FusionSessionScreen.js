@@ -326,6 +326,15 @@ export default function FusionSessionScreen({ navigation }) {
                     onPress={() => navigation.navigate('Phenotyping')} t={t}
                 />
 
+                <Text style={[styles.sectionsLabel, { color: t.textSub, marginTop: 14 }]}>Real-Time Interventions</Text>
+
+                <SectionCard
+                    icon={NAMES.intervention} iconColor="#10B981" title="Relaxation Guide"
+                    statusText="Active" statusColor="#10B981"
+                    summary="Personalized relaxation techniques, guided breathing & interactive games"
+                    onPress={() => navigation.navigate('RelaxationGuide')} t={t}
+                />
+
                 <View style={{ height: 20 }} />
             </ScrollView>
         </ScreenBackground>

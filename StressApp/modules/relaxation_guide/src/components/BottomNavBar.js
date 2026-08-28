@@ -10,15 +10,15 @@ export const BottomNavBar = () => {
   const navigation = useNavigation();
 
   const navItems = [
-    { id: 'Dashboard', label: 'Home', icon: '🏠' },
+    { id: 'Dashboard', label: 'Guide', icon: '🏠' },
     { id: 'Methods', label: 'Catalog', icon: '🌸' },
     { id: 'FusionPipeline', label: 'Pipeline', icon: '📡' },
     { id: 'History', label: 'History', icon: '📊' },
     { id: 'UserProfile', label: 'Profile', icon: '👤' }
   ];
 
-  // Hide bottom nav during full-screen immersive games or onboarding flow
-  const hideScreens = ['GamePlayer', 'PrivacyPolicy', 'OnboardingQuestions', 'Permissions'];
+  // Hide bottom nav during full-screen immersive games
+  const hideScreens = ['GamePlayer'];
   if (hideScreens.includes(currentScreen)) {
     return null;
   }

@@ -48,70 +48,107 @@ export const GamePlayerScreen = () => {
 
   const subId = selectedSubOption ? selectedSubOption.id : 'box_meditation';
 
-  // Game metadata
+  // Game metadata with WESAD Priority ranks
   const gameMetadata = {
-    // Guided Meditation & Breathwork
-    box_meditation: {
-      title: 'Box Meditation',
-      icon: '📦',
-      color: '#38BDF8',
-      description: 'Structured 4-4-4-4 visual and auditory breathing rhythm for rapid vagal nerve activation.'
-    },
-    chakra_harmonizer: {
-      title: 'Chakra Harmonizer',
-      icon: '✨',
-      color: '#EC4899',
-      description: '432Hz & 528Hz acoustic harmonic frequency alignment for neural synchronization.'
-    },
-    silent_zen_timer: {
-      title: 'Silent Zen Timer',
-      icon: '🔔',
-      color: '#F59E0B',
-      description: 'Minimalist open monitoring meditation timer with periodic singing bowl cues.'
-    },
-
-    // Breathing Garden
-    flower_meadow: {
-      title: 'Flower Meadow',
-      icon: '🌺',
-      color: '#EC4899',
-      description: 'Interactive flower blooming matched to 4-7-8 parasympathetic breathing cycles.'
-    },
     water_lily_pond: {
-      title: 'Water Lily Pond',
+      title: 'Lily Pond Diaphragmatic Exhale',
       icon: '🪷',
+      color: '#10B981',
+      description: 'WESAD Priority #1 · 100% Recovery (89s) · Diaphragmatic 4-6 Exhalation Pacing'
+    },
+    vagus_humming: {
+      title: 'Vagal Humming Exhale',
+      icon: '🧘‍♀️',
       color: '#8B5CF6',
-      description: 'Expanding water lily blooms synchronized with diaphragmatic exhalations.'
+      description: 'WESAD Priority #2 · 80% Recovery (134s) · Vagal Nerve Resonant Humming'
     },
     cosmic_nebula: {
-      title: 'Cosmic Nebula',
+      title: 'Cosmic Nebula (6 bpm)',
       icon: '🌌',
       color: '#A78BFA',
-      description: 'Starlight galaxy expansion pacing slow 6-breaths-per-minute resonance.'
+      description: 'WESAD Priority #3 · 80% Recovery (137s) · 0.1Hz Resonance Frequency Pacing'
     },
-
-    // Cognitive De-Stress Arcade
-    bubble_pop: {
-      title: 'Zen Bubble Pop',
-      icon: '🧼',
-      color: '#F43F5E',
-      description: 'Haptic and visual bubble popping providing immediate sensory grounding and tension release.'
+    flower_meadow: {
+      title: 'Flower Meadow (4-7-8)',
+      icon: '🌺',
+      color: '#EC4899',
+      description: 'WESAD Priority #4 · 80% Recovery (140s) · 4-7-8 Parasympathetic Bloom'
     },
-    pattern_align: {
-      title: 'Pattern Alignment',
-      icon: '🧩',
+    diaphragmatic_pace: {
+      title: 'Deep Abdominal Pacing',
+      icon: '🫁',
       color: '#3B82F6',
-      description: 'Mindful spatial tile alignment shifting cognitive load away from stressful thoughts.'
+      description: 'WESAD Priority #5 · 66.7% Recovery (169s) · Deep Abdominal Pacing'
     },
-    cloud_float: {
-      title: 'Cloud Floating',
-      icon: '☁️',
+    box_meditation: {
+      title: 'Box Breathing (4-4-4-4)',
+      icon: '📦',
       color: '#38BDF8',
-      description: 'Low-demand spatial navigation steering soft clouds across gentle skies for cognitive offloading.'
+      description: 'WESAD Priority #6 · 60% Recovery (184s) · Equal Square Pacing'
+    },
+    soft_fascination: {
+      title: 'Nature Restoration Viewing',
+      icon: '🌿',
+      color: '#059669',
+      description: 'WESAD Priority #7 · 60% Recovery (190s) · Biophilic Attention Restoration'
+    },
+    progressive_muscle: {
+      title: 'Progressive Muscle Release',
+      icon: '🦾',
+      color: '#D97706',
+      description: 'WESAD Priority #8 · 46.7% Recovery (217s) · Somatic Tension Release'
+    },
+    guided_imagery: {
+      title: 'Guided Forest Walk',
+      icon: '🌲',
+      color: '#047857',
+      description: 'WESAD Priority #9 · 26.7% Recovery (254s) · Forest Trail Imagery Walk'
+    },
+    pattern_alignment: {
+      title: 'Visuospatial Memory Alignment',
+      icon: '🧩',
+      color: '#7E57C2',
+      description: 'WESAD Priority #10 · 20% Recovery (268s) · Visuospatial Tile Memory'
     }
   };
 
-  const meta = gameMetadata[subId] || gameMetadata.box_meditation;
+  const meta = gameMetadata[subId] || gameMetadata.water_lily_pond;
+
+  const renderGameCanvas = () => {
+    switch (subId) {
+      // Breathing Garden & Resonance Pacing
+      case 'water_lily_pond':
+        return <LilyPondGame />;
+      case 'flower_meadow':
+        return <FlowerMeadowGame />;
+      case 'cosmic_nebula':
+        return <PulseWaveGame mode="cosmic_nebula" />;
+
+      // Guided Meditation & Vagal Breathwork
+      case 'vagus_humming':
+      case 'diaphragmatic_pace':
+      case 'box_meditation':
+      case 'chakra_harmonizer':
+      case 'silent_zen_timer':
+        return <MeditationGame mode={subId} initialMode={subId} />;
+
+      // Cognitive De-Stress Arcade
+      case 'soft_fascination':
+      case 'progressive_muscle':
+      case 'guided_imagery':
+      case 'pattern_alignment':
+      case 'muscle':
+      case 'pattern':
+      case 'nature':
+      case 'bubble_pop':
+      case 'pattern_align':
+      case 'cloud_float':
+        return <CognitiveDeStressGame mode={subId} />;
+
+      default:
+        return <LilyPondGame />;
+    }
+  };
 
   // Pulsing animation for the game container
   useEffect(() => {
@@ -166,33 +203,6 @@ export const GamePlayerScreen = () => {
       // Show achievement notification
       setShowStats(true);
       setTimeout(() => setShowStats(false), 3000);
-    }
-  };
-
-  const renderGameCanvas = () => {
-    switch (subId) {
-      // Guided Meditation
-      case 'box_meditation':
-      case 'chakra_harmonizer':
-      case 'silent_zen_timer':
-        return <MeditationGame mode={subId} initialMode={subId} />;
-
-      // Breathing Garden
-      case 'flower_meadow':
-        return <FlowerMeadowGame />;
-      case 'water_lily_pond':
-        return <LilyPondGame />;
-      case 'cosmic_nebula':
-        return <PulseWaveGame mode="cosmic_nebula" />;
-
-      // Cognitive De-Stress Arcade
-      case 'bubble_pop':
-      case 'pattern_align':
-      case 'cloud_float':
-        return <CognitiveDeStressGame mode={subId} />;
-
-      default:
-        return <MeditationGame mode="box_meditation" initialMode="box_meditation" />;
     }
   };
 

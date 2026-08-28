@@ -4,32 +4,28 @@ import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
 import { Header } from '../components/Header';
 
-// Game sub-option icons and visual theme metadata
+// Game sub-option icons and visual theme metadata (WESAD Rank #1 to #10 Priority Order)
 const SUB_OPTION_META = {
-  // Focus Arcade
-  resonance_circle: { icon: '🔄', tag: 'Heart Rhythm Coherence', accent: '#60A5FA', bg: 'rgba(96, 165, 250, 0.12)' },
-  mindful_sweep: { icon: '🧠', tag: 'Attention Scanning', accent: '#34D399', bg: 'rgba(52, 211, 153, 0.12)' },
-  serenity_spiral: { icon: '🌀', tag: 'Visual Flow State', accent: '#FBBF24', bg: 'rgba(251, 191, 36, 0.12)' },
-
-  // Guided Meditation & Breathwork
-  box_meditation: { icon: '📦', tag: '4-4-4-4 Rhythm', accent: '#38BDF8', bg: 'rgba(56, 189, 248, 0.12)' },
-  chakra_harmonizer: { icon: '✨', tag: 'Energy Alignment', accent: '#EC4899', bg: 'rgba(236, 72, 153, 0.12)' },
-  silent_zen_timer: { icon: '🔔', tag: 'Minimalist Zen Timer', accent: '#F59E0B', bg: 'rgba(245, 158, 11, 0.12)' },
-
-  // Nature Sensory Environments
-  rain_scene: { icon: '🌧️', tag: 'Raindrops & Ripples', accent: '#0284C7', bg: 'rgba(2, 132, 199, 0.12)' },
-  forest_scene: { icon: '🌲', tag: 'Firefly Forest', accent: '#10B981', bg: 'rgba(16, 185, 129, 0.12)' },
-  ocean_scene: { icon: '🌊', tag: 'Deep Ocean Waves', accent: '#3B82F6', bg: 'rgba(59, 130, 246, 0.12)' },
-
-  // Breathing Garden
-  flower_meadow: { icon: '🌺', tag: 'Bloom Garden · 4-7-8 Breath', accent: '#EC4899', bg: 'rgba(236, 72, 153, 0.12)' },
-  water_lily_pond: { icon: '🪷', tag: 'Koi Pond & Lilies', accent: '#8B5CF6', bg: 'rgba(139, 92, 246, 0.12)' },
-  cosmic_nebula: { icon: '🌌', tag: 'Star Dust Expansion', accent: '#A78BFA', bg: 'rgba(167, 139, 250, 0.12)' },
-
-  // Cognitive De-Stress Arcade
-  muscle: { icon: '🧘', tag: 'Progressive Muscle Relaxation', accent: '#D97706', bg: 'rgba(217, 119, 6, 0.12)' },
-  pattern: { icon: '🧩', tag: 'Pattern Alignment (Visuospatial)', accent: '#7E57C2', bg: 'rgba(126, 87, 194, 0.12)' },
-  nature: { icon: '🌿', tag: 'Soft Fascination Nature Viewing', accent: '#2E7D5B', bg: 'rgba(46, 125, 91, 0.12)' },
+  // Rank #1 Priority
+  water_lily_pond: { icon: '🪷', tag: 'Rank #1 · 100% Recovery (89s)', accent: '#10B981', bg: 'rgba(16, 185, 129, 0.14)', priority: 'TOP PRIORITY #1' },
+  // Rank #2 Priority
+  vagus_humming: { icon: '🧘‍♀️', tag: 'Rank #2 · Vagal Nerve Resonant Exhale', accent: '#8B5CF6', bg: 'rgba(139, 92, 246, 0.14)', priority: 'PRIORITY #2' },
+  // Rank #3 Priority
+  cosmic_nebula: { icon: '🌌', tag: 'Rank #3 · 6bpm Resonance Frequency', accent: '#A78BFA', bg: 'rgba(167, 139, 250, 0.14)', priority: 'PRIORITY #3' },
+  // Rank #4 Priority
+  flower_meadow: { icon: '🌺', tag: 'Rank #4 · 4-7-8 Parasympathetic Bloom', accent: '#EC4899', bg: 'rgba(236, 72, 153, 0.14)', priority: 'PRIORITY #4' },
+  // Rank #5 Priority
+  diaphragmatic_pace: { icon: '🫁', tag: 'Rank #5 · Deep Abdominal Pacing', accent: '#3B82F6', bg: 'rgba(59, 130, 246, 0.14)', priority: 'PRIORITY #5' },
+  // Rank #6 Priority
+  box_meditation: { icon: '📦', tag: 'Rank #6 · 4-4-4-4 Square Pacing', accent: '#38BDF8', bg: 'rgba(56, 189, 248, 0.14)', priority: 'PRIORITY #6' },
+  // Rank #7 Priority
+  soft_fascination: { icon: '🌿', tag: 'Rank #7 · Biophilic Attention Restoration', accent: '#059669', bg: 'rgba(5, 150, 105, 0.14)', priority: 'PRIORITY #7' },
+  // Rank #8 Priority
+  progressive_muscle: { icon: '🦾', tag: 'Rank #8 · Somatic Tension Discharge', accent: '#D97706', bg: 'rgba(217, 119, 6, 0.14)', priority: 'PRIORITY #8' },
+  // Rank #9 Priority
+  guided_imagery: { icon: '🌲', tag: 'Rank #9 · Forest Trail Imagery Walk', accent: '#047857', bg: 'rgba(4, 120, 87, 0.14)', priority: 'PRIORITY #9' },
+  // Rank #10 Priority
+  pattern_alignment: { icon: '🧩', tag: 'Rank #10 · Visuospatial Memory Alignment', accent: '#7E57C2', bg: 'rgba(126, 87, 194, 0.14)', priority: 'PRIORITY #10' },
 };
 
 export const SubOptionSelectorScreen = () => {

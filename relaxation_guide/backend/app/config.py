@@ -118,15 +118,17 @@ BADGES_CATALOG = [
     }
 ]
 
+# --- WESAD-Validated Top 10 Sub-Technique Catalog ---
 TECHNIQUES = {
     "guided_meditation": {
         "id": "guided_meditation",
         "title": "Guided Meditation & Breathwork",
-        "description": "Mindfulness practice, structured box breathing, acoustic frequency alignment, and silent meditation timers.",
+        "description": "Mindfulness practice, structured box breathing, deep abdominal pacing, and vagal humming exhalations.",
         "sub_options": [
-            {"id": "box_meditation", "title": "Box Meditation", "description": "Structured 4-4-4-4 visual and auditory breathing rhythm for rapid vagal nerve activation."},
-            {"id": "chakra_harmonizer", "title": "Chakra Harmonizer", "description": "432Hz & 528Hz acoustic harmonic frequency alignment for neural synchronization."},
-            {"id": "silent_zen_timer", "title": "Silent Zen Timer", "description": "Minimalist open monitoring meditation timer with periodic singing bowl cues."}
+            {"id": "water_lily_pond", "title": "Lily Pond Diaphragmatic Exhale", "description": "Expanding water lily blooms synchronized with 4-6 diaphragmatic exhalations (WESAD Rank #1)."},
+            {"id": "vagus_humming", "title": "Vagal Humming Exhale", "description": "Vagal nerve stimulation through resonant humming exhalations (WESAD Rank #2)."},
+            {"id": "diaphragmatic_pace", "title": "Deep Abdominal Pacing", "description": "Slow diaphragmatic abdominal breathing pacing for rapid vagal recovery (WESAD Rank #5)."},
+            {"id": "box_meditation", "title": "Box Breathing (4-4-4-4)", "description": "Structured 4-4-4-4 visual and auditory breathing rhythm for rapid vagal nerve activation (WESAD Rank #6)."}
         ]
     },
     "breathing_garden": {
@@ -134,19 +136,19 @@ TECHNIQUES = {
         "title": "Breathing Garden",
         "description": "Gamified physiological pacing exercises guided by interactive organic nature animations.",
         "sub_options": [
-            {"id": "flower_meadow", "title": "Flower Meadow", "description": "Interactive flower blooming matched to 4-7-8 parasympathetic breathing cycles."},
-            {"id": "water_lily_pond", "title": "Water Lily Pond", "description": "Expanding water lily blooms synchronized with diaphragmatic exhalations."},
-            {"id": "cosmic_nebula", "title": "Cosmic Nebula", "description": "Starlight galaxy expansion pacing slow 6-breaths-per-minute resonance."}
+            {"id": "flower_meadow", "title": "Flower Meadow (4-7-8)", "description": "Interactive flower blooming matched to 4-7-8 parasympathetic breathing cycles (WESAD Rank #4)."},
+            {"id": "cosmic_nebula", "title": "Cosmic Nebula (6 bpm)", "description": "Starlight galaxy expansion pacing slow 6-breaths-per-minute resonance (WESAD Rank #3)."}
         ]
     },
     "cognitive_destress": {
         "id": "cognitive_destress",
         "title": "Cognitive De-Stress Arcade",
-        "description": "Tactile micro-interventions designed to disrupt active cognitive stress loops and release tension.",
+        "description": "Tactile micro-interventions designed to disrupt active cognitive stress loops and release physical tension.",
         "sub_options": [
-            {"id": "bubble_pop", "title": "Zen Bubble Pop", "description": "Haptic and visual bubble popping providing immediate sensory grounding and tension release."},
-            {"id": "pattern_align", "title": "Pattern Alignment", "description": "Mindful spatial tile alignment shifting cognitive load away from stressful thoughts."},
-            {"id": "cloud_float", "title": "Cloud Floating", "description": "Low-demand spatial navigation steering soft clouds across gentle skies for cognitive offloading."}
+            {"id": "soft_fascination", "title": "Nature Restoration Viewing", "description": "Passive nature restoration viewing asking nothing of directed attention (WESAD Rank #7)."},
+            {"id": "progressive_muscle", "title": "Progressive Muscle Release", "description": "Tense & release muscle cycling for physical tension discharge (WESAD Rank #8)."},
+            {"id": "guided_imagery", "title": "Guided Forest Walk", "description": "Multisensory guided forest imagery walk for cognitive distress reduction (WESAD Rank #9)."},
+            {"id": "pattern_alignment", "title": "Visuospatial Memory Alignment", "description": "Visuospatial working memory color matching to disrupt intrusive rumination loops (WESAD Rank #10)."}
         ]
     }
 }

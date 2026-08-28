@@ -49,6 +49,12 @@ export default function AppModeScreen({ navigation }) {
           />
           <View style={{ height: 12 }} />
           <Button
+            label="Open Relaxation Guide"
+            onPress={() => navigation.navigate('RelaxationGuide')}
+            variant="outline"
+          />
+          <View style={{ height: 12 }} />
+          <Button
             label="Enter Admin App"
             onPress={() => navigation.replace('Admin')}
             variant="outline"

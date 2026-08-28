@@ -29,11 +29,12 @@ export const MethodsScreen = () => {
     {
       id: "guided_meditation",
       title: "Guided Meditation & Breathwork",
-      icon: "🧘",
+      icon: "🧘‍♀️",
       sub_options: [
-        { id: "box_meditation", title: "Box Meditation", description: "Structured 4-4-4-4 visual and auditory breathing rhythm." },
-        { id: "chakra_harmonizer", title: "Chakra Harmonizer", description: "432Hz & 528Hz acoustic harmonic frequency alignment." },
-        { id: "silent_zen_timer", title: "Silent Zen Timer", description: "Minimalist open monitoring meditation timer." }
+        { id: "water_lily_pond", title: "Lily Pond Diaphragmatic Exhale", description: "WESAD Rank #1 · 100% Recovery in 89s · 4-6 Exhalation Pacing" },
+        { id: "vagus_humming", title: "Vagal Humming Exhale", description: "WESAD Rank #2 · 80% Recovery in 134s · Resonant Humming Exhalation" },
+        { id: "diaphragmatic_pace", title: "Deep Abdominal Pacing", description: "WESAD Rank #5 · 66.7% Recovery in 169s · Deep Abdominal Pacing" },
+        { id: "box_meditation", title: "Box Breathing (4-4-4-4)", description: "WESAD Rank #6 · 60% Recovery in 184s · Equal Square Pacing" }
       ]
     },
     {
@@ -41,19 +42,19 @@ export const MethodsScreen = () => {
       title: "Breathing Garden",
       icon: "🌸",
       sub_options: [
-        { id: "flower_meadow", title: "Flower Meadow", description: "Interactive flower blooming matched to 4-7-8 breathing cycles." },
-        { id: "water_lily_pond", title: "Water Lily Pond", description: "Expanding water lily blooms synchronized with exhalations." },
-        { id: "cosmic_nebula", title: "Cosmic Nebula", description: "Starlight galaxy expansion pacing slow 6-breaths-per-minute." }
+        { id: "cosmic_nebula", title: "Cosmic Nebula (6 bpm)", description: "WESAD Rank #3 · 80% Recovery in 137s · 0.1Hz Resonance Frequency" },
+        { id: "flower_meadow", title: "Flower Meadow (4-7-8)", description: "WESAD Rank #4 · 80% Recovery in 140s · 4-7-8 Parasympathetic Bloom" }
       ]
     },
     {
       id: "cognitive_destress",
       title: "Cognitive De-Stress Arcade",
-      icon: "🧩",
+      icon: "🌿",
       sub_options: [
-        { id: "muscle", title: "Progressive Muscle Relaxation", description: "Tense & release muscle cycling for physical tension discharge." },
-        { id: "pattern", title: "Pattern Alignment", description: "Visuospatial working memory tile matching for cognitive offloading." },
-        { id: "nature", title: "Soft Fascination Viewing", description: "Low-demand passive nature viewing for attention restoration." }
+        { id: "soft_fascination", title: "Nature Restoration Viewing", description: "WESAD Rank #7 · 60% Recovery in 190s · Biophilic Attention Restoration" },
+        { id: "progressive_muscle", title: "Progressive Muscle Release", description: "WESAD Rank #8 · 46.7% Recovery in 217s · Somatic Tension Release" },
+        { id: "guided_imagery", title: "Guided Forest Walk", description: "WESAD Rank #9 · 26.7% Recovery in 254s · Forest Trail Imagery Walk" },
+        { id: "pattern_alignment", title: "Visuospatial Memory Alignment", description: "WESAD Rank #10 · 20% Recovery in 268s · Visuospatial Tile Memory" }
       ]
     }
   ];

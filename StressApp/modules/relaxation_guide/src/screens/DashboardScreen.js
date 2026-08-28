@@ -138,9 +138,8 @@ const getStateConfig = (stressState, stressProbability, theme, isCalibrated = tr
     return {
       color: theme.warning,
       bgTint: 'rgba(245,158,11,0.14)',
-      label: 'AWAITING LLIVE STREAM',
+      label: 'WAITING FOR LIVE STREAM',
       emoji: '📡',
-      tagline: 'Active session initialized — waiting for live fusion telemetry stream from sensors...',
       icon: '📡',
       pct: '--',
       breathDuration: 2000,
@@ -270,8 +269,7 @@ export const DashboardScreen = () => {
     simMode, updateSimMode,
     isSafetyOverride, isAlertTriggered, telemetryMessage,
     isCalibrated, hasLivePacket,
-    setCurrentRecommendation, setPreInterventionLabel,
-    onboardingRecommendation, hasShownOnboardingAlert, setHasShownOnboardingAlert
+    setCurrentRecommendation, setPreInterventionLabel
   } = useContext(AppContext);
 
   const { theme } = useContext(ThemeContext);
@@ -304,19 +302,6 @@ export const DashboardScreen = () => {
     return () => clearInterval(t);
   }, []);
 
-  // Onboarding recommendation alert
-  useEffect(() => {
-    if (onboardingRecommendation && !hasShownOnboardingAlert) {
-      setHasShownOnboardingAlert(true);
-      showAlert({
-        title: '🎯 Personal Relaxation Plan Ready!',
-        text: `Welcome ${username}!\n\nBased on your answers:\n\n• Recommended Technique: ${onboardingRecommendation.title}\n• Why It Helps: ${onboardingRecommendation.reason}`,
-        icon: 'success',
-        confirmButtonText: 'Explore Dashboard →'
-      });
-    }
-  }, [onboardingRecommendation, hasShownOnboardingAlert]);
-
   const triggerIntervention = async () => {
     setLoading(true);
     try {
@@ -331,7 +316,7 @@ export const DashboardScreen = () => {
       setCurrentRecommendation(recommendation);
       showAlert({
         title: 'Intervention Selected! 🎯',
-        text: `Based on your live signals (${stressState.toUpperCase()}), Calm AI selected: ${recommendation.title}.`,
+        text: `Based on your live signals (${stressState.toUpperCase()}), Relaxation Guide selected: ${recommendation.title}.`,
         icon: 'info',
         confirmButtonText: 'Start Session ▶️',
         onConfirm: () => setCurrentScreen('Intervention')
@@ -383,7 +368,7 @@ export const DashboardScreen = () => {
 
   return (
     <View style={[s.container, { backgroundColor: theme.bgPrimary }]}>
-      <Header title="Home" />
+      <Header title="Welcome to Relaxation Guide" />
 
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
         <Animated.View style={{ opacity: fadeIn, transform: [{ translateY: slideUp }] }}>
@@ -392,22 +377,26 @@ export const DashboardScreen = () => {
           <LiveQuotesBanner theme={theme} />
 
           {/* ═══════════ 2. WELCOME + STATUS ROW ═══════════ */}
-          <View style={[s.welcomeRow, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
+          <TouchableOpacity
+            style={[s.welcomeRow, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}
+            onPress={() => setCurrentScreen('UserProfile')}
+            activeOpacity={0.85}
+          >
             <View style={s.welcomeLeft}>
               <Text style={[s.greetingTxt, { color: theme.textMuted }]}>{greeting}</Text>
               <Text style={[s.nameTxt, { color: theme.textPrimary }]}>{username}</Text>
               <View style={s.liveChip}>
                 <PulseDot color={sc.color} />
-                <Text style={[s.liveChipTxt, { color: sc.color }]}>{isCalibrated ? (hasLivePacket ? 'System Active' : 'Awaiting Telemetry Stream') : 'Waiting for Calibration'}</Text>
+                <Text style={[s.liveChipTxt, { color: sc.color }]}>{isCalibrated ? (hasLivePacket ? 'System Active' : 'Awaiting Live Stream') : 'Waiting for Calibration'}</Text>
               </View>
             </View>
             <View style={s.welcomeRight}>
               <Text style={[s.clockTxt, { color: theme.accent }]}>{timeStr}</Text>
               <View style={[s.idPill, { backgroundColor: theme.bgPrimary, borderColor: theme.border }]}>
-                <Text style={[s.idPillTxt, { color: theme.textMuted }]}>🔐 {userId}</Text>
+                <Text style={[s.idPillTxt, { color: theme.textMuted }]}>👤 Profile ({userId})</Text>
               </View>
             </View>
-          </View>
+          </TouchableOpacity>
 
           {/* ═══════════ 3. STRESS STATE HERO ═══════════ */}
           <View style={[s.stateHero, { borderColor: sc.color, backgroundColor: sc.bgTint }]}>
@@ -488,7 +477,7 @@ export const DashboardScreen = () => {
           <Text style={[s.sectionTitle, { color: theme.textPrimary }]}>Quick Actions</Text>
           <View style={s.actionGrid}>
             {[
-              { id: 'Intervention', icon: '🧘', label: 'Techniques', sub: '25 Games', tint: 'rgba(56,189,248,0.14)', accent: '#38BDF8' },
+              { id: 'Methods', icon: '🧘', label: 'Techniques', sub: '15 Methods', tint: 'rgba(56,189,248,0.14)', accent: '#38BDF8' },
               { id: 'History', icon: '📈', label: 'History', sub: 'Recovery', tint: 'rgba(16,185,129,0.14)', accent: '#10B981' },
               { id: 'UserProfile', icon: '👤', label: 'Profile', sub: 'Account', tint: 'rgba(245,158,11,0.14)', accent: '#F59E0B' }
             ].map(item => (

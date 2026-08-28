@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Switch } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
@@ -8,7 +8,7 @@ import { apiService } from '../api/apiService';
 
 export const UserProfileScreen = () => {
   const { userId, username, hostExit, setCurrentScreen } = useContext(AppContext);
-  const { theme } = useContext(ThemeContext);
+  const { theme, isDarkMode, toggleTheme } = useContext(ThemeContext);
   // Relaxation Guide's own screens are all reached via setCurrentScreen
   // (in-module switch, see AppContext). The Physiological module is a
   // separate top-level stack screen (App.js), so reaching its Dashboard
@@ -71,51 +71,6 @@ export const UserProfileScreen = () => {
                 <Text style={[styles.statLbl, { color: theme.textMuted }]}>Completed</Text>
               </View>
             </View>
-          </View>
-
-          {/* User-Wise Questionnaire Summary Card */}
-          <Text style={[styles.secTitle, { color: theme.textPrimary }]}>📋 Personal Stress Profile Summary</Text>
-          <View style={[styles.summaryCard, { backgroundColor: theme.bgSecondary, borderColor: theme.accent }]}>
-            <View style={styles.summaryItem}>
-              <Text style={styles.summaryIcon}>💼</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.summaryLabel, { color: theme.textMuted }]}>PRIMARY STRESS TRIGGER</Text>
-                <Text style={[styles.summaryVal, { color: theme.textPrimary }]}>
-                  {formatAnswer(onboardingAnswers?.stress_source || 'Work & Deadlines')}
-                </Text>
-              </View>
-            </View>
-
-            <View style={[styles.summaryDivider, { backgroundColor: theme.border }]} />
-
-            <View style={styles.summaryItem}>
-              <Text style={styles.summaryIcon}>🧘</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.summaryLabel, { color: theme.textMuted }]}>PREFERRED RELAXATION STYLE</Text>
-                <Text style={[styles.summaryVal, { color: theme.accent }]}>
-                  {formatAnswer(onboardingAnswers?.relaxation_style || 'Guided Meditation')}
-                </Text>
-              </View>
-            </View>
-
-            <View style={[styles.summaryDivider, { backgroundColor: theme.border }]} />
-
-            <View style={styles.summaryItem}>
-              <Text style={styles.summaryIcon}>⚡</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.summaryLabel, { color: theme.textMuted }]}>STRESS FREQUENCY</Text>
-                <Text style={[styles.summaryVal, { color: theme.warning }]}>
-                  {formatAnswer(onboardingAnswers?.stress_frequency || 'Daily Peak Hours')}
-                </Text>
-              </View>
-            </View>
-
-            <TouchableOpacity
-              style={[styles.retakeBtn, { borderColor: theme.accent }]}
-              onPress={() => setCurrentScreen('OnboardingQuestions')}
-            >
-              <Text style={[styles.retakeBtnTxt, { color: theme.accent }]}>✏️ Retake Personalization Survey</Text>
-            </TouchableOpacity>
           </View>
 
           {/* Theme Settings Switcher */}

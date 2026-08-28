@@ -2,15 +2,13 @@ import React, { useContext } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Platform, StatusBar } from 'react-native';
 import { ThemeContext } from '../context/ThemeContext';
 
-// This module is StressApp's "Intervention" tab (one of five main tabs,
-// see PhysiologicalNavigator.js), not a standalone landing experience --
-// the header never shows a "back to host" affordance, logging out (Profile
-// screen) is the only way out, same as any other primary app screen.
-// Dark mode removed app-wide -- theme toggle button removed accordingly.
 export const Header = ({ title, showBack = false, onBack }) => {
   const { theme } = useContext(ThemeContext);
 
-  const paddingTop = Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 6 : 10;
+  const paddingTop = Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 4 : 8;
+
+  // Filter out any standalone "Home" text
+  const displayTitle = (title && title !== 'Home') ? title : 'Welcome to MindPulse AI Relaxation Guide';
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bgSecondary, borderBottomColor: theme.border, paddingTop }]}>
@@ -23,23 +21,26 @@ export const Header = ({ title, showBack = false, onBack }) => {
         </TouchableOpacity>
       ) : (
         <View style={styles.brandBox}>
-          <Text style={styles.brandIcon}>🧘</Text>
-          <Text style={[styles.brandTitle, { color: theme.accent }]}>Calm AI</Text>
+          <Text style={styles.brandIcon}>🧠</Text>
+          <Text style={[styles.brandTitle, { color: theme.accent }]}>MindPulse AI</Text>
         </View>
       )}
 
-      <Text style={[styles.title, { color: theme.textPrimary }]}>{title}</Text>
+      <Text style={[styles.title, { color: theme.textPrimary }]} numberOfLines={1} ellipsisMode="tail">
+        {displayTitle}
+      </Text>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
-    paddingBottom: 10,
+    paddingBottom: 6,
+    paddingTop: 6,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
     borderBottomWidth: 1,
     elevation: 2
   },
@@ -48,26 +49,29 @@ const styles = StyleSheet.create({
     alignItems: 'center'
   },
   brandIcon: {
-    fontSize: 18,
+    fontSize: 16,
     marginRight: 4
   },
   brandTitle: {
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: '900',
-    letterSpacing: 0.5
+    letterSpacing: 0.4
   },
   btn: {
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 8
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 6
   },
   btnTxt: {
     fontWeight: '600',
-    fontSize: 13
+    fontSize: 12
   },
   title: {
-    fontSize: 16,
-    fontWeight: '700',
-    letterSpacing: 0.3
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.2,
+    flexShrink: 1,
+    textAlign: 'right',
+    marginLeft: 8
   },
 });

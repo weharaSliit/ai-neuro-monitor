@@ -24,35 +24,68 @@ const AMBIENT_TICK_MS = 50;
 // against the "effortless attention" mechanism it was meant to demonstrate.
 // ---------------------------------------------------------------------------
 const TECHNIQUES = {
+  soft_fascination: {
+    id: 'soft_fascination',
+    name: 'Nature Restoration Viewing',
+    subtitle: 'WESAD Rank #7 Priority',
+    description:
+      'Watch gentle, slowly changing biophilic nature scenes asking nothing of directed attention to restore cognitive calm.',
+    citation: '✨ WESAD Rank #7 · Biophilic Attention Restoration',
+  },
+  progressive_muscle: {
+    id: 'progressive_muscle',
+    name: 'Progressive Muscle Release',
+    subtitle: 'WESAD Rank #8 Priority',
+    description:
+      'Gently tighten and release muscle groups in sequence to discharge physical cortisol and body tension.',
+    citation: '✨ WESAD Rank #8 · Somatic Tension Discharge',
+  },
+  guided_imagery: {
+    id: 'guided_imagery',
+    name: 'Guided Forest Walk',
+    subtitle: 'WESAD Rank #9 Priority',
+    description:
+      'Multisensory guided forest trail walk with atmospheric canopy mist to shift focus away from intrusive anxiety loops.',
+    citation: '✨ WESAD Rank #9 · Forest Trail Imagery Walk',
+  },
+  pattern_alignment: {
+    id: 'pattern_alignment',
+    name: 'Visuospatial Memory Alignment',
+    subtitle: 'WESAD Rank #10 Priority',
+    description:
+      'A calm visuospatial color-matching puzzle that occupies central executive memory to clear intrusive worry.',
+    citation: '✨ WESAD Rank #10 · Visuospatial Working Memory Focus',
+  },
   muscle: {
     id: 'muscle',
-    name: 'Muscle Relaxation',
-    subtitle: 'Tense & Release',
-    description:
-      'Gently tighten and release your muscles one by one to quickly let go of physical stress and body tension.',
-    citation: '✨ Deep body tension release',
+    name: 'Progressive Muscle Release',
+    subtitle: 'WESAD Rank #8 Priority',
+    description: 'Gently tighten and release your muscles to discharge physical body tension.',
+    citation: '✨ WESAD Rank #8 · Somatic Tension Discharge',
   },
   pattern: {
     id: 'pattern',
     name: 'Pattern Alignment',
-    subtitle: 'Color Matching',
-    description:
-      'A calm color-matching puzzle that gently occupies your mind and clears away stressful thoughts.',
-    citation: '✨ Clears overthinking & worry',
+    subtitle: 'WESAD Rank #10 Priority',
+    description: 'A calm color-matching puzzle that gently occupies your mind and clears away stressful thoughts.',
+    citation: '✨ WESAD Rank #10 · Visuospatial Focus',
   },
   nature: {
     id: 'nature',
-    name: 'Calming Nature View',
-    subtitle: 'Nature Scenes',
-    description:
-      'Watch gentle, slowly changing nature scenes with zero effort to rest your mind and restore calm.',
-    citation: '✨ Restores calm & lowers stress',
+    name: 'Nature Restoration Viewing',
+    subtitle: 'WESAD Rank #7 Priority',
+    description: 'Watch gentle nature scenes to rest your mind and restore calm.',
+    citation: '✨ WESAD Rank #7 · Biophilic Attention Restoration',
   },
 };
 
 const DURATION_OPTIONS_MIN = [2, 5, 10];
 
 const THEME = {
+  soft_fascination: { primary: '#059669', secondary: '#A7F3D0', background: '#041B13', accent: '#10B981' },
+  progressive_muscle: { primary: '#D97706', secondary: '#FCD34D', background: '#1A1206', accent: '#F59E0B' },
+  guided_imagery: { primary: '#047857', secondary: '#6EE7B7', background: '#031912', accent: '#059669' },
+  pattern_alignment: { primary: '#7E57C2', secondary: '#B39DDB', background: '#140A28', accent: '#9575CD' },
   muscle: { primary: '#D97706', secondary: '#FCD34D', background: '#1A1206', accent: '#F59E0B' },
   pattern: { primary: '#7E57C2', secondary: '#B39DDB', background: '#140A28', accent: '#9575CD' },
   nature: { primary: '#2E7D5B', secondary: '#A5D6A7', background: '#08150F', accent: '#66BB8F' },

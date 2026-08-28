@@ -9,19 +9,12 @@ export const AppContext = createContext();
 // live telemetry endpoints to resolve real Firebase data (see firebase_service.py);
 // the 'guest_' fallback only exists so this module still renders standalone in dev.
 export const AppProvider = ({ children, initialUserId, initialUsername, initialIsNewUser = false, onExit = null }) => {
-  const [currentScreen, setCurrentScreen] = useState('PrivacyPolicy');
+  const [currentScreen, setCurrentScreen] = useState('Dashboard');
   const [userId, setUserId] = useState(initialUserId || `user_${Date.now()}`);
   const [username, setUsername] = useState(initialUsername || 'Participant');
   const [userEmail, setUserEmail] = useState('');
   const [pendingVerificationCode, setPendingVerificationCode] = useState('');
   const [isGuest, setIsGuest] = useState(!initialUserId);
-
-  // Individual Permission Toggles
-  const [permissionsGranted, setPermissionsGranted] = useState(false);
-  const [permMember1, setPermMember1] = useState(true);  // Member 1: EEG Earbud
-  const [permMember2, setPermMember2] = useState(true);  // Member 2: Smart Ring
-  const [permMember3, setPermMember3] = useState(true);  // Member 3: Smartphone Phenotype
-  const [permVoice, setPermVoice] = useState(true);
 
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
   const [isCalibrated, setIsCalibrated] = useState(true);
@@ -58,10 +51,8 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
   // Intervention History
   const [historyList, setHistoryList] = useState([]);
 
-  // Onboarding Questions & Recommendations
+  // Onboarding Answers
   const [onboardingAnswers, setOnboardingAnswers] = useState(null);
-  const [onboardingRecommendation, setOnboardingRecommendation] = useState(null);
-  const [hasShownOnboardingAlert, setHasShownOnboardingAlert] = useState(false);
 
   // Telemetry poll loop (every 2 seconds).
   useEffect(() => {
@@ -152,16 +143,6 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
         setPendingVerificationCode,
         isGuest,
         setIsGuest,
-        permissionsGranted,
-        setPermissionsGranted,
-        permMember1,
-        setPermMember1,
-        permMember2,
-        setPermMember2,
-        permMember3,
-        setPermMember3,
-        permVoice,
-        setPermVoice,
         privacyAccepted,
         setPrivacyAccepted,
         isCalibrated,
@@ -201,11 +182,7 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
         baselineNotReachedModal,
         setBaselineNotReachedModal,
         onboardingAnswers,
-        setOnboardingAnswers,
-        onboardingRecommendation,
-        setOnboardingRecommendation,
-        hasShownOnboardingAlert,
-        setHasShownOnboardingAlert
+        setOnboardingAnswers
       }}
     >
       {children}

@@ -12,6 +12,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import FusionSessionScreen from '../fusion/screens/FusionSessionScreen';
 import PhenotypingScreen   from '../phenotyping/screens/PhenotypingScreen';
+import RelaxationGuideModule from '../relaxation_guide';
 
 const Stack = createNativeStackNavigator();
 
@@ -20,6 +21,7 @@ export default function PhysiologicalNavigator() {
     <Stack.Navigator screenOptions={{ headerShown: false }} initialRouteName="Fusion">
       <Stack.Screen name="Fusion" component={FusionSessionScreen} />
       <Stack.Screen name="Phenotyping" component={PhenotypingScreen} />
+      <Stack.Screen name="RelaxationGuide" component={RelaxationGuideModule} />
     </Stack.Navigator>
   );
 }

@@ -30,9 +30,6 @@ import { GamePlayerScreen } from './src/screens/GamePlayerScreen';
 import { RatingScreen } from './src/screens/RatingScreen';
 import { RecoveryScreen } from './src/screens/RecoveryScreen';
 import { HistoryScreen } from './src/screens/HistoryScreen';
-import { PrivacyPolicyScreen } from './src/screens/PrivacyPolicyScreen';
-import { OnboardingQuestionsScreen } from './src/screens/OnboardingQuestionsScreen';
-import { PermissionsScreen } from './src/screens/PermissionsScreen';
 
 LogBox.ignoreLogs(['Expo AV has been deprecated', 'Expo AV is deprecated']);
 
@@ -49,12 +46,6 @@ const MainNavigator = () => {
       );
     }
     switch (currentScreen) {
-      case 'PrivacyPolicy':
-        return <PrivacyPolicyScreen />;
-      case 'OnboardingQuestions':
-        return <OnboardingQuestionsScreen />;
-      case 'Permissions':
-        return <PermissionsScreen />;
       case 'UserProfile':
         return <UserProfileScreen />;
       case 'Dashboard':
