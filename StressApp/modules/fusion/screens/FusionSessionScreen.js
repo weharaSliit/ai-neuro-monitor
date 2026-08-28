@@ -198,7 +198,7 @@ export default function FusionSessionScreen({ navigation }) {
                     color={stateColor}
                 />
 
-                <CalibrationBanner userId={userId} token={token} />
+                <CalibrationBanner userId={userId} token={token} db={db} />
 
                 {/* Calibrate -- Calm Breathing: always visible (not tucked
                     behind a hidden button) -- a plain breathe-in/breathe-out

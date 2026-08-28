@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { View } from 'react-native';
-import CalibrationGate from './modules/shared/CalibrationGate';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
@@ -8,6 +7,7 @@ import { StatusBar } from 'expo-status-bar';
 import WelcomeScreen from './screens/WelcomeScreen';
 import LoginScreen from './screens/LoginScreen';
 import RegisterScreen from './screens/RegisterScreen';
+import AccountSetupScreen from './screens/AccountSetupScreen';
 import PhysiologicalNavigator from './modules/physiological/PhysiologicalNavigator';
 import AdminNavigator from './modules/admin/AdminNavigator';
 import CalibrationScreen from './modules/physiological/screens/CalibrationScreen';
@@ -34,6 +34,7 @@ const linking = {
       Welcome: 'welcome',
       Login: 'login',
       Register: 'register',
+      AccountSetup: 'account-setup',
       Admin: 'admin',
       Physiological: {
         path: '',
@@ -42,7 +43,6 @@ const linking = {
           Phenotyping:  'phenotyping-tab',
         },
       },
-      CalibrationGate:        'calibration-gate',
       Calibration:            'calibration',
       RingSummary:            'ring',
       EegSummary:             'eeg',
@@ -67,13 +67,21 @@ function RootNavigator() {
   }
 
   // Every login/session-restore lands straight in the User app now -- no
-  // mode-chooser screen. CalibrationGate is the real landing point: it
-  // intercepts if neither Ring nor EEG has a usable calibration on file,
-  // otherwise immediately forwards to Physiological (see
-  // modules/shared/CalibrationGate.js's own useEffect). Admin is reached
-  // one level down, via a link in ProfileScreen.js -- not a peer choice
-  // made at login.
-  const initialRoute = !user ? 'Welcome' : 'CalibrationGate';
+  // mode-chooser screen, and no blocking calibration gate either (that
+  // used to be a separate forced screen with its own "Calibrate Ring" /
+  // "Open EEG" buttons pointing at old standalone screens -- calibration
+  // is now inline on Fusion itself: CalibrateBreathingCard is always
+  // visible there, and CalibrationBanner nudges renewal non-blockingly.
+  // See modules/shared/CalibrationGate.js -- only its named exports
+  // (useCalibrationSummary, CalibrationBanner, useSignupAge) are still
+  // used; its old default-exported blocking screen is gone).
+  //
+  // A brand-new registration (user.isNewUser, see AuthContext.js's
+  // register()) lands on AccountSetupScreen instead -- a one-time device
+  // check + the same Calibrate card, skippable -- then
+  // completeOnboarding() flips isNewUser off so every login after that
+  // goes straight to Physiological like normal.
+  const initialRoute = !user ? 'Welcome' : (user.isNewUser ? 'AccountSetup' : 'Physiological');
 
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }} initialRouteName={initialRoute}>
@@ -81,21 +89,21 @@ function RootNavigator() {
         <>
           {/* User path: Physiological's 2-tab bar (Overview/Phenotyping --
               see PhysiologicalNavigator.js), simplified for a real end
-              user; CalibrationGate intercepts first if neither Ring nor
-              EEG has a usable calibration on file. Admin path:
-              AdminNavigator, a separate stack with full raw/technical data
-              for any registered user, independent of who's logged into
-              this phone -- reached via ProfileScreen.js's "Clinical &
-              Admin Suite" card, with its own way back (see
-              AdminUserListScreen.js's swap-mode button, which returns to
-              CalibrationGate). Everything technical that used to live in
-              the user app (raw baseline numbers, live signal charts,
-              session history detail, Relaxation Guide, phenotyping's
-              Analysis deep-dive) now lives only under Admin. Profile is
-              reached via a persistent header icon on each user tab, not a
-              tab of its own -- see ProfileScreen.js. */}
+              user -- calibration freshness is handled inline on that
+              screen, not as a separate gate. Admin path: AdminNavigator, a
+              separate stack with full raw/technical data for any
+              registered user, independent of who's logged into this phone
+              -- reached via ProfileScreen.js's "Clinical & Admin Suite"
+              card, with its own way back (see AdminUserListScreen.js's
+              swap-mode button, which returns straight to Physiological).
+              Everything technical that used to live in the user app (raw
+              baseline numbers, live signal charts, session history detail,
+              Relaxation Guide, phenotyping's Analysis deep-dive) now lives
+              only under Admin. Profile is reached via a persistent header
+              icon on each user tab, not a tab of its own -- see
+              ProfileScreen.js. */}
           <Stack.Screen name="Admin" component={AdminNavigator} />
-          <Stack.Screen name="CalibrationGate" component={CalibrationGate} />
+          <Stack.Screen name="AccountSetup" component={AccountSetupScreen} />
           <Stack.Screen name="Physiological" component={PhysiologicalNavigator} />
           <Stack.Screen
             name="Profile"
