@@ -11,6 +11,10 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -142,6 +146,34 @@ public class KeystrokeCollectorService extends AccessibilityService {
     private long   lastScrollEventMs     = 0;
     private static final long SCROLL_GESTURE_GAP_MS = 300;
 
+    // -----------------------------------------------------------------------
+    // Tilt angle — measured from accelerometer via low-pass gravity filter
+    // -----------------------------------------------------------------------
+    private SensorManager sensorManager;
+    private final float[] gravityFilter  = new float[3];  // low-pass gravity estimate
+    private final float   ALPHA_GRAVITY  = 0.8f;          // low-pass smoothing constant
+    private volatile double currentTiltAngle = 0.0;       // degrees; updated in real-time
+
+    private final SensorEventListener tiltListener = new SensorEventListener() {
+        @Override
+        public void onSensorChanged(SensorEvent event) {
+            // Low-pass filter to isolate gravity component from linear acceleration noise
+            gravityFilter[0] = ALPHA_GRAVITY * gravityFilter[0] + (1 - ALPHA_GRAVITY) * event.values[0];
+            gravityFilter[1] = ALPHA_GRAVITY * gravityFilter[1] + (1 - ALPHA_GRAVITY) * event.values[1];
+            gravityFilter[2] = ALPHA_GRAVITY * gravityFilter[2] + (1 - ALPHA_GRAVITY) * event.values[2];
+            // Tilt angle: angle between the device Y-axis and the gravity vector
+            // Result in degrees: 0 = flat on table, 90 = held upright, 180 = upside-down
+            double tiltRad = Math.atan2(
+                Math.sqrt(gravityFilter[0] * gravityFilter[0] + gravityFilter[2] * gravityFilter[2]),
+                gravityFilter[1]
+            );
+            currentTiltAngle = Math.toDegrees(tiltRad);
+        }
+
+        @Override
+        public void onAccuracyChanged(Sensor sensor, int accuracy) { /* not used */ }
+    };
+
     private long   lastFocusEventTime = 0;
     private static final long MAX_FOCUS_PAIR_MS = 500;
 
@@ -264,9 +296,22 @@ public class KeystrokeCollectorService extends AccessibilityService {
 
         startActivityRecognition();
 
+        // Register accelerometer for tilt angle collection
+        sensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
+        if (sensorManager != null) {
+            Sensor accel = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+            if (accel != null) {
+                // SENSOR_DELAY_NORMAL (~5 Hz) is sufficient for tilt — low battery cost
+                sensorManager.registerListener(tiltListener, accel, SensorManager.SENSOR_DELAY_NORMAL);
+                Log.d(TAG, "Accelerometer registered for tilt angle collection");
+            } else {
+                Log.w(TAG, "No accelerometer found -- tilt_angle will default to 0.0");
+            }
+        }
+
         handler.postDelayed(uploadRunnable, 10_000);
 
-        Log.d(TAG, "PhenoCare sensor live -- collecting flight times, scroll velocity & activity context");
+        Log.d(TAG, "PhenoCare sensor live -- collecting flight times, scroll velocity, tilt_angle & cpm");
     }
 
     private void startForegroundService() {
@@ -302,6 +347,9 @@ public class KeystrokeCollectorService extends AccessibilityService {
         super.onDestroy();
         try { unregisterReceiver(unlockReceiver); } catch (Exception ignored) {}
         stopActivityRecognition();
+        if (sensorManager != null) {
+            sensorManager.unregisterListener(tiltListener);
+        }
         handler.removeCallbacks(uploadRunnable);
     }
 
@@ -517,11 +565,25 @@ public class KeystrokeCollectorService extends AccessibilityService {
                 double interactionRate = (double) flightSnapshot.size() / elapsed;
                 double appSwitchRate   = (double) appSwitchSnapshot / elapsed;
 
+                // ── CPM: characters typed per minute (Option 1 — 5th feature) ──────
+                // elapsed is in minutes (see line 481). dwellSnapshot.size() == keystrokes
+                // this window. Clamp to 0 if no typing happened.
+                double cpm = (elapsed > 0 && !dwellSnapshot.isEmpty())
+                    ? (double) dwellSnapshot.size() / elapsed
+                    : 0.0;
+
+                // ── Tilt angle: snapshot of rolling accelerometer reading ────────
+                // currentTiltAngle is continuously updated by tiltListener above.
+                // Snapshot it here so the background thread doesn't race on it.
+                double tiltAngleSnapshot = currentTiltAngle;
+
                 JSONObject payload = new JSONObject();
                 payload.put("user_id",           currentUserId);
                 payload.put("dwell_times",       dwellArr);
                 payload.put("flight_times",      flightArr);
                 payload.put("scroll_velocity",   avgScroll);
+                payload.put("tilt_angle",         tiltAngleSnapshot);
+                payload.put("cpm",               cpm);
                 payload.put("interaction_rate",  interactionRate);
                 payload.put("app_switch_rate",   appSwitchRate);
                 payload.put("unlocks_count",     unlockSnapshot);
@@ -529,7 +591,9 @@ public class KeystrokeCollectorService extends AccessibilityService {
 
                 Log.d(TAG, "Sending to Flask: " + flightSnapshot.size()
                     + " flight times | scroll=" + String.format("%.1f", avgScroll)
-                    + " px/s | app_switches=" + appSwitchSnapshot
+                    + " px/s | tilt=" + String.format("%.1f", tiltAngleSnapshot)
+                    + " deg | cpm=" + String.format("%.1f", cpm)
+                    + " | app_switches=" + appSwitchSnapshot
                     + " | data_valid=" + windowDataValid);
 
                 String flaskResponse = httpPost(PREDICT_ENDPOINT, payload.toString());

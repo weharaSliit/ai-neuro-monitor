@@ -27,6 +27,16 @@ const SIGNAL_CONFIG = {
         measures: [{ id: 'scroll_vel', name: 'Scroll Velocity', unit: 'px/s', color: '#7FB596',
             explanation: 'How fast you scroll through content. Faster scrolling than usual can indicate impatience or difficulty focusing — a subtle pre-stress marker.' }],
     },
+    tilt: {
+        title: '📐 Device Tilt Angle',
+        measures: [{ id: 'tilt_angle', name: 'Tilt Angle', unit: '°', color: '#A895C9',
+            explanation: 'The angle at which you hold your phone, measured by the accelerometer. Studies show people hunch over their phone (higher tilt angle) when stressed or anxious. Population mean ≈59° when calm.' }],
+    },
+    cpm: {
+        title: '🔡 Typing Speed (CPM)',
+        measures: [{ id: 'cpm', name: 'Characters Per Minute', unit: 'cpm', color: '#E0A458',
+            explanation: 'How fast you type in this window. A significant drop in typing speed compared to your personal baseline can signal cognitive fatigue or mental overload, even before you consciously feel it.' }],
+    },
     app_switch: {
         title: '🔀 App Switching Frequency',
         measures: [{ id: 'switch_rate', name: 'Switch Rate', unit: '/min', color: '#A895C9',
@@ -59,6 +69,31 @@ export default function PhenotypingSignalDetailScreen({ route }) {
     const config = SIGNAL_CONFIG[signalId];
 
     const [measures, setMeasures] = useState(null);
+    // Personal baselines from Firebase — populated after 7-day calibration.
+    // Until calibration completes, bl is null and we fall back to the
+    // Kaggle population means as the displayed baseline string.
+    const [bl, setBl] = useState(null);
+
+    // ── Baseline listener ────────────────────────────────────────────────────
+    useEffect(() => {
+        if (!userId) return;
+        const blRef = ref(db, `phenotyping/users/${userId}/baselines`);
+        const handler = onValue(blRef, (snap) => {
+            setBl(snap.val() || null);
+        });
+        return () => off(blRef, 'value', handler);
+    }, [userId]);
+
+    // ── Helper: format a personal baseline mean with fallback ────────────────
+    // Returns e.g. "134 ms (personal)" if calibrated, or "120 ms (pop. avg)" if not.
+    function fmtBaseline(fieldKey, decimals, unit, populationFallback) {
+        const mean = bl?.[fieldKey]?.mean;
+        if (mean != null && mean > 0) {
+            const val = decimals === 0 ? Math.round(mean) : mean.toFixed(decimals);
+            return `${val} ${unit} (personal)`;
+        }
+        return `${populationFallback} (pop. avg)`;
+    }
 
     useEffect(() => {
         if (!userId || !config) return;
@@ -73,26 +108,62 @@ export default function PhenotypingSignalDetailScreen({ route }) {
             const latest = entries[entries.length - 1];
 
             if (signalId === 'keyboard') {
+                // Personal baseline from Firebase, or Kaggle population mean as fallback
+                const dwellMean  = bl?.avg_dwell?.mean  || 5.74;   // Kaggle mean in ms (stored as ms)
+                const flightMean = bl?.avg_flight?.mean || 917.46; // Kaggle mean in ms
                 setMeasures([
-                    { ...config.measures[0], value: `${Math.round(latest.avg_dwell || 0)} ms`, baseline: '120 ms',
-                      status: (latest.avg_dwell || 0) > 150 ? 'anomalous' : (latest.avg_dwell || 0) > 130 ? 'elevated' : 'normal' },
-                    { ...config.measures[1], value: `${Math.round(latest.avg_flight || 0)} ms`, baseline: '195 ms', status: 'normal' },
+                    { ...config.measures[0],
+                      value:    `${Math.round(latest.avg_dwell || 0)} ms`,
+                      baseline: fmtBaseline('avg_dwell', 0, 'ms', '5.74 ms'),
+                      // anomalous if >30% above personal mean; elevated if >15%
+                      status:   (latest.avg_dwell || 0) > dwellMean * 1.30 ? 'anomalous'
+                              : (latest.avg_dwell || 0) > dwellMean * 1.15 ? 'elevated' : 'normal' },
+                    { ...config.measures[1],
+                      value:    `${Math.round(latest.avg_flight || 0)} ms`,
+                      baseline: fmtBaseline('avg_flight', 0, 'ms', '917 ms'),
+                      status:   (latest.avg_flight || 0) > flightMean * 1.20 ? 'elevated' : 'normal' },
                 ]);
             } else if (signalId === 'scroll') {
-                setMeasures([{ ...config.measures[0], value: `${Math.round(latest.scroll_velocity || 0)} px/s`, baseline: '38 px/s',
-                    status: (latest.scroll_velocity || 0) > 60 ? 'elevated' : 'normal' }]);
+                const scrollMean = bl?.scroll_velocity?.mean || 922.39;
+                setMeasures([{ ...config.measures[0],
+                    value:    `${Math.round(latest.scroll_velocity || 0)} px/s`,
+                    baseline: fmtBaseline('scroll_velocity', 0, 'px/s', '922 px/s'),
+                    status:   (latest.scroll_velocity || 0) > scrollMean * 1.30 ? 'elevated' : 'normal' }]);
+            } else if (signalId === 'tilt') {
+                const tiltMean = bl?.tilt_angle?.mean || 59.09;
+                setMeasures([{ ...config.measures[0],
+                    value:    `${Math.round(latest.tilt_angle || 0)}°`,
+                    baseline: fmtBaseline('tilt_angle', 1, '°', '59.1°'),
+                    status:   (latest.tilt_angle || 0) > tiltMean * 1.30 ? 'elevated' : 'normal' }]);
+            } else if (signalId === 'cpm') {
+                const cpmMean = bl?.cpm?.mean || 39.40;
+                setMeasures([{ ...config.measures[0],
+                    value:    `${Math.round(latest.cpm || 0)} cpm`,
+                    baseline: fmtBaseline('cpm', 1, 'cpm', '39.4 cpm'),
+                    // elevated if typing speed drops more than 40% below personal mean
+                    status:   (latest.cpm || 0) < cpmMean * 0.60 && (latest.avg_dwell || 0) > 0 ? 'elevated' : 'normal' }]);
             } else if (signalId === 'app_switch') {
-                setMeasures([{ ...config.measures[0], value: `${(latest.app_switch_rate || 0).toFixed(1)} /min`, baseline: '2.0 /min', status: 'normal' }]);
+                const switchMean = bl?.app_switch_rate?.mean;
+                const switchBaseline = switchMean ? `${switchMean.toFixed(1)} /min (personal)` : '2.0 /min (pop. avg)';
+                setMeasures([{ ...config.measures[0],
+                    value:    `${(latest.app_switch_rate || 0).toFixed(1)} /min`,
+                    baseline: switchBaseline,
+                    status:   'normal' }]);
             } else if (signalId === 'activity') {
-                setMeasures([{ ...config.measures[0], value: latest.data_valid === false ? 'Motion' : 'Stationary', baseline: '—',
+                setMeasures([{ ...config.measures[0],
+                    value:  latest.data_valid === false ? 'Motion' : 'Stationary',
+                    baseline: '—',
                     status: latest.data_valid === false ? 'elevated' : 'normal' }]);
             } else if (signalId === 'screen') {
-                setMeasures([{ ...config.measures[0], value: `${latest.unlocks_count || 0} unlocks`, baseline: '—',
-                    status: (latest.unlocks_count || 0) > 30 ? 'elevated' : 'normal' }]);
+                setMeasures([{ ...config.measures[0],
+                    value:    `${latest.unlocks_count || 0} unlocks`,
+                    baseline: '—',
+                    status:   (latest.unlocks_count || 0) > 30 ? 'elevated' : 'normal' }]);
             }
         });
         return () => off(metricsRef, 'value', handler);
-    }, [userId, signalId]);
+    }, [userId, signalId, bl]);   // re-run when bl changes (calibration arrives mid-session)
+
 
     if (!config) {
         return (

@@ -54,40 +54,49 @@ def deploy_brain():
 
     # ── 1. Load Real Mobile Dataset ──────────────────────────────────────────
     kaggle_path = os.path.join(BASE_DIR, "research_v1_kaggle_mobile", "data", "processed", "kaggle_mobile_processed.csv")
-    cmu_path = os.path.join(BASE_DIR, "research_v2_cmu", "data", "processed", "cmu_refined.csv")
 
     if os.path.exists(kaggle_path):
         df_mobile = pd.read_csv(kaggle_path)
-        
-        # Extract mobile dwell (ms), flight (ms), scroll magnitude (px/s)
-        dwell_ms = df_mobile["avg_dwell"].values * 1000.0   # Convert to ms
-        flight_ms = df_mobile["avg_flight"].values * 1000.0 # Convert to ms
-        scroll_val = df_mobile["scroll_magnitude"].fillna(45.0).values
-        
-        X_train_raw = np.column_stack([dwell_ms, flight_ms, scroll_val])
-        training_source = f"Kaggle Mobile Behavioral Biometrics ({len(X_train_raw)} real mobile records, 20 users)"
-        print(f"📊 Training on REAL Mobile Touchscreen Data: {len(X_train_raw)} samples...")
-    elif os.path.exists(cmu_path):
-        df_cmu = pd.read_csv(cmu_path)
-        dwell_ms = df_cmu["avg_dwell"].values * 1000.0
-        flight_ms = df_cmu["avg_flight"].values * 1000.0
-        scroll_val = np.random.normal(loc=45.0, scale=12.0, size=len(dwell_ms))
-        X_train_raw = np.column_stack([dwell_ms, flight_ms, scroll_val])
-        training_source = f"CMU Keystroke Baseline ({len(X_train_raw)} samples, 51 participants)"
-        print(f"⚠️  Kaggle data not found — falling back to CMU: {len(X_train_raw)} samples...")
+
+        # Extract all 5 mobile features: dwell (ms), flight (ms), scroll (px/s), tilt (deg), typing_speed (CPM)
+        dwell_ms    = df_mobile["avg_dwell"].values * 1000.0    # Convert to ms
+        flight_ms   = df_mobile["avg_flight"].values * 1000.0   # Convert to ms
+        scroll_val  = df_mobile["scroll_magnitude"].fillna(45.0).values
+        tilt_val    = df_mobile["tilt_axis"].fillna(59.09).values       # Population mean from Kaggle (deg)
+        cpm_val     = df_mobile["typing_speed"].fillna(39.40).values    # Population mean from Kaggle (CPM)
+
+        X_train_raw = np.column_stack([dwell_ms, flight_ms, scroll_val, tilt_val, cpm_val])
+        training_source = f"Kaggle Mobile 5-Feature ({len(X_train_raw)} real mobile records, 20 users)"
+        print(f"📊 Training on REAL Mobile Touchscreen Data (5 features): {len(X_train_raw)} samples...")
     else:
-        np.random.seed(42)
-        X_train_raw = np.random.normal(loc=[145, 230, 45], scale=[15, 25, 12], size=(1000, 3))
-        training_source = "Fallback synthetic baseline"
+        # ── HARD STOP: No synthetic or random fallback allowed ───────────────
+        # The production OC-SVM MUST be trained on real mobile touchscreen data.
+        # Allowing synthetic or CMU-scroll-imputed data would silently corrupt the
+        # scaler statistics and invalidate all academic precision claims (92.7%).
+        raise FileNotFoundError(
+            "\n\n❌ [S8] PRODUCTION DEPLOYMENT BLOCKED — Real mobile data not found.\n"
+            f"   Expected: {kaggle_path}\n\n"
+            "   FIX: Run the Kaggle preprocessing pipeline first:\n"
+            "     1. Download dataset from:\n"
+            "        https://www.kaggle.com/datasets/aryaanyaadav/mobile-behavioral-biometrics-dataset\n"
+            "     2. Place the CSV in:\n"
+            "        phenotyping/research_v1_kaggle_mobile/data/raw/behavioral_biometrics.csv\n"
+            "     3. Run:  python phenotyping/research_v1_kaggle_mobile/src/s1_kaggle_preprocess.py\n"
+            "     4. Then re-run this script.\n\n"
+            "   ⚠️  Synthetic/random fallback data has been permanently removed from this pipeline\n"
+            "       to preserve academic integrity of the deployed model.\n"
+        )
 
     # ── 2. Fit StandardScaler (Feature Scaler) ───────────────────────────────
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train_raw)
 
-    print(f"✅ StandardScaler fitted:")
-    print(f"   Dwell  mean: {scaler.mean_[0]:.2f} ms | std: {scaler.scale_[0]:.2f} ms")
-    print(f"   Flight mean: {scaler.mean_[1]:.2f} ms | std: {scaler.scale_[1]:.2f} ms")
-    print(f"   Scroll mean: {scaler.mean_[2]:.2f} px/s | std: {scaler.scale_[2]:.2f} px/s")
+    print(f"✅ StandardScaler fitted (5 features):")
+    print(f"   Dwell    mean: {scaler.mean_[0]:.2f} ms   | std: {scaler.scale_[0]:.2f} ms")
+    print(f"   Flight   mean: {scaler.mean_[1]:.2f} ms   | std: {scaler.scale_[1]:.2f} ms")
+    print(f"   Scroll   mean: {scaler.mean_[2]:.2f} px/s | std: {scaler.scale_[2]:.2f} px/s")
+    print(f"   Tilt     mean: {scaler.mean_[3]:.2f} deg  | std: {scaler.scale_[3]:.2f} deg")
+    print(f"   CPM      mean: {scaler.mean_[4]:.2f} cpm  | std: {scaler.scale_[4]:.2f} cpm")
 
     # ── 3. Fit One-Class SVM with Hyperparameter Calibration ─────────────────
     best_nu = 0.05
@@ -113,12 +122,16 @@ def deploy_brain():
         'means': {
             'avg_dwell': float(scaler.mean_[0]),
             'avg_flight': float(scaler.mean_[1]),
-            'scroll_velocity': float(scaler.mean_[2])
+            'scroll_velocity': float(scaler.mean_[2]),
+            'tilt_angle': float(scaler.mean_[3]),
+            'cpm': float(scaler.mean_[4])
         },
         'stds': {
             'avg_dwell': float(scaler.scale_[0]),
             'avg_flight': float(scaler.scale_[1]),
-            'scroll_velocity': float(scaler.scale_[2])
+            'scroll_velocity': float(scaler.scale_[2]),
+            'tilt_angle': float(scaler.scale_[3]),
+            'cpm': float(scaler.scale_[4])
         }
     }
     ema_engine = EMAAdaptiveEngine(initial_baseline=initial_baseline, alpha=0.1)
@@ -140,7 +153,7 @@ def deploy_brain():
     model_package = {
         "model_name": "Pre-Stress Behavioral Engine (Adaptive Continual Learning)",
         "version": "4.0.0",
-        "inputs": ["dwell_time", "flight_time", "scroll_velocity"],
+        "inputs": ["dwell_time", "flight_time", "scroll_velocity", "tilt_angle", "cpm"],
         "logic": "Dual-Layer Gate: OC-SVM (Population Scale) + Composite Z-Score (Personal Baseline) + Drift Analyzer",
         "calibration_period_days": 7,
         "training_source": training_source,
