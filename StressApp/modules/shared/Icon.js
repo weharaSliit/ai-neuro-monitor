@@ -37,9 +37,23 @@ export const NAMES = {
   signal:       'signal-cellular-3',
   wifiOff:      'wifi-off',
 
-  // Normal/Stress state icons -- replaces the emoji faces (😌/😰) used
-  // pre-redesign. Same 0/1 Normal/Stress vocabulary everywhere (see
-  // physiological/config/config.js's STRESS_LABELS).
+  // Normal/Stress state icons -- replaces the emoji faces used
+  // pre-redesign. Same 0/1 Normal/Stress vocabulary everywhere.
   moodNormal:   'emoticon-happy-outline',
-  moodStress:   'emoticon-cry-outline',
+  moodStress:   'emoticon-sad-outline',
+  moodHappy:    'emoticon-happy-outline',
+  moodCalm:     'emoticon-outline',
+  moodNeutral:  'emoticon-neutral-outline',
+
+  // Wellness & Zen concepts
+  breathe:      'weather-windy',
+  lotus:        'flower-tulip-outline',
+  sparkle:      'sparkles',
+  sound:        'volume-high',
+  wave:         'waveform',
+  heart:        'heart-pulse',
+  shield:       'shield-check-outline',
+  info:         'information-outline',
+  bell:         'bell-outline',
+  sparkles:     'creation',
 };

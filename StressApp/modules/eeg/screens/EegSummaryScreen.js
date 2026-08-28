@@ -9,7 +9,6 @@
 // ============================================================
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, ScrollView, StyleSheet } from 'react-native';
-import axios from 'axios';
 import { ref, onValue, off, get } from 'firebase/database';
 import { db } from '../firebase';
 import ScreenBackground from '../../shared/ScreenBackground';
@@ -18,11 +17,9 @@ import StatusDot from '../../shared/StatusDot';
 import Icon, { NAMES } from '../../shared/Icon';
 import MoodBadge from '../../shared/MoodBadge';
 import { useTheme } from '../../physiological/config/ThemeContext';
+import { COLORS } from '../../physiological/config/theme';
 import { useAuth } from '../../../context/AuthContext';
 import { TASK_STATE_LABELS } from '../config/config';
-
-const EEG_API_BASE = 'https://mindpulse-eeg.onrender.com';
-const eegClient = axios.create({ baseURL: EEG_API_BASE, timeout: 45000 });
 
 function latestWindow(windowsObj) {
   if (!windowsObj) return null;
@@ -39,179 +36,137 @@ function DistBar({ label, value, total, color, muted }) {
       <View style={[styles.distBarBg, { backgroundColor: muted + '30' }]}>
         <View style={[styles.distBarFill, { width: `${pct}%`, backgroundColor: color }]} />
       </View>
-      <Text style={[styles.distValue, { color }]}>{value}</Text>
-      <Text style={[styles.distLabel, { color: muted }]}>{label}</Text>
+      <Text style={[styles.distVal, { color }]}>{value} ({pct.toFixed(0)}%)</Text>
     </View>
   );
 }
 
 export default function EegSummaryScreen() {
-  const { COLORS, theme } = useTheme();
-  const { user, token } = useAuth();
+  const { theme, COLORS } = useTheme();
+  const { user } = useAuth();
   const userId = user?.userId;
 
-  const [calib, setCalib] = useState(null);
-  const [latest, setLatest] = useState(null);
+  const [currentSessionId, setCurrentSessionId] = useState(null);
   const [hasSession, setHasSession] = useState(false);
-  const [sessionDist, setSessionDist] = useState({ normal: 0, stress: 0 });
+  const [sessionWindows, setSessionWindows] = useState(null);
   const [recentSessions, setRecentSessions] = useState([]);
+  const [sessionDist, setSessionDist] = useState({ normal: 0, stress: 0 });
 
-  const loadCalib = useCallback(async () => {
-    if (!token) return;
-    try {
-      const res = await eegClient.get('/calibration/status', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      setCalib(res.data);
-    } catch {
-      setCalib(null);
-    }
-  }, [token]);
-
-  useEffect(() => { loadCalib(); }, [loadCalib]);
-
-  // Watches the current live session, same pointer EegSessionScreen.js
-  // used, just no raw-signal subscription -- only the derived task-state
-  // label + real quality score, so this stays lightweight.
   useEffect(() => {
     if (!userId) return;
-    const pointerRef = ref(db, 'psychological/current_session_id');
-    let sessionRef = null;
-    let sessionHandler = null;
-    const pointerHandler = onValue(pointerRef, (snap) => {
-      const sessionId = snap.val();
-      if (sessionRef) off(sessionRef, 'value', sessionHandler);
-      if (!sessionId) { setHasSession(false); setLatest(null); return; }
-      sessionRef = ref(db, `psychological/${userId}/${sessionId}`);
-      sessionHandler = onValue(sessionRef, (s) => {
-        const data = s.val();
-        setHasSession(!!data);
-        setLatest(latestWindow(data));
-      });
+    const pRef = ref(db, 'psychological/current_session_id');
+    const h = onValue(pRef, (snap) => {
+      const sid = snap.val();
+      setCurrentSessionId(sid || null);
+      setHasSession(!!sid);
     });
-    return () => {
-      off(pointerRef, 'value', pointerHandler);
-      if (sessionRef) off(sessionRef, 'value', sessionHandler);
-    };
+    return () => off(pRef, 'value', h);
   }, [userId]);
 
-  // Session history -- one-time read of every past session under this
-  // user (there's no history REST route for EEG), majority-voted per
-  // session same as Ring/Admin's derivation.
+  useEffect(() => {
+    if (!userId || !currentSessionId) {
+      setSessionWindows(null);
+      return;
+    }
+    const sRef = ref(db, `psychological/${userId}/${currentSessionId}`);
+    const h = onValue(sRef, (snap) => setSessionWindows(snap.val()));
+    return () => off(sRef, 'value', h);
+  }, [userId, currentSessionId]);
+
+  const latest = latestWindow(sessionWindows);
+
   useEffect(() => {
     if (!userId) return;
-    get(ref(db, `psychological/${userId}`)).then((snap) => {
-      const data = snap.val() || {};
-      const sids = Object.keys(data).sort();
-      const dist = { normal: 0, stress: 0 };
+    const userRef = ref(db, `psychological/${userId}`);
+    get(userRef).then((snap) => {
+      const all = snap.val() || {};
+      const sids = Object.keys(all);
+      let nNorm = 0;
+      let nStress = 0;
       const recents = [];
       sids.forEach((sid) => {
-        const windowsObj = data[sid];
-        const keys = Object.keys(windowsObj || {}).filter((k) => /^\d+$/.test(k));
-        const preds = keys.map((k) => windowsObj[k]).filter((w) => w && !w.skipped && w.task_state_label !== undefined);
-        if (preds.length === 0) return;
-        const stressCount = preds.filter((w) => w.task_state_label === 1).length;
-        const majority = stressCount > preds.length / 2 ? 1 : 0;
-        if (majority === 1) dist.stress++; else dist.normal++;
-        recents.push({ sid, label: majority, windowCount: preds.length, last: preds[preds.length - 1] });
+        const sObj = all[sid];
+        if (!sObj || typeof sObj !== 'object') return;
+        const keys = Object.keys(sObj).filter((k) => /^\d+$/.test(k));
+        if (!keys.length) return;
+        keys.sort((a, b) => Number(a) - Number(b));
+        const lastW = sObj[keys[keys.length - 1]];
+        if (lastW?.task_state_label === 1) nStress++;
+        else if (lastW?.task_state_label === 0) nNorm++;
+        recents.push({
+          sid,
+          label: lastW?.task_state_label,
+          windowCount: keys.length,
+        });
       });
-      setSessionDist(dist);
+      setSessionDist({ normal: nNorm, stress: nStress });
       setRecentSessions(recents.slice(-5).reverse());
     }).catch(() => {});
   }, [userId, hasSession]);
 
   const t = theme;
-  const calibrated = calib?.exists;
-  const calibColor = calibrated ? COLORS.normal : COLORS.warning;
-  const label = latest?.task_state_label;
-  const stateColor = label !== undefined && label !== null ? (label === 1 ? COLORS.stress : COLORS.normal) : COLORS.brand;
   const qualityScore = latest?.eeg_quality_score;
   const qualityTrusted = latest?.eeg_quality_flag;
 
   return (
     <ScreenBackground>
-      <ScrollView contentContainerStyle={{ padding: 20, paddingTop: 16, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
-        <View style={styles.header}>
-          <Icon name={NAMES.eeg} size={26} color={COLORS.warning} />
-          <View style={{ marginLeft: 10 }}>
-            <Text style={[styles.title, { color: t.text }]}>EEG Headband</Text>
-            <Text style={[styles.subtitle, { color: t.textMuted }]}>Connection, signal quality & calibration</Text>
-          </View>
-        </View>
-
-        <Card accentColor={hasSession ? COLORS.normal : COLORS.stress} elevated>
+      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+        {/* Device Status */}
+        <Card accentColor={hasSession ? COLORS.normal : COLORS.warning} elevated style={styles.card}>
           <View style={styles.rowBetween}>
             <View style={styles.rowGap}>
-              <Icon name={NAMES.device} size={18} color={hasSession ? COLORS.normal : COLORS.stress} />
-              <Text style={[styles.cardTitle, { color: t.text, marginBottom: 0 }]}>Device Status</Text>
+              <Icon name={NAMES.device} size={18} color={hasSession ? COLORS.normal : COLORS.warning} />
+              <Text style={[styles.cardTitle, { color: t.text, marginBottom: 0 }]}>Headband Telemetry</Text>
             </View>
-            <StatusDot color={hasSession ? COLORS.normal : COLORS.stress} active={hasSession} size={10} />
+            <View style={[styles.statusPill, { backgroundColor: hasSession ? COLORS.normalSoft : COLORS.warningSoft }]}>
+              <StatusDot color={hasSession ? COLORS.normal : COLORS.warning} active={hasSession} size={8} />
+              <Text style={[styles.statusPillText, { color: hasSession ? COLORS.normalDark : COLORS.warningDark }]}>
+                {hasSession ? 'Streaming' : 'Standby'}
+              </Text>
+            </View>
           </View>
-          <Text style={[styles.statusValue, { color: hasSession ? COLORS.normal : COLORS.stress }]}>
-            {hasSession ? 'Connected' : 'Not Connected'}
-          </Text>
-          <Text style={[styles.cardSub, { color: t.textMuted }]}>
-            {hasSession ? 'EEG headband streaming (wearable02)' : 'Put the headband on to start a session'}
+          <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 10 }]}>
+            {hasSession ? 'EEG headband actively streaming neural channels (wearable02)' : 'Put on the headband to begin measuring mental workload'}
           </Text>
         </Card>
 
-        <Card accentColor={stateColor} elevated>
-          <Text style={[styles.cardTitle, { color: t.text }]}>Current Reading</Text>
-          {!hasSession ? (
-            <Text style={[styles.stateLabel, { color: t.textMuted, fontSize: 15 }]}>
-              No active session right now.
-            </Text>
-          ) : (
-            <>
-              <View style={styles.readingRow}>
-                <MoodBadge stressed={label === 1} color={stateColor} size={52} />
-                <Text style={[styles.stateLabel, { color: stateColor, marginLeft: 12 }]}>
-                  {label !== undefined && label !== null ? TASK_STATE_LABELS[label] : 'Scoring…'}
-                </Text>
-              </View>
-              {qualityScore !== undefined && qualityScore !== null && (
-                <View style={styles.qualityRow}>
-                  <Icon name={NAMES.signal} size={16} color={qualityTrusted ? COLORS.normal : COLORS.warning} />
-                  <Text style={[styles.cardSub, { color: t.textMuted, marginLeft: 6 }]}>
-                    Signal quality {qualityScore.toFixed(0)} · {qualityTrusted ? 'good electrode contact' : 'check electrode contact'}
-                  </Text>
-                </View>
-              )}
-            </>
-          )}
-        </Card>
+        {/* Current State & Quality */}
+        {hasSession && qualityScore !== undefined && qualityScore !== null && (
+          <Card accentColor={qualityTrusted ? COLORS.normal : COLORS.warning} elevated style={styles.card}>
+            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 8 }]}>Electrode Contact Quality</Text>
+            <View style={[styles.qualityBox, { backgroundColor: qualityTrusted ? COLORS.normalSoft : COLORS.warningSoft }]}>
+              <Icon name={NAMES.signal} size={18} color={qualityTrusted ? COLORS.normalDark : COLORS.warningDark} />
+              <Text style={[styles.qualityText, { color: qualityTrusted ? COLORS.normalDark : COLORS.warningDark }]}>
+                Electrode Contact Quality: {qualityScore.toFixed(0)}% · {qualityTrusted ? 'Optimal Signal' : 'Adjust Placement'}
+              </Text>
+            </View>
+          </Card>
+        )}
 
-        <Card accentColor={calibColor}>
-          <View style={styles.rowBetween}>
-            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 0 }]}>Calibration</Text>
-            <Icon name={NAMES.calibration} size={18} color={calibColor} />
-          </View>
-          <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 6 }]}>
-            {calibrated
-              ? `Last calibrated ${Math.floor(calib.age_days ?? 0)} days ago.`
-              : 'Calibrates automatically in the first ~75s of a session — just wear the headband.'}
-          </Text>
-        </Card>
-
+        {/* Session Distribution */}
         {(sessionDist.normal + sessionDist.stress) > 0 && (
-          <Card>
-            <Text style={[styles.cardTitle, { color: t.text }]}>Session History</Text>
+          <Card style={styles.card}>
+            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 6 }]}>Session Distribution</Text>
             <DistBar label="Low Load" value={sessionDist.normal} total={sessionDist.normal + sessionDist.stress} color={COLORS.normal} muted={t.textMuted} />
             <DistBar label="High Load" value={sessionDist.stress} total={sessionDist.normal + sessionDist.stress} color={COLORS.stress} muted={t.textMuted} />
           </Card>
         )}
 
+        {/* Recent Sessions */}
         {recentSessions.length > 0 && (
-          <Card>
-            <Text style={[styles.cardTitle, { color: t.text }]}>Recent Sessions</Text>
+          <Card style={styles.card}>
+            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 6 }]}>Recent Sessions</Text>
             {recentSessions.map((s, i) => {
               const color = s.label === 1 ? COLORS.stress : COLORS.normal;
               return (
                 <View key={s.sid} style={[styles.activityRow, i === recentSessions.length - 1 && { borderBottomWidth: 0 }, { borderBottomColor: t.border }]}>
-                  <MoodBadge stressed={s.label === 1} color={color} size={32} />
-                  <View style={{ flex: 1, marginLeft: 10 }}>
+                  <MoodBadge stressed={s.label === 1} color={color} size={36} />
+                  <View style={{ flex: 1, marginLeft: 12 }}>
                     <Text style={[styles.activityLabel, { color: t.text }]}>{TASK_STATE_LABELS[s.label]}</Text>
-                    <Text style={[styles.activitySub, { color: t.textMuted }]}>{s.windowCount} windows</Text>
+                    <Text style={[styles.activitySub, { color: t.textMuted }]}>{s.windowCount} windows captured</Text>
+                  </View>
+                  <View style={[styles.windowBadge, { backgroundColor: color + '15' }]}>
+                    <Text style={[styles.windowBadgeText, { color }]}>{s.label === 1 ? 'High' : 'Low'}</Text>
                   </View>
                 </View>
               );
@@ -224,23 +179,34 @@ export default function EegSummaryScreen() {
 }
 
 const styles = StyleSheet.create({
-  header: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
-  title: { fontSize: 22, fontWeight: '900' },
+  scroll: { paddingBottom: 40 },
+  header: { flexDirection: 'row', alignItems: 'center', marginBottom: 18 },
+  headerIconCircle: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
+  title: { fontSize: 22, fontWeight: '900', letterSpacing: -0.2 },
   subtitle: { fontSize: 12, marginTop: 2 },
+  card: { marginHorizontal: 20, marginVertical: 8, padding: 18, borderRadius: 22 },
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   rowGap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   cardTitle: { fontSize: 15, fontWeight: '800' },
   cardSub: { fontSize: 12 },
-  statusValue: { fontSize: 18, fontWeight: '900', marginTop: 8 },
-  stateLabel: { fontSize: 18, fontWeight: '900' },
+  statusPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
+  statusPillText: { fontSize: 11, fontWeight: '800' },
+  stateLabel: { fontSize: 19, fontWeight: '900', letterSpacing: -0.2 },
+  readingSub: { fontSize: 12, marginTop: 2 },
+  waitingBlock: { paddingVertical: 10 },
   readingRow: { flexDirection: 'row', alignItems: 'center', marginTop: 10 },
-  qualityRow: { flexDirection: 'row', alignItems: 'center', marginTop: 12 },
+  qualityBox: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, borderRadius: 14, marginTop: 14 },
+  qualityText: { fontSize: 12, fontWeight: '700' },
   distRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 },
   distBarBg: { flex: 1, height: 8, borderRadius: 4, overflow: 'hidden' },
   distBarFill: { height: 8, borderRadius: 4 },
+  distVal: { fontSize: 12, fontWeight: '800', minWidth: 60, textAlign: 'right' },
   distValue: { width: 22, fontSize: 13, fontWeight: '800', textAlign: 'right' },
-  distLabel: { width: 65, fontSize: 11 },
+  distLabel: { width: 65, fontSize: 11, fontWeight: '600' },
   activityRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1 },
   activityLabel: { fontSize: 13, fontWeight: '700' },
   activitySub: { fontSize: 11, marginTop: 1 },
+  windowBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
+  windowBadgeText: { fontSize: 11, fontWeight: '700' },
 });
+

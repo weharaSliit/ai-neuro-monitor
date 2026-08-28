@@ -8,7 +8,6 @@ import { StatusBar } from 'expo-status-bar';
 import WelcomeScreen from './screens/WelcomeScreen';
 import LoginScreen from './screens/LoginScreen';
 import RegisterScreen from './screens/RegisterScreen';
-import AppModeScreen from './screens/AppModeScreen';
 import PhysiologicalNavigator from './modules/physiological/PhysiologicalNavigator';
 import AdminNavigator from './modules/admin/AdminNavigator';
 import RelaxationGuideModule from './modules/relaxation_guide';
@@ -36,7 +35,6 @@ const linking = {
       Welcome: 'welcome',
       Login: 'login',
       Register: 'register',
-      AppMode: 'app-mode',
       Admin: 'admin',
       Physiological: {
         path: '',
@@ -69,31 +67,34 @@ function RootNavigator() {
     return <View style={{ flex: 1, backgroundColor: theme.bg }} />;
   }
 
-  // Every login/session-restore lands on AppMode first -- "Continue as
-  // User" (see AppModeScreen.js) is where the CalibrationGate check now
-  // happens, since Admin doesn't need a calibrated device of its own to
-  // browse other users' data.
-  const initialRoute = !user ? 'Welcome' : 'AppMode';
+  // Every login/session-restore lands straight in the User app now -- no
+  // mode-chooser screen. CalibrationGate is the real landing point: it
+  // intercepts if neither Ring nor EEG has a usable calibration on file,
+  // otherwise immediately forwards to Physiological (see
+  // modules/shared/CalibrationGate.js's own useEffect). Admin is reached
+  // one level down, via a link in ProfileScreen.js -- not a peer choice
+  // made at login.
+  const initialRoute = !user ? 'Welcome' : 'CalibrationGate';
 
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }} initialRouteName={initialRoute}>
       {user ? (
         <>
-          {/* AppMode ("Continue as User" / "Enter Admin App") is the real
-              landing point for every login now. User path: Physiological's
-              2-tab bar (Overview/Phenotyping -- see PhysiologicalNavigator.js),
-              simplified for a real end user; CalibrationGate intercepts
-              first if neither Ring nor EEG has a usable calibration on
-              file (see modules/shared/CalibrationGate.js). Admin path:
+          {/* User path: Physiological's 2-tab bar (Overview/Phenotyping --
+              see PhysiologicalNavigator.js), simplified for a real end
+              user; CalibrationGate intercepts first if neither Ring nor
+              EEG has a usable calibration on file. Admin path:
               AdminNavigator, a separate stack with full raw/technical data
               for any registered user, independent of who's logged into
-              this phone. Everything technical that used to live in the
-              user app (raw baseline numbers, live signal charts, session
-              history detail, Relaxation Guide, phenotyping's Analysis
-              deep-dive) now lives only under Admin. Profile is reached via
-              a persistent header icon on each user tab, not a tab of its
-              own -- see ProfileScreen.js. */}
-          <Stack.Screen name="AppMode" component={AppModeScreen} />
+              this phone -- reached via ProfileScreen.js's "Clinical &
+              Admin Suite" card, with its own way back (see
+              AdminUserListScreen.js's swap-mode button, which returns to
+              CalibrationGate). Everything technical that used to live in
+              the user app (raw baseline numbers, live signal charts,
+              session history detail, Relaxation Guide, phenotyping's
+              Analysis deep-dive) now lives only under Admin. Profile is
+              reached via a persistent header icon on each user tab, not a
+              tab of its own -- see ProfileScreen.js. */}
           <Stack.Screen name="Admin" component={AdminNavigator} />
           <Stack.Screen name="CalibrationGate" component={CalibrationGate} />
           <Stack.Screen name="Physiological" component={PhysiologicalNavigator} />

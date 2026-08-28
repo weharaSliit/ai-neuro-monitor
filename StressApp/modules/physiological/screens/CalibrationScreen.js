@@ -6,6 +6,7 @@ import {
 import ScreenBackground from '../../shared/ScreenBackground';
 import { useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../config/ThemeContext';
+import { COLORS } from '../config/theme';
 import { useAuth } from '../../../context/AuthContext';
 import api from '../api/client';
 
@@ -114,28 +115,30 @@ export default function CalibrationScreen() {
   return (
     <ScreenBackground>
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+        <View style={styles.header}>
+          <Text style={[styles.title, { color: text }]}>Baseline Calibration</Text>
+          <Text style={[styles.subtitle, { color: muted }]}>
+            Establishes your personal resting baseline — comparing your unique physiology against your own relaxed state rather than a generic average.
+          </Text>
+        </View>
 
-        <Text style={[styles.title, { color: text }]}>Calibration</Text>
-        <Text style={[styles.subtitle, { color: muted }]}>
-          Establishes your personal resting baseline — the model compares
-          future readings against this, not a generic average.
-        </Text>
-
-        {/* Current status -- plain language only, no raw sensor numbers.
-            age_days/is_stale_soft/is_stale_hard already come back from
-            GET /baseline/<user_id> (see backend/physiological/app.py). */}
+        {/* Current status */}
         <View style={[styles.card, { backgroundColor: card, borderColor: border }]}>
-          <Text style={[styles.cardTitle, { color: text }]}>Current Baseline</Text>
+          <Text style={[styles.cardTitle, { color: text }]}>Current Status</Text>
           {baseline?.exists ? (
-            <Text style={[styles.statusLine, { color: baseline.is_stale_soft ? COLORS.warning : COLORS.normal }]}>
-              {baseline.is_stale_hard
-                ? '⚠ Your baseline needs renewing'
-                : baseline.is_stale_soft
-                  ? `✓ Baseline is set — ${Math.floor(baseline.age_days ?? 0)} days old, renew when convenient`
-                  : '✓ Baseline is set and up to date'}
-            </Text>
+            <View style={[styles.statusBanner, { backgroundColor: baseline.is_stale_soft ? COLORS.warningSoft : COLORS.normalSoft }]}>
+              <Text style={[styles.statusLine, { color: baseline.is_stale_soft ? COLORS.warningDark : COLORS.normalDark }]}>
+                {baseline.is_stale_hard
+                  ? '⚠ Your baseline needs renewing (>30 days old)'
+                  : baseline.is_stale_soft
+                    ? `✓ Active — ${Math.floor(baseline.age_days ?? 0)} days old (recalibrate when convenient)`
+                    : '✓ Baseline is active, accurate, and up to date'}
+              </Text>
+            </View>
           ) : (
-            <Text style={[styles.statusLine, { color: COLORS.warning }]}>No baseline yet</Text>
+            <View style={[styles.statusBanner, { backgroundColor: COLORS.warningSoft }]}>
+              <Text style={[styles.statusLine, { color: COLORS.warningDark }]}>No baseline calibrated yet</Text>
+            </View>
           )}
         </View>
 
@@ -144,7 +147,7 @@ export default function CalibrationScreen() {
           {inProgress || phase === 'done' ? (
             <>
               <Text style={[styles.cardTitle, { color: text }]}>
-                {phase === 'done' ? 'Calibration Complete' : 'Calibrating…'}
+                {phase === 'done' ? 'Calibration Complete' : 'Calibrating Baseline…'}
               </Text>
               <View style={styles.stepperRow}>
                 {STEPS.map((s, i) => (
@@ -167,25 +170,26 @@ export default function CalibrationScreen() {
               </Text>
               <Text style={[styles.stepHint, { color: muted }]}>{STEPS[stepIndex]?.hint}</Text>
               {inProgress && (
-                <View style={styles.spinnerRow}>
-                  <ActivityIndicator color={COLORS.brand} />
-                  <Text style={[styles.spinnerText, { color: muted }]}>
-                    Keep the ring worn and stay still…
+                <View style={[styles.spinnerRow, { backgroundColor: COLORS.brandSoft }]}>
+                  <ActivityIndicator color={COLORS.brand} size="small" />
+                  <Text style={[styles.spinnerText, { color: COLORS.brandDark }]}>
+                    Keep the ring worn, sit comfortably, and breathe calmly…
                   </Text>
                 </View>
               )}
               {phase === 'done' && (
-                <Text style={[styles.doneText, { color: COLORS.normal }]}>
-                  Your baseline has been saved and is now in use.
-                </Text>
+                <View style={[styles.doneBox, { backgroundColor: COLORS.normalSoft }]}>
+                  <Text style={[styles.doneText, { color: COLORS.normalDark }]}>
+                    ✓ Your personal baseline has been saved and is now active for stress scoring.
+                  </Text>
+                </View>
               )}
             </>
           ) : (
             <>
-              <Text style={[styles.cardTitle, { color: text }]}>Start Calibration</Text>
+              <Text style={[styles.cardTitle, { color: text }]}>Begin Guided Capture</Text>
               <Text style={[styles.cardSub, { color: muted }]}>
-                Takes about 3.5 minutes. Wear the ring, sit somewhere calm,
-                and stay relaxed and still for the whole capture.
+                Takes about 3.5 minutes. Wear the smart ring, rest your hands comfortably in your lap, and stay relaxed throughout the capture.
               </Text>
               {phase === 'error' && errorMsg && (
                 <Text style={[styles.errorText, { color: COLORS.stress }]}>{errorMsg}</Text>
@@ -206,7 +210,7 @@ export default function CalibrationScreen() {
             style={[styles.recalibrateBtn, { backgroundColor: card, borderColor: border }]}
             onPress={() => { setPhase('idle'); setErrorMsg(null); }}
           >
-            <Text style={[styles.recalibrateText, { color: COLORS.brand }]}>Recalibrate</Text>
+            <Text style={[styles.recalibrateText, { color: COLORS.brand }]}>Recalibrate Baseline</Text>
           </TouchableOpacity>
         )}
 
@@ -217,26 +221,28 @@ export default function CalibrationScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe:            { flex: 1 },
-  container:       { padding: 20 },
-  title:           { fontSize: 24, fontWeight: '900' },
-  subtitle:        { fontSize: 13, marginTop: 4, marginBottom: 16, lineHeight: 19 },
-  card:            { padding: 18, borderRadius: 20, borderWidth: 1, marginBottom: 16 },
+  container:       { padding: 20, paddingTop: 16 },
+  header:          { marginBottom: 16 },
+  title:           { fontSize: 24, fontWeight: '900', letterSpacing: -0.3 },
+  subtitle:        { fontSize: 13, marginTop: 4, lineHeight: 19 },
+  card:            { padding: 20, borderRadius: 22, borderWidth: 1, marginBottom: 16 },
   cardTitle:       { fontSize: 16, fontWeight: '800' },
   cardSub:         { fontSize: 12, marginTop: 6, lineHeight: 18 },
-  statusLine:      { fontSize: 14, fontWeight: '700', marginTop: 8, marginBottom: 4, lineHeight: 20 },
-  stepperRow:      { flexDirection: 'row', alignItems: 'center', marginTop: 12, marginBottom: 14 },
+  statusBanner:    { padding: 12, borderRadius: 14, marginTop: 10 },
+  statusLine:      { fontSize: 13, fontWeight: '800', lineHeight: 18 },
+  stepperRow:      { flexDirection: 'row', alignItems: 'center', marginTop: 14, marginBottom: 14 },
   stepDotWrap:     { flexDirection: 'row', alignItems: 'center', flex: 1 },
   stepDot:         { width: 14, height: 14, borderRadius: 7, borderWidth: 2 },
   stepLine:        { flex: 1, height: 2, marginHorizontal: 2 },
   stepLabel:       { fontSize: 15, fontWeight: '800', marginBottom: 4 },
   stepHint:        { fontSize: 12, marginBottom: 12 },
-  spinnerRow:      { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  spinnerText:     { fontSize: 12 },
-  doneText:        { fontSize: 13, marginTop: 4 },
+  spinnerRow:      { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: 14, marginTop: 4 },
+  spinnerText:     { fontSize: 12, fontWeight: '700', flex: 1 },
+  doneBox:         { padding: 12, borderRadius: 14, marginTop: 8 },
+  doneText:        { fontSize: 13, fontWeight: '800', lineHeight: 18 },
   errorText:       { fontSize: 13, marginTop: 8, marginBottom: 8 },
-  startBtn:        { marginTop: 14, padding: 16, borderRadius: 14, alignItems: 'center' },
+  startBtn:        { marginTop: 16, padding: 15, borderRadius: 28, alignItems: 'center', shadowColor: COLORS.brandDark, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8, elevation: 3 },
   startBtnText:    { color: '#fff', fontSize: 15, fontWeight: '800' },
-  recalibrateBtn:  { padding: 14, borderRadius: 14, alignItems: 'center', borderWidth: 1 },
-  recalibrateText: { fontSize: 14, fontWeight: '700' },
+  recalibrateBtn:  { padding: 14, borderRadius: 28, alignItems: 'center', borderWidth: 1 },
+  recalibrateText: { fontSize: 14, fontWeight: '800' },
 });

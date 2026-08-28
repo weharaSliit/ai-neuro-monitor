@@ -3,8 +3,6 @@ import {
     View, Text, StyleSheet, Dimensions,
     TouchableOpacity, ScrollView,
 } from 'react-native';
-
-const CHART_WIDTH = Dimensions.get('window').width - 2 * 20 - 2 * 18 - 40;
 import axios from 'axios';
 import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
@@ -14,14 +12,18 @@ import MoodBadge from '../../shared/MoodBadge';
 import AvatarButton from '../../shared/AvatarButton';
 import { CalibrationBanner } from '../../shared/CalibrationGate';
 import LineChart from '../../shared/LineChart';
+import FreudHeroBanner from '../../shared/FreudHeroBanner';
+import CalibrateBreathingCard from '../../shared/CalibrateBreathingCard';
 import { ref, onValue, off } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
+import { COLORS } from '../../physiological/config/theme';
 import { useAuth } from '../../../context/AuthContext';
 import api from '../../physiological/api/client';
-import { API_BASE, DEVICE_ID } from '../../physiological/config/config';
-import { STRESS_COLORS, STRESS_LABELS, FUSION_TREND_LABELS } from '../config/config';
+import { API_BASE, DEVICE_ID, STRESS_DECISION_THRESHOLD_PERCENT } from '../../physiological/config/config';
+import { FUSION_TREND_LABELS } from '../config/config';
 
+const CHART_WIDTH = Dimensions.get('window').width - 2 * 20 - 2 * 18 - 10;
 const DEVICE_POLL_MS = 8000;
 
 function getGreeting() {
@@ -49,15 +51,10 @@ function latestWindow(windowsObj) {
     return keys.length ? windowsObj[keys[keys.length - 1]] : null;
 }
 
-// A section card for one device/module -- Ring, EEG, Phenotyping -- each
-// tappable through to its own detail screen. Richer than a plain status
-// row: icon, connection state, and a short one-line summary of what's
-// there right now, so the hub page reads as full sections rather than a
-// thin nav list.
 function SectionCard({ icon, iconColor, title, statusText, statusColor, summary, onPress, t }) {
     return (
         <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
-            <Card>
+            <Card style={styles.sectionCard}>
                 <View style={styles.sectionRow}>
                     <View style={[styles.sectionIconCircle, { backgroundColor: iconColor + '18' }]}>
                         <Icon name={icon} size={22} color={iconColor} />
@@ -99,16 +96,11 @@ export default function FusionSessionScreen({ navigation }) {
         if (!userId) return;
         const targetId = (idOverride ?? sessionId).trim();
         if (!targetId) return;
-        if (targetId === sessionId && listenerRef.current) return;  // already watching this session
+        if (targetId === sessionId && listenerRef.current) return;
         setSessionId(targetId);
         setWindows(null);
         setHasAnyWindow(false);
 
-        // Nested under the logged-in user (fusion_en/{userId}/{sessionId}) --
-        // a "session" is a login-to-logout span belonging to one user, see
-        // backend/psychological/firebase_service.py's EegFirebaseSession and
-        // fushion engin/fusion_live_session.py, which write/read this same
-        // user-scoped path.
         const sessionRef = ref(db, `fusion_en/${userId}/${targetId}`);
         const handler = onValue(sessionRef, (snapshot) => {
             const data = snapshot.val();
@@ -118,27 +110,17 @@ export default function FusionSessionScreen({ navigation }) {
         listenerRef.current = { sessionRef, handler };
         setWatching(true);
     }, [sessionId, userId]);
+
     useEffect(() => {
         if (!userId) return;
-        // A live subscription, not a one-time get() -- picks up the current
-        // session the instant AuthContext.js writes it (at login) and
-        // follows any later rotation automatically, so there's never a
-        // manual "Start" step needed. current_session_id itself stays a flat
-        // pointer (not user-scoped) -- see AuthContext.js's
-        // CURRENT_SESSION_ID_ROOTS.
         const pointerRef = ref(db, 'fusion_en_sessions/current_session_id');
         const handler = onValue(pointerRef, (snapshot) => {
             const liveId = snapshot.val();
             if (liveId) startWatching(liveId);
         });
         return () => off(pointerRef, 'value', handler);
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- startWatching is always called
-        // with an explicit liveId override here, so its own sessionId-state closure never matters.
     }, [userId]);
 
-    // Ring: real device-status poll. EEG: no equivalent device-status
-    // route exists, so "connected" is read as "a live EEG session exists
-    // right now" -- same pointer EegSummaryScreen.js watches.
     useEffect(() => {
         let ringTimer;
         const pollRing = async () => {
@@ -161,10 +143,6 @@ export default function FusionSessionScreen({ navigation }) {
         };
     }, []);
 
-    // Fallback for "nothing live yet in this session" (a brand-new session
-    // starts empty even while the device is on, and stays empty the whole
-    // time if it's actually off) -- last known reading from history, so the
-    // screen shows something real instead of a blank waiting state.
     useEffect(() => {
         if (!userId) return;
         (async () => {
@@ -178,151 +156,132 @@ export default function FusionSessionScreen({ navigation }) {
                     .sort((a, b) => (b.window_idx ?? 0) - (a.window_idx ?? 0));
                 if (preds[0]) setLastKnown(preds[0]);
             } catch {
-                // no history yet -- leave lastKnown null, the plain waiting text covers it
+                // no history yet
             }
         })();
     }, [userId]);
 
     const latest = useMemo(() => latestWindow(windows), [windows]);
-    const { fusedHistory, baselinePercent } = useMemo(() => {
+    const fusedHistory = useMemo(() => {
         const keys = sortedWindowKeys(windows);
-        // Each window key IS a real wall-clock bucket index (see
-        // backend/common/fusion.py's fusion_window_key(): int(time.time() //
-        // FUSION_WINDOW_BUCKET_SEC)) -- multiplying back out gives a genuine
-        // timestamp per point, not a synthetic sequential index.
-        const history = keys
+        return keys
             .map((k) => ({ v: windows[k]?.fused_probability, key: k }))
             .filter(({ v }) => v !== undefined && v !== null)
             .map(({ v, key }) => ({ value: Math.round(v * 100), date: new Date(Number(key) * 60000) }));
-        const latestProb = latest?.fused_probability;
-        const latestDev = latest?.stress_deviation;
-        const baseline = (latestProb !== undefined && latestProb !== null
-            && latestDev !== undefined && latestDev !== null)
-            ? Math.round((latestProb - latestDev) * 100)
-            : null;
-        return { fusedHistory: history, baselinePercent: baseline };
-    }, [windows, latest]);
+    }, [windows]);
 
     const label = latest?.fused_label;
-    const prob = latest?.fused_probability;
     const trend = latest?.stress_trend;
-    const stateColor = label !== undefined && label !== null ? STRESS_COLORS[label] : COLORS.brand;
+    const stateColor = label === 1
+        ? COLORS.stress
+        : trend === 'increasing' ? COLORS.warning : COLORS.normal;
+
+    const heroStateLabel = hasAnyWindow
+        ? (label === 1 ? 'Stress' : trend === 'increasing' ? 'Trending' : 'Calm')
+        : (lastKnown ? (lastKnown.label === 'Stress' ? 'Stress' : 'Calm') : 'Calm');
 
     return (
         <ScreenBackground>
             <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-                <View style={styles.header}>
+                {/* Top Profile / Greeting Bar */}
+                <View style={styles.topHeader}>
                     <View>
                         <Text style={[styles.dateStr, { color: t.textMuted }]}>{getDateStr()}</Text>
                         <Text style={[styles.greeting, { color: t.text }]}>{getGreeting()}, {userName}</Text>
-                        <Text style={[styles.subtitle, { color: t.textMuted }]}>
-                            Wear your ring and headband to see your live stress result
-                        </Text>
                     </View>
                     <AvatarButton userId={userId} onPress={() => navigation.navigate('Profile')} />
                 </View>
 
+                {/* Freud v2 Signature Curved Organic Hero Banner */}
+                <FreudHeroBanner
+                    stateLabel={heroStateLabel}
+                    color={stateColor}
+                />
+
                 <CalibrationBanner userId={userId} token={token} />
 
-                <Card elevated accentColor={stateColor}>
-                    {!hasAnyWindow ? (
-                        lastKnown ? (
-                            <>
-                                <Text style={[styles.hint, { color: t.textMuted, marginBottom: 10 }]}>
-                                    No live reading right now — last known state:
-                                </Text>
-                                <View style={styles.gaugeRow}>
-                                    <MoodBadge stressed={lastKnown.label === 'Stress'}
-                                        color={lastKnown.label === 'Stress' ? COLORS.stress : COLORS.normal} size={58} />
-                                    <View style={{ flex: 1, marginLeft: 14 }}>
-                                        <Text style={[styles.stateLabel, { color: lastKnown.label === 'Stress' ? COLORS.stress : COLORS.normal }]}>
-                                            {lastKnown.label || '—'}
-                                        </Text>
-                                        <Text style={[styles.stateProb, { color: t.textMuted }]}>
-                                            {lastKnown.timestamp ? new Date(lastKnown.timestamp).toLocaleString() : ''}
-                                        </Text>
-                                    </View>
-                                </View>
-                            </>
-                        ) : (
-                            <View style={styles.emptyState}>
-                                <Icon name={NAMES.overview} size={34} color={t.textMuted} />
-                                <Text style={[styles.waiting, { color: t.textMuted }]}>
-                                    Wear your ring and headband to see your live stress result here.
-                                </Text>
-                            </View>
-                        )
-                    ) : (
-                        <>
-                            <View style={styles.gaugeRow}>
-                                {label !== undefined && label !== null ? (
-                                    <MoodBadge stressed={label === 1} color={stateColor} size={58} />
-                                ) : (
-                                    <View style={[styles.stateIconCircle, { backgroundColor: stateColor + '18' }]}>
-                                        <Icon name={NAMES.overview} size={26} color={stateColor} />
-                                    </View>
-                                )}
-                                <View style={{ flex: 1, marginLeft: 14 }}>
-                                    <Text style={[styles.stateLabel, { color: stateColor }]}>
-                                        {label !== undefined && label !== null
-                                            ? STRESS_LABELS[label] : 'Scoring…'}
-                                    </Text>
-                                    <Text style={[styles.stateProb, { color: t.textMuted }]}>
-                                        {prob !== undefined && prob !== null
-                                            ? `${(prob * 100).toFixed(0)}%` : ''}
-                                    </Text>
-                                </View>
-                                {trend && TREND_ICON[trend] && (
-                                    <View style={styles.trendChip}>
-                                        <Icon name={TREND_ICON[trend]} size={16} color={t.textSub} />
-                                        <Text style={[styles.trendChipText, { color: t.textSub }]}>
-                                            {FUSION_TREND_LABELS[trend] || trend}
-                                        </Text>
-                                    </View>
-                                )}
-                            </View>
-
-                            {fusedHistory.length > 1 && (
-                                <View style={styles.trendBlock}>
-                                    <Text style={[styles.hint, { color: t.textMuted, marginBottom: 10 }]}>
-                                        Trend this session
-                                        {baselinePercent !== null ? ` · baseline ${baselinePercent}%` : ''}
-                                    </Text>
-                                    <LineChart
-                                        points={fusedHistory}
-                                        color={stateColor}
-                                        width={CHART_WIDTH}
-                                        height={150}
-                                        maxValue={100}
-                                        suffix="%"
-                                        fallback={<Text style={[styles.waiting, { color: t.textMuted }]}>Loading chart…</Text>}
-                                    />
-                                </View>
-                            )}
-                        </>
-                    )}
+                {/* Calibrate -- Calm Breathing: always visible (not tucked
+                    behind a hidden button) -- a plain breathe-in/breathe-out
+                    visual while real Ring+EEG calibration runs in the
+                    background, right here on the Fusion page. */}
+                <Card style={styles.calibrateCard} accentColor={COLORS.brand}>
+                    <Text style={[styles.cardTitle, { color: t.text }]}>Calibrate — Calm Breathing</Text>
+                    <CalibrateBreathingCard
+                        userId={userId}
+                        token={token}
+                        ringOnline={ringConnected}
+                        eegDb={db}
+                    />
                 </Card>
 
-                <Text style={[styles.sectionsLabel, { color: t.textSub }]}>Devices & Tracking</Text>
+                {/* Session Progression Line Chart */}
+                {fusedHistory.length > 1 && (
+                    <Card elevated style={styles.chartCard}>
+                        <View style={styles.chartHeader}>
+                            <View>
+                                <Text style={[styles.chartTitle, { color: t.text }]}>Real-Time Stress Progression</Text>
+                                <Text style={[styles.chartSub, { color: t.textMuted }]}>
+                                    Live multi-modal fusion curve ({fusedHistory.length} readings)
+                                </Text>
+                            </View>
+                            {trend && TREND_ICON[trend] && (
+                                <View style={[styles.trendChip, { backgroundColor: COLORS.light.pillBg }]}>
+                                    <Icon name={TREND_ICON[trend]} size={14} color={t.textSub} />
+                                    <Text style={[styles.trendChipText, { color: t.textSub }]}>
+                                        {FUSION_TREND_LABELS[trend] || trend}
+                                    </Text>
+                                </View>
+                            )}
+                        </View>
+                        <LineChart
+                            points={fusedHistory}
+                            color={stateColor}
+                            width={CHART_WIDTH}
+                            height={145}
+                            maxValue={100}
+                            hideValues
+                            baselineValue={STRESS_DECISION_THRESHOLD_PERCENT}
+                            baselineLabel="Stress threshold"
+                            colorZones
+                            fallback={<Text style={[styles.waiting, { color: t.textMuted }]}>Loading chart…</Text>}
+                        />
+                    </Card>
+                )}
+
+                {/* Quick PSS-4 self check-in */}
+                <Card style={styles.pss4Card} accentColor={COLORS.brand}>
+                    <Text style={[styles.cardTitle, { color: t.text }]}>How are you feeling?</Text>
+                    <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 4 }]}>
+                        Take 30 seconds for a quick self check-in.
+                    </Text>
+                    <TouchableOpacity onPress={() => navigation.navigate('PSS4')} activeOpacity={0.85} style={{ marginTop: 10 }}>
+                        <View style={[styles.actionTile, { backgroundColor: COLORS.brandSoft, borderColor: COLORS.brand + '30' }]}>
+                            <Text style={{ color: COLORS.brandDark, fontWeight: '800' }}>Fill in PSS-4 →</Text>
+                        </View>
+                    </TouchableOpacity>
+                </Card>
+
+                {/* Connected Devices Section */}
+                <Text style={[styles.sectionsLabel, { color: t.textSub }]}>Hardware & Sensor Stream</Text>
 
                 <SectionCard
-                    icon={NAMES.my} iconColor={COLORS.brand} title="My Ring"
-                    statusText={ringConnected ? 'Connected' : 'Off'}
+                    icon={NAMES.my} iconColor={COLORS.brand} title="Smart Ring Telemetry"
+                    statusText={ringConnected ? 'Streaming' : 'Offline'}
                     statusColor={ringConnected ? COLORS.normal : t.border}
-                    summary={ringConnected ? 'Streaming HRV & GSR readings' : 'Put the ring on to start streaming'}
+                    summary={ringConnected ? 'Streaming continuous HRV & GSR readings' : 'Slip on your ring to stream telemetry'}
                     onPress={() => navigation.navigate('RingSummary')} t={t}
                 />
                 <SectionCard
-                    icon={NAMES.eeg} iconColor={COLORS.warning} title="EEG Headband"
-                    statusText={eegConnected ? 'Connected' : 'Off'}
+                    icon={NAMES.eeg} iconColor={COLORS.warning} title="EEG Neural Headband"
+                    statusText={eegConnected ? 'Streaming' : 'Offline'}
                     statusColor={eegConnected ? COLORS.normal : t.border}
-                    summary={eegConnected ? 'Reading cognitive load live' : 'Put the headband on to start a session'}
+                    summary={eegConnected ? 'Reading cognitive workload live' : 'Wear the headband to measure mental load'}
                     onPress={() => navigation.navigate('EegSummary')} t={t}
                 />
                 <SectionCard
-                    icon={NAMES.phenotyping} iconColor={COLORS.gsr} title="Phone Statistics"
-                    statusText="Always on" statusColor={COLORS.gsr}
-                    summary="Typing rhythm, screen activity & app-switching patterns"
+                    icon={NAMES.phenotyping} iconColor={COLORS.gsr} title="Digital Phenotyping"
+                    statusText="Active" statusColor={COLORS.normal}
+                    summary="Passive smartphone keystroke & interaction cadence"
                     onPress={() => navigation.navigate('Phenotyping')} t={t}
                 />
 
@@ -342,27 +301,139 @@ export default function FusionSessionScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-    scroll: { padding: 20, paddingBottom: 40 },
-    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18 },
-    dateStr: { fontSize: 12, fontWeight: '600', marginBottom: 2 },
-    greeting: { fontSize: 24, fontWeight: '900' },
-    subtitle: { fontSize: 12, marginTop: 6, maxWidth: 240, lineHeight: 17 },
-    hint: { fontSize: 11, lineHeight: 16 },
-    waiting: { fontSize: 13, textAlign: 'center', marginTop: 10 },
-    emptyState: { alignItems: 'center', paddingVertical: 16 },
-    gaugeRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 18 },
-    stateIconCircle: { width: 54, height: 54, borderRadius: 27, alignItems: 'center', justifyContent: 'center' },
-    stateLabel: { fontSize: 22, fontWeight: '900' },
-    stateProb: { fontSize: 13, marginTop: 2 },
-    trendChip: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-    trendChipText: { fontSize: 11, fontWeight: '700', maxWidth: 70 },
-    trendBlock: { marginBottom: 4 },
-    sectionsLabel: { fontSize: 12, fontWeight: '800', letterSpacing: 0.4, textTransform: 'uppercase', marginTop: 6, marginBottom: 10 },
-    sectionRow: { flexDirection: 'row', alignItems: 'center' },
-    sectionIconCircle: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center' },
-    sectionTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-    sectionTitle: { fontSize: 15, fontWeight: '800' },
-    sectionStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-    sectionStatusText: { fontSize: 11, fontWeight: '700' },
-    sectionSummary: { fontSize: 12, marginTop: 3 },
+    scroll: {
+        paddingBottom: 40,
+    },
+    topHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'flex-start',
+        paddingHorizontal: 20,
+        paddingTop: 12,
+        paddingBottom: 10,
+    },
+    dateStr: {
+        fontSize: 12,
+        fontWeight: '700',
+    },
+    greeting: {
+        fontSize: 22,
+        fontWeight: '900',
+        letterSpacing: -0.3,
+    },
+    chartCard: {
+        marginHorizontal: 20,
+        marginVertical: 10,
+        padding: 18,
+        borderRadius: 24,
+    },
+    chartHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'flex-start',
+        marginBottom: 12,
+    },
+    chartTitle: {
+        fontSize: 15,
+        fontWeight: '800',
+        letterSpacing: -0.2,
+    },
+    chartSub: {
+        fontSize: 11,
+        marginTop: 2,
+    },
+    trendChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderRadius: 10,
+    },
+    trendChipText: {
+        fontSize: 11,
+        fontWeight: '700',
+    },
+    waiting: {
+        fontSize: 13,
+        fontStyle: 'italic',
+        textAlign: 'center',
+        paddingVertical: 20,
+    },
+    calibrateCard: {
+        marginHorizontal: 20,
+        marginVertical: 10,
+        padding: 18,
+        borderRadius: 24,
+    },
+    pss4Card: {
+        marginHorizontal: 20,
+        marginVertical: 8,
+        padding: 18,
+        borderRadius: 22,
+    },
+    cardTitle: {
+        fontSize: 15,
+        fontWeight: '800',
+    },
+    cardSub: {
+        fontSize: 12,
+    },
+    actionTile: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: 16,
+        borderWidth: 1,
+        padding: 14,
+    },
+    sectionsLabel: {
+        fontSize: 12,
+        fontWeight: '800',
+        letterSpacing: 0.5,
+        textTransform: 'uppercase',
+        marginHorizontal: 20,
+        marginTop: 14,
+        marginBottom: 10,
+    },
+    sectionCard: {
+        marginHorizontal: 20,
+        padding: 16,
+        borderRadius: 22,
+        marginBottom: 10,
+    },
+    sectionRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    sectionIconCircle: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    sectionTopRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+    },
+    sectionTitle: {
+        fontSize: 15,
+        fontWeight: '800',
+    },
+    sectionStatusRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+    },
+    sectionStatusText: {
+        fontSize: 11,
+        fontWeight: '700',
+    },
+    sectionSummary: {
+        fontSize: 12,
+        marginTop: 3,
+    },
 });
+

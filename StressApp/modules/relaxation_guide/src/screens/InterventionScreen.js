@@ -349,6 +349,101 @@ export const InterventionScreen = () => {
             )}
           </TouchableOpacity>
         </Animated.View>
+
+        {/* Fallback Cascade */}
+        {fallbackData && (
+          <Animated.View
+            style={[
+              styles.fallbackBox,
+              {
+                opacity: fadeAnim,
+                transform: [{ scale: scaleAnim }]
+              }
+            ]}
+          >
+            <View style={styles.fallbackHeader}>
+              <Text style={styles.fallbackTitle}>
+                🌀 Level {fallbackData.fallback_level} Alternative
+              </Text>
+              <View style={styles.fallbackLevelBadge}>
+                <Text style={styles.fallbackLevelText}>FALLBACK</Text>
+              </View>
+            </View>
+
+            {fallbackData.fallback_level === 1 && (
+              <View>
+                <Text style={styles.fallbackSub}>
+                  Here are 2 alternatives (we've noted your preference)
+                </Text>
+                {fallbackData.level1_alternatives.map((alt, index) => (
+                  <TouchableOpacity
+                    key={alt.technique_id}
+                    style={[styles.altCard, { marginTop: index > 0 ? 8 : 0 }]}
+                    onPress={() => {
+                      Vibration.vibrate(15);
+                      setSelectedSubOption(alt.selected_sub_option);
+                      setCurrentScreen('SubOptionSelector');
+                    }}
+                  >
+                    <View style={styles.altCardHeader}>
+                      <Text style={styles.altNumber}>#{index + 1}</Text>
+                      <Text style={styles.altTitle}>{alt.title}</Text>
+                    </View>
+                    <Text style={styles.altDesc}>{alt.description}</Text>
+                    <Text style={styles.altAction}>Tap to select →</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
+            {fallbackData.fallback_level === 2 && (
+              <View style={styles.level2Box}>
+                <View style={styles.breathingIcon}>
+                  <Text style={styles.breathingIconEmoji}>🌊</Text>
+                </View>
+                <Text style={styles.level2Title}>30-Second Breathing Reset</Text>
+                <Text style={styles.level2Desc}>
+                  {fallbackData.level2_breathing_reset.instructions}
+                </Text>
+                <TouchableOpacity
+                  style={styles.breathingResetBtn}
+                  onPress={() => {
+                    Vibration.vibrate(30);
+                    setSelectedSubOption({ id: 'breathing_light', title: 'Calibrate — Calm Breathing' });
+                    setCurrentScreen('GamePlayer');
+                  }}
+                >
+                  <Text style={styles.breathingResetTxt}>🌬️ Calibrate — Calm Breathing</Text>
+                  <Text style={styles.breathingResetSub}>Guided breathing while your Ring/EEG baseline captures</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {fallbackData.fallback_level === 3 && (
+              <View>
+                <Text style={styles.level3Title}>💭 What would help you right now?</Text>
+                {fallbackData.level3_prompt_options.map((opt) => (
+                  <TouchableOpacity
+                    key={opt.id}
+                    style={styles.promptBtn}
+                    onPress={() => {
+                      Vibration.vibrate(20);
+                      Alert.alert(
+                        "✅ Preference Noted",
+                        `Applied selection: ${opt.label}`,
+                        [{ text: "Got it", onPress: () => setCurrentScreen('Dashboard') }]
+                      );
+                    }}
+                  >
+                    <Text style={styles.promptEmoji}>{opt.emoji || '💡'}</Text>
+                    <Text style={styles.promptTxt}>{opt.label}</Text>
+                    <Text style={styles.promptArrow}>→</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </Animated.View>
+        )}
       </ScrollView>
     </View>
   );

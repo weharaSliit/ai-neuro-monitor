@@ -1,28 +1,33 @@
 #include <SPI.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
+#include <WiFiClientSecure.h> 
 #include <PubSubClient.h>
 
-/* ================= WIFI ================= */
+/* ================= HARDWARE PIN DEFINITIONS (XIAO ESP32-C3) ================= */
+// Reverted to raw GPIO integers for generic ESP32-C3 board compatibility
+constexpr int8_t ADS_PIN_RESET = 2;   // GPIO2 (D0)
+constexpr int8_t ADS_PIN_START = 3;   // GPIO3 (D1)
+constexpr int8_t ADS_PIN_DRDY  = 4;   // GPIO4 (D2)
+constexpr int8_t ADS_PIN_CS    = 7;   // GPIO7 (D5)
 
-// Tried in order in connectWiFi() -- add more pairs here as needed rather
-// than re-flashing every time the device needs a different network.
+constexpr int8_t SPI_PIN_SCK   = 8;   // GPIO8 (D8)
+constexpr int8_t SPI_PIN_MISO  = 9;   // GPIO9 (D9)
+constexpr int8_t SPI_PIN_MOSI  = 10;  // GPIO10 (D10)
+
+/* ================= WIFI CONFIGURATION ================= */
+
 const int WIFI_NETWORK_COUNT = 2;
 const char* WIFI_SSIDS[WIFI_NETWORK_COUNT]     = { "Wehara's A07", "Hiruni" };
 const char* WIFI_PASSWORDS[WIFI_NETWORK_COUNT] = { "wehara1216",   "Hiruni2022" };
-// EMQX Cloud Serverless broker (mindpulse-broker, Asia-Pacific) -- see
-// iot_firmware/wearable01/wearable01.ino's identical comment. Serverless
-// only accepts TLS on 8883 (see EMQX_CA_CERT below) with username/password
-// auth, unlike the old local Mosquitto's plain-TCP/allow_anonymous setup.
+
+// --- EMQX CLOUD BROKER CONFIGURATION ---
 const char* MQTT_BROKER = "ob1f0f10.ala.asia-southeast1.emqxsl.com";
 const int   MQTT_PORT   = 8883;
 const char* MQTT_USER   = "wearable02";
 const char* MQTT_PASS   = "wearable02";
 const char* MQTT_TOPIC  = "mindpulse/wearable02/sensors";
+const char* MQTT_STATUS = "mindpulse/wearable02/status";
 
-// EMQX Cloud's CA (DigiCert Global Root G2, expires 2031-11-10) -- see
-// wearable01.ino's identical cert / comment, also saved standalone at
-// iot_firmware/emqxsl-ca.crt.
 const char* EMQX_CA_CERT = R"EOF(
 -----BEGIN CERTIFICATE-----
 MIIDjjCCAnagAwIBAgIQAzrx5qcRqaC7KGSxHQn65TANBgkqhkiG9w0BAQsFADBh
@@ -48,142 +53,105 @@ MrY=
 -----END CERTIFICATE-----
 )EOF";
 
-/* ================= ADS1292R PINS ================= */
+/* ================= ADS1292R COMMANDS & CONFIG ================= */
 
-#define CS     D4
-#define RESET  D2
-#define START  D3
-#define DRDY   D6
-
-/* ================= ADS COMMANDS ================= */
-
-#define ADS_START   0x08
-#define ADS_RDATAC  0x10
-#define ADS_SDATAC  0x11
-#define ADS_WREG    0x40
-#define ADS_RREG    0x20
-
-/* ================= BATCHING ================= */
+#define ADS_CMD_START   0x08
+#define ADS_CMD_STOP    0x0A
+#define ADS_CMD_RDATAC  0x10
+#define ADS_CMD_SDATAC  0x11
+#define ADS_CMD_WREG    0x40
+#define ADS_CMD_RREG    0x20
 
 #define BATCH_SIZE 25
 
 uint32_t batchTime[BATCH_SIZE];
-int32_t  batchCh1[BATCH_SIZE];
 int32_t  batchCh2[BATCH_SIZE];
 uint8_t  batchCount = 0;
-
 uint32_t corruptFrameCount = 0;
 
-/* ================= GLOBALS ================= */
+/* ================= SYSTEM OBJECTS ================= */
 
 WiFiClientSecure wifiClient;
 PubSubClient mqtt(wifiClient);
 
-SPISettings adsSPI(100000, MSBFIRST, SPI_MODE1);
-
+SPISettings adsSPI(100000, MSBFIRST, SPI_MODE1); // Kept at 100kHz for stability
 volatile bool drdyFlag = false;
+unsigned long lastDrdyTimestamp = 0;
+unsigned long lastHeartbeatTime = 0;
 
 void IRAM_ATTR onDrdy() {
   drdyFlag = true;
 }
 
-/* ================================================= */
-/* SPI HELPERS                                       */
-/* ================================================= */
+/* ================= SPI HELPERS ================= */
 
 void sendCommand(byte cmd) {
   SPI.beginTransaction(adsSPI);
-  digitalWrite(CS, LOW);
+  digitalWrite(ADS_PIN_CS, LOW);
   delayMicroseconds(10);
-
   SPI.transfer(cmd);
-
-  digitalWrite(CS, HIGH);
+  digitalWrite(ADS_PIN_CS, HIGH);
   SPI.endTransaction();
   delay(2);
 }
 
 void writeReg(byte reg, byte val) {
   SPI.beginTransaction(adsSPI);
-  digitalWrite(CS, LOW);
+  digitalWrite(ADS_PIN_CS, LOW);
   delayMicroseconds(10);
-
-  SPI.transfer(ADS_WREG | reg);
+  SPI.transfer(ADS_CMD_WREG | reg);
   SPI.transfer(0x00);
   SPI.transfer(val);
-
-  digitalWrite(CS, HIGH);
+  digitalWrite(ADS_PIN_CS, HIGH);
   SPI.endTransaction();
   delay(10);
 }
 
 byte readReg(byte reg) {
   SPI.beginTransaction(adsSPI);
-  digitalWrite(CS, LOW);
+  digitalWrite(ADS_PIN_CS, LOW);
   delayMicroseconds(10);
-
-  SPI.transfer(ADS_RREG | reg);
+  SPI.transfer(ADS_CMD_RREG | reg);
   SPI.transfer(0x00);
-
   byte val = SPI.transfer(0x00);
-
-  digitalWrite(CS, HIGH);
+  digitalWrite(ADS_PIN_CS, HIGH);
   SPI.endTransaction();
   delay(5);
-
   return val;
 }
 
 bool verifiedWrite(byte reg, byte value) {
   writeReg(reg, value);
   byte check = readReg(reg);
-
   if (check != value) {
     Serial.print("WRITE FAIL REG 0x");
     Serial.print(reg, HEX);
-    Serial.print(" expected ");
+    Serial.print(" expected 0x");
     Serial.print(value, HEX);
-    Serial.print(" got ");
+    Serial.print(" got 0x");
     Serial.println(check, HEX);
     return false;
   }
   return true;
 }
 
-/* ================================================= */
-/* SIGNED 24 BIT                                     */
-/* ================================================= */
-
-int32_t s24(byte a, byte b, byte c) {
-  int32_t v = ((int32_t)a << 16) |
-              ((int32_t)b << 8) |
-               c;
-
-  if (v & 0x800000)
-      v |= 0xFF000000;
-
-  return v;
+int32_t parseSigned24(byte msb, byte mid, byte lsb) {
+  int32_t val = ((int32_t)msb << 16) | ((int32_t)mid << 8) | lsb;
+  if (val & 0x800000) {
+    val |= 0xFF000000;
+  }
+  return val;
 }
 
-bool statusValid(byte s0) {
+bool isStatusValid(byte s0) {
   return (s0 & 0xF0) == 0xC0;
 }
 
-/* ================================================= */
-/* WIFI                                              */
-/* ================================================= */
+/* ================= NETWORK SERVICES ================= */
 
 void connectWiFi() {
   WiFi.mode(WIFI_STA);
-
   for (int i = 0; i < WIFI_NETWORK_COUNT; i++) {
-    // Without this, falling through from a failed attempt straight into
-    // the next WiFi.begin() hits the driver mid-state-machine and throws
-    // "E wifi:sta is connecting, cannot set config" -- that reconfigure
-    // is then silently dropped, so the "next network" attempt never
-    // actually takes. Also run before the very first attempt: a WiFi
-    // reconnect (called again from loop() after a drop, not just setup())
-    // can find the driver already mid-connecting from the prior failure.
     WiFi.disconnect(true, true);
     delay(100);
 
@@ -192,263 +160,225 @@ void connectWiFi() {
     WiFi.begin(WIFI_SSIDS[i], WIFI_PASSWORDS[i]);
 
     int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 40) {
-      delay(500);
+    while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+      delay(300);
       Serial.print(".");
       attempts++;
     }
 
     if (WiFi.status() == WL_CONNECTED) {
       Serial.println();
-      Serial.println("WiFi connected to " + String(WIFI_SSIDS[i]));
-      Serial.print("IP: ");
+      Serial.println("WiFi connected: " + String(WIFI_SSIDS[i]));
+      Serial.print("IP Address: ");
       Serial.println(WiFi.localIP());
       WiFi.setSleep(false);
       return;
     }
     Serial.println();
-    Serial.println("Failed to connect to " + String(WIFI_SSIDS[i]) + " after 20s -- trying next network");
   }
-  Serial.println("WiFi connection FAILED for all known networks");
+  Serial.println("WiFi connection failed across all configurations.");
 }
-
-/* ================================================= */
-/* MQTT (non-blocking)                               */
-/* ================================================= */
 
 unsigned long lastMqttAttempt = 0;
 const unsigned long MQTT_RETRY_INTERVAL_MS = 2000;
 
 void maintainMQTT() {
-  if (mqtt.connected())
-      return;
-
+  if (mqtt.connected()) return;
   unsigned long now = millis();
-
-  if (now - lastMqttAttempt < MQTT_RETRY_INTERVAL_MS)
-      return;
-
+  if (now - lastMqttAttempt < MQTT_RETRY_INTERVAL_MS) return;
   lastMqttAttempt = now;
 
-  Serial.print("Connecting MQTT...");
-
-  // Client ID matches the "wearable02" username/topic convention (see
-  // wearable01.ino's identical DEVICE_ID pattern) -- was hardcoded to the
-  // unrelated "ESP32_EEG" before, which is worth ruling out if the broker's
-  // ACL/authorization rules are scoped per client ID.
+  Serial.print("Connecting to EMQX MQTT Broker...");
   if (mqtt.connect("wearable02", MQTT_USER, MQTT_PASS)) {
-    Serial.println("connected");
-  }
-  else {
-    Serial.print("failed, rc=");
-    Serial.print(mqtt.state());
-    Serial.println(" -- retry in 2s");
+    Serial.println(" Connected");
+    mqtt.publish(MQTT_STATUS, "{\"status\":\"ONLINE\",\"mode\":\"BIPOLAR_T7_T8\"}");
+  } else {
+    Serial.print(" Failed, rc=");
+    Serial.println(mqtt.state());
   }
 }
 
-/* ================================================= */
-/* ADS INIT                                          */
-/* ================================================= */
+/* ================= ADS1292R OPTION B CONFIGURATION ================= */
 
-void initADS(bool internalShort = false) {
-  Serial.println("Configuring ADS1292R...");
+bool initADS() {
+  Serial.println("Configuring ADS1292R for Option B (1-Channel Bipolar T7-T8)...");
 
-  sendCommand(ADS_SDATAC);
+  // --- NEW: Wake up the chip before doing anything ---
+  sendCommand(0x02); // WAKEUP Command
   delay(100);
 
-  sendCommand(ADS_SDATAC);
+  sendCommand(ADS_CMD_SDATAC);
   delay(100);
 
-  // CONFIG1: 250 SPS
-  verifiedWrite(0x01, 0x01);   
+  // CONFIG1 (0x01): 250 SPS data rate -> 0x01
+  if (!verifiedWrite(0x01, 0x01)) return false;
 
-  // CONFIG2: 0xE0 -> PDB_REFBUF = 1 (Ref Buffer ON), VREF_4V = 1 (4V Ref)
-  // Fixes floating reference drift and DC offset (~-4200uV / ~-6100uV)
-  verifiedWrite(0x02, 0xE0);   
+  // CONFIG2 (0x02): PDB_REFBUF = 1, VREF = 2.42V -> 0xA0
+  if (!verifiedWrite(0x02, 0xA0)) return false;
 
-  if (internalShort) {
-    // CH1SET & CH2SET: Gain 12 (0x60) | MUX Shorted (0x01) -> 0x61
-    verifiedWrite(0x04, 0x61);   
-    verifiedWrite(0x05, 0x61);   
-    Serial.println("MODE: ADS1292R Internal Short Test");
-  } else {
-    // CH1SET & CH2SET: Gain 12 (0x60) | MUX Normal Electrodes (0x00) -> 0x60
-    verifiedWrite(0x04, 0x60);   
-    verifiedWrite(0x05, 0x60);   
-    Serial.println("MODE: Normal Electrode Acquisition");
-  }
+  // CH1SET (0x04): Power-down Ch1 & short input -> 0x81
+  if (!verifiedWrite(0x04, 0x81)) return false;
 
-  // RLD / Bias configuration
-  verifiedWrite(0x06, 0x2C);   
+  // CH2SET (0x05): Gain = 6 (0x50), Normal Electrode MUX (0x00) -> 0x50
+  if (!verifiedWrite(0x05, 0x50)) return false;
 
+  if (!verifiedWrite(0x06, 0x2C)) return false;
+
+  // RESP1 (0x09): Disable respiration circuitry -> 0x00
+  if (!verifiedWrite(0x09, 0x00)) return false;
+
+  // RESP2 (0x0A): Set internal RLD reference to midsupply (RLDREF_INT = 1) -> 0x02
+  if (!verifiedWrite(0x0A, 0x02)) return false;
   delay(100);
 
-  Serial.print("CONFIG1 = 0x");
-  Serial.println(readReg(0x01), HEX);
+  attachInterrupt(digitalPinToInterrupt(ADS_PIN_DRDY), onDrdy, FALLING);
 
-  Serial.print("CONFIG2 = 0x");
-  Serial.println(readReg(0x02), HEX);
-
-  Serial.print("CH1SET  = 0x");
-  Serial.println(readReg(0x04), HEX);
-
-  Serial.print("CH2SET  = 0x");
-  Serial.println(readReg(0x05), HEX);
-
-  Serial.print("RLD     = 0x");
-  Serial.println(readReg(0x06), HEX);
-
-  attachInterrupt(
-      digitalPinToInterrupt(DRDY),
-      onDrdy,
-      FALLING
-  );
-
-  sendCommand(ADS_RDATAC);
+  sendCommand(ADS_CMD_RDATAC);
   delay(50);
 
-  sendCommand(ADS_START);
-  digitalWrite(START, HIGH);
+  sendCommand(ADS_CMD_START);
+  digitalWrite(ADS_PIN_START, HIGH);
 
-  Serial.println("ADS STREAMING");
+  Serial.println("Option B Streaming Initialized.");
+  return true;
 }
 
-/* ================================================= */
-/* PUBLISH                                           */
-/* ================================================= */
+/* ================= MQTT TRANSMISSION ================= */
 
 void publishBatch() {
   if (mqtt.connected()) {
-    static char payload[900];
+    static char payload[600];
     int offset = 0;
 
     for (uint8_t i = 0; i < batchCount; i++) {
       int n = snprintf(
           payload + offset, sizeof(payload) - offset,
-          "%lu,%ld,%ld;",
-          batchTime[i], batchCh1[i], batchCh2[i]
+          "%lu,%ld;",
+          batchTime[i], batchCh2[i]
       );
-
-      if (n < 0 || offset + n >= (int)sizeof(payload))
-          break;
-
+      if (n < 0 || offset + n >= (int)sizeof(payload)) break;
       offset += n;
     }
 
-    // Previously ignored -- for QoS0 this only confirms the write to the
-    // socket succeeded, not that the broker accepted it (an ACL rejection
-    // or oversized packet is silent either way), but it at least rules out
-    // the local, checkable half of "connected but no data arrives".
-    bool published = mqtt.publish(MQTT_TOPIC, payload);
-    Serial.print("Publish ");
-    Serial.print(published ? "OK" : "FAILED");
-    Serial.print(" (");
-    Serial.print(batchCount);
-    Serial.print(" samples, ");
-    Serial.print(offset);
-    Serial.println(" bytes)");
-  } else {
-    Serial.println("Skipped batch publish -- MQTT not connected");
+    bool ok = mqtt.publish(MQTT_TOPIC, payload);
+    if (!ok) {
+      Serial.println("[MQTT] Publish batch drop");
+    }
   }
-
   batchCount = 0;
 }
 
-/* ================================================= */
-/* SETUP                                             */
-/* ================================================= */
+/* ================= SETUP ================= */
 
 void setup() {
   Serial.begin(115200);
-  delay(2000);
 
-  Serial.println("EEG PRE-STRESS SYSTEM");
+  unsigned long startWait = millis();
+  while (!Serial && (millis() - startWait < 2000));
 
-  pinMode(CS, OUTPUT);
-  pinMode(RESET, OUTPUT);
-  pinMode(START, OUTPUT);
-  pinMode(DRDY, INPUT);
+  Serial.println("\n=================================");
+  Serial.println("  OPTION B: BIPOLAR T7-T8 EEG    ");
+  Serial.println("=================================");
 
-  digitalWrite(CS, HIGH);
-  digitalWrite(START, LOW);
+  pinMode(ADS_PIN_CS, OUTPUT);
+  pinMode(ADS_PIN_RESET, OUTPUT);
+  pinMode(ADS_PIN_START, OUTPUT);
+  pinMode(ADS_PIN_DRDY, INPUT_PULLUP);
 
-  SPI.begin(D8, D7, D10, CS);
+  digitalWrite(ADS_PIN_CS, HIGH);
+  digitalWrite(ADS_PIN_START, LOW);
 
-  /* HARD RESET */
-  digitalWrite(RESET, LOW);
+  SPI.begin(SPI_PIN_SCK, SPI_PIN_MISO, SPI_PIN_MOSI, -1);
+
+  // Hardware Reset Pulse
+  digitalWrite(ADS_PIN_RESET, LOW);
   delay(300);
-
-  digitalWrite(RESET, HIGH);
+  digitalWrite(ADS_PIN_RESET, HIGH);
   delay(1000);
 
-  /* ADS FIRST */
-  // Pass true to run internal short test, false for live electrode data
-  initADS(false); 
-
-  /* WIFI SECOND */
   connectWiFi();
 
-  /* MQTT THIRD */
+  // Restored Certificate for secure connection
   wifiClient.setCACert(EMQX_CA_CERT);
   mqtt.setServer(MQTT_BROKER, MQTT_PORT);
   mqtt.setBufferSize(1024);
   maintainMQTT();
+
+  if (!initADS()) {
+    Serial.println("[FATAL] ADS1292R initialization failed! Checking SPI lines.");
+    while (true) {
+      delay(100);
+    }
+  }
+
+  lastDrdyTimestamp = millis();
 }
 
-/* ================================================= */
-/* LOOP                                              */
-/* ================================================= */
+/* ================= LOOP ================= */
 
 void loop() {
-  // connectWiFi() was previously only ever called once, from setup() --
-  // a WiFi drop mid-session (router hiccup, range, AP reboot) had no
-  // recovery path at all and would silently kill data collection until
-  // the device was power-cycled. Matches wearable01.ino's same check.
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi dropped, reconnecting...");
     connectWiFi();
   }
 
   maintainMQTT();
   mqtt.loop();
 
-  if (!drdyFlag)
-      return;
+  // 5-second Watchdog & Heartbeat
+  if (millis() - lastHeartbeatTime > 5000) {
+    lastHeartbeatTime = millis();
+    bool drdyActive = (millis() - lastDrdyTimestamp < 1000);
+    if (!drdyActive) {
+      Serial.println("[WARNING] DRDY interrupt stopped pulsing!");
+    }
+    if (mqtt.connected()) {
+      char hb[64];
+      snprintf(hb, sizeof(hb), "{\"uptime_ms\":%lu,\"drdy_ok\":%d}", millis(), drdyActive ? 1 : 0);
+      mqtt.publish(MQTT_STATUS, hb);
+    }
+  }
 
+  if (!drdyFlag) return;
   drdyFlag = false;
+  lastDrdyTimestamp = millis();
 
   byte r[9];
-
   SPI.beginTransaction(adsSPI);
-  digitalWrite(CS, LOW);
-
+  digitalWrite(ADS_PIN_CS, LOW);
   for (int i = 0; i < 9; i++) {
     r[i] = SPI.transfer(0x00);
   }
-
-  digitalWrite(CS, HIGH);
+  digitalWrite(ADS_PIN_CS, HIGH);
   SPI.endTransaction();
 
-  if (!statusValid(r[0])) {
+  if (!isStatusValid(r[0])) {
     corruptFrameCount++;
-    // Was tallied but never surfaced -- if the ADS is wired/seated wrong,
-    // every frame fails this check, batchCount never reaches BATCH_SIZE,
-    // and publishBatch() silently never runs, looking identical to an MQTT
-    // problem from the Serial monitor.
     if (corruptFrameCount % 250 == 0) {
-      Serial.print("WARNING: ");
-      Serial.print(corruptFrameCount);
-      Serial.println(" corrupt ADS frames so far -- check SPI wiring/DRDY");
+      Serial.print("Corrupted ADS frames: ");
+      Serial.println(corruptFrameCount);
     }
     return;
   }
 
-  int32_t ch1 = s24(r[3], r[4], r[5]);
-  int32_t ch2 = s24(r[6], r[7], r[8]);
+  // Channel 2 (T7 - T8 Differential)
+  int32_t raw_t7_t8 = parseSigned24(r[6], r[7], r[8]);
+  uint32_t now = millis();
 
-  batchTime[batchCount] = millis();
-  batchCh1[batchCount]  = ch1;
-  batchCh2[batchCount]  = ch2;
+  // Gain 6, VREF 2.42V: (2 * 2.42V / 6) / 8388607 * 1e6 = 0.0961538 uV/count
+  float t7_t8_uV = raw_t7_t8 * 0.0961538f;
+
+  /* =========================================== */
+  /* --- MODIFIED FOR ARDUINO SERIAL PLOTTER --- */
+  /* =========================================== */
+  // Only printing the microvolt value with a label. 
+  
+  Serial.print("EEG(uV):");
+  Serial.println(t7_t8_uV, 2);
+
+  /* =========================================== */
+
+  batchTime[batchCount] = now;
+  batchCh2[batchCount]  = raw_t7_t8;
   batchCount++;
 
   if (batchCount >= BATCH_SIZE) {

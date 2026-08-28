@@ -15,18 +15,17 @@
 //
 // Ring's own manual calibration flow already exists
 // (modules/physiological/screens/CalibrationScreen.js, POST
-// /calibrate/start + poll /calibrate/status). EEG has no equivalent manual
-// screen -- its calibration is server-driven by mqtt_bridge.py the moment
-// a live EEG session starts (see backend/psychological/app.py's /calibrate,
-// called from the bridge, not from EegSessionScreen.js directly) -- so the
-// EEG action here is "open the EEG tab", not a calibration button of its
-// own.
+// /calibrate/start + poll /calibrate/status). EEG now has the same shape
+// (backend/psychological/app.py's POST /calibrate/start + GET
+// /calibrate/status), triggered together with Ring's from one screen --
+// modules/relaxation_guide/src/games/BreathingLightGame.js's Calibrate --
+// Calm Breathing flow, reached via the Relaxation Guide module. No
+// automatic calibration happens anymore on either side.
 // ============================================================
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import axios from 'axios';
 import ScreenBackground from './ScreenBackground';
 import Card from './Card';
 import Button from './Button';
@@ -34,13 +33,7 @@ import Icon, { NAMES } from './Icon';
 import { useTheme } from '../physiological/config/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import physiologicalApi from '../physiological/api/client';
-
-// EEG's Flask API has no existing frontend client (EegSessionScreen.js only
-// ever reads Firebase directly) -- same Render-hosted, cold-start-tolerant
-// pattern already used for relaxation_guide/physiological (see
-// modules/relaxation_guide/src/api/apiService.js), just for this one route.
-const EEG_API_BASE = 'https://mindpulse-eeg.onrender.com';
-const eegClient = axios.create({ baseURL: EEG_API_BASE, timeout: 45000 });
+import { eegClient } from './eegApiClient';
 
 async function fetchSide(fn) {
   try {
@@ -94,26 +87,47 @@ export function useCalibrationSummary(userId, token) {
   return { loading, ring, eeg, blocking, softStaleRing, softStaleEeg, refresh };
 }
 
+// Concrete age + days-remaining-until-the-30-day-hard-cutoff, instead of
+// the old vague "over a week old" -- age_days/is_stale_soft/is_stale_hard
+// all already come from the shared /baseline and /calibration/status
+// responses (see useCalibrationSummary above), so this is real data, not
+// an estimate.
+function describeStale(name, side) {
+  const age = Math.floor(side.age_days);
+  const remaining = Math.max(0, Math.ceil(30 - side.age_days));
+  return `${name} calibration is ${age} day${age === 1 ? '' : 's'} old — `
+    + `renew within the next ${remaining} day${remaining === 1 ? '' : 's'} for best accuracy.`;
+}
+
 // Small dismissible nudge shown on the Overview (Fusion) landing tab --
 // never blocking, per-session dismissal only (re-appears next app open,
 // since this isn't meant to be permanently silenceable the way a real
-// "don't ask again" would be).
+// "don't ask again" would be). Ring and EEG are tracked and shown
+// separately -- there's no single merged "your baseline" anywhere in this
+// backend (each modality calibrates and stores its own baseline
+// independently; the fusion engine's own session-level average is a
+// different, smaller thing -- see the "Session start" line on the Ring
+// chart), so this banner is honest about that rather than implying a
+// combined number that doesn't exist.
 export function CalibrationBanner({ userId, token }) {
   const { theme, COLORS } = useTheme();
-  const { softStaleRing, softStaleEeg } = useCalibrationSummary(userId, token);
+  const { ring, eeg, softStaleRing, softStaleEeg } = useCalibrationSummary(userId, token);
   const [dismissed, setDismissed] = useState(false);
 
   if (dismissed || (!softStaleRing && !softStaleEeg)) return null;
 
-  const which = softStaleRing && softStaleEeg ? 'Ring and EEG calibration are'
-    : softStaleRing ? 'Ring calibration is'
-    : 'EEG calibration is';
-
   return (
     <View style={[bannerStyles.wrap, { backgroundColor: COLORS.warning + '1a', borderColor: COLORS.warning + '55' }]}>
-      <Text style={[bannerStyles.text, { color: theme.text }]}>
-        {which} over a week old — renew when convenient.
-      </Text>
+      <View style={{ flex: 1 }}>
+        {softStaleRing && (
+          <Text style={[bannerStyles.text, { color: theme.text }]}>{describeStale('Ring', ring)}</Text>
+        )}
+        {softStaleEeg && (
+          <Text style={[bannerStyles.text, { color: theme.text, marginTop: softStaleRing ? 4 : 0 }]}>
+            {describeStale('EEG', eeg)}
+          </Text>
+        )}
+      </View>
       <TouchableOpacity onPress={() => setDismissed(true)} hitSlop={10}>
         <Text style={[bannerStyles.dismiss, { color: COLORS.warning }]}>Dismiss</Text>
       </TouchableOpacity>
@@ -123,11 +137,11 @@ export function CalibrationBanner({ userId, token }) {
 
 const bannerStyles = StyleSheet.create({
   wrap: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between',
     borderWidth: 1, borderRadius: 12, padding: 12, marginBottom: 12,
   },
-  text: { flex: 1, fontSize: 12, fontWeight: '600', marginRight: 10 },
-  dismiss: { fontSize: 12, fontWeight: '800' },
+  text: { fontSize: 12, fontWeight: '600', marginRight: 10, lineHeight: 17 },
+  dismiss: { fontSize: 12, fontWeight: '800', paddingTop: 1 },
 });
 
 // The blocking full-screen prompt itself -- registered as a Stack.Screen in
@@ -196,7 +210,7 @@ export default function CalibrationGate({ navigation }) {
           <Text style={[styles.cardSub, { color: theme.textMuted }]}>
             {eeg?.ok && eeg.exists
               ? `Last calibrated ${Math.floor(eeg.age_days)} days ago.`
-              : 'Calibrates automatically once an EEG session starts.'}
+              : 'Run Calibrate — Calm Breathing from the Relaxation Guide to set an EEG baseline.'}
           </Text>
           <Button label="Open EEG →" onPress={() => navigation.navigate('EegSummary')} variant="secondary" />
         </Card>

@@ -75,11 +75,13 @@ export const GamePlayerScreen = () => {
         {renderGameCanvas()}
       </View>
 
-      <View style={[styles.footer, { borderTopColor: theme.border }]}>
-        <TouchableOpacity style={[styles.finishBtn, { backgroundColor: theme.success }]} onPress={handleFinishGame}>
-          <Text style={styles.finishBtnTxt}>Complete Exercise & Submit Rating →</Text>
-        </TouchableOpacity>
-      </View>
+      {!isCalibrating && (
+        <View style={[styles.footer, { borderTopColor: theme.border }]}>
+          <TouchableOpacity style={[styles.finishBtn, { backgroundColor: theme.success }]} onPress={handleFinishGame}>
+            <Text style={styles.finishBtnTxt}>Complete Exercise & Submit Rating →</Text>
+          </TouchableOpacity>
+        </View>
+      )}
     </View>
   );
 };
