@@ -3,11 +3,51 @@ import {
   View, Text, StyleSheet, TouchableOpacity,
   ScrollView, Alert, Animated
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import ScreenBackground from '../../shared/ScreenBackground';
+import { ref, query, orderByKey, limitToLast, get as dbGet } from 'firebase/database';
 import { useTheme } from '../config/ThemeContext';
 import { COLORS } from '../config/theme';
 import api from '../api/client';
 import { useAppState } from './AppState';
+import { useAuth } from '../../../context/AuthContext';
+import { db } from '../../../firebase';
+
+// This is the one shared self-report check-in for both modalities (EEG has
+// no survey of its own, see the "Unified Calibration + EMA" plan section 2)
+// -- reads whichever of Ring/EEG has a recent reading and tags the
+// submission with it, working fine with only one, both, or neither present.
+async function fetchRingProbStress(userId) {
+  if (!userId) return null;
+  try {
+    const h = await api.get(`/history/${userId}`);
+    const sessionIds = Object.keys(h.data?.sessions || {});
+    const latestId = sessionIds[sessionIds.length - 1];
+    if (!latestId) return null;
+    const s = await api.get(`/history/${userId}/${latestId}`);
+    const predictions = Object.values(s.data?.predictions || {})
+      .sort((a, b) => (b.window_idx ?? 0) - (a.window_idx ?? 0));
+    return predictions[0]?.prob_stress ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// EEG has no HTTP route for "latest reading" -- read fusion_en directly,
+// same path EegFirebaseSession.push() writes to
+// (backend/psychological/firebase_service.py:52-67, prob_eeg field per
+// make_eeg_fusion_record()).
+async function fetchEegProbStress(userId, sessionId) {
+  if (!userId || !sessionId) return null;
+  try {
+    const q = query(ref(db, `fusion_en/${userId}/${sessionId}`), orderByKey(), limitToLast(1));
+    const snap = await dbGet(q);
+    if (!snap.exists()) return null;
+    const [latest] = Object.values(snap.val());
+    return latest?.prob_eeg ?? null;
+  } catch {
+    return null;
+  }
+}
 
 const QUESTIONS = [
   { q: 'In the last month, how often have you felt nervous and stressed?', reverse: false },
@@ -27,6 +67,7 @@ const OPTIONS = [
 export default function PSS4Screen() {
   const { isDark, theme }        = useTheme();
   const { lastSessionId }        = useAppState();
+  const { user, sessionId }      = useAuth();
   const [answers,   setAnswers]  = useState([null, null, null, null]);
   const [submitted, setSubmitted]= useState(false);
   const [result,    setResult]   = useState(null);
@@ -57,10 +98,16 @@ export default function PSS4Screen() {
   const submit = async () => {
     if (answers.some(a => a === null)) { Alert.alert('Incomplete', 'Please answer all 4 questions.'); return; }
     const sessionToUse = lastSessionId || 'no_session';
+    const [ringProbStress, eegProbStress] = await Promise.all([
+      fetchRingProbStress(user?.userId),
+      fetchEegProbStress(user?.userId, sessionId),
+    ]);
     try {
       const res = await api.post('/pss4', {
         session_id: sessionToUse,
         q1: answers[0], q2: answers[1], q3: answers[2], q4: answers[3],
+        ring_prob_stress: ringProbStress,
+        eeg_prob_stress: eegProbStress,
       });
       setResult(res.data); setSubmitted(true);
     } catch {
@@ -79,8 +126,8 @@ export default function PSS4Screen() {
     const pct   = (result.score / (result.max_score || 16)) * 100;
 
     return (
-      <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
-        <View style={[styles.resultScreen, { backgroundColor: bg }]}>
+      <ScreenBackground>
+        <View style={styles.resultScreen}>
           <View style={[styles.resultCard, { backgroundColor: card, borderColor: color + '60', borderWidth: 2 }]}>
 
             <View style={[styles.resultIconRing, { borderColor: color + '60' }]}>
@@ -126,14 +173,14 @@ export default function PSS4Screen() {
             </TouchableOpacity>
           </View>
         </View>
-      </SafeAreaView>
+      </ScreenBackground>
     );
   }
 
   const progressWidth = progressAnim.interpolate({ inputRange: [0,1], outputRange: ['0%','100%'] });
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
+    <ScreenBackground>
       <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
 
         {/* Header */}
@@ -238,62 +285,62 @@ export default function PSS4Screen() {
 
         <View style={{ height: 80 }} />
       </ScrollView>
-    </SafeAreaView>
+    </ScreenBackground>
   );
 }
 
 const styles = StyleSheet.create({
   safe:              { flex: 1 },
-  container:         { flex: 1, padding: 20 },
+  container:         { flex: 1, padding: 20, paddingTop: 16 },
   header:            { marginBottom: 16 },
-  title:             { fontSize: 24, fontWeight: '900' },
+  title:             { fontSize: 24, fontWeight: '900', letterSpacing: -0.3 },
   subtitle:          { fontSize: 13, marginTop: 4 },
-  progressCard:      { borderRadius: 16, borderWidth: 1, padding: 14, marginBottom: 16 },
+  progressCard:      { borderRadius: 20, borderWidth: 1, padding: 16, marginBottom: 16 },
   progressHeader:    { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
-  progressLabel:     { fontSize: 13, fontWeight: '600' },
+  progressLabel:     { fontSize: 13, fontWeight: '700' },
   progressPct:       { fontSize: 13, fontWeight: '800' },
   progressBg:        { height: 6, borderRadius: 3, overflow: 'hidden', marginBottom: 12 },
   progressFill:      { height: 6, borderRadius: 3, backgroundColor: COLORS.brand },
   dotRow:            { flexDirection: 'row', gap: 10 },
   progressDot:       { width: 10, height: 10, borderRadius: 5 },
-  questionCard:      { borderRadius: 18, borderWidth: 1, padding: 18, marginBottom: 14 },
-  questionCardActive:{ shadowColor: COLORS.brand, shadowOpacity: 0.2, shadowRadius: 12, elevation: 4 },
+  questionCard:      { borderRadius: 22, borderWidth: 1, padding: 20, marginBottom: 14 },
+  questionCardActive:{ shadowColor: COLORS.brandDark, shadowOpacity: 0.1, shadowRadius: 14, elevation: 3 },
   questionHeader:    { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
   qNumber:           { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   qNumberText:       { fontSize: 12, fontWeight: '800' },
   reverseBadge:      { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1 },
   reverseText:       { fontSize: 10, fontWeight: '700' },
-  questionText:      { fontSize: 14, lineHeight: 22, marginBottom: 14 },
+  questionText:      { fontSize: 14, lineHeight: 22, marginBottom: 14, fontWeight: '600' },
   optionsGrid:       { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  optionBtn:         { width: '18.5%', borderRadius: 12, borderWidth: 1, padding: 8, alignItems: 'center' },
+  optionBtn:         { width: '18.5%', borderRadius: 14, borderWidth: 1, padding: 8, alignItems: 'center' },
   optionEmoji:       { fontSize: 16, marginBottom: 3 },
   optionVal:         { fontSize: 16, fontWeight: '900' },
-  optionLabel:       { fontSize: 8, marginTop: 2, textAlign: 'center' },
-  previewCard:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 14, borderWidth: 1, padding: 14, marginBottom: 16 },
-  previewLabel:      { fontSize: 13 },
+  optionLabel:       { fontSize: 8, marginTop: 2, textAlign: 'center', fontWeight: '700' },
+  previewCard:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 16, borderWidth: 1, padding: 14, marginBottom: 16 },
+  previewLabel:      { fontSize: 13, fontWeight: '700' },
   previewScore:      { fontSize: 32, fontWeight: '900' },
   previewMax:        { fontSize: 16 },
-  submitBtn:         { backgroundColor: COLORS.brand, padding: 18, borderRadius: 16, alignItems: 'center', marginBottom: 16 },
-  submitBtnText:     { color: '#fff', fontSize: 16, fontWeight: '800' },
+  submitBtn:         { backgroundColor: COLORS.brand, padding: 16, borderRadius: 28, alignItems: 'center', marginBottom: 16, shadowColor: COLORS.brandDark, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8, elevation: 3 },
+  submitBtnText:     { color: '#fff', fontSize: 15, fontWeight: '800' },
   resultScreen:      { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20 },
-  resultCard:        { width: '100%', borderRadius: 24, padding: 28, alignItems: 'center' },
+  resultCard:        { width: '100%', borderRadius: 26, padding: 28, alignItems: 'center' },
   resultIconRing:    { width: 110, height: 110, borderRadius: 55, borderWidth: 2, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
   resultIconInner:   { width: 90, height: 90, borderRadius: 45, alignItems: 'center', justifyContent: 'center' },
   resultEmoji:       { fontSize: 48 },
-  resultTitle:       { fontSize: 14, marginBottom: 8 },
-  resultScore:       { fontSize: 64, fontWeight: '900' },
+  resultTitle:       { fontSize: 14, marginBottom: 8, fontWeight: '700' },
+  resultScore:       { fontSize: 64, fontWeight: '900', letterSpacing: -2 },
   resultMax:         { fontSize: 18, marginTop: -8, marginBottom: 6 },
-  resultLevel:       { fontSize: 26, fontWeight: '900', marginBottom: 16 },
+  resultLevel:       { fontSize: 24, fontWeight: '900', marginBottom: 16 },
   scoreBar:          { width: '100%', height: 8, borderRadius: 4, overflow: 'hidden', flexDirection: 'row', position: 'relative', marginBottom: 4 },
   scoreBarNormal:     { height: 8, backgroundColor: COLORS.normal },
   scoreBarStress:     { height: 8, backgroundColor: COLORS.warning },
   scoreBarHighStress: { height: 8, backgroundColor: COLORS.stress },
   scoreMarker:       { position: 'absolute', top: -3, width: 4, height: 14, borderRadius: 2 },
   scoreLabels:       { flexDirection: 'row', justifyContent: 'space-between', width: '100%', marginBottom: 16 },
-  scoreLabel:        { fontSize: 10, fontWeight: '700' },
+  scoreLabel:        { fontSize: 10, fontWeight: '800' },
   resultDesc:        { fontSize: 14, textAlign: 'center', lineHeight: 22, marginBottom: 16 },
-  sessionNote:       { borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8, borderWidth: 1, marginBottom: 14 },
-  sessionNoteText:   { fontSize: 11 },
-  resetBtn:          { borderRadius: 12, borderWidth: 1, padding: 14, width: '100%', alignItems: 'center' },
-  resetBtnText:      { fontSize: 15, fontWeight: '600' },
+  sessionNote:       { borderRadius: 12, paddingHorizontal: 14, paddingVertical: 8, borderWidth: 1, marginBottom: 14 },
+  sessionNoteText:   { fontSize: 11, fontWeight: '700' },
+  resetBtn:          { borderRadius: 28, borderWidth: 1, padding: 14, width: '100%', alignItems: 'center' },
+  resetBtnText:      { fontSize: 14, fontWeight: '800' },
 });

@@ -62,7 +62,7 @@ export default function EmaSummaryCard({ navigation }) {
         <Text style={[styles.sub, { color: muted }]}>Loading…</Text>
       ) : !latest ? (
         <Text style={[styles.sub, { color: muted }]}>
-          No baseline updates yet — happens automatically after sessions.
+          No baseline updates yet — happens automatically each time you recalibrate.
         </Text>
       ) : (
         <>

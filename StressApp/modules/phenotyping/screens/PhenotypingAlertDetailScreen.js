@@ -8,14 +8,14 @@
 // ============================================================
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import ScreenBackground from '../../shared/ScreenBackground';
 import { useTheme } from '../../physiological/config/ThemeContext';
 
 export default function PhenotypingAlertDetailScreen({ navigation }) {
     const { theme: t, COLORS } = useTheme();
 
     return (
-        <SafeAreaView style={[styles.container, { backgroundColor: t.bg }]} edges={['left', 'right']}>
+        <ScreenBackground edges={['left', 'right']}>
             <View style={styles.scroll}>
                 <View style={[styles.alertBox, { backgroundColor: COLORS.brand + '15', borderColor: COLORS.brand + '40' }]}>
                     <Text style={[styles.alertTitle, { color: t.text }]}>⚠️ Pre-stress alert triggered</Text>
@@ -38,7 +38,7 @@ export default function PhenotypingAlertDetailScreen({ navigation }) {
                     </View>
                 </TouchableOpacity>
             </View>
-        </SafeAreaView>
+        </ScreenBackground>
     );
 }
 

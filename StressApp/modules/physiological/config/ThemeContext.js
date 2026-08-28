@@ -1,17 +1,39 @@
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useContext } from 'react';
 import { COLORS } from './theme';
 
-const ThemeContext = createContext(null);
+export { COLORS };
+export const colors = COLORS;
+
+const defaultThemeValue = {
+  isDark: false,
+  toggle: () => {},
+  theme: { ...COLORS.light, colors: { ...COLORS, ...COLORS.light } },
+  COLORS,
+  colors: { ...COLORS, ...COLORS.light },
+};
+
+const ThemeContext = createContext(defaultThemeValue);
 
 export function ThemeProvider({ children }) {
-  const [isDark, setIsDark] = useState(true);
-  const toggle = () => setIsDark(p => !p);
-  const theme  = isDark ? COLORS.dark : COLORS.light;
+  const value = {
+    isDark: false,
+    toggle: () => {},
+    theme: {
+      ...COLORS.light,
+      colors: { ...COLORS, ...COLORS.light },
+    },
+    COLORS,
+    colors: { ...COLORS, ...COLORS.light },
+  };
   return (
-    <ThemeContext.Provider value={{ isDark, toggle, theme, COLORS }}>
+    <ThemeContext.Provider value={value}>
       {children}
     </ThemeContext.Provider>
   );
 }
 
-export function useTheme() { return useContext(ThemeContext); }
+export function useTheme() {
+  const ctx = useContext(ThemeContext);
+  return ctx || defaultThemeValue;
+}
+

@@ -14,7 +14,7 @@
 // ============================================================
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, NativeModules, Platform } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import ScreenBackground from '../../shared/ScreenBackground';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import { useAuth } from '../../../context/AuthContext';
@@ -72,7 +72,7 @@ export default function PhenotypingOnboardingScreen({ navigation }) {
     };
 
     return (
-        <SafeAreaView style={[styles.container, { backgroundColor: t.bg }]} edges={['left', 'right']}>
+        <ScreenBackground edges={['left', 'right']}>
             <ScrollView contentContainerStyle={styles.scroll}>
                 <Text style={[styles.title, { color: t.text }]}>Set up behavioral tracking</Text>
                 <Text style={[styles.subtitle, { color: t.textMuted }]}>
@@ -130,7 +130,7 @@ export default function PhenotypingOnboardingScreen({ navigation }) {
                     <Text style={styles.finishBtnText}>{allAnswered ? "I'm all set →" : `Answer ${SURVEY_QUESTIONS.length - Object.keys(answers).length} more to continue`}</Text>
                 </TouchableOpacity>
             </ScrollView>
-        </SafeAreaView>
+        </ScreenBackground>
     );
 }
 

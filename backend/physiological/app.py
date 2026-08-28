@@ -3,7 +3,6 @@ import sys
 
 from flask import jsonify, request, g
 from werkzeug.security import generate_password_hash, check_password_hash
-import numpy as np
 import re
 import threading
 from pathlib import Path
@@ -17,18 +16,19 @@ if __package__ is None:
 from backend.common.app_factory import create_app
 from backend.common.config import (
     STRESS_COLORS,
-    EMA_ALPHA, N_BASELINE_WIN
+    N_BASELINE_WIN,
+    CALIBRATION_SOFT_AGE_DAYS, CALIBRATION_HARD_AGE_DAYS
 )
 from backend.common.auth import generate_token, require_auth
 from backend.physiological.firebase_service import (
     init_firebase,
     create_user, get_user, list_users,
     create_user_with_password, set_password_hash,
-    save_baseline, load_baseline,
+    load_baseline, load_baseline_meta,
     save_prediction, get_session_predictions,
     get_recent_sessions,
     save_pss4, get_pss4_history,
-    save_ema_update, _ref,
+    _ref,
     save_prediction_quality,
     save_fusion_en_rtdb,
     label_session_ground_truth_rtdb,
@@ -220,7 +220,7 @@ def predict():
 
     # ── Extract features from raw arrays ───────────────────────
     try:
-        features_2d, motion_rejected, feat_dict = \
+        features_2d, motion_rejected, feat_dict, hrv_is_fallback = \
             extract_features(
                 ibi_array,
                 gsr_adc_array,
@@ -241,6 +241,20 @@ def predict():
             'window_idx':      window_idx,
             'message':         'Window rejected — too much movement',
             'hint':            'Keep hand still during measurement'
+        })
+
+    # ── HRV fallback rejection ─────────────────────────────────
+    # Previously silent: too little clean IBI data made extract_hrv_features()
+    # substitute fixed placeholder values (AVNN: 800.0 etc.), which used to
+    # get fed straight into the model as if they were a real reading --
+    # capable of producing a confident-looking Normal/Stress label built on
+    # fabricated features. Rejected the same way motion_rejected already is.
+    if hrv_is_fallback:
+        return jsonify({
+            'hrv_fallback': True,
+            'window_idx':   window_idx,
+            'message':      'Window rejected — insufficient clean IBI data',
+            'hint':         'Ensure MAX30102 has stable skin contact'
         })
 
     signal_quality = compute_signal_quality(
@@ -331,8 +345,10 @@ def submit_pss4():
     q2 = int(data.get('q2', 0))
     q3 = int(data.get('q3', 0))
     q4 = int(data.get('q4', 0))
+    ring_prob_stress = data.get('ring_prob_stress')
+    eeg_prob_stress  = data.get('eeg_prob_stress')
 
-    score = save_pss4(user_id, session_id, q1, q2, q3, q4)
+    score = save_pss4(user_id, session_id, q1, q2, q3, q4, ring_prob_stress, eeg_prob_stress)
     label_session_ground_truth_rtdb(user_id, session_id, score)
 
     level = (
@@ -349,16 +365,63 @@ def submit_pss4():
     })
 
 
+# ── Response builders shared by the owner-only routes below and their
+# /admin/... counterparts -- same data, the only difference between the two
+# is which caller is allowed to reach it (self only vs any authenticated
+# admin caller, see the /admin/ routes' own docstring further down).
+def _history_response(user_id):
+    return {
+        'user_id':  user_id,
+        'sessions': get_recent_sessions(user_id, limit=10),
+        'pss4':     get_pss4_history(user_id)
+    }
+
+
+def _session_detail_response(user_id, session_id):
+    return {
+        'user_id':     user_id,
+        'session_id':  session_id,
+        'predictions': get_session_predictions(user_id, session_id)
+    }
+
+
+def _baseline_response(user_id):
+    b_mean, b_std = load_baseline(user_id, feature_cols)
+    meta = load_baseline_meta(user_id)
+
+    if b_mean is None:
+        return {'exists': False}
+
+    age_days = meta.get('age_days')
+    return {
+        'exists':   True,
+        'user_id':  user_id,
+        'updated_at': meta.get('updated_at'),
+        'age_days': age_days,
+        'is_stale_soft': age_days is not None and age_days > CALIBRATION_SOFT_AGE_DAYS,
+        'is_stale_hard': age_days is not None and age_days > CALIBRATION_HARD_AGE_DAYS,
+        'baseline': {
+            feature_cols[i]: {
+                'mean': float(b_mean[i]),
+                'std':  float(b_std[i])
+            }
+            for i in range(len(feature_cols))
+        }
+    }
+
+
+def _ema_history_response(user_id):
+    ref  = _ref(f'ema_history/{user_id}')
+    data = ref.get() or {}
+    return {'user_id': user_id, 'ema_history': data}
+
+
 @app.route('/history/<user_id>', methods=['GET'])
 @require_auth
 def get_history(user_id):
     if user_id != g.user_id:
         return jsonify({'error': 'Forbidden — token does not match requested user'}), 403
-    return jsonify({
-        'user_id':  user_id,
-        'sessions': get_recent_sessions(user_id, limit=10),
-        'pss4':     get_pss4_history(user_id)
-    })
+    return jsonify(_history_response(user_id))
 
 
 @app.route('/history/<user_id>/<session_id>',
@@ -367,13 +430,7 @@ def get_history(user_id):
 def get_session_detail(user_id, session_id):
     if user_id != g.user_id:
         return jsonify({'error': 'Forbidden — token does not match requested user'}), 403
-    return jsonify({
-        'user_id':     user_id,
-        'session_id':  session_id,
-        'predictions': get_session_predictions(
-            user_id, session_id
-        )
-    })
+    return jsonify(_session_detail_response(user_id, session_id))
 
 
 @app.route('/baseline/<user_id>', methods=['GET'])
@@ -381,147 +438,7 @@ def get_session_detail(user_id, session_id):
 def get_baseline(user_id):
     if user_id != g.user_id:
         return jsonify({'error': 'Forbidden — token does not match requested user'}), 403
-    b_mean, b_std = load_baseline(user_id, feature_cols)
-
-    if b_mean is None:
-        return jsonify({'exists': False})
-
-    return jsonify({
-        'exists':   True,
-        'user_id':  user_id,
-        'baseline': {
-            feature_cols[i]: {
-                'mean': float(b_mean[i]),
-                'std':  float(b_std[i])
-            }
-            for i in range(len(feature_cols))
-        }
-    })
-
-
-@app.route('/ema/update', methods=['POST'])
-@require_auth
-def ema_update():
-    from backend.physiological.ema_service import (
-        compute_session_mean,
-        compute_ema_update,
-        build_ema_summary,
-        interpret_ema_change,
-    )
-
-    data       = request.get_json(silent=True) or {}
-    user_id    = g.user_id
-    session_id = data.get('session_id', '')
-
-    old_mean, old_std = load_baseline(user_id, feature_cols)
-    if old_mean is None:
-        return jsonify({'error': 'No baseline found'}), 400
-
-    predictions_data = get_session_predictions(
-        user_id, session_id
-    )
-    if not predictions_data:
-        return jsonify({'error': 'No predictions found'}), 400
-
-    feature_arrays  = []
-    prediction_list = []
-
-    for key, pred in predictions_data.items():
-        if 'features' in pred:
-            row = [
-                pred['features'].get(f, 0.0)
-                for f in feature_cols
-            ]
-            feature_arrays.append(row)
-            prediction_list.append(
-                int(pred.get('prediction', 0))
-            )
-
-    if len(feature_arrays) == 0:
-        return jsonify({'error': 'No features found'}), 400
-
-    feature_arrays = np.array(feature_arrays)
-    normal_count   = sum(
-        1 for p in prediction_list if p == 0
-    )
-
-    session_mean = compute_session_mean(
-        feature_arrays,
-        predictions=prediction_list
-    )
-
-    if session_mean is None:
-        return jsonify({
-            'success':        True,
-            'updated':        False,
-            'user_id':        user_id,
-            'session_id':     session_id,
-            'alpha':          EMA_ALPHA,
-            'n_windows':      len(feature_arrays),
-            'n_normal_used':  normal_count,
-            'reason':         'Fewer than 3 Normal windows in session',
-            'message': (
-                f'Baseline unchanged. Session had only '
-                f'{normal_count} Normal windows '
-                f'(minimum 3 required).'
-            ),
-            'interpretation': [
-                f'Session contained {len(feature_arrays)} windows '
-                f'total, {normal_count} classified as Normal.',
-                'Minimum 3 Normal windows required.',
-                'Your resting baseline remains stable.',
-            ],
-            'comparison': []
-        })
-
-    new_mean       = compute_ema_update(old_mean, session_mean)
-    summary        = build_ema_summary(
-        old_mean, new_mean, feature_cols
-    )
-    interpretation = interpret_ema_change(
-        old_mean, new_mean, feature_cols
-    )
-
-    save_baseline(user_id, new_mean, old_std, feature_cols)
-    save_ema_update(
-        user_id, session_id,
-        old_mean, new_mean, feature_cols, EMA_ALPHA
-    )
-
-    key_features = [
-        'AVNN', 'MeanHR', 'SCL_mean', 'SCR_count', 'SD1'
-    ]
-    comparison = []
-    for feat in key_features:
-        if feat in feature_cols:
-            i = feature_cols.index(feat)
-            comparison.append({
-                'feature': feat,
-                'old':     round(float(old_mean[i]), 3),
-                'new':     round(float(new_mean[i]), 3),
-                'delta':   round(
-                    float(new_mean[i] - old_mean[i]), 3
-                ),
-                'formula': (
-                    f"{EMA_ALPHA} × "
-                    f"{round(float(session_mean[i]), 2)} + "
-                    f"{1-EMA_ALPHA} × "
-                    f"{round(float(old_mean[i]), 2)} = "
-                    f"{round(float(new_mean[i]), 2)}"
-                )
-            })
-
-    return jsonify({
-        'success':        True,
-        'updated':        True,
-        'user_id':        user_id,
-        'session_id':     session_id,
-        'alpha':          EMA_ALPHA,
-        'n_windows':      len(feature_arrays),
-        'n_normal_used':  normal_count,
-        'comparison':     comparison,
-        'interpretation': interpretation,
-    })
+    return jsonify(_baseline_response(user_id))
 
 
 @app.route('/ema/history/<user_id>', methods=['GET'])
@@ -529,12 +446,39 @@ def ema_update():
 def get_ema_history(user_id):
     if user_id != g.user_id:
         return jsonify({'error': 'Forbidden — token does not match requested user'}), 403
-    ref  = _ref(f'ema_history/{user_id}')
-    data = ref.get() or {}
-    return jsonify({
-        'user_id':     user_id,
-        'ema_history': data
-    })
+    return jsonify(_ema_history_response(user_id))
+
+
+# ── Admin routes ──────────────────────────────────────────────────────
+# Same data as the owner-only routes above, but for ANY user_id -- no
+# ownership check, only @require_auth (a valid token, still required).
+# Deliberate: no admin/role concept exists anywhere in this backend (by
+# design, for a small research app with few accounts) -- any logged-in
+# account can view any other account's data through these routes, matching
+# StressApp's new post-login "User App / Admin App" chooser. Read-only;
+# never touches the viewed user's own session/token.
+@app.route('/admin/history/<user_id>', methods=['GET'])
+@require_auth
+def admin_get_history(user_id):
+    return jsonify(_history_response(user_id))
+
+
+@app.route('/admin/history/<user_id>/<session_id>', methods=['GET'])
+@require_auth
+def admin_get_session_detail(user_id, session_id):
+    return jsonify(_session_detail_response(user_id, session_id))
+
+
+@app.route('/admin/baseline/<user_id>', methods=['GET'])
+@require_auth
+def admin_get_baseline(user_id):
+    return jsonify(_baseline_response(user_id))
+
+
+@app.route('/admin/ema/history/<user_id>', methods=['GET'])
+@require_auth
+def admin_get_ema_history(user_id):
+    return jsonify(_ema_history_response(user_id))
 
 
 if __name__ == '__main__':
@@ -555,8 +499,10 @@ if __name__ == '__main__':
     print(f"  POST /pss4")
     print(f"  GET  /history/<user_id>")
     print(f"  GET  /baseline/<user_id>")
-    print(f"  POST /ema/update")
-    print(f"  GET  /ema/history/<user_id>")
+    print(f"  GET  /ema/history/<user_id>  ← baseline-adaptation log (written on recalibration)")
+    print(f"  GET  /admin/history/<user_id>, /admin/history/<user_id>/<session_id>,")
+    print(f"       /admin/baseline/<user_id>, /admin/ema/history/<user_id>")
+    print(f"       ← same data, any user_id, no ownership check (StressApp's Admin App)")
     print("=" * 50)
     # Render.com injects $PORT -- use it in production; default to 5050
     # locally (see backend/phenotyping_behavior/app.py's identical pattern).

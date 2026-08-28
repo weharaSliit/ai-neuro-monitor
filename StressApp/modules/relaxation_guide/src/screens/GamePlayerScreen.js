@@ -60,7 +60,7 @@ export const GamePlayerScreen = () => {
       case 'particle_field':
         return <ParticleFieldGame />;
       case 'breathing_light':
-        return <BreathingLightGame />;
+        return <BreathingLightGame onCalibrationComplete={handleFinishGame} />;
       case 'singing_bowls':
       case 'forest_stream':
       case 'solfeggio_528':
@@ -82,6 +82,13 @@ export const GamePlayerScreen = () => {
     setCurrentScreen('Rating');
   };
 
+  // The calibration flow drives its own completion (once every triggered
+  // capture -- Ring ~210s, EEG ~85s -- actually reports done/error) via
+  // onCalibrationComplete above, not a fixed timer -- a 60s force-end would
+  // cut a real capture short mid-flight. No footer "abandon" button either,
+  // so a capture can't be walked away from by accident.
+  const isCalibrating = subId === 'breathing_light';
+
   return (
     <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
       <Header
@@ -90,19 +97,23 @@ export const GamePlayerScreen = () => {
         onBack={() => setCurrentScreen('SubOptionSelector')}
       />
 
-      <View style={styles.timerBar}>
-        <Timer initialSeconds={60} onComplete={handleFinishGame} />
-      </View>
+      {!isCalibrating && (
+        <View style={styles.timerBar}>
+          <Timer initialSeconds={60} onComplete={handleFinishGame} />
+        </View>
+      )}
 
       <View style={styles.canvasContainer}>
         {renderGameCanvas()}
       </View>
 
-      <View style={[styles.footer, { borderTopColor: theme.border }]}>
-        <TouchableOpacity style={[styles.finishBtn, { backgroundColor: theme.success }]} onPress={handleFinishGame}>
-          <Text style={styles.finishBtnTxt}>Complete Exercise & Submit Rating →</Text>
-        </TouchableOpacity>
-      </View>
+      {!isCalibrating && (
+        <View style={[styles.footer, { borderTopColor: theme.border }]}>
+          <TouchableOpacity style={[styles.finishBtn, { backgroundColor: theme.success }]} onPress={handleFinishGame}>
+            <Text style={styles.finishBtnTxt}>Complete Exercise & Submit Rating →</Text>
+          </TouchableOpacity>
+        </View>
+      )}
     </View>
   );
 };

@@ -4,12 +4,16 @@
 
 import pandas as pd
 import numpy as np
+import sys
+import joblib
+import os
 from sklearn.svm import OneClassSVM
 from sklearn.ensemble import IsolationForest, RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import f1_score, accuracy_score
-import joblib
-import os
+from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
+
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
 
 def train_and_compare():
     df = pd.read_csv("../data/processed/merged_studentlife_u00.csv")

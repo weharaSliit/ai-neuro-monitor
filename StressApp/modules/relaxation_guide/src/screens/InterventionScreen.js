@@ -127,7 +127,7 @@ export const InterventionScreen = () => {
 
   const renderConfidenceMeter = () => {
     const score = (currentRecommendation.blended_score * 100).toFixed(0);
-    const scoreColor = score > 80 ? '#10B981' : score > 60 ? '#F59E0B' : '#EF4444';
+    const scoreColor = score > 80 ? '#82C0A0' : score > 60 ? '#E8B368' : '#E08585';
 
     return (
       <Animated.View style={[
@@ -254,7 +254,7 @@ export const InterventionScreen = () => {
                 <View style={styles.scoreBar}>
                   <View style={[styles.scoreBarFill, {
                     width: `${(currentRecommendation.physiological_sample * 100).toFixed(0)}%`,
-                    backgroundColor: '#38BDF8'
+                    backgroundColor: '#8B87C4'
                   }]} />
                 </View>
                 <Text style={styles.scoreVal}>
@@ -272,7 +272,7 @@ export const InterventionScreen = () => {
                 <View style={styles.scoreBar}>
                   <View style={[styles.scoreBarFill, {
                     width: `${(currentRecommendation.preference_score * 100).toFixed(0)}%`,
-                    backgroundColor: '#8B5CF6'
+                    backgroundColor: '#E2A38F'
                   }]} />
                 </View>
                 <Text style={styles.scoreVal}>
@@ -321,7 +321,7 @@ export const InterventionScreen = () => {
             disabled={isAccepting}
           >
             {isAccepting ? (
-              <ActivityIndicator color="#0F172A" />
+              <ActivityIndicator color="#332F45" />
             ) : (
               <>
                 <Text style={styles.acceptBtnTxt}>▶️ Start Technique</Text>
@@ -336,7 +336,7 @@ export const InterventionScreen = () => {
             disabled={isRejecting}
           >
             {isRejecting ? (
-              <ActivityIndicator color="#F59E0B" size="small" />
+              <ActivityIndicator color="#E8B368" size="small" />
             ) : (
               <>
                 <Text style={styles.rejectBtnTxt}>🤔 Not feeling this?</Text>
@@ -405,11 +405,12 @@ export const InterventionScreen = () => {
                   style={styles.breathingResetBtn}
                   onPress={() => {
                     Vibration.vibrate(30);
+                    setSelectedSubOption({ id: 'breathing_light', title: 'Calibrate — Calm Breathing' });
                     setCurrentScreen('GamePlayer');
                   }}
                 >
-                  <Text style={styles.breathingResetTxt}>🌬️ Start Breathing Exercise</Text>
-                  <Text style={styles.breathingResetSub}>Guided, 30 seconds</Text>
+                  <Text style={styles.breathingResetTxt}>🌬️ Calibrate — Calm Breathing</Text>
+                  <Text style={styles.breathingResetSub}>Guided breathing while your Ring/EEG baseline captures</Text>
                 </TouchableOpacity>
               </View>
             )}
@@ -447,7 +448,7 @@ export const InterventionScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0F172A'
+    backgroundColor: '#FAF9FC'
   },
   content: {
     padding: 16,
@@ -459,7 +460,7 @@ const styles = StyleSheet.create({
     marginTop: 40
   },
   emptyTxt: {
-    color: '#94A3B8',
+    color: '#8B86A3',
     fontSize: 16,
     textAlign: 'center'
   },
@@ -468,49 +469,49 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#1E293B',
+    backgroundColor: '#FFFFFF',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 20,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: '#334155'
+    borderColor: '#E9E5F2'
   },
   headerChipText: {
-    color: '#38BDF8',
+    color: '#8B87C4',
     fontSize: 12,
     fontWeight: '600',
     letterSpacing: 0.5
   },
   headerChipBadge: {
-    color: '#64748B',
+    color: '#6F6A87',
     fontSize: 10,
     fontWeight: '700',
-    backgroundColor: '#0F172A',
+    backgroundColor: '#FAF9FC',
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 12
   },
   mainHeadline: {
-    color: '#F8FAFC',
+    color: '#332F45',
     fontSize: 20,
     fontWeight: '700',
     marginBottom: 4,
     lineHeight: 28
   },
   subHeadline: {
-    color: '#64748B',
+    color: '#6F6A87',
     fontSize: 13,
     marginBottom: 16
   },
   // Confidence Meter
   confidenceContainer: {
-    backgroundColor: '#1E293B',
+    backgroundColor: '#FFFFFF',
     padding: 14,
     borderRadius: 12,
     marginBottom: 16,
     borderWidth: 1,
-    borderColor: '#334155'
+    borderColor: '#E9E5F2'
   },
   confidenceHeader: {
     flexDirection: 'row',
@@ -519,7 +520,7 @@ const styles = StyleSheet.create({
     marginBottom: 8
   },
   confidenceLabel: {
-    color: '#CBD5E1',
+    color: '#332F45',
     fontSize: 13,
     fontWeight: '600'
   },
@@ -529,7 +530,7 @@ const styles = StyleSheet.create({
   },
   confidenceBarBg: {
     height: 6,
-    backgroundColor: '#334155',
+    backgroundColor: '#F5F3FA',
     borderRadius: 3,
     overflow: 'hidden'
   },
@@ -538,18 +539,18 @@ const styles = StyleSheet.create({
     borderRadius: 3
   },
   confidenceNote: {
-    color: '#94A3B8',
+    color: '#8B86A3',
     fontSize: 11,
     marginTop: 8,
     fontStyle: 'italic'
   },
   // Card Styles
   card: {
-    backgroundColor: '#1E293B',
+    backgroundColor: '#FFFFFF',
     borderRadius: 16,
     padding: 18,
     borderWidth: 1,
-    borderColor: '#334155'
+    borderColor: '#E9E5F2'
   },
   cardHeader: {
     flexDirection: 'row',
@@ -558,13 +559,13 @@ const styles = StyleSheet.create({
     marginBottom: 12
   },
   recommendationBadge: {
-    backgroundColor: '#10B981',
+    backgroundColor: '#82C0A0',
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 12
   },
   recommendationBadgeText: {
-    color: '#0F172A',
+    color: '#332F45',
     fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.5
@@ -573,34 +574,34 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: '#334155',
+    backgroundColor: '#F5F3FA',
     alignItems: 'center',
     justifyContent: 'center'
   },
   infoButtonText: {
-    color: '#94A3B8',
+    color: '#8B86A3',
     fontSize: 14
   },
   techTitle: {
-    color: '#F8FAFC',
+    color: '#332F45',
     fontSize: 24,
     fontWeight: '800',
     marginBottom: 6
   },
   techDesc: {
-    color: '#94A3B8',
+    color: '#8B86A3',
     fontSize: 14,
     lineHeight: 20,
     marginBottom: 16
   },
   // Breakdown Styles
   breakdownBox: {
-    backgroundColor: '#0F172A',
+    backgroundColor: '#FAF9FC',
     borderRadius: 12,
     padding: 14,
     marginVertical: 14,
     borderWidth: 1,
-    borderColor: '#1E293B'
+    borderColor: '#F1EEF8'
   },
   breakdownHeader: {
     flexDirection: 'row',
@@ -609,12 +610,12 @@ const styles = StyleSheet.create({
     marginBottom: 10
   },
   breakdownTitle: {
-    color: '#CBD5E1',
+    color: '#332F45',
     fontSize: 13,
     fontWeight: '700'
   },
   breakdownTap: {
-    color: '#64748B',
+    color: '#6F6A87',
     fontSize: 10,
     fontStyle: 'italic'
   },
@@ -631,7 +632,7 @@ const styles = StyleSheet.create({
     marginRight: 6
   },
   scoreLbl: {
-    color: '#94A3B8',
+    color: '#8B86A3',
     fontSize: 12
   },
   scoreBarContainer: {
@@ -642,7 +643,7 @@ const styles = StyleSheet.create({
   scoreBar: {
     flex: 1,
     height: 4,
-    backgroundColor: '#334155',
+    backgroundColor: '#F5F3FA',
     borderRadius: 2,
     marginRight: 10,
     overflow: 'hidden'
@@ -652,7 +653,7 @@ const styles = StyleSheet.create({
     borderRadius: 2
   },
   scoreVal: {
-    color: '#38BDF8',
+    color: '#8B87C4',
     fontSize: 12,
     fontWeight: '700',
     minWidth: 40,
@@ -662,17 +663,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     borderTopWidth: 1,
-    borderTopColor: '#334155',
+    borderTopColor: '#E9E5F2',
     paddingTop: 8,
     marginTop: 6
   },
   totalLbl: {
-    color: '#F8FAFC',
+    color: '#332F45',
     fontSize: 14,
     fontWeight: '700'
   },
   totalVal: {
-    color: '#10B981',
+    color: '#82C0A0',
     fontSize: 16,
     fontWeight: '800'
   },
@@ -682,10 +683,10 @@ const styles = StyleSheet.create({
     marginTop: 8,
     paddingTop: 8,
     borderTopWidth: 1,
-    borderTopColor: '#1E293B'
+    borderTopColor: '#F1EEF8'
   },
   latencyTxt: {
-    color: '#64748B',
+    color: '#6F6A87',
     fontSize: 11,
     fontStyle: 'italic',
     marginRight: 8
@@ -694,7 +695,7 @@ const styles = StyleSheet.create({
     width: 4,
     height: 4,
     borderRadius: 2,
-    backgroundColor: '#10B981'
+    backgroundColor: '#82C0A0'
   },
   // Sub-option Styles
   subOptionHeaderContainer: {
@@ -705,38 +706,38 @@ const styles = StyleSheet.create({
     marginTop: 4
   },
   subOptionHeader: {
-    color: '#CBD5E1',
+    color: '#332F45',
     fontSize: 14,
     fontWeight: '600'
   },
   subOptionCount: {
-    color: '#64748B',
+    color: '#6F6A87',
     fontSize: 11,
-    backgroundColor: '#1E293B',
+    backgroundColor: '#FFFFFF',
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 10
   },
   subOptionBox: {
-    backgroundColor: '#334155',
+    backgroundColor: '#F5F3FA',
     padding: 14,
     borderRadius: 10,
     marginBottom: 16,
     borderWidth: 1,
-    borderColor: '#475569'
+    borderColor: '#8B87C4'
   },
   subTitle: {
-    color: '#F8FAFC',
+    color: '#332F45',
     fontWeight: '700',
     fontSize: 15
   },
   subDesc: {
-    color: '#94A3B8',
+    color: '#8B86A3',
     fontSize: 13,
     marginTop: 4
   },
   subTapHint: {
-    color: '#64748B',
+    color: '#6F6A87',
     fontSize: 10,
     marginTop: 8,
     textAlign: 'right',
@@ -744,7 +745,7 @@ const styles = StyleSheet.create({
   },
   // Button Styles
   acceptBtn: {
-    backgroundColor: '#38BDF8',
+    backgroundColor: '#8B87C4',
     paddingVertical: 14,
     borderRadius: 12,
     alignItems: 'center',
@@ -757,44 +758,44 @@ const styles = StyleSheet.create({
     opacity: 0.6
   },
   acceptBtnTxt: {
-    color: '#0F172A',
+    color: '#FFFFFF',
     fontWeight: '800',
     fontSize: 16
   },
   acceptBtnSub: {
-    color: '#0F172A',
+    color: '#FFFFFF',
     fontSize: 11,
     fontWeight: '500',
-    opacity: 0.7
+    opacity: 0.85
   },
   rejectBtn: {
     paddingVertical: 12,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#334155',
+    borderColor: '#E9E5F2',
     borderRadius: 12
   },
   rejectBtnDisabled: {
     opacity: 0.5
   },
   rejectBtnTxt: {
-    color: '#F59E0B',
+    color: '#E8B368',
     fontSize: 14,
     fontWeight: '600'
   },
   rejectBtnSub: {
-    color: '#64748B',
+    color: '#6F6A87',
     fontSize: 11,
     marginTop: 2
   },
   // Fallback Styles
   fallbackBox: {
-    backgroundColor: '#1E1B4B',
+    backgroundColor: '#F1EEF8',
     padding: 16,
     borderRadius: 16,
     marginTop: 16,
     borderWidth: 1,
-    borderColor: '#818CF8'
+    borderColor: '#8B87C4'
   },
   fallbackHeader: {
     flexDirection: 'row',
@@ -803,33 +804,33 @@ const styles = StyleSheet.create({
     marginBottom: 12
   },
   fallbackTitle: {
-    color: '#A5B4FC',
+    color: '#6B679F',
     fontWeight: '800',
     fontSize: 16
   },
   fallbackLevelBadge: {
-    backgroundColor: '#818CF8',
+    backgroundColor: '#8B87C4',
     paddingHorizontal: 10,
     paddingVertical: 3,
     borderRadius: 12
   },
   fallbackLevelText: {
-    color: '#0F172A',
+    color: '#FFFFFF',
     fontSize: 10,
     fontWeight: '800',
     letterSpacing: 0.5
   },
   fallbackSub: {
-    color: '#CBD5E1',
+    color: '#332F45',
     fontSize: 13,
     marginBottom: 12
   },
   altCard: {
-    backgroundColor: '#312E81',
+    backgroundColor: '#F1EEF8',
     padding: 14,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#4F46E5'
+    borderColor: '#8B87C4'
   },
   altCardHeader: {
     flexDirection: 'row',
@@ -837,27 +838,27 @@ const styles = StyleSheet.create({
     marginBottom: 4
   },
   altNumber: {
-    color: '#818CF8',
+    color: '#8B87C4',
     fontSize: 12,
     fontWeight: '700',
     marginRight: 8,
-    backgroundColor: '#1E1B4B',
+    backgroundColor: '#F1EEF8',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6
   },
   altTitle: {
-    color: '#F8FAFC',
+    color: '#332F45',
     fontWeight: '700',
     fontSize: 15
   },
   altDesc: {
-    color: '#A5B4FC',
+    color: '#6B679F',
     fontSize: 13,
     marginTop: 2
   },
   altAction: {
-    color: '#818CF8',
+    color: '#8B87C4',
     fontSize: 11,
     marginTop: 8,
     textAlign: 'right'
@@ -870,7 +871,7 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: '#312E81',
+    backgroundColor: '#F1EEF8',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 12
@@ -879,19 +880,19 @@ const styles = StyleSheet.create({
     fontSize: 32
   },
   level2Title: {
-    color: '#F8FAFC',
+    color: '#332F45',
     fontWeight: '700',
     fontSize: 17
   },
   level2Desc: {
-    color: '#CBD5E1',
+    color: '#332F45',
     fontSize: 14,
     marginVertical: 10,
     textAlign: 'center',
     lineHeight: 20
   },
   breathingResetBtn: {
-    backgroundColor: '#818CF8',
+    backgroundColor: '#8B87C4',
     paddingVertical: 12,
     paddingHorizontal: 24,
     borderRadius: 12,
@@ -899,44 +900,44 @@ const styles = StyleSheet.create({
     width: '100%'
   },
   breathingResetTxt: {
-    color: '#0F172A',
+    color: '#FFFFFF',
     fontWeight: '800',
     fontSize: 15
   },
   breathingResetSub: {
-    color: '#0F172A',
+    color: '#FFFFFF',
     fontSize: 11,
-    opacity: 0.7,
+    opacity: 0.85,
     marginTop: 2
   },
   level3Title: {
-    color: '#F8FAFC',
+    color: '#332F45',
     fontWeight: '700',
     fontSize: 15,
     marginBottom: 12
   },
   promptBtn: {
-    backgroundColor: '#312E81',
+    backgroundColor: '#F1EEF8',
     padding: 14,
     borderRadius: 12,
     marginBottom: 8,
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#4F46E5'
+    borderColor: '#8B87C4'
   },
   promptEmoji: {
     fontSize: 20,
     marginRight: 12
   },
   promptTxt: {
-    color: '#E0E7FF',
+    color: '#332F45',
     fontWeight: '600',
     fontSize: 14,
     flex: 1
   },
   promptArrow: {
-    color: '#818CF8',
+    color: '#8B87C4',
     fontSize: 18
   }
 });
