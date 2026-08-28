@@ -405,11 +405,12 @@ export const InterventionScreen = () => {
                   style={styles.breathingResetBtn}
                   onPress={() => {
                     Vibration.vibrate(30);
+                    setSelectedSubOption({ id: 'breathing_light', title: 'Calibrate — Calm Breathing' });
                     setCurrentScreen('GamePlayer');
                   }}
                 >
-                  <Text style={styles.breathingResetTxt}>🌬️ Start Breathing Exercise</Text>
-                  <Text style={styles.breathingResetSub}>Guided, 30 seconds</Text>
+                  <Text style={styles.breathingResetTxt}>🌬️ Calibrate — Calm Breathing</Text>
+                  <Text style={styles.breathingResetSub}>Guided breathing while your Ring/EEG baseline captures</Text>
                 </TouchableOpacity>
               </View>
             )}

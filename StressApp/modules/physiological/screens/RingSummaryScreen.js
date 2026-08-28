@@ -1,25 +1,29 @@
 // ============================================================
 // RingSummaryScreen.js
-// Consumer-facing detail for the ring: connection + reading confidence,
-// baseline/calibration status with a direct "Calibrate" call to action,
-// a Normal/Stress session-distribution bar, and the live trend. No raw
-// AVNN/SCL feature numbers or a manual "Stop Watching" control -- that
-// level of detail lives in the Admin app (modules/admin/).
+// Consumer-facing detail for the ring: connection + current Normal/Stress
+// reading, baseline/calibration status with a direct "Calibrate" call to
+// action, a session-distribution bar, and the live trend -- a scrollable,
+// tappable, zone-colored chart (see LineChart.js's colorZones) against the
+// one shared Stress threshold line: green below it, red (dashed) at/above
+// it. Deliberately kept to just that one line -- no session-baseline
+// reference or deviation numbers here, that level of detail moved to the
+// Admin app (modules/admin/) instead, same reasoning as the raw AVNN/SCL
+// feature numbers and the manual "Stop Watching" control already living
+// there rather than here.
 // ============================================================
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
 import axios from 'axios';
 import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
-import Button from '../../shared/Button';
 import StatusDot from '../../shared/StatusDot';
 import Icon, { NAMES } from '../../shared/Icon';
 import MoodBadge from '../../shared/MoodBadge';
 import LineChart from '../../shared/LineChart';
 import { useTheme } from '../config/ThemeContext';
+import { COLORS } from '../config/theme';
 import { useAuth } from '../../../context/AuthContext';
-import { API_BASE, DEVICE_ID } from '../config/config';
+import { API_BASE, DEVICE_ID, STRESS_DECISION_THRESHOLD_PERCENT } from '../config/config';
 import api from '../api/client';
 
 const POLL_INTERVAL_MS = 5000;
@@ -44,10 +48,10 @@ export default function RingSummaryScreen({ navigation }) {
   const userId = user?.userId;
 
   const [status, setStatus] = useState('offline');
+  const [fingerDetected, setFingerDetected] = useState(null);
   const [latest, setLatest] = useState(null);
   const [chartWindows, setChartWindows] = useState([]);
   const [recent, setRecent] = useState([]);
-  const [baseline, setBaseline] = useState(null);
   const [sessionDist, setSessionDist] = useState({ normal: 0, stress: 0 });
   const [sessionCount, setSessionCount] = useState(0);
   const intervalRef = useRef(null);
@@ -56,6 +60,13 @@ export default function RingSummaryScreen({ navigation }) {
     try {
       const s = await axios.get(`${API_BASE}/devices/${DEVICE_ID}/status`);
       setStatus(s.data?.status || 'offline');
+      // finger_detected is written by the bridge from the live sensor
+      // payload every ~5s (backend/physiological/mqtt_bridge.py's
+      // on_message) -- undefined (not false) means this device has never
+      // reported it, e.g. still on an older firmware build.
+      setFingerDetected(
+        s.data?.finger_detected === undefined ? null : !!s.data.finger_detected
+      );
     } catch {
       setStatus('offline');
     }
@@ -82,18 +93,6 @@ export default function RingSummaryScreen({ navigation }) {
     intervalRef.current = setInterval(poll, POLL_INTERVAL_MS);
     return () => clearInterval(intervalRef.current);
   }, [poll]);
-
-  const loadBaseline = useCallback(async () => {
-    if (!userId) return;
-    try {
-      const b = await api.get(`/baseline/${userId}`);
-      setBaseline(b.data);
-    } catch {
-      setBaseline(null);
-    }
-  }, [userId]);
-
-  useFocusEffect(useCallback(() => { loadBaseline(); }, [loadBaseline]));
 
   // Normal-vs-Stress distribution across sessions, majority-voted from each
   // session's own predictions -- same derivation Admin uses.
@@ -140,108 +139,100 @@ export default function RingSummaryScreen({ navigation }) {
   const t = theme;
   const connected = status === 'online';
   const statusColor = connected ? COLORS.normal : COLORS.stress;
-  const stateColor = latest?.label === 'Stress' ? COLORS.stress : COLORS.normal;
-  const confidence = latest ? Math.round(Math.max(latest.prob_normal ?? 0, latest.prob_stress ?? 0) * 100) : null;
-
-  const needsCalibration = !baseline?.exists || baseline?.is_stale_hard;
-  const calibrationNudge = !baseline?.exists
-    ? 'No personal baseline yet — calibrate for accurate readings.'
-    : baseline?.is_stale_hard
-      ? "It's been over a month — recalibrate for the best accuracy."
-      : baseline?.is_stale_soft
-        ? 'Getting a little stale — recalibrating keeps it sharp.'
-        : 'Your baseline is set and up to date.';
+  const stateColor = latest?.label === 'Stress'
+    ? COLORS.stress
+    : latest?.trending_toward_stress ? COLORS.warning : COLORS.normal;
 
   return (
     <ScreenBackground>
-      <ScrollView contentContainerStyle={{ padding: 20, paddingTop: 16, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
-        <View style={styles.header}>
-          <Icon name={NAMES.my} size={26} color={COLORS.brand} />
-          <View style={{ marginLeft: 10 }}>
-            <Text style={[styles.title, { color: t.text }]}>My Ring</Text>
-            <Text style={[styles.subtitle, { color: t.textMuted }]}>Connection, readings & baseline</Text>
-          </View>
-        </View>
-
-        <Card accentColor={statusColor} elevated>
+      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+        {/* Device Status Card */}
+        <Card accentColor={statusColor} elevated style={styles.statusCard}>
           <View style={styles.rowBetween}>
             <View style={styles.rowGap}>
               <Icon name={NAMES.device} size={18} color={statusColor} />
-              <Text style={[styles.cardTitle, { color: t.text, marginBottom: 0 }]}>Device Status</Text>
+              <Text style={[styles.cardTitle, { color: t.text, marginBottom: 0 }]}>Hardware Status</Text>
             </View>
-            <StatusDot color={statusColor} active={connected} size={10} />
+            <View style={[styles.statusPill, { backgroundColor: connected ? COLORS.normalSoft : COLORS.stressSoft }]}>
+              <StatusDot color={statusColor} active={connected} size={8} />
+              <Text style={[styles.statusPillText, { color: connected ? COLORS.normalDark : COLORS.stressDark }]}>
+                {connected ? 'Connected' : 'Offline'}
+              </Text>
+            </View>
           </View>
-          <Text style={[styles.statusValue, { color: statusColor }]}>
-            {connected ? 'Connected' : 'Not Connected'}
+          <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 10 }]}>
+            {connected
+              ? `Streaming live biometric data packets from sensor ID: ${DEVICE_ID}`
+              : `Put on the smart ring to begin continuous streaming (${DEVICE_ID})`}
           </Text>
-          <Text style={[styles.cardSub, { color: t.textMuted }]}>
-            {connected ? `Streaming from ${DEVICE_ID}` : `Put the ring on to start streaming from ${DEVICE_ID}`}
-          </Text>
-        </Card>
-
-        <Card accentColor={stateColor} elevated>
-          <Text style={[styles.cardTitle, { color: t.text }]}>Current Reading</Text>
-          {!latest ? (
-            <Text style={[styles.stateLabel, { color: t.textMuted, fontSize: 15 }]}>Waiting for a reading…</Text>
-          ) : (
-            <View style={styles.readingRow}>
-              <MoodBadge stressed={latest.label === 'Stress'} color={stateColor} size={52} />
-              <View style={{ marginLeft: 12 }}>
-                <Text style={[styles.stateLabel, { color: stateColor }]}>{latest.label}</Text>
-                <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 2 }]}>
-                  {confidence !== null ? `${confidence}% confidence` : ''}
-                </Text>
-              </View>
-            </View>
-          )}
-          {trend.length > 1 && (
-            <View style={{ marginTop: 16 }}>
-              <Text style={[styles.hint, { color: t.textMuted, marginBottom: 8 }]}>Trend (most recent windows)</Text>
-              <LineChart points={trend} color={stateColor} width={TREND_CHART_WIDTH} height={140} maxValue={100} suffix="%" />
+          {/* Live finger-contact feedback -- the single biggest cause of
+              "insufficient data" windows is the pulse sensor not actually
+              touching skin; this surfaces that immediately instead of only
+              being discoverable after the fact in server logs. */}
+          {connected && fingerDetected !== null && (
+            <View style={[styles.contactBanner, { backgroundColor: fingerDetected ? COLORS.normalSoft : COLORS.warningSoft }]}>
+              <Icon
+                name={fingerDetected ? 'check-circle-outline' : 'alert-circle-outline'}
+                size={16}
+                color={fingerDetected ? COLORS.normalDark : COLORS.warningDark}
+              />
+              <Text style={[styles.contactBannerText, { color: fingerDetected ? COLORS.normalDark : COLORS.warningDark }]}>
+                {fingerDetected ? 'Good finger contact' : 'No finger detected — adjust the ring for a clean reading'}
+              </Text>
             </View>
           )}
         </Card>
 
-        <Card accentColor={needsCalibration ? COLORS.warning : COLORS.normal}>
-          <View style={styles.rowBetween}>
-            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 0 }]}>Personal Baseline</Text>
-            <Icon name={NAMES.calibration} size={18} color={needsCalibration ? COLORS.warning : COLORS.normal} />
-          </View>
-          <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 6, marginBottom: 14 }]}>
-            {calibrationNudge}
-          </Text>
-          <Button
-            label={baseline?.exists ? 'Recalibrate for better accuracy →' : 'Calibrate now →'}
-            variant={needsCalibration ? 'primary' : 'outline'}
-            onPress={() => navigation.navigate('Calibration')}
-          />
-        </Card>
+        {/* Live Session Trend Chart */}
+        {trend.length > 1 && (
+          <Card accentColor={stateColor} elevated style={styles.readingCard}>
+            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 4 }]}>Live HRV & EDA Stress Curve</Text>
+            <Text style={[styles.cardSub, { color: t.textMuted, marginBottom: 12 }]}>
+              Continuous telemetry windows with stress decision boundary
+            </Text>
+            <LineChart
+              points={trend}
+              color={stateColor}
+              width={TREND_CHART_WIDTH}
+              height={145}
+              maxValue={100}
+              hideValues
+              baselineValue={STRESS_DECISION_THRESHOLD_PERCENT}
+              baselineLabel="Stress threshold"
+              colorZones
+            />
+          </Card>
+        )}
 
+        {/* Session Distribution */}
         {(sessionDist.normal + sessionDist.stress) > 0 && (
-          <Card>
-            <Text style={[styles.cardTitle, { color: t.text }]}>Session History</Text>
+          <Card style={styles.historyCard}>
+            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 6 }]}>Session Distribution</Text>
             <DistBar label="Normal" value={sessionDist.normal} total={sessionDist.normal + sessionDist.stress} color={COLORS.normal} muted={t.textMuted} />
             <DistBar label="Stress" value={sessionDist.stress} total={sessionDist.normal + sessionDist.stress} color={COLORS.stress} muted={t.textMuted} />
           </Card>
         )}
 
+        {/* Recent Windows */}
         {recent.length > 0 && (
-          <Card>
-            <Text style={[styles.cardTitle, { color: t.text }]}>Recent Activity</Text>
+          <Card style={styles.historyCard}>
+            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 6 }]}>Recent Readings</Text>
             {recent.map((w, i) => {
               const color = w.label === 'Stress' ? COLORS.stress : COLORS.normal;
               return (
                 <View key={i} style={[styles.activityRow, i === recent.length - 1 && { borderBottomWidth: 0 }, { borderBottomColor: t.border }]}>
-                  <MoodBadge stressed={w.label === 'Stress'} color={color} size={32} />
-                  <View style={{ flex: 1, marginLeft: 10 }}>
-                    <Text style={[styles.activityLabel, { color: t.text }]}>{w.label}</Text>
+                  <MoodBadge stressed={w.label === 'Stress'} color={color} size={36} />
+                  <View style={{ flex: 1, marginLeft: 12 }}>
+                    <Text style={[styles.activityLabel, { color: t.text }]}>
+                      {w.label === 'Stress' ? 'Elevated Load' : 'Normal State'}
+                    </Text>
                     <Text style={[styles.activitySub, { color: t.textMuted }]}>
                       {w.timestamp ? new Date(w.timestamp).toLocaleTimeString() : ''}
                     </Text>
                   </View>
-                  <Text style={[styles.activityConf, { color }]}>
-                    {Math.round(Math.max(w.prob_normal ?? 0, w.prob_stress ?? 0) * 100)}%
-                  </Text>
+                  <View style={[styles.windowBadge, { backgroundColor: color + '15' }]}>
+                    <Text style={[styles.windowBadgeText, { color }]}>{w.label}</Text>
+                  </View>
                 </View>
               );
             })}
@@ -253,24 +244,34 @@ export default function RingSummaryScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  header: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
-  title: { fontSize: 22, fontWeight: '900' },
+  header: { flexDirection: 'row', alignItems: 'center', marginBottom: 18 },
+  headerIconCircle: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
+  title: { fontSize: 22, fontWeight: '900', letterSpacing: -0.2 },
   subtitle: { fontSize: 12, marginTop: 2 },
+  statusCard: { padding: 18, borderRadius: 22 },
+  readingCard: { padding: 20, borderRadius: 24 },
+  historyCard: { padding: 18, borderRadius: 22 },
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   rowGap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   cardTitle: { fontSize: 15, fontWeight: '800' },
   cardSub: { fontSize: 12 },
-  statusValue: { fontSize: 18, fontWeight: '900', marginTop: 8 },
-  stateLabel: { fontSize: 20, fontWeight: '900' },
-  hint: { fontSize: 11 },
+  statusPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
+  statusPillText: { fontSize: 11, fontWeight: '800' },
+  contactBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 12, padding: 10, marginTop: 10 },
+  contactBannerText: { fontSize: 12, fontWeight: '700', flex: 1 },
+  stateLabel: { fontSize: 19, fontWeight: '900', letterSpacing: -0.2 },
+  readingSub: { fontSize: 12, marginTop: 2 },
+  waitingBlock: { paddingVertical: 10 },
+  hint: { fontSize: 12 },
   readingRow: { flexDirection: 'row', alignItems: 'center', marginTop: 10 },
   distRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 },
   distBarBg: { flex: 1, height: 8, borderRadius: 4, overflow: 'hidden' },
   distBarFill: { height: 8, borderRadius: 4 },
   distValue: { width: 22, fontSize: 13, fontWeight: '800', textAlign: 'right' },
-  distLabel: { width: 55, fontSize: 11 },
+  distLabel: { width: 55, fontSize: 11, fontWeight: '600' },
   activityRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1 },
   activityLabel: { fontSize: 13, fontWeight: '700' },
   activitySub: { fontSize: 11, marginTop: 1 },
-  activityConf: { fontSize: 13, fontWeight: '800' },
+  windowBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
+  windowBadgeText: { fontSize: 11, fontWeight: '700' },
 });

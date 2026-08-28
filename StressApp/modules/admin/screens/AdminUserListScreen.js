@@ -39,14 +39,23 @@ export default function AdminUserListScreen({ navigation }) {
     <ScreenBackground>
       <View style={styles.header}>
         <View>
-          <Text style={[styles.title, { color: COLORS.light.text }]}>Admin</Text>
+          <Text style={[styles.title, { color: COLORS.light.text }]}>Clinical & Admin Suite</Text>
           <Text style={[styles.subtitle, { color: COLORS.light.textMuted }]}>
-            Select a registered user to inspect
+            Select a registered user to inspect full biometric telemetry
           </Text>
         </View>
-        <TouchableOpacity onPress={logout}>
-          <Icon name={NAMES.logout} size={22} color={COLORS.stress} />
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={styles.switchModeBtn}
+            onPress={() => navigation.navigate('CalibrationGate')}
+            activeOpacity={0.8}
+          >
+            <Icon name="swap-horizontal" size={18} color={COLORS.brand} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={logout} style={styles.logoutIconBtn}>
+            <Icon name={NAMES.logout} size={18} color={COLORS.stress} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {loading ? (
@@ -85,10 +94,13 @@ export default function AdminUserListScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', padding: 20, paddingBottom: 12 },
-  title: { fontSize: 24, fontWeight: '900' },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  switchModeBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: COLORS.brandSoft, alignItems: 'center', justifyContent: 'center' },
+  logoutIconBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: COLORS.stressSoft, alignItems: 'center', justifyContent: 'center' },
+  title: { fontSize: 24, fontWeight: '900', letterSpacing: -0.3 },
   subtitle: { fontSize: 12, marginTop: 4, maxWidth: 240 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  avatar: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center' },
+  avatar: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
   name: { fontSize: 15, fontWeight: '800' },
   sub: { fontSize: 12, marginTop: 2 },
 });

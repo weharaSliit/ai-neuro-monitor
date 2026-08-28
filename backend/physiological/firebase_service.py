@@ -45,7 +45,7 @@ def create_user(user_id, name):
     ref = _ref(f'users/{user_id}')
     ref.set({
         'name':       name,
-        'created_at': datetime.now().isoformat(),
+        'created_at': datetime.now(timezone.utc).isoformat(),
         'session_count': 0
     })
     return user_id
@@ -56,7 +56,7 @@ def create_user_with_password(user_id, name, password_hash):
     ref = _ref(f'users/{user_id}')
     ref.set({
         'name':          name,
-        'created_at':    datetime.now().isoformat(),
+        'created_at':    datetime.now(timezone.utc).isoformat(),
         'session_count': 0,
         'password_hash': password_hash
     })
@@ -160,7 +160,7 @@ def load_baseline_meta(user_id):
 def start_session(user_id):
     sessions_ref = _ref(f'sessions/{user_id}')
     new_session  = sessions_ref.push({
-        'start_time': datetime.now().isoformat(),
+        'start_time': datetime.now(timezone.utc).isoformat(),
         'end_time':   None,
         'pss4_score': None,
         'stress_label': None,
@@ -172,7 +172,7 @@ def start_session(user_id):
 def end_session(user_id, session_id,
                 pss4_score=None):
     ref = _ref(f'sessions/{user_id}/{session_id}')
-    update = {'end_time': datetime.now().isoformat()}
+    update = {'end_time': datetime.now(timezone.utc).isoformat()}
 
     if pss4_score is not None:
         update['pss4_score'] = pss4_score
@@ -205,7 +205,7 @@ def save_prediction(user_id, session_id, window_idx,
     ref = _ref(f'predictions/{user_id}/{session_id}')
     new_ref = ref.push({
         'window_idx':             window_idx,
-        'timestamp':               datetime.now().isoformat(),
+        'timestamp':               datetime.now(timezone.utc).isoformat(),
         'prediction':              int(prediction),
         'label':                   label,
         'prob_normal':             float(prob_normal),
@@ -236,7 +236,7 @@ def save_prediction_quality(user_id, session_id, window_idx,
     ref = _ref(f'prediction_quality/{user_id}/{session_id}')
     ref.push({
         'window_idx':              window_idx,
-        'timestamp':                datetime.now().isoformat(),
+        'timestamp':                datetime.now(timezone.utc).isoformat(),
         'confidence':                float(confidence),
         'signal_quality':            float(signal_quality),
         'prob_normal':               float(prob_normal),
@@ -426,7 +426,7 @@ def save_pss4(user_id, session_id,
         'q3':        q3,
         'q4':        q4,
         'score':     score,
-        'timestamp': datetime.now().isoformat()
+        'timestamp': datetime.now(timezone.utc).isoformat()
     }
     # Combined EMA check-in tagging: whichever objective reading(s) were
     # available at submission time (Ring and/or EEG's latest prob_stress) --
@@ -462,7 +462,7 @@ def save_baseline_adaptation(user_id, changes, interpretation, alpha):
     the rest of this file."""
     ref = _ref(f'ema_history/{user_id}')
     ref.push({
-        'timestamp':      datetime.now().isoformat(),
+        'timestamp':      datetime.now(timezone.utc).isoformat(),
         'alpha':          alpha,
         'changes':        changes,
         'interpretation': interpretation,

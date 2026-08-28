@@ -1,296 +1,236 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useContext, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   Animated,
-  Dimensions,
-  TouchableWithoutFeedback,
-  Easing
+  Easing,
+  TouchableOpacity,
+  ActivityIndicator,
 } from 'react-native';
+import axios from 'axios';
+import { ref, get, update } from 'firebase/database';
+import { db } from '../../firebase';
+import { useAuth } from '../../../../context/AuthContext';
+import { AppContext } from '../context/AppContext';
+import physiologicalApi from '../../../physiological/api/client';
+import { API_BASE, DEVICE_ID } from '../../../physiological/config/config';
+import { eegClient } from '../../../shared/eegApiClient';
 
-const { width, height } = Dimensions.get('window');
+const IN_PROGRESS_STATUSES = ['settling', 'capturing', 'saving'];
+const POLL_INTERVAL_MS = 2000;
 
-export const BreathingLightGame = () => {
-  const [breathPhase, setBreathPhase] = useState('inhale'); // inhale, hold, exhale, rest
-  const [cycleCount, setCycleCount] = useState(0);
-  const [score, setScore] = useState(0);
-  const [streak, setStreak] = useState(0);
-  const [breathTimer, setBreathTimer] = useState(0);
-  const [gameState, setGameState] = useState('ready'); // ready, breathing, holding, exhaling, complete
+// Breathing cycle timing (in milliseconds) -- purely the visual pace, no
+// relation to how long the underlying capture actually takes (Ring
+// ~210s, EEG ~85s -- see the capture status text instead).
+const BREATH_TIMINGS = { inhale: 4000, hold: 2000, exhale: 4000, rest: 1000 };
 
-  // Animation values
+// -- one modality's capture: start it, poll until it leaves settling/
+// capturing/saving, report status changes back via onUpdate. Shared shape
+// for Ring and EEG -- they differ only in which client/session_id to use.
+function useCaptureRunner(onUpdate) {
+  const pollRef = useRef(null);
+  const stop = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  const run = useCallback(async (startFn, statusFn) => {
+    onUpdate({ status: 'settling' });
+    try {
+      await startFn();
+    } catch (e) {
+      if (e?.response?.status !== 409) {
+        onUpdate({ status: 'error', message: e?.response?.data?.error || e.message });
+        return;
+      }
+      // 409 -- already in progress somewhere; just start watching it.
+    }
+    pollRef.current = setInterval(async () => {
+      try {
+        const res = await statusFn();
+        onUpdate(res.data);
+        if (res.data?.status && !IN_PROGRESS_STATUSES.includes(res.data.status)) {
+          stop();
+        }
+      } catch (e) {
+        // A single missed poll doesn't mean the capture failed -- Render
+        // cold starts can drop one request; the next tick tries again.
+      }
+    }, POLL_INTERVAL_MS);
+  }, [onUpdate, stop]);
+
+  useEffect(() => () => stop(), [stop]);
+  return run;
+}
+
+export const BreathingLightGame = ({ onCalibrationComplete }) => {
+  const { token } = useAuth();
+  const { setCurrentScreen } = useContext(AppContext);
+
+  // -- Breathing visual state (unchanged animation, no game mechanics) --
+  const [breathPhase, setBreathPhase] = useState('inhale');
+  const [gameState, setGameState] = useState('ready');
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const glowAnim = useRef(new Animated.Value(0.3)).current;
   const rotateAnim = useRef(new Animated.Value(0)).current;
-  const rippleAnim = useRef(new Animated.Value(0)).current;
-  const particleAnims = useRef([]).current;
 
-  const [particles, setParticles] = useState([]);
-  const [floatingTexts, setFloatingTexts] = useState([]);
-  const [ripples, setRipples] = useState([]);
+  // -- Calibration orchestration state --
+  // 'detecting' | 'no_device' | 'running' | 'complete' | 'error'
+  const [stage, setStage] = useState('detecting');
+  const [ring, setRing] = useState({ triggered: false, status: 'idle' });
+  const [eeg, setEeg] = useState({ triggered: false, status: 'idle' });
+  const [errorMsg, setErrorMsg] = useState(null);
+  const combinedWrittenRef = useRef(false);
 
-  // Breathing cycle timing (in milliseconds)
-  const BREATH_TIMINGS = {
-    inhale: 4000,
-    hold: 2000,
-    exhale: 4000,
-    rest: 1000
-  };
+  const runRing = useCaptureRunner((data) => setRing((r) => ({ ...r, ...data })));
+  const runEeg = useCaptureRunner((data) => setEeg((e) => ({ ...e, ...data })));
 
-  // Create particle system
-  const createParticles = (x, y, count = 30) => {
-    const newParticles = [];
-    for (let i = 0; i < count; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const distance = 50 + Math.random() * 150;
-      newParticles.push({
-        id: Date.now() + Math.random(),
-        x: x + Math.cos(angle) * Math.random() * 30,
-        y: y + Math.sin(angle) * Math.random() * 30,
-        targetX: x + Math.cos(angle) * distance,
-        targetY: y + Math.sin(angle) * distance,
-        size: 2 + Math.random() * 8,
-        color: `hsl(${240 + Math.random() * 40}, ${80 + Math.random() * 20}%, ${60 + Math.random() * 30}%)`,
-        progress: 0,
-        speed: 0.005 + Math.random() * 0.015,
-        rotation: Math.random() * 360,
-      });
-    }
-    setParticles(prev => [...prev, ...newParticles]);
-  };
+  // Device detection on mount -- Ring via its device-status endpoint (same
+  // check FusionSessionScreen.js already does), EEG via the live
+  // psychological/current_session_id Firebase pointer (same one
+  // StressApp/context/AuthContext.js's CURRENT_SESSION_ID_ROOTS mints at
+  // login and shares across psychological/fusion_en/fusion_en_sessions --
+  // also exactly the id the combined-calibration write below nests under).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      let ringOnline = false;
+      let eegSessionId = null;
+      try {
+        const res = await axios.get(`${API_BASE}/devices/${DEVICE_ID}/status`);
+        ringOnline = (res.data?.status || 'offline') === 'online';
+      } catch (e) {
+        ringOnline = false;
+      }
+      try {
+        const snap = await get(ref(db, 'psychological/current_session_id'));
+        eegSessionId = snap.val() || null;
+      } catch (e) {
+        eegSessionId = null;
+      }
+      if (cancelled) return;
 
-  // Floating text effect
-  const createFloatingText = (x, y, text, color = '#C7D2FE') => {
-    setFloatingTexts(prev => [...prev, {
-      id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}_${Math.random()}`,
-      x: x - 40,
-      y,
-      text,
-      color,
-      opacity: 1,
-      scale: 1,
-    }]);
-  };
-
-  // Handle touch interaction
-  const handleTouch = (evt) => {
-    const { locationX, locationY } = evt.nativeEvent;
-
-    // Create ripple effect
-    setRipples(prev => [...prev, {
-      id: Date.now(),
-      x: locationX,
-      y: locationY,
-      scale: 0,
-      opacity: 1,
-    }]);
-
-    // Create particles at touch point
-    createParticles(locationX, locationY, 40);
-
-    // Score bonus for tapping during inhale/exhale
-    if (gameState === 'breathing' || gameState === 'holding') {
-      const bonus = breathPhase === 'inhale' ? 15 : breathPhase === 'exhale' ? 20 : 10;
-      const newScore = score + bonus;
-      setScore(newScore);
-      setStreak(prev => prev + 1);
-
-      createFloatingText(
-        locationX,
-        locationY - 30,
-        `+${bonus} 💨`,
-        breathPhase === 'inhale' ? '#A5B4FC' : '#FDE68A'
-      );
-
-      // Combo bonuses
-      if (streak > 5 && streak % 5 === 0) {
-        createFloatingText(
-          locationX,
-          locationY - 70,
-          `🔥 ${streak}x COMBO!`,
-          '#F472B6'
-        );
+      if (!ringOnline && !eegSessionId) {
+        setStage('no_device');
+        return;
       }
 
-      // Trigger glow pulse
-      Animated.sequence([
-        Animated.timing(glowAnim, {
-          toValue: 1,
-          duration: 200,
-          useNativeDriver: true,
-        }),
-        Animated.timing(glowAnim, {
-          toValue: 0.6,
-          duration: 400,
-          useNativeDriver: true,
-        }),
-      ]).start();
-    }
-  };
+      setStage('running');
+      if (ringOnline) {
+        setRing((r) => ({ ...r, triggered: true }));
+        runRing(
+          () => physiologicalApi.post('/calibrate/start', {}),
+          () => physiologicalApi.get('/calibrate/status'),
+        );
+      }
+      if (eegSessionId) {
+        setEeg((e) => ({ ...e, triggered: true }));
+        const headers = token ? { Authorization: `Bearer ${token}` } : {};
+        runEeg(
+          () => eegClient.post('/calibrate/start', { session_id: eegSessionId }, { headers }),
+          () => eegClient.get('/calibrate/status', { headers }),
+        );
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Breathing cycle
+  // Aggregate completion: once every triggered modality has left
+  // settling/capturing/saving, write the combined record (only if BOTH
+  // were triggered and both actually succeeded) and hand off.
   useEffect(() => {
+    if (stage !== 'running') return;
+    const ringSettled = !ring.triggered || !IN_PROGRESS_STATUSES.includes(ring.status);
+    const eegSettled = !eeg.triggered || !IN_PROGRESS_STATUSES.includes(eeg.status);
+    if (!ringSettled || !eegSettled) return;
+
+    const ringOk = ring.triggered && ring.status === 'done';
+    const eegOk = eeg.triggered && eeg.status === 'done';
+    const anyFailed = (ring.triggered && ring.status === 'error') || (eeg.triggered && eeg.status === 'error');
+
+    (async () => {
+      if (ring.triggered && eeg.triggered && ringOk && eegOk && !combinedWrittenRef.current) {
+        combinedWrittenRef.current = true;
+        try {
+          const snap = await get(ref(db, 'psychological/current_session_id'));
+          const userIdSnap = await get(ref(db, 'psychological/current_user_id'));
+          const sessionId = snap.val();
+          const userId = userIdSnap.val();
+          if (sessionId && userId) {
+            await update(ref(db), {
+              [`fusion_en_sessions/${userId}/${sessionId}/combined_calibration`]: {
+                at: new Date().toISOString(),
+                ring_calibrated: true,
+                eeg_calibrated: true,
+                session_id: sessionId,
+              },
+            });
+          }
+        } catch (e) {
+          // Best-effort marker -- each modality's own baseline is already
+          // saved regardless, so a failed combined-write here isn't fatal.
+        }
+      }
+      if (anyFailed) {
+        setErrorMsg((ring.triggered && ring.status === 'error' && ring.message)
+          || (eeg.triggered && eeg.status === 'error' && eeg.message)
+          || 'Calibration failed');
+        setStage('error');
+      } else {
+        setStage('complete');
+      }
+    })();
+  }, [stage, ring, eeg]);
+
+  // Breathing cycle -- only runs while a capture is actually in progress.
+  const calibrating = stage === 'running';
+  useEffect(() => {
+    if (!calibrating) return;
+
     if (gameState === 'ready') {
-      // Start the game after a brief delay
       const timer = setTimeout(() => setGameState('breathing'), 1000);
       return () => clearTimeout(timer);
     }
 
-    if (gameState === 'breathing' || gameState === 'holding' || gameState === 'exhaling') {
-      let timer;
+    let timer;
+    switch (breathPhase) {
+      case 'inhale':
+        Animated.parallel([
+          Animated.timing(scaleAnim, { toValue: 1.6, duration: BREATH_TIMINGS.inhale, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+          Animated.timing(glowAnim, { toValue: 1, duration: BREATH_TIMINGS.inhale, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+          Animated.timing(rotateAnim, { toValue: 1, duration: BREATH_TIMINGS.inhale, easing: Easing.linear, useNativeDriver: true }),
+        ]).start();
+        timer = setTimeout(() => { setBreathPhase('hold'); setGameState('holding'); }, BREATH_TIMINGS.inhale);
+        break;
 
-      switch (breathPhase) {
-        case 'inhale':
-          // Expand animation
-          Animated.parallel([
-            Animated.timing(scaleAnim, {
-              toValue: 1.6,
-              duration: BREATH_TIMINGS.inhale,
-              easing: Easing.inOut(Easing.ease),
-              useNativeDriver: true,
-            }),
-            Animated.timing(glowAnim, {
-              toValue: 1,
-              duration: BREATH_TIMINGS.inhale,
-              easing: Easing.inOut(Easing.ease),
-              useNativeDriver: true,
-            }),
-            Animated.timing(rotateAnim, {
-              toValue: 1,
-              duration: BREATH_TIMINGS.inhale,
-              easing: Easing.linear,
-              useNativeDriver: true,
-            }),
-          ]).start();
+      case 'hold':
+        Animated.timing(glowAnim, { toValue: 1.2, duration: BREATH_TIMINGS.hold, easing: Easing.inOut(Easing.ease), useNativeDriver: true }).start();
+        timer = setTimeout(() => { setBreathPhase('exhale'); setGameState('exhaling'); }, BREATH_TIMINGS.hold);
+        break;
 
-          timer = setTimeout(() => {
-            setBreathPhase('hold');
-            setGameState('holding');
-            createFloatingText(width / 2 - 50, height / 2 - 100, '⏸️ HOLD', '#60A5FA');
-          }, BREATH_TIMINGS.inhale);
-          break;
+      case 'exhale':
+        Animated.parallel([
+          Animated.timing(scaleAnim, { toValue: 1, duration: BREATH_TIMINGS.exhale, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+          Animated.timing(glowAnim, { toValue: 0.3, duration: BREATH_TIMINGS.exhale, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        ]).start();
+        timer = setTimeout(() => {
+          setBreathPhase('rest');
+          setGameState('ready');
+          setTimeout(() => { setBreathPhase('inhale'); setGameState('breathing'); }, BREATH_TIMINGS.rest);
+        }, BREATH_TIMINGS.exhale);
+        break;
 
-        case 'hold':
-          // Maintain glow
-          Animated.timing(glowAnim, {
-            toValue: 1.2,
-            duration: BREATH_TIMINGS.hold,
-            easing: Easing.inOut(Easing.ease),
-            useNativeDriver: true,
-          }).start();
-
-          timer = setTimeout(() => {
-            setBreathPhase('exhale');
-            setGameState('exhaling');
-            createFloatingText(width / 2 - 50, height / 2 - 100, '😮‍💨 EXHALE', '#FBBF24');
-          }, BREATH_TIMINGS.hold);
-          break;
-
-        case 'exhale':
-          // Contract animation
-          Animated.parallel([
-            Animated.timing(scaleAnim, {
-              toValue: 1,
-              duration: BREATH_TIMINGS.exhale,
-              easing: Easing.inOut(Easing.ease),
-              useNativeDriver: true,
-            }),
-            Animated.timing(glowAnim, {
-              toValue: 0.3,
-              duration: BREATH_TIMINGS.exhale,
-              easing: Easing.inOut(Easing.ease),
-              useNativeDriver: true,
-            }),
-          ]).start();
-
-          // Add bonus for completing exhale
-          const exhaleBonus = 25 + streak * 2;
-          setScore(prev => prev + exhaleBonus);
-          setCycleCount(prev => prev + 1);
-          createFloatingText(
-            width / 2 - 40,
-            height / 2 + 80,
-            `✨ +${exhaleBonus}`,
-            '#34D399'
-          );
-
-          timer = setTimeout(() => {
-            setBreathPhase('rest');
-            setGameState('ready');
-            // Reset for next cycle after rest
-            setTimeout(() => {
-              setBreathPhase('inhale');
-              setGameState('breathing');
-              createFloatingText(width / 2 - 50, height / 2 - 120, '🌬️ INHALE', '#818CF8');
-            }, BREATH_TIMINGS.rest);
-          }, BREATH_TIMINGS.exhale);
-          break;
-
-        default:
-          break;
-      }
-
-      return () => {
-        if (timer) clearTimeout(timer);
-      };
+      default:
+        break;
     }
-  }, [breathPhase, gameState, streak]);
 
-  // Update particles animation
-  useEffect(() => {
-    const particleInterval = setInterval(() => {
-      setParticles(prev => prev.map(p => ({
-        ...p,
-        progress: p.progress + p.speed,
-        x: p.x + (p.targetX - p.x) * 0.02,
-        y: p.y + (p.targetY - p.y) * 0.02,
-        rotation: p.rotation + 1,
-        size: p.size * (1 - p.progress * 0.3),
-      })).filter(p => p.progress < 1));
-    }, 16);
+    return () => { if (timer) clearTimeout(timer); };
+  }, [breathPhase, gameState, calibrating]);
 
-    return () => clearInterval(particleInterval);
-  }, []);
-
-  // Update floating texts
-  useEffect(() => {
-    const textInterval = setInterval(() => {
-      setFloatingTexts(prev => prev.map(t => ({
-        ...t,
-        y: t.y - 1,
-        opacity: t.opacity - 0.01,
-        scale: t.scale + 0.01,
-      })).filter(t => t.opacity > 0));
-    }, 16);
-
-    return () => clearInterval(textInterval);
-  }, []);
-
-  // Update ripples
-  useEffect(() => {
-    const rippleInterval = setInterval(() => {
-      setRipples(prev => prev.map(r => ({
-        ...r,
-        scale: r.scale + 0.03,
-        opacity: r.opacity - 0.02,
-      })).filter(r => r.opacity > 0));
-    }, 16);
-
-    return () => clearInterval(rippleInterval);
-  }, []);
-
-  // Calculate breath progress for UI
-  const getBreathProgress = () => {
-    if (breathPhase === 'inhale') {
-      return scaleAnim._value / 1.6;
-    } else if (breathPhase === 'exhale') {
-      return 1 - (scaleAnim._value - 1) / 0.6;
-    }
-    return breathPhase === 'hold' ? 1 : 0;
-  };
-
-  // Get breath phase icon and color
   const getBreathInfo = () => {
     switch (breathPhase) {
       case 'inhale': return { icon: '🌬️', color: '#818CF8', text: 'BREATHE IN' };
@@ -299,166 +239,83 @@ export const BreathingLightGame = () => {
       default: return { icon: '✨', color: '#818CF8', text: 'READY' };
     }
   };
-
   const breathInfo = getBreathInfo();
-  const progress = getBreathProgress();
+
+  const durationHint = ring.triggered ? '~3.5 minutes' : eeg.triggered ? '~85 seconds' : '';
+
+  const statusText = () => {
+    if (stage === 'detecting') return 'Looking for your Ring / EEG headband…';
+    if (stage === 'no_device') return 'No device detected — connect your Ring or EEG headband first';
+    if (stage === 'error') return errorMsg || 'Calibration failed';
+    if (stage === 'complete') return 'Calibration complete — your baseline has been saved.';
+    const anySettling = (ring.triggered && ring.status === 'settling') || (eeg.triggered && eeg.status === 'settling');
+    const anySaving = (ring.triggered && ring.status === 'saving') || (eeg.triggered && eeg.status === 'saving');
+    if (anySettling) return 'Settling — first few seconds discarded';
+    if (anySaving) return 'Saving your personal baseline…';
+    return 'Capturing — sit still and breathe calmly';
+  };
 
   return (
-    <TouchableWithoutFeedback onPress={handleTouch}>
-      <View style={styles.container}>
-        {/* Background gradient overlay */}
-        <View style={styles.bgGradient} />
+    <View style={styles.container}>
+      <View style={styles.bgGradient} />
 
-        {/* Particle system */}
-        {particles.map(p => (
-          <Animated.View
-            key={p.id}
-            style={[
-              styles.particle,
-              {
-                left: p.x - p.size / 2,
-                top: p.y - p.size / 2,
-                width: p.size,
-                height: p.size,
-                backgroundColor: p.color,
-                opacity: 1 - p.progress,
-                transform: [
-                  { rotate: `${p.rotation}deg` },
-                  { scale: 1 - p.progress * 0.5 },
-                ],
-              }
-            ]}
-          />
-        ))}
-
-        {/* Ripple effects */}
-        {ripples.map(r => (
-          <Animated.View
-            key={r.id}
-            style={[
-              styles.ripple,
-              {
-                left: r.x - 50,
-                top: r.y - 50,
-                width: 100 + r.scale * 200,
-                height: 100 + r.scale * 200,
-                borderRadius: 50 + r.scale * 100,
-                opacity: r.opacity * 0.5,
-                borderColor: `rgba(129, 140, 248, ${r.opacity * 0.5})`,
-              }
-            ]}
-          />
-        ))}
-
-        {/* Floating texts */}
-        {floatingTexts.map(t => (
-          <Animated.Text
-            key={t.id}
-            style={[
-              styles.floatingText,
-              {
-                left: t.x,
-                top: t.y,
-                opacity: t.opacity,
-                color: t.color,
-                transform: [{ scale: t.scale }],
-              }
-            ]}
-          >
-            {t.text}
-          </Animated.Text>
-        ))}
-
-        {/* Main breathing sphere */}
-        <Animated.View
-          style={[
-            styles.sphereContainer,
-            {
-              transform: [
-                { scale: scaleAnim },
-                {
-                  rotate: rotateAnim.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: ['0deg', '360deg'],
-                  })
-                },
-              ],
-            }
-          ]}
-        >
-          <Animated.View style={[
-            styles.auraSphere,
-            {
-              opacity: glowAnim.interpolate({
-                inputRange: [0, 1],
-                outputRange: [0.3, 1],
-              }),
-              shadowOpacity: glowAnim.interpolate({
-                inputRange: [0, 1],
-                outputRange: [0.3, 0.9],
-              }),
-            }
-          ]}>
-            <View style={styles.auraCore}>
+      {/* Main breathing sphere */}
+      <Animated.View
+        style={[
+          styles.sphereContainer,
+          {
+            transform: [
+              { scale: scaleAnim },
+              { rotate: rotateAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) },
+            ],
+          },
+        ]}
+      >
+        <Animated.View style={[
+          styles.auraSphere,
+          {
+            opacity: glowAnim.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] }),
+            shadowOpacity: glowAnim.interpolate({ inputRange: [0, 1], outputRange: [0.3, 0.9] }),
+          },
+        ]}>
+          <View style={styles.auraCore}>
+            {stage === 'detecting' ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
               <Text style={styles.breathIcon}>{breathInfo.icon}</Text>
-            </View>
-          </Animated.View>
+            )}
+          </View>
         </Animated.View>
+      </Animated.View>
 
-        {/* Breath progress circle */}
+      {/* Breath phase readout */}
+      {calibrating && (
         <View style={styles.progressContainer}>
           <View style={styles.progressCircle}>
             <Text style={styles.breathPhaseText}>{breathInfo.text}</Text>
-            <View style={styles.progressBarContainer}>
-              <View style={[styles.progressBar, {
-                width: `${progress * 100}%`,
-                backgroundColor: breathInfo.color,
-              }]} />
-            </View>
           </View>
         </View>
+      )}
 
-        {/* HUD */}
-        <View style={styles.hud}>
-          <View style={styles.hudLeft}>
-            <Text style={styles.hudLabel}>🌀 CYCLES</Text>
-            <Text style={styles.hudValue}>{cycleCount}</Text>
-          </View>
-          <View style={styles.hudCenter}>
-            <Text style={styles.hudLabel}>💫 SCORE</Text>
-            <Text style={styles.hudValue}>{score}</Text>
-          </View>
-          <View style={styles.hudRight}>
-            <Text style={styles.hudLabel}>⚡ STREAK</Text>
-            <Text style={[
-              styles.hudValue,
-              streak > 5 && styles.streakHigh,
-              streak > 10 && styles.streakSuper,
-            ]}>
-              {streak}x
-            </Text>
-          </View>
-        </View>
-
-        {/* Controls */}
-        <View style={styles.controls}>
-          <View style={styles.controlGroup}>
-            <Text style={styles.controlText}>👆 Tap to amplify</Text>
-            <Text style={styles.controlSubtext}>Touch the light during breathing for bonus points</Text>
-          </View>
-        </View>
-
-        {/* Status indicator */}
-        <View style={[styles.statusIndicator, { borderColor: breathInfo.color }]}>
-          <Text style={[styles.statusText, { color: breathInfo.color }]}>
-            {breathPhase === 'inhale' ? '🌬️ Inhale...' :
-              breathPhase === 'hold' ? '⏸️ Hold...' :
-                breathPhase === 'exhale' ? '😮‍💨 Exhale...' :
-                  '✨ Ready'}
-          </Text>
-        </View>
+      {/* Calibration status */}
+      <View style={styles.statusPanel}>
+        <Text style={styles.statusTitle}>Calibrate — Calm Breathing</Text>
+        <Text style={styles.statusBody}>{statusText()}</Text>
+        {calibrating && durationHint ? (
+          <Text style={styles.statusSub}>Expected duration: {durationHint}</Text>
+        ) : null}
+        {(stage === 'no_device' || stage === 'error') && (
+          <TouchableOpacity style={styles.backBtn} onPress={() => setCurrentScreen('SubOptionSelector')}>
+            <Text style={styles.backBtnText}>← Back</Text>
+          </TouchableOpacity>
+        )}
+        {stage === 'complete' && (
+          <TouchableOpacity style={styles.backBtn} onPress={() => onCalibrationComplete && onCalibrationComplete()}>
+            <Text style={styles.backBtnText}>Done →</Text>
+          </TouchableOpacity>
+        )}
       </View>
-    </TouchableWithoutFeedback>
+    </View>
   );
 };
 
@@ -472,11 +329,8 @@ const styles = StyleSheet.create({
   },
   bgGradient: {
     position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'radial-gradient(circle at center, #1A1040 0%, #0F0A2A 100%)',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: '#0F0A2A',
   },
   sphereContainer: {
     justifyContent: 'center',
@@ -510,28 +364,9 @@ const styles = StyleSheet.create({
   breathIcon: {
     fontSize: 32,
   },
-  particle: {
-    position: 'absolute',
-    borderRadius: 50,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
-  },
-  ripple: {
-    position: 'absolute',
-    borderWidth: 2,
-    borderRadius: 50,
-  },
-  floatingText: {
-    position: 'absolute',
-    fontSize: 20,
-    fontWeight: 'bold',
-    textShadowColor: 'rgba(0,0,0,0.8)',
-    textShadowOffset: { width: 2, height: 2 },
-    textShadowRadius: 4,
-  },
   progressContainer: {
     position: 'absolute',
-    bottom: 120,
+    bottom: 160,
     alignItems: 'center',
   },
   progressCircle: {
@@ -548,113 +383,46 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     letterSpacing: 2,
-    marginBottom: 8,
   },
-  progressBarContainer: {
-    width: 200,
-    height: 4,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  progressBar: {
-    height: '100%',
-    borderRadius: 2,
-  },
-  hud: {
-    position: 'absolute',
-    top: 30,
-    left: 20,
-    right: 20,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
-  hudLeft: {
-    backgroundColor: 'rgba(15, 10, 42, 0.8)',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(129, 140, 248, 0.2)',
-    alignItems: 'center',
-  },
-  hudCenter: {
-    backgroundColor: 'rgba(15, 10, 42, 0.8)',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(251, 191, 36, 0.2)',
-    alignItems: 'center',
-  },
-  hudRight: {
-    backgroundColor: 'rgba(15, 10, 42, 0.8)',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(244, 114, 182, 0.2)',
-    alignItems: 'center',
-  },
-  hudLabel: {
-    color: '#64748B',
-    fontSize: 9,
-    fontWeight: '600',
-    letterSpacing: 1,
-  },
-  hudValue: {
-    color: '#FFFFFF',
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  streakHigh: {
-    color: '#F472B6',
-  },
-  streakSuper: {
-    color: '#F59E0B',
-    textShadowColor: '#F59E0B',
-    textShadowRadius: 10,
-  },
-  controls: {
+  statusPanel: {
     position: 'absolute',
     bottom: 30,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-  },
-  controlGroup: {
-    backgroundColor: 'rgba(15, 10, 42, 0.7)',
-    paddingVertical: 10,
-    paddingHorizontal: 20,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(15, 10, 42, 0.85)',
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(129, 140, 248, 0.1)',
+    borderColor: 'rgba(129, 140, 248, 0.2)',
+    padding: 16,
     alignItems: 'center',
   },
-  controlText: {
-    color: '#A5B4FC',
-    fontSize: 13,
-    fontWeight: '600',
+  statusTitle: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+    marginBottom: 6,
   },
-  controlSubtext: {
+  statusBody: {
+    color: '#C7D2FE',
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  statusSub: {
     color: '#64748B',
     fontSize: 11,
-    marginTop: 2,
+    marginTop: 6,
   },
-  statusIndicator: {
-    position: 'absolute',
-    top: 100,
-    paddingVertical: 4,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#818CF8',
-    backgroundColor: 'rgba(15, 10, 42, 0.6)',
+  backBtn: {
+    marginTop: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 20,
+    borderRadius: 20,
+    backgroundColor: '#818CF8',
   },
-  statusText: {
-    fontSize: 11,
-    fontWeight: '600',
-    letterSpacing: 1,
+  backBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 13,
   },
 });
