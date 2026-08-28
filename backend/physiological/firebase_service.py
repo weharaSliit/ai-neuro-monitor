@@ -96,7 +96,7 @@ def save_baseline(user_id, baseline_mean,
             'mean': float(baseline_mean[i]),
             'std':  float(baseline_std[i])
         }
-    data['updated_at']    = datetime.now().isoformat()
+    data['updated_at']    = datetime.now(timezone.utc).isoformat()
     data['session_count'] = get_session_count(user_id)
     ref.set(data)
 
@@ -125,6 +125,35 @@ def load_baseline(user_id, feature_cols):
 def baseline_exists(user_id):
     ref = _ref(f'baselines/{user_id}')
     return ref.get() is not None
+
+
+def load_baseline_meta(user_id):
+    """Returns {'exists', 'updated_at', 'age_days'} without needing the full
+    feature mean/std arrays -- used by GET /baseline/<user_id> to expose
+    calibration freshness to the frontend's calibration-renewal gate. Mirrors
+    psychological's calibration_profile age check
+    (backend/psychological/firebase_service.py::load_user_calibration_profile),
+    kept here instead of a shared module since each service owns its own
+    Firebase schema."""
+    ref = _ref(f'baselines/{user_id}')
+    data = ref.get()
+    if data is None or 'updated_at' not in data:
+        return {'exists': False, 'updated_at': None, 'age_days': None}
+    updated_at = data['updated_at']
+    try:
+        parsed = datetime.fromisoformat(updated_at)
+        # Pre-fix records were written with a naive datetime.now() (local
+        # server time, no tzinfo) -- see save_baseline()'s history. Treat a
+        # naive timestamp as UTC rather than raising: this is a freshness
+        # heuristic for a 7/30-day gate, not a precision clock, so a few
+        # hours of server-timezone skew on old records is an acceptable
+        # tradeoff against crashing the whole /baseline endpoint.
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        age_days = (datetime.now(timezone.utc) - parsed).total_seconds() / 86400.0
+    except ValueError:
+        age_days = None
+    return {'exists': True, 'updated_at': updated_at, 'age_days': age_days}
 
 
 # Session operations 
@@ -387,17 +416,28 @@ def get_recent_sessions(user_id, limit=10):
 
 # PSS-4 operations
 def save_pss4(user_id, session_id,
-              q1, q2, q3, q4):
+              q1, q2, q3, q4,
+              ring_prob_stress=None, eeg_prob_stress=None):
     score = q1 + q2 + q3 + q4
     ref   = _ref(f'pss4/{user_id}/{session_id}')
-    ref.set({
+    data = {
         'q1':        q1,
         'q2':        q2,
         'q3':        q3,
         'q4':        q4,
         'score':     score,
         'timestamp': datetime.now().isoformat()
-    })
+    }
+    # Combined EMA check-in tagging: whichever objective reading(s) were
+    # available at submission time (Ring and/or EEG's latest prob_stress) --
+    # either, both, or neither, per the "unified check-in" design. Omitted
+    # entirely (not written as null) when a modality had no reading, so a
+    # PSS-4 record's own shape tells you which modality was live at the time.
+    if ring_prob_stress is not None:
+        data['ring_prob_stress'] = ring_prob_stress
+    if eeg_prob_stress is not None:
+        data['eeg_prob_stress'] = eeg_prob_stress
+    ref.set(data)
 
     end_session(user_id, session_id, score)
     return score
@@ -408,20 +448,22 @@ def get_pss4_history(user_id):
     return ref.get() or {}
 
 
-# EMA history 
-def save_ema_update(user_id, session_id,
-                    old_mean, new_mean,
-                    feature_cols, alpha):
-    ref = _ref(f'ema_history/{user_id}/{session_id}')
-    ref.set({
-        'timestamp': datetime.now().isoformat(),
-        'alpha':     alpha,
-        'changes':   {
-            feat: {
-                'old': float(old_mean[i]),
-                'new': float(new_mean[i]),
-                'delta': float(new_mean[i] - old_mean[i])
-            }
-            for i, feat in enumerate(feature_cols)
-        }
+# Baseline adaptation history -- one entry per recalibration that actually
+# blended into an existing baseline (see calibration_capture.py's
+# save_calibration_windows()), not per session. No natural session_id
+# exists for a recalibration event, so this pushes an auto-generated key
+# instead of the old fixed-per-session path -- ema_history/{user_id} was
+# confirmed empty for every real account before this changed, so there's no
+# existing data in the old shape to migrate.
+def save_baseline_adaptation(user_id, changes, interpretation, alpha):
+    """changes/interpretation are ema_service.py's build_ema_summary()['features']
+    and interpret_ema_change()'s output -- built by the caller (calibration_capture.py)
+    so this stays a plain Firebase write, same division of responsibility as
+    the rest of this file."""
+    ref = _ref(f'ema_history/{user_id}')
+    ref.push({
+        'timestamp':      datetime.now().isoformat(),
+        'alpha':          alpha,
+        'changes':        changes,
+        'interpretation': interpretation,
     })

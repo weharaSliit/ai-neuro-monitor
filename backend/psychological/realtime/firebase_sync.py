@@ -25,6 +25,28 @@ BIPOLAR_FEATURE_SUFFIXES = [
 ]
 
 
+def _lookup_model_accuracy(feature_set: str) -> float:
+    """Raises instead of returning None for an unrecognized feature_set --
+    MODEL_ACCURACY_AUC.get(feature_set) used to fail silently here, writing
+    model_accuracy=None into the fusion record. fusion_engin.py's
+    handle_missing_values() then fills that None with 0.0, which zeroes
+    EEG's entire reliability weight for every window in the session -- a
+    config/version mismatch (feature_set not registered above) would look
+    identical to "EEG had a low-quality window," not what it actually was.
+    feature_set is a fixed per-deployment constant (see app.py's MODEL_VERSION),
+    so this fails on the very first prediction rather than degrading fusion
+    silently for an entire session."""
+    try:
+        return MODEL_ACCURACY_AUC[feature_set]
+    except KeyError:
+        raise KeyError(
+            f"Unrecognized feature_set {feature_set!r} -- no validated accuracy is "
+            f"registered for it in MODEL_ACCURACY_AUC ({sorted(MODEL_ACCURACY_AUC)}). "
+            f"Register this feature_set's own LOSO-validated accuracy there rather "
+            f"than letting this fall back to None/0.0."
+        ) from None
+
+
 def _trend_direction(history_scores: list[float], lookback: int = 3) -> str:
     valid = [s for s in history_scores if s is not None][-lookback:]
     if len(valid) < 2:
@@ -55,7 +77,7 @@ def make_eeg_output_record(result: dict, window_sec: float, model_version: str,
         'eeg_quality_score': result.get('quality_quality_score'),
         'eeg_quality_flag': bool(result.get('quality_is_trusted', False)),
         'signal_quality': result.get('quality_quality_score'),
-        'model_accuracy': MODEL_ACCURACY_AUC.get(feature_set),
+        'model_accuracy': _lookup_model_accuracy(feature_set),
         'baseline_degraded': bool(result.get('baseline_degraded', False)),
         'ch2_mirrored': bool(result.get('ch2_mirrored', False)),
         'ch2_reconstructed': bool(result.get('ch2_reconstructed', False)),
@@ -159,6 +181,18 @@ class FirebaseSync:
             self._ref.set(record)
         except Exception as e:  # noqa: BLE001 -- one failed write shouldn't kill a live session
             print(f'[firebase] WARNING: set failed for session_id={self.session_id}: {e}')
+
+    def get(self) -> dict | None:
+        """Reads this ref's current value -- the read-side counterpart to
+        set(), for a single 'latest snapshot' node. Returns None both when
+        nothing has been written yet and when the read itself fails, since
+        callers (e.g. a cross-session profile lookup) should treat either
+        case the same way: fall back to behaving as if nothing were stored."""
+        try:
+            return self._ref.get()
+        except Exception as e:  # noqa: BLE001 -- a failed read should look like "nothing stored", not crash the caller
+            print(f'[firebase] WARNING: get failed for session_id={self.session_id}: {e}')
+            return None
 
 def make_eeg_fusion_record(record: dict) -> dict:
     skipped = bool(record.get('skipped'))

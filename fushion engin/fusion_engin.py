@@ -163,11 +163,21 @@ def flag_usable(df: pd.DataFrame) -> pd.DataFrame:
 # ═══════════════════════════════════════════════════════════════════
 
 def compute_reliability_weight(df: pd.DataFrame) -> pd.DataFrame:
+    """signal_quality_eeg is on a 0-100 scale (SignalQualityGate,
+    backend/psychological/realtime/quality_gate.py) while every other
+    modality's signal_quality is already 0-1 -- scaled here by each
+    modality's own real max (not an arbitrary tuning constant) so EEG's
+    weight isn't ~100x inflated whenever it has a real value, matching the
+    fix compute_realtime_multimodal_fusion() already applies on the live
+    path (see that function's docstring). This stage previously multiplied
+    signal_quality_eeg raw, unlike the live path, silently double-counting
+    EEG relative to HRV/GSR and phenotyping in any batch/offline run.
+    """
     df = df.copy()
     for m in MODALITIES:
-        df[f"{m}_reliability_weight"] = (
-            df[f"signal_quality_{m}"] * df[f"model_acc_{m}"] * df[f"conf_{m}"]
-        )
+        max_quality = 100.0 if m == "eeg" else 1.0
+        quality_unit = df[f"signal_quality_{m}"].clip(lower=0.0, upper=max_quality) / max_quality
+        df[f"{m}_reliability_weight"] = quality_unit * df[f"model_acc_{m}"] * df[f"conf_{m}"]
     return df
 
 

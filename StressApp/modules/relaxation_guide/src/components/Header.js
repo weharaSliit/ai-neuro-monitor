@@ -2,12 +2,13 @@ import React, { useContext } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Platform, StatusBar } from 'react-native';
 import { ThemeContext } from '../context/ThemeContext';
 
-// This module is StressApp's primary post-login home now (not a side
-// feature reached from elsewhere), so the header never shows a "back to
-// host" affordance -- logging out (Profile screen) is the only way out,
-// same as any other primary app screen.
+// This module is StressApp's "Intervention" tab (one of five main tabs,
+// see PhysiologicalNavigator.js), not a standalone landing experience --
+// the header never shows a "back to host" affordance, logging out (Profile
+// screen) is the only way out, same as any other primary app screen.
+// Dark mode removed app-wide -- theme toggle button removed accordingly.
 export const Header = ({ title, showBack = false, onBack }) => {
-  const { isDarkMode, toggleTheme, theme } = useContext(ThemeContext);
+  const { theme } = useContext(ThemeContext);
 
   const paddingTop = Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 6 : 10;
 
@@ -28,14 +29,6 @@ export const Header = ({ title, showBack = false, onBack }) => {
       )}
 
       <Text style={[styles.title, { color: theme.textPrimary }]}>{title}</Text>
-
-      {/* Theme Toggle Button (Moon / Sun) */}
-      <TouchableOpacity
-        style={[styles.themeBtn, { backgroundColor: theme.bgPrimary }]}
-        onPress={toggleTheme}
-      >
-        <Text style={styles.themeIcon}>{isDarkMode ? '🌙' : '☀️'}</Text>
-      </TouchableOpacity>
     </View>
   );
 };
@@ -77,15 +70,4 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.3
   },
-  themeBtn: {
-    padding: 6,
-    borderRadius: 20,
-    width: 36,
-    height: 36,
-    justifyContent: 'center',
-    alignItems: 'center'
-  },
-  themeIcon: {
-    fontSize: 15
-  }
 });

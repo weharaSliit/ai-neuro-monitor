@@ -28,7 +28,11 @@ console.log('[apiService] Dynamic API Base URL:', API_BASE_URL);
 
 const client = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 5000,
+  // 45s, not 5s -- Render's free tier (which this service runs on) can take
+  // 28-30s to wake from a cold start; 5s guaranteed every call would hit
+  // the catch-block fallback whenever the service had gone idle. Same fix
+  // already applied to the physiological/psychological bridges.
+  timeout: 45000,
   headers: {
     'Content-Type': 'application/json',
   },

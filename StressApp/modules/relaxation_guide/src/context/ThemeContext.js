@@ -1,53 +1,56 @@
-import React, { createContext, useState } from 'react';
+import React, { createContext } from 'react';
+import { COLORS } from '../../../physiological/config/theme';
 
 export const ThemeContext = createContext();
 
+// Repointed to the app-wide "Calm Mist" palette (StressApp/modules/
+// physiological/config/theme.js) instead of this module's previous
+// independent Slate/Sky palette -- per the redesign's explicit scope for
+// this module (colors/background only, no game or structural changes).
+// `dark` is kept (rather than deleted) only so any lingering reference
+// doesn't crash; isDarkMode is now hardcoded false app-wide, so it's never
+// actually selected.
 export const themeTokens = {
   dark: {
     mode: 'dark',
-    bgPrimary: '#0F172A',      // Slate 900
-    bgSecondary: '#1E293B',    // Slate 800
-    bgCard: '#1E293B',
-    bgInput: '#0F172A',
-    textPrimary: '#F8FAFC',    // Slate 50
-    textSecondary: '#94A3B8',  // Slate 400
-    textMuted: '#64748B',      // Slate 500
-    border: '#334155',         // Slate 700
-    accent: '#38BDF8',         // Sky 400
-    accentText: '#0F172A',
-    success: '#10B981',        // Emerald 500
-    warning: '#F59E0B',        // Amber 500
-    danger: '#EF4444'          // Red 500
+    bgPrimary: COLORS.light.bg,
+    bgSecondary: COLORS.light.surface,
+    bgCard: COLORS.light.card,
+    bgInput: COLORS.light.cardHover,
+    textPrimary: COLORS.light.text,
+    textSecondary: COLORS.light.textSub,
+    textMuted: COLORS.light.textMuted,
+    border: COLORS.light.border,
+    accent: COLORS.brand,
+    accentText: '#FFFFFF',
+    success: COLORS.normal,
+    warning: COLORS.warning,
+    danger: COLORS.stress,
   },
   light: {
     mode: 'light',
-    bgPrimary: '#F8FAFC',     // Slate 50
-    bgSecondary: '#FFFFFF',   // Pure White
-    bgCard: '#FFFFFF',
-    bgInput: '#F1F5F9',       // Slate 100
-    textPrimary: '#0F172A',   // Slate 900
-    textSecondary: '#475569', // Slate 600
-    textMuted: '#64748B',     // Slate 500
-    border: '#E2E8F0',        // Slate 200
-    accent: '#0284C7',        // Sky 600
+    bgPrimary: COLORS.light.bg,
+    bgSecondary: COLORS.light.surface,
+    bgCard: COLORS.light.card,
+    bgInput: COLORS.light.cardHover,
+    textPrimary: COLORS.light.text,
+    textSecondary: COLORS.light.textSub,
+    textMuted: COLORS.light.textMuted,
+    border: COLORS.light.border,
+    accent: COLORS.brand,
     accentText: '#FFFFFF',
-    success: '#059669',       // Emerald 600
-    warning: '#D97706',       // Amber 600
-    danger: '#DC2626'         // Red 600
-  }
+    success: COLORS.normal,
+    warning: COLORS.warning,
+    danger: COLORS.stress,
+  },
 };
 
+// Dark mode removed app-wide -- always light, toggleTheme kept as a no-op
+// so any screen not yet swept still calling it doesn't crash.
 export const ThemeProvider = ({ children }) => {
-  const [isDarkMode, setIsDarkMode] = useState(true);
-
-  const toggleTheme = () => {
-    setIsDarkMode((prev) => !prev);
-  };
-
-  const theme = isDarkMode ? themeTokens.dark : themeTokens.light;
-
+  const value = { isDarkMode: false, toggleTheme: () => {}, theme: themeTokens.light };
   return (
-    <ThemeContext.Provider value={{ isDarkMode, toggleTheme, theme }}>
+    <ThemeContext.Provider value={value}>
       {children}
     </ThemeContext.Provider>
   );

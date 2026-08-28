@@ -30,7 +30,12 @@ from flask import jsonify, request, g
 
 from backend.common.app_factory import create_app
 from backend.common.auth import require_auth
-from backend.psychological.firebase_service import EegFirebaseSession
+from backend.psychological.firebase_service import (
+    EegFirebaseSession,
+    load_user_calibration_profile,
+    save_user_calibration_profile,
+    get_calibration_status,
+)
 from backend.psychological.realtime.adc import code_to_microvolts
 from backend.psychological.realtime.csv_logger import CsvLogger, RAW_FIELDS, log_raw_block
 from backend.psychological.realtime.firebase_sync import make_eeg_output_record
@@ -175,6 +180,41 @@ def calibrate():
         engine.calibrate_block(samples)
 
     outcome = engine.finalize_calibration(allow_degraded=bool(data.get("allow_degraded", False)))
+
+    # "You've done this before, skip ahead": a returning user (g.user_id
+    # already has a recent calibration on file) reuses that baseline_shift
+    # instead of this session's own fresh 3-block estimate -- the stored
+    # one typically rests on more/less-noisy history than a single 3-block
+    # SEM check can achieve (see compute_baseline_shift()'s docstring).
+    # Only the probability-correction offset is restored, not the
+    # feature-level UserBaseline or Itakura signal reference -- those still
+    # come from THIS session's real blocks, captured normally above,
+    # because the deployed bipolar-only model doesn't read baseline-relative
+    # features anyway (see pipeline.py's AdaptiveBaselineTracker docstring)
+    # and the Itakura check specifically needs a same-session clean
+    # reference (electrode placement isn't stable across sessions).
+    if outcome["status"] == "ok":
+        stored_profile = load_user_calibration_profile(g.user_id)
+        if stored_profile is not None:
+            engine.baseline_shift = stored_profile["baseline_shift"]
+            engine.thresholds_personalized = stored_profile["thresholds_personalized"]
+            outcome["baseline_shift"] = engine.baseline_shift
+            outcome["thresholds_personalized"] = engine.thresholds_personalized
+            outcome["skip_ahead_used"] = True
+        else:
+            # New user, or this user's stored profile is now too stale to
+            # trust -- this session's own fresh result (already in outcome/
+            # engine from finalize_calibration() above) becomes the new
+            # baseline. Only persisted when a real shift was actually
+            # computed (thresholds_personalized) -- saving a 0.0-shift
+            # result here would let one noisy session lock out
+            # personalization for CALIBRATION_PROFILE_MAX_AGE_DAYS.
+            outcome["skip_ahead_used"] = False
+            if engine.thresholds_personalized:
+                save_user_calibration_profile(
+                    g.user_id, engine.baseline_shift, engine.thresholds_personalized
+                )
+
     # Written regardless of status (including "failed") -- BaselineCalibrationScreen.js
     # and EegSessionScreen.js have no other path to this outcome, since
     # calibration is driven server-side by mqtt_bridge.py, not called by
@@ -211,6 +251,30 @@ def calibrate():
     # (success: True either way). Surfaced here so that's visible without
     # cross-referencing this service's own startup logs.
     return jsonify({"success": True, "session_id": session_id, "firebase_enabled": firebase.enabled, **outcome})
+
+
+@app.route("/calibration/status", methods=["GET"])
+@require_auth
+def calibration_status():
+    """{exists, calibrated_at, age_days, is_stale_soft, is_stale_hard} for
+    this user's stored calibration_profile -- lets
+    StressApp/modules/shared/CalibrationGate.js check EEG's calibration
+    freshness without running a full 3-block calibration, mirroring
+    physiological's GET /baseline/<user_id> response shape."""
+    return jsonify(get_calibration_status(g.user_id))
+
+
+@app.route("/admin/calibration/<user_id>", methods=["GET"])
+@require_auth
+def admin_calibration_status(user_id):
+    """Same shape as GET /calibration/status, but for any user_id -- unlike
+    that route (hardcoded to g.user_id, no user_id param exists on it),
+    this takes the target user explicitly. No ownership check, only
+    @require_auth (a valid token still required) -- see
+    backend/physiological/app.py's /admin/... routes for why (StressApp's
+    Admin App, no role/permission concept exists in this backend by
+    design)."""
+    return jsonify(get_calibration_status(user_id))
 
 
 # -- /predict -- one 25s block -> task_state_score --------------------

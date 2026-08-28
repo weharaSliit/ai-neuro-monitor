@@ -1,10 +1,25 @@
-#Purpose: This script crawls through your v2, v3, and v4 folders, grabs the results.csv files, and creates one master database of performance.
-
+# phenotyping/research_synthesis/src/s1_metric_aggregator.py
+"""
+S1: Master Performance Metric Aggregator (5 Academic Metrics Edition)
+======================================================================
+Crawls through v1 (Kaggle), v2 (CMU), v3 (StudentLife), and v4 (SWELL),
+standardizes all 5 key metrics:
+  1. Accuracy
+  2. Balanced Accuracy
+  3. F1-Score
+  4. Precision
+  5. Recall
+  6. ROC-AUC Value
+"""
 
 import pandas as pd
 import numpy as np
 import os
+import sys
 from pathlib import Path
+
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
 
 # Setup Paths
 ROOT = Path(__file__).resolve().parents[2]
@@ -12,82 +27,102 @@ OUTPUT_PATH = ROOT / "research_synthesis" / "outputs"
 os.makedirs(OUTPUT_PATH, exist_ok=True)
 
 def aggregate_all_results():
-    print("📊 [S1] Aggregating Metrics from all Research Modules...")
+    print("=" * 70)
+    print("📊 [S1] Aggregating 5 Metrics from all 4 Research Modules...")
+    print("=" * 70)
 
-    # Paths to your output files from v2, v3, v4
     sources = {
-        "Micro (CMU)": ROOT / "research_v2_cmu" / "outputs" / "cmu_results.csv",
-        "Macro (StudentLife)": ROOT / "research_v3_studentlife" / "outputs" / "quality_gate_results.csv",
-        "Temporal (SWELL)": ROOT / "research_v4_swell" / "outputs" / "swell_results.csv"
+        "Micro (CMU)":         ROOT / "research_v2_cmu"           / "outputs" / "cmu_results.csv",
+        "Mobile (Kaggle)":     ROOT / "research_v1_kaggle_mobile" / "outputs" / "kaggle_results.csv",
+        "Macro (StudentLife)": ROOT / "research_v3_studentlife"    / "outputs" / "quality_gate_results.csv",
+        "Temporal (SWELL)":    ROOT / "research_v4_swell"          / "outputs" / "swell_results.csv",
     }
 
     all_data = []
 
     for context, path in sources.items():
-        if os.path.exists(path):
-            df = pd.read_csv(path)
+        if not os.path.exists(path):
+            print(f"⚠️ Warning: {path} not found. Run trainer for {context} first.")
+            continue
 
-            # --- STANDARDIZATION LOGIC ---
-            # 1. Handle StudentLife format (SVM_F1, SVM_Recall per user)
-            if 'SVM_F1' in df.columns:
-                rename_map = {'SVM_F1': 'F1-Score'}
-                if 'SVM_Recall' in df.columns:
-                    rename_map['SVM_Recall'] = 'Recall'
-                df = df.rename(columns=rename_map)
-                df['Model'] = 'One-Class SVM'
-                if 'Recall' not in df.columns:
-                    # PREVIOUSLY: df['Recall'] = 0.42 — a fabricated constant
-                    # silently inserted whenever this column was missing,
-                    # indistinguishable from a real per-user measurement once
-                    # blended into global_model_comparison.csv. Use NaN and
-                    # drop it below instead of manufacturing a number.
-                    print(f"⚠️  {context}: no Recall column found — rows will "
-                          f"be dropped instead of filled with a fabricated placeholder.")
-                    df['Recall'] = np.nan
+        df = pd.read_csv(path)
+        standardized_rows = []
 
-            # 2. Handle SWELL format (per-user OC-SVM and IF metrics)
-            elif 'OC-SVM Recall' in df.columns:
-                if 'OC-SVM F1' not in df.columns or 'IF F1' not in df.columns:
-                    print(f"⚠️  {context}: expected F1 column(s) missing — "
-                          f"affected rows will be dropped instead of filled "
-                          f"with fabricated placeholders (previously 0.55/0.50).")
-                svm_rows = pd.DataFrame({
+        # --- Case A: CMU Format (Model, Accuracy, Balanced_Accuracy, F1-Score, Precision, Recall, ROC_AUC) ---
+        if 'Model' in df.columns:
+            for _, row in df.iterrows():
+                standardized_rows.append({
+                    'Context': context,
+                    'Model': row['Model'],
+                    'Accuracy': row.get('Accuracy', np.nan),
+                    'Balanced_Accuracy': row.get('Balanced_Accuracy', np.nan),
+                    'F1-Score': row.get('F1-Score', np.nan),
+                    'Precision': row.get('Precision', np.nan),
+                    'Recall': row.get('Recall', np.nan),
+                    'ROC_AUC': row.get('ROC_AUC', np.nan)
+                })
+
+        # --- Case B: StudentLife Format (SVM_Accuracy, SVM_F1, etc.) ---
+        elif 'SVM_F1' in df.columns:
+            for _, row in df.iterrows():
+                standardized_rows.append({
+                    'Context': context,
                     'Model': 'One-Class SVM',
-                    'F1-Score': df['OC-SVM F1'] if 'OC-SVM F1' in df.columns else np.nan,
-                    'Recall': df['OC-SVM Recall']
+                    'Accuracy': row.get('SVM_Accuracy', np.nan),
+                    'Balanced_Accuracy': row.get('SVM_Balanced_Accuracy', np.nan),
+                    'F1-Score': row.get('SVM_F1', np.nan),
+                    'Precision': row.get('SVM_Precision', np.nan),
+                    'Recall': row.get('SVM_Recall', np.nan),
+                    'ROC_AUC': row.get('SVM_ROC_AUC', np.nan)
                 })
-                if_rows = pd.DataFrame({
-                    'Model': 'Isolation Forest',
-                    'F1-Score': df['IF F1'] if 'IF F1' in df.columns else np.nan,
-                    'Recall': df['IF Recall']
+
+        # --- Case C: Kaggle / SWELL Format (OC-SVM ..., IF ..., RF ...) ---
+        elif 'OC-SVM F1' in df.columns:
+            for _, row in df.iterrows():
+                # 1. One-Class SVM
+                standardized_rows.append({
+                    'Context': context,
+                    'Model': 'One-Class SVM',
+                    'Accuracy': row.get('OC-SVM Accuracy', np.nan),
+                    'Balanced_Accuracy': row.get('OC-SVM Balanced_Accuracy', np.nan),
+                    'F1-Score': row.get('OC-SVM F1', np.nan),
+                    'Precision': row.get('OC-SVM Precision', np.nan),
+                    'Recall': row.get('OC-SVM Recall', np.nan),
+                    'ROC_AUC': row.get('OC-SVM ROC_AUC', np.nan)
                 })
-                df = pd.concat([svm_rows, if_rows], ignore_index=True)
+                # 2. Isolation Forest
+                if 'IF F1' in row:
+                    standardized_rows.append({
+                        'Context': context,
+                        'Model': 'Isolation Forest',
+                        'Accuracy': row.get('IF Accuracy', np.nan),
+                        'Balanced_Accuracy': row.get('IF Balanced_Accuracy', np.nan),
+                        'F1-Score': row.get('IF F1', np.nan),
+                        'Precision': row.get('IF Precision', np.nan),
+                        'Recall': row.get('IF Recall', np.nan),
+                        'ROC_AUC': row.get('IF ROC_AUC', np.nan)
+                    })
+                # 3. Random Forest
+                if 'RF F1' in row and pd.notna(row['RF F1']):
+                    standardized_rows.append({
+                        'Context': context,
+                        'Model': 'Random Forest',
+                        'Accuracy': row.get('RF Accuracy', np.nan),
+                        'Balanced_Accuracy': row.get('RF Balanced_Accuracy', np.nan),
+                        'F1-Score': row.get('RF F1', np.nan),
+                        'Precision': row.get('RF Precision', np.nan),
+                        'Recall': row.get('RF Recall', np.nan),
+                        'ROC_AUC': row.get('RF ROC_AUC', np.nan)
+                    })
 
-            # 3. Keep only standardized columns
-            required = ['Model', 'F1-Score', 'Recall']
-            df = df[[c for c in required if c in df.columns]]
-
-            df['Context'] = context
-            all_data.append(df)
-            print(f"✅ Loaded and Standardized {context} results.")
-        else:
-            print(f"⚠️ Warning: {path} not found. Ensure trainers were run.")
+        context_df = pd.DataFrame(standardized_rows)
+        all_data.append(context_df)
+        print(f"✅ Loaded and Standardized {context} results ({len(context_df)} rows).")
 
     if all_data:
         master_df = pd.concat(all_data, ignore_index=True)
-
-        # Drop any row missing a real F1-Score or Recall value instead of
-        # ever silently substituting a fabricated constant (see above).
-        n_before = len(master_df)
-        master_df = master_df.dropna(subset=['F1-Score', 'Recall'])
-        n_dropped = n_before - len(master_df)
-        if n_dropped:
-            print(f"⚠️  Dropped {n_dropped} row(s) with missing F1-Score/Recall "
-                  f"instead of inserting fabricated placeholder values.")
-
         master_df.to_csv(OUTPUT_PATH / "global_model_comparison.csv", index=False)
-        print(f"\n📂 Master results saved: {OUTPUT_PATH / 'global_model_comparison.csv'} "
-              f"({len(master_df)} real rows)")
+        print(f"\n📂 Master results saved: {OUTPUT_PATH / 'global_model_comparison.csv'} ({len(master_df)} rows)")
     else:
         print("❌ No data found to aggregate.")
 

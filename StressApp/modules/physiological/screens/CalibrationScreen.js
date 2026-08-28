@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, TouchableOpacity,
   ScrollView, ActivityIndicator, Alert
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import ScreenBackground from '../../shared/ScreenBackground';
 import { useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../config/ThemeContext';
 import { useAuth } from '../../../context/AuthContext';
@@ -112,7 +112,7 @@ export default function CalibrationScreen() {
   const stepIndex = STEPS.findIndex(s => s.key === phase);
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
+    <ScreenBackground>
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
 
         <Text style={[styles.title, { color: text }]}>Calibration</Text>
@@ -121,18 +121,19 @@ export default function CalibrationScreen() {
           future readings against this, not a generic average.
         </Text>
 
-        {/* Current status */}
+        {/* Current status -- plain language only, no raw sensor numbers.
+            age_days/is_stale_soft/is_stale_hard already come back from
+            GET /baseline/<user_id> (see backend/physiological/app.py). */}
         <View style={[styles.card, { backgroundColor: card, borderColor: border }]}>
           <Text style={[styles.cardTitle, { color: text }]}>Current Baseline</Text>
           {baseline?.exists ? (
-            <>
-              <Text style={[styles.statusLine, { color: COLORS.normal }]}>✓ Baseline is set</Text>
-              <View style={styles.valueRow}>
-                <ValueChip label="AVNN" value={baseline.baseline?.AVNN?.mean?.toFixed(1)} unit="ms" color={COLORS.hrv} />
-                <ValueChip label="Heart Rate" value={baseline.baseline?.MeanHR?.mean?.toFixed(1)} unit="bpm" color={COLORS.stress} />
-                <ValueChip label="GSR (SCL)" value={baseline.baseline?.SCL_mean?.mean?.toFixed(3)} unit="μS" color={COLORS.gsr} />
-              </View>
-            </>
+            <Text style={[styles.statusLine, { color: baseline.is_stale_soft ? COLORS.warning : COLORS.normal }]}>
+              {baseline.is_stale_hard
+                ? '⚠ Your baseline needs renewing'
+                : baseline.is_stale_soft
+                  ? `✓ Baseline is set — ${Math.floor(baseline.age_days ?? 0)} days old, renew when convenient`
+                  : '✓ Baseline is set and up to date'}
+            </Text>
           ) : (
             <Text style={[styles.statusLine, { color: COLORS.warning }]}>No baseline yet</Text>
           )}
@@ -211,17 +212,7 @@ export default function CalibrationScreen() {
 
         <View style={{ height: 60 }} />
       </ScrollView>
-    </SafeAreaView>
-  );
-}
-
-function ValueChip({ label, value, unit, color }) {
-  return (
-    <View style={[styles.valueChip, { borderColor: color + '40', backgroundColor: color + '15' }]}>
-      <Text style={[styles.valueChipValue, { color }]}>{value ?? '—'}</Text>
-      <Text style={[styles.valueChipUnit, { color }]}>{unit}</Text>
-      <Text style={styles.valueChipLabel}>{label}</Text>
-    </View>
+    </ScreenBackground>
   );
 }
 
@@ -233,12 +224,7 @@ const styles = StyleSheet.create({
   card:            { padding: 18, borderRadius: 20, borderWidth: 1, marginBottom: 16 },
   cardTitle:       { fontSize: 16, fontWeight: '800' },
   cardSub:         { fontSize: 12, marginTop: 6, lineHeight: 18 },
-  statusLine:      { fontSize: 14, fontWeight: '700', marginTop: 8, marginBottom: 12 },
-  valueRow:        { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  valueChip:       { flex: 1, minWidth: 90, borderRadius: 12, borderWidth: 1, padding: 10, alignItems: 'center' },
-  valueChipValue:  { fontSize: 16, fontWeight: '900' },
-  valueChipUnit:   { fontSize: 10, marginTop: 1 },
-  valueChipLabel:  { fontSize: 10, marginTop: 4, color: '#9B958A', textAlign: 'center' },
+  statusLine:      { fontSize: 14, fontWeight: '700', marginTop: 8, marginBottom: 4, lineHeight: 20 },
   stepperRow:      { flexDirection: 'row', alignItems: 'center', marginTop: 12, marginBottom: 14 },
   stepDotWrap:     { flexDirection: 'row', alignItems: 'center', flex: 1 },
   stepDot:         { width: 14, height: 14, borderRadius: 7, borderWidth: 2 },

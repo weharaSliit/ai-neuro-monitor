@@ -156,7 +156,8 @@ export const PrivacyPolicyScreen = () => {
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1
+    flex: 1,
+    backgroundColor: '#FAF9FC'
   },
   content: {
     padding: 16
@@ -280,8 +281,8 @@ const styles = StyleSheet.create({
     marginBottom: 20
   },
   acceptBtnTxt: {
-    color: '#0F172A',
-    fontWeight: '900',
-    fontSize: 15
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 16
   }
 });

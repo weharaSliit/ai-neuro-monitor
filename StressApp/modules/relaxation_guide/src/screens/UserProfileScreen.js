@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Switch } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
@@ -7,8 +7,12 @@ import { Header } from '../components/Header';
 import { apiService } from '../api/apiService';
 
 export const UserProfileScreen = () => {
-  const { userId, username, hostExit, setCurrentScreen, onboardingAnswers } = useContext(AppContext);
-  const { isDarkMode, toggleTheme, theme } = useContext(ThemeContext);
+  const { userId, username, hostExit, setCurrentScreen } = useContext(AppContext);
+  const { theme } = useContext(ThemeContext);
+  // Relaxation Guide's own screens are all reached via setCurrentScreen
+  // (in-module switch, see AppContext). The Physiological module is a
+  // separate top-level stack screen (App.js), so reaching its Dashboard
+  // needs the actual React Navigation object, not the in-module switch.
   const navigation = useNavigation();
 
   const [profileData, setProfileData] = useState(null);
@@ -46,7 +50,7 @@ export const UserProfileScreen = () => {
         <ScrollView contentContainerStyle={styles.content}>
           {/* Profile Hero Header */}
           <View style={[styles.profileCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
-            <View style={styles.avatar}>
+            <View style={[styles.avatar, { backgroundColor: theme.accent + '26' }]}>
               <Text style={styles.avatarIcon}>👤</Text>
             </View>
             <Text style={[styles.name, { color: theme.textPrimary }]}>{username}</Text>
@@ -55,15 +59,15 @@ export const UserProfileScreen = () => {
             {/* Stats row */}
             <View style={[styles.statsRow, { backgroundColor: theme.bgPrimary }]}>
               <View style={styles.statBox}>
-                <Text style={styles.statVal}>⚡ {profileData?.xp_points ?? 0}</Text>
+                <Text style={[styles.statVal, { color: theme.accent }]}>⚡ {profileData?.xp_points ?? 0}</Text>
                 <Text style={[styles.statLbl, { color: theme.textMuted }]}>XP Points</Text>
               </View>
               <View style={styles.statBox}>
-                <Text style={styles.statVal}>🔥 {profileData?.streak_days ?? 1}d</Text>
+                <Text style={[styles.statVal, { color: theme.accent }]}>🔥 {profileData?.streak_days ?? 1}d</Text>
                 <Text style={[styles.statLbl, { color: theme.textMuted }]}>Streak</Text>
               </View>
               <View style={styles.statBox}>
-                <Text style={styles.statVal}>🎯 {profileData?.recent_interventions_count ?? 0}</Text>
+                <Text style={[styles.statVal, { color: theme.accent }]}>🎯 {profileData?.recent_interventions_count ?? 0}</Text>
                 <Text style={[styles.statLbl, { color: theme.textMuted }]}>Completed</Text>
               </View>
             </View>
@@ -198,7 +202,6 @@ const styles = StyleSheet.create({
     width: 72,
     height: 72,
     borderRadius: 36,
-    backgroundColor: 'rgba(56, 189, 248, 0.15)',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 10
@@ -228,7 +231,6 @@ const styles = StyleSheet.create({
   statVal: {
     fontSize: 16,
     fontWeight: '800',
-    color: '#38BDF8'
   },
   statLbl: {
     fontSize: 10,

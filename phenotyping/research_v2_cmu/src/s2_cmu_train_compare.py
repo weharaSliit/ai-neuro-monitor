@@ -1,20 +1,29 @@
 import pandas as pd
 import numpy as np
 import joblib
+import os
+import sys
+import warnings
 from sklearn.svm import OneClassSVM
 from sklearn.ensemble import IsolationForest, RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import f1_score, precision_score, recall_score
-import os
-import warnings
+from sklearn.metrics import (
+    f1_score, precision_score, recall_score,
+    accuracy_score, balanced_accuracy_score, roc_auc_score
+)
+
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
 
 # Suppress unnecessary warnings
 warnings.filterwarnings("ignore")
 
-# Configuration
-PROCESSED_DATA = "../data/processed/cmu_refined.csv"
-MODEL_DIR = "../models/"
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROCESSED_DATA = os.path.join(ROOT_DIR, "..", "data", "processed", "cmu_refined.csv")
+MODEL_DIR = os.path.join(ROOT_DIR, "..", "models")
+OUTPUT_DIR = os.path.join(ROOT_DIR, "..", "outputs")
 os.makedirs(MODEL_DIR, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 print("="*60)
 print(" 🔬 S2: DYNAMIC MULTI-MODEL COMPARISON (FIXED)")
@@ -56,32 +65,40 @@ def run_robust_experiment():
     X_test = np.vstack([test_normal, test_anomalous])
     y_test = [1]*len(test_normal) + [-1]*len(test_anomalous)
     
+    y_test_binary = (np.array(y_test) == -1).astype(int)
     results = []
 
     # --- MODEL 1: One-Class SVM (The Sensitivity Specialist) ---
-    # Good for detecting the "Drift" into Pre-Stress
     ocsvm = OneClassSVM(kernel="rbf", nu=0.1, gamma='scale')
     ocsvm.fit(X_train_normal)
     y_pred_oc = ocsvm.predict(X_test)
+    oc_scores = -ocsvm.decision_function(X_test)
     results.append({
         "Model": "One-Class SVM",
-        "F1-Score": f1_score(y_test, y_pred_oc, pos_label=-1),
-        "Recall": recall_score(y_test, y_pred_oc, pos_label=-1)
+        "Accuracy": accuracy_score(y_test, y_pred_oc),
+        "Balanced_Accuracy": balanced_accuracy_score(y_test, y_pred_oc),
+        "F1-Score": f1_score(y_test, y_pred_oc, pos_label=-1, zero_division=0),
+        "Precision": precision_score(y_test, y_pred_oc, pos_label=-1, zero_division=0),
+        "Recall": recall_score(y_test, y_pred_oc, pos_label=-1, zero_division=0),
+        "ROC_AUC": roc_auc_score(y_test_binary, oc_scores)
     })
 
     # --- MODEL 2: Isolation Forest (The Outlier Specialist) ---
-    # Good for detecting sudden "Bursts" of stress
     iso = IsolationForest(contamination=0.1, random_state=42)
     iso.fit(X_train_normal)
     y_pred_iso = iso.predict(X_test)
+    iso_scores = -iso.decision_function(X_test)
     results.append({
         "Model": "Isolation Forest",
-        "F1-Score": f1_score(y_test, y_pred_iso, pos_label=-1),
-        "Recall": recall_score(y_test, y_pred_iso, pos_label=-1)
+        "Accuracy": accuracy_score(y_test, y_pred_iso),
+        "Balanced_Accuracy": balanced_accuracy_score(y_test, y_pred_iso),
+        "F1-Score": f1_score(y_test, y_pred_iso, pos_label=-1, zero_division=0),
+        "Precision": precision_score(y_test, y_pred_iso, pos_label=-1, zero_division=0),
+        "Recall": recall_score(y_test, y_pred_iso, pos_label=-1, zero_division=0),
+        "ROC_AUC": roc_auc_score(y_test_binary, iso_scores)
     })
 
     # --- MODEL 3: Random Forest (The Benchmark) ---
-    # We create a balanced training set for RF (User vs Others)
     rf_others = other_df.iloc[train_size : train_size + train_size].values
     X_rf_train = np.vstack([X_train_normal, rf_others])
     y_rf_train = [1]*len(X_train_normal) + [-1]*len(rf_others)
@@ -89,26 +106,33 @@ def run_robust_experiment():
     rf = RandomForestClassifier(n_estimators=100, random_state=42)
     rf.fit(X_rf_train, y_rf_train)
     y_pred_rf = rf.predict(X_test)
+    rf_probs = rf.predict_proba(X_test)
+    pos_idx = np.where(rf.classes_ == -1)[0]
+    rf_anomaly_prob = rf_probs[:, pos_idx[0]] if len(pos_idx) > 0 else np.zeros(len(X_test))
+
     results.append({
         "Model": "Random Forest",
-        "F1-Score": f1_score(y_test, y_pred_rf, pos_label=-1),
-        "Recall": recall_score(y_test, y_pred_rf, pos_label=-1)
+        "Accuracy": accuracy_score(y_test, y_pred_rf),
+        "Balanced_Accuracy": balanced_accuracy_score(y_test, y_pred_rf),
+        "F1-Score": f1_score(y_test, y_pred_rf, pos_label=-1, zero_division=0),
+        "Precision": precision_score(y_test, y_pred_rf, pos_label=-1, zero_division=0),
+        "Recall": recall_score(y_test, y_pred_rf, pos_label=-1, zero_division=0),
+        "ROC_AUC": roc_auc_score(y_test_binary, rf_anomaly_prob)
     })
 
     # Save the One-Class SVM as the production model 
-    # (It is best for personalized pre-stress drift)
-    model_path = f"{MODEL_DIR}pre_stress_detector_s002.joblib"
+    model_path = os.path.join(MODEL_DIR, "pre_stress_detector_s002.joblib")
     joblib.dump(ocsvm, model_path)
     
     report = pd.DataFrame(results)
     
     # Save results for cross-dataset synthesis (s1_metric_aggregator.py)
-    os.makedirs("../outputs/", exist_ok=True)
-    report.to_csv("../outputs/cmu_results.csv", index=False)
+    out_csv = os.path.join(OUTPUT_DIR, "cmu_results.csv")
+    report.to_csv(out_csv, index=False)
     
     print(f"\nResults for User {target_user} ({n_samples} total samples):")
-    print(report.to_string(index=False))
+    print(report.round(4).to_string(index=False))
     print(f"\n✅ Final Model Saved: {model_path}")
-    print(f"📊 Results saved to ../outputs/cmu_results.csv")
+    print(f"📊 Results saved to {out_csv}")
 
 run_robust_experiment()

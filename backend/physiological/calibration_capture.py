@@ -25,12 +25,14 @@ from backend.common.config import (
     MQTT_BROKER, MQTT_PORT, MQTT_TOPIC, MQTT_USER, MQTT_PASSWORD, MQTT_CA_CERT,
     GSR_CAL, WINDOW_SEC, SETTLE_SEC, N_BASELINE_WIN
 )
+from backend.common.config import EMA_ALPHA
 from backend.physiological.extract_features import extract_features
+from backend.physiological.ema_service import build_ema_summary, interpret_ema_change
 from backend.physiological.predictor import (
     compute_baseline, update_baseline_ema, feature_cols
 )
 from backend.physiological.firebase_service import (
-    save_baseline, load_baseline, baseline_exists
+    save_baseline, load_baseline, baseline_exists, save_baseline_adaptation
 )
 
 
@@ -48,7 +50,7 @@ def save_calibration_windows(user_id, raw_windows):
 
     feature_rows = []
     for i, w in enumerate(raw_windows):
-        features_2d, motion_rejected, feat_dict = extract_features(
+        features_2d, motion_rejected, feat_dict, hrv_is_fallback = extract_features(
             w.get('ibi_array', []),
             w.get('gsr_adc_array', []),
             w.get('acc_array', []),
@@ -60,6 +62,14 @@ def save_calibration_windows(user_id, raw_windows):
                 f'Window {i} rejected for movement — '
                 f'sit still for the whole calibration period'
             )
+        if hrv_is_fallback:
+            # A baseline built on fabricated HRV placeholders (see
+            # extract_hrv_features()'s docstring) would be worse than no
+            # baseline at all -- same rejection treatment as motion.
+            raise ValueError(
+                f'Window {i} rejected — insufficient clean heart-rate data '
+                f'(check ring contact/fit and retry)'
+            )
         feature_rows.append(features_2d[0])
 
     windows_array = np.array(feature_rows)
@@ -68,7 +78,22 @@ def save_calibration_windows(user_id, raw_windows):
     if baseline_exists(user_id):
         old_mean, old_std = load_baseline(user_id, feature_cols)
         if old_mean is not None:
-            b_mean, b_std = update_baseline_ema(old_mean, old_std, b_mean, b_std)
+            new_mean, b_std = update_baseline_ema(old_mean, old_std, b_mean, b_std)
+            # This IS "continual adaptation over time" for this project --
+            # a real, controlled recalibration blended into the existing
+            # baseline (not a guess from noisy everyday session data, see
+            # ema_service.py's header). Logged here, once per recalibration
+            # that actually had a prior baseline to blend against, for the
+            # "Continual Learning" screen (StressApp/modules/physiological/
+            # screens/EMAScreen.js) to display -- build_ema_summary gives the
+            # real per-feature formula (actual numbers, not a template
+            # string) and interpret_ema_change gives a physiological reading
+            # of what changed, both computed once here rather than
+            # reconstructed client-side from raw numbers.
+            summary = build_ema_summary(old_mean, new_mean, feature_cols)
+            interpretation = interpret_ema_change(old_mean, new_mean, feature_cols)
+            save_baseline_adaptation(user_id, summary['features'], interpretation, EMA_ALPHA)
+            b_mean = new_mean
 
     save_baseline(user_id, b_mean, b_std, feature_cols)
 
