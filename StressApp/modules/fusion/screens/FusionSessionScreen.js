@@ -10,7 +10,7 @@ import StatusDot from '../../shared/StatusDot';
 import Icon, { NAMES } from '../../shared/Icon';
 import MoodBadge from '../../shared/MoodBadge';
 import AvatarButton from '../../shared/AvatarButton';
-import { CalibrationBanner } from '../../shared/CalibrationGate';
+import { CalibrationBanner, useCalibrationSummary } from '../../shared/CalibrationGate';
 import LineChart from '../../shared/LineChart';
 import FreudHeroBanner from '../../shared/FreudHeroBanner';
 import CalibrateBreathingCard from '../../shared/CalibrateBreathingCard';
@@ -82,6 +82,34 @@ export default function FusionSessionScreen({ navigation }) {
     const { theme: t, COLORS } = useTheme();
     const { user, token } = useAuth();
     const userId = user?.userId;
+
+    // This card is the REAL, always-reachable calibration entry point --
+    // register lands directly here (Fusion), not on a separate onboarding
+    // screen -- so the personal-threshold task (EegThresholdTaskScreen.js,
+    // route 'ThresholdCalibration') has to trigger from here, not from
+    // AccountSetupScreen's copy of this same card. Gated to a brand-new
+    // user's FIRST calibration only (user.isNewUser) -- a returning user
+    // recalibrating on this always-visible card just refreshes the
+    // freshness bars as it already does, not forced into a quiz screen
+    // every time they recalibrate.
+    const goToThresholdCalibration = useCallback(() => {
+        if (user?.isNewUser) {
+            navigation.navigate('ThresholdCalibration');
+        }
+    }, [user?.isNewUser, navigation]);
+    // Same summary CalibrationBanner/CalibrateBreathingCard already fetch
+    // (GET /baseline/{userId} + GET /calibration/status) -- both now carry
+    // personal_stress_threshold / personal_high_load_p once the onboarding
+    // threshold task has actually separated Rest from Task for this user
+    // (see backend/physiological/app.py::_baseline_response() and
+    // backend/psychological/firebase_service.py::get_calibration_status()).
+    // Reused here, not re-fetched, so this card can never show a different
+    // number than what CalibrationBanner is already reasoning about.
+    const { ring: ringCalibration, eeg: eegCalibration } = useCalibrationSummary(userId, token);
+    const personalEegPct = eegCalibration?.personal_high_load_p != null
+        ? Math.round(eegCalibration.personal_high_load_p * 100) : null;
+    const personalRingPct = ringCalibration?.personal_stress_threshold != null
+        ? Math.round(ringCalibration.personal_stress_threshold * 100) : null;
     const userName = user?.name || userId;
     const [sessionId, setSessionId] = useState('');
     const [watching, setWatching] = useState(false);
@@ -200,6 +228,30 @@ export default function FusionSessionScreen({ navigation }) {
 
                 <CalibrationBanner userId={userId} token={token} db={db} />
 
+                {/* Personalized thresholds: only rendered once at least one
+                    side has actually separated Rest from Task (see
+                    _baseline_response()/get_calibration_status() above) --
+                    a user who's only done resting-baseline calibration
+                    still sees nothing here rather than a premature
+                    "Standard" placeholder for a task they haven't run yet. */}
+                {(personalEegPct != null || personalRingPct != null) && (
+                    <Card style={styles.thresholdCard} accentColor={COLORS.brand}>
+                        <Text style={[styles.cardTitle, { color: t.text }]}>Your Personalized Thresholds</Text>
+                        <View style={styles.thresholdRow}>
+                            <Text style={[styles.thresholdLabel, { color: t.textMuted }]}>EEG high-load</Text>
+                            <Text style={[styles.thresholdValue, { color: t.text }]}>
+                                {personalEegPct != null ? `${personalEegPct}%` : 'Standard'}
+                            </Text>
+                        </View>
+                        <View style={styles.thresholdRow}>
+                            <Text style={[styles.thresholdLabel, { color: t.textMuted }]}>Ring stress</Text>
+                            <Text style={[styles.thresholdValue, { color: t.text }]}>
+                                {personalRingPct != null ? `${personalRingPct}%` : 'Standard'}
+                            </Text>
+                        </View>
+                    </Card>
+                )}
+
                 {/* Calibrate -- Calm Breathing: always visible (not tucked
                     behind a hidden button) -- a plain breathe-in/breathe-out
                     visual while real Ring+EEG calibration runs in the
@@ -209,8 +261,8 @@ export default function FusionSessionScreen({ navigation }) {
                     <CalibrateBreathingCard
                         userId={userId}
                         token={token}
-                        ringOnline={ringConnected}
                         eegDb={db}
+                        onComplete={goToThresholdCalibration}
                     />
                 </Card>
 
@@ -356,6 +408,26 @@ const styles = StyleSheet.create({
         marginVertical: 10,
         padding: 18,
         borderRadius: 24,
+    },
+    thresholdCard: {
+        marginHorizontal: 20,
+        marginVertical: 10,
+        padding: 18,
+        borderRadius: 22,
+    },
+    thresholdRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingVertical: 6,
+    },
+    thresholdLabel: {
+        fontSize: 13,
+        fontWeight: '700',
+    },
+    thresholdValue: {
+        fontSize: 14,
+        fontWeight: '900',
     },
     pss4Card: {
         marginHorizontal: 20,

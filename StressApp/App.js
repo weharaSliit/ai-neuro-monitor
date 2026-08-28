@@ -85,8 +85,20 @@ function RootNavigator() {
   // goes straight to Physiological like normal.
   const initialRoute = !user ? 'Welcome' : (user.isNewUser ? 'AccountSetup' : 'Physiological');
 
+  // `key={phase}` is load-bearing, not decoration: React Navigation only
+  // honors initialRouteName on a Stack.Navigator's FIRST mount -- it's the
+  // SAME navigator instance across register()/completeOnboarding() (only
+  // its Stack.Screen children below swap based on `user`), so a
+  // recomputed initialRoute above would otherwise silently never take
+  // effect (a well-documented React Navigation gotcha). Keying on the
+  // auth phase forces a real unmount+remount exactly when initialRoute
+  // needs to change (auth -> onboarding -> app), so e.g. a fresh
+  // registration actually lands on AccountSetup instead of wherever the
+  // stack happened to already be.
+  const phase = !user ? 'auth' : (user.isNewUser ? 'onboarding' : 'app');
+
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }} initialRouteName={initialRoute}>
+    <Stack.Navigator key={phase} screenOptions={{ headerShown: false }} initialRouteName={initialRoute}>
       {user ? (
         <>
           {/* User path: Physiological's 2-tab bar (Overview/Phenotyping --

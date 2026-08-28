@@ -271,7 +271,7 @@ void publishBatch() {
 /* ================= SETUP ================= */
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin();
 
   unsigned long startWait = millis();
   while (!Serial && (millis() - startWait < 2000));

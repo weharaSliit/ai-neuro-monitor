@@ -15,50 +15,27 @@
 // and continues into the app; there's no dead end here.
 // ============================================================
 
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
-import axios from 'axios';
-import { ref, onValue, off } from 'firebase/database';
 import ScreenBackground from '../modules/shared/ScreenBackground';
 import Card from '../modules/shared/Card';
 import Icon, { NAMES } from '../modules/shared/Icon';
 import StatusDot from '../modules/shared/StatusDot';
 import CalibrateBreathingCard from '../modules/shared/CalibrateBreathingCard';
+import { useDeviceStatus } from '../modules/shared/CalibrationGate';
 import { COLORS } from '../modules/physiological/config/theme';
-import { API_BASE, DEVICE_ID } from '../modules/physiological/config/config';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
-
-const DEVICE_POLL_MS = 8000;
 
 export default function AccountSetupScreen({ navigation }) {
   const { user, token, completeOnboarding } = useAuth();
   const userId = user?.userId;
 
-  const [ringConnected, setRingConnected] = useState(false);
-  const [eegConnected, setEegConnected] = useState(false);
-
-  useEffect(() => {
-    let ringTimer;
-    const pollRing = async () => {
-      try {
-        const res = await axios.get(`${API_BASE}/devices/${DEVICE_ID}/status`);
-        setRingConnected((res.data?.status || 'offline') === 'online');
-      } catch {
-        setRingConnected(false);
-      }
-    };
-    pollRing();
-    ringTimer = setInterval(pollRing, DEVICE_POLL_MS);
-
-    const eegPointerRef = ref(db, 'psychological/current_session_id');
-    const eegHandler = onValue(eegPointerRef, (snap) => setEegConnected(!!snap.val()));
-
-    return () => {
-      clearInterval(ringTimer);
-      off(eegPointerRef, 'value', eegHandler);
-    };
-  }, []);
+  // Real connectivity + live-data-flow check (Ring: recent MQTT heartbeat;
+  // EEG: recent live_raw push) -- see CalibrationGate.js::useDeviceStatus()
+  // for why the EEG side used to read "connected" for any logged-in user
+  // regardless of whether a headset was even nearby.
+  const { ringOnline: ringConnected, eegOnline: eegConnected } = useDeviceStatus(userId, db);
 
   // "Skip for now" (below) still goes straight to the dashboard --
   // skipping baseline calibration makes the threshold task meaningless
@@ -118,7 +95,6 @@ export default function AccountSetupScreen({ navigation }) {
           <CalibrateBreathingCard
             userId={userId}
             token={token}
-            ringOnline={ringConnected}
             eegDb={db}
             onComplete={proceedToThreshold}
           />

@@ -1,30 +1,24 @@
-// ============================================================
-// CalibrationGate.js
-//
-// Combined Ring + EEG calibration-freshness check, shared by:
-//   - CalibrateBreathingCard.js's day-bars (via useCalibrationSummary)
-//   - CalibrationBanner, the dismissible non-blocking renewal nudge shown
-//     on the Fusion landing tab
-//
-// There used to also be a blocking full-screen gate here (a forced
-// "Calibrate Ring" / "Open EEG" screen shown before Fusion even loaded,
-// pointing at old standalone calibration screens) -- removed, since
-// calibration is now inline on Fusion itself: CalibrateBreathingCard is
-// always visible there and runs the real on-demand Ring+EEG capture
-// directly, so a separate forced gate before reaching Fusion just
-// duplicated (and, since it went stale, contradicted) that. App.js now
-// routes straight to 'Physiological' after login/session-restore.
-//
-// A service being unreachable (Render cold start, offline) is treated as
-// "unknown", not "not calibrated" -- see useCalibrationSummary below.
-// ============================================================
-
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
-import { ref, get } from 'firebase/database';
+import axios from 'axios';
+import { ref, get, onValue, off, query, orderByChild, limitToLast } from 'firebase/database';
 import { useTheme } from '../physiological/config/ThemeContext';
 import physiologicalApi from '../physiological/api/client';
+import { API_BASE, DEVICE_ID } from '../physiological/config/config';
 import { eegClient } from './eegApiClient';
+
+const DEVICE_POLL_MS = 5000;
+// The backend no longer pushes a ~1s raw live_raw preview (raw EEG samples
+// are never sent to Firebase at all now -- see backend/psychological/
+// app.py's /predict route) -- EEG liveness is read from the latest
+// per-block derived-output record instead (psychological/{userId}/
+// {sessionId}/{window}, written once per BLOCK_SEC=25s block, skipped
+// blocks included -- see make_eeg_output_record()). 40s, not 15s: the
+// freshness window has to comfortably exceed the real ~25s write cadence
+// (plus network/processing jitter) or this would flap "offline" between
+// every normal block, unlike the old 1s live_raw cadence that 15s was
+// originally sized against.
+const EEG_LATEST_WINDOW_FRESH_SEC = 40;
 
 async function fetchSide(fn) {
   try {
@@ -35,9 +29,6 @@ async function fetchSide(fn) {
   }
 }
 
-// Shared by CalibrationBanner's renewal nudge and CalibrateBreathingCard's
-// day-bars (non-blocking, shown on the Overview/Fusion landing tab) -- one
-// fetch, two consumers, so they never disagree about what "stale" means.
 export function useCalibrationSummary(userId, token) {
   const [state, setState] = useState({ loading: true, ring: null, eeg: null });
 
@@ -66,9 +57,6 @@ export function useCalibrationSummary(userId, token) {
 
   const { loading, ring, eeg } = state;
   const known = [ring, eeg].filter((s) => s && s.ok);
-  // Both sides unreachable -> "unknown", never blocks by itself (see file
-  // header). Otherwise: blocking only if every side we actually heard back
-  // from is either never-calibrated or past the hard 30-day cutoff.
   const blocking = !loading && known.length > 0
     && known.every((s) => !s.exists || s.is_stale_hard);
   const softStaleRing = !loading && ring?.ok && ring.exists && ring.is_stale_soft && !ring.is_stale_hard;
@@ -77,13 +65,63 @@ export function useCalibrationSummary(userId, token) {
   return { loading, ring, eeg, blocking, softStaleRing, softStaleEeg, refresh };
 }
 
-// Days since account creation -- the fallback "clock" for a modality that
-// has never been calibrated at all, so a brand-new user still sees a real
-// filling countdown (and the same 7-day "recommended" nudge) instead of
-// just a blank "no baseline on file" message. `db` is passed in by the
-// caller (Fusion already has one, via its own firebase.js import) rather
-// than this file importing its own -- keeps this module free of a second
-// Firebase app-init path.
+export function useDeviceStatus(userId, db) {
+  const [ringOnline, setRingOnline] = useState(false);
+  const [sessionId, setSessionId] = useState(null);
+  const [eegLastSeen, setEegLastSeen] = useState(null); // epoch seconds, from the latest block record's timestamp_end
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await axios.get(`${API_BASE}/devices/${DEVICE_ID}/status`);
+        if (!cancelled) setRingOnline((res.data?.status || 'offline') === 'online');
+      } catch {
+        if (!cancelled) setRingOnline(false);
+      }
+    };
+    poll();
+    const id = setInterval(poll, DEVICE_POLL_MS);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  useEffect(() => {
+    if (!userId || !db) return undefined;
+    const pointerRef = ref(db, 'psychological/current_session_id');
+    const handler = onValue(pointerRef, (snap) => setSessionId(snap.val() || null));
+    return () => off(pointerRef, 'value', handler);
+  }, [userId, db]);
+
+  useEffect(() => {
+    if (!userId || !sessionId || !db) {
+      setEegLastSeen(null);
+      return undefined;
+    }
+    // Latest per-block derived-output record (see EEG_LATEST_WINDOW_FRESH_SEC's
+    // comment above) -- same {window: record} shape AdminEegLiveScreen.js
+    // already queries this same way for its own "latest" read.
+    const latestRef = query(
+      ref(db, `psychological/${userId}/${sessionId}`),
+      orderByChild('window'), limitToLast(1),
+    );
+    const handler = onValue(latestRef, (snap) => {
+      const data = snap.val();
+      const latest = data ? Object.values(data)[0] : null;
+      setEegLastSeen(latest?.timestamp_end ?? null);
+    });
+    return () => off(latestRef, 'value', handler);
+  }, [userId, sessionId, db]);
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), DEVICE_POLL_MS);
+    return () => clearInterval(id);
+  }, []);
+
+  const eegOnline = eegLastSeen != null && (now / 1000 - eegLastSeen) <= EEG_LATEST_WINDOW_FRESH_SEC;
+
+  return { ringOnline, eegOnline, eegSessionId: sessionId };
+}
 export function useSignupAge(userId, db) {
   const [signupAgeDays, setSignupAgeDays] = useState(null);
 
@@ -104,39 +142,18 @@ export function useSignupAge(userId, db) {
 
   return signupAgeDays;
 }
-
-// Concrete age + days-remaining-until-the-30-day-hard-cutoff, instead of
-// the old vague "over a week old" -- age_days/is_stale_soft/is_stale_hard
-// all already come from the shared /baseline and /calibration/status
-// responses (see useCalibrationSummary above), so this is real data, not
-// an estimate.
 function describeStale(name, side) {
   const age = Math.floor(side.age_days);
   const remaining = Math.max(0, Math.ceil(30 - side.age_days));
   return `${name} calibration is ${age} day${age === 1 ? '' : 's'} old — `
     + `renew within the next ${remaining} day${remaining === 1 ? '' : 's'} for best accuracy.`;
 }
-
-// Small dismissible nudge shown on the Overview (Fusion) landing tab --
-// never blocking, per-session dismissal only (re-appears next app open,
-// since this isn't meant to be permanently silenceable the way a real
-// "don't ask again" would be). Ring and EEG are tracked and shown
-// separately -- there's no single merged "your baseline" anywhere in this
-// backend (each modality calibrates and stores its own baseline
-// independently; the fusion engine's own session-level average is a
-// different, smaller thing -- see the "Session start" line on the Ring
-// chart), so this banner is honest about that rather than implying a
-// combined number that doesn't exist.
 export function CalibrationBanner({ userId, token, db }) {
   const { theme, COLORS } = useTheme();
   const { loading, ring, eeg, softStaleRing, softStaleEeg } = useCalibrationSummary(userId, token);
   const signupAgeDays = useSignupAge(userId, db);
   const [dismissed, setDismissed] = useState(false);
 
-  // Neither side has ever been calibrated at all -- once a week has passed
-  // since signup, nudge toward the Calibrate card already on this same
-  // screen (not a separate flow) -- same skip/dismiss behavior as the
-  // renewal nudges below, per "if not can skip as well."
   const neverCalibrated = !loading && ring?.ok && !ring.exists && eeg?.ok && !eeg.exists;
   const newUserOverdue = neverCalibrated && signupAgeDays != null && signupAgeDays >= 7;
 
