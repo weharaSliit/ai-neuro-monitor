@@ -18,6 +18,36 @@ import pandas as pd
 
 MAD_TO_STD = 1.4826  # scales MAD to a Gaussian-equivalent std, standard convention
 
+# Cheap early-reject threshold, checked directly on device timestamps before
+# any despike/interpolation/filter work runs -- mirrors adc.py's
+# MAX_RAW_UV/raw_magnitude_ok pattern, but for a dropped-packet outage
+# instead of an amplitude fault. np.interp() (used downstream in
+# interpolate_to_uniform_grid()) has no concept of a gap: it fabricates a
+# straight line across ANY hole in the timestamps, so a multi-second WiFi/
+# MQTT outage would otherwise be silently smoothed into a plausible-looking
+# but entirely synthetic stretch of "signal" and fed straight into the
+# filter and model like real data.
+MAX_GAP_SEC = 1.0
+
+
+def max_gap_sec(millis: np.ndarray) -> float:
+    """Largest spacing between consecutive, de-duplicated device timestamps,
+    in seconds -- see MAX_GAP_SEC above. Safe to call on raw millis before
+    any other processing."""
+    millis = np.asarray(millis, dtype=float)
+    if millis.size < 2:
+        return 0.0
+    millis = np.sort(millis)
+    millis = millis[np.concatenate(([True], np.diff(millis) > 0))]
+    if millis.size < 2:
+        return 0.0
+    return float(np.max(np.diff(millis)) / 1000.0)
+
+
+def timing_ok(millis: np.ndarray) -> bool:
+    """True if this block has no dropped-packet gap wider than MAX_GAP_SEC."""
+    return max_gap_sec(millis) <= MAX_GAP_SEC
+
 
 def remove_spikes(values: np.ndarray, abs_threshold_uv: float = 10_000.0,
                    mad_k: float = 5.0, window: int = 25,
@@ -78,6 +108,12 @@ def interpolate_to_uniform_grid(millis: np.ndarray, values: np.ndarray, target_f
     from millis[0] -- makes block length deterministic (e.g. always exactly
     25s * target_fs samples) regardless of real-world packet-count
     variability. If None, spans millis[0]..millis[-1].
+
+    Callers should check timing_ok()/max_gap_sec() BEFORE calling this --
+    np.interp() has no concept of a gap and will fabricate a straight line
+    across any hole in the timestamps, including a multi-second dropped-
+    packet outage, indistinguishable downstream from real interpolated-
+    jitter correction.
     """
     millis = np.asarray(millis, dtype=float)
     values = np.asarray(values, dtype=float)

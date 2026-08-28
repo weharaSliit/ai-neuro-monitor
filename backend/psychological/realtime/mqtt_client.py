@@ -1,19 +1,8 @@
-"""MQTT subscriber for the ESP32 firmware's batched payload on
-mindpulse/wearable02/sensors -- one or more "millis,ch1,ch2" records per
-message, separated by ';'
-(see firmware/eeg_t7t8/eeg_t7t8.ino publishBatch(), BATCH_SIZE samples per
-publish rather than one publish() per sample).
-
-Kept transport-agnostic from the processing pipeline: this module only
-parses messages and appends to a buffer: `RawSampleBuffer` -- pipeline.py
-owns turning accumulated samples into inference blocks (25s = 3200 samples
-@ 128 Hz, or the equivalent duration of new raw 250 SPS data).
-"""
-
 import threading
+import itertools
 from collections import deque
 from dataclasses import dataclass
-
+from typing import Union, List
 
 @dataclass(frozen=True)
 class RawSample:
@@ -21,20 +10,24 @@ class RawSample:
     ch1_code: int
     ch2_code: int
 
+@dataclass(frozen=True)
+class BipolarRawSample:
+    millis: int
+    code: int
+
+# Define a type alias so the buffer knows it can expect either type of sample
+AnySample = Union[RawSample, BipolarRawSample]
 
 class RawSampleBuffer:
-    """Thread-safe append/drain buffer for incoming raw ADC samples."""
-
     def __init__(self, maxlen: int = 250 * 60):  # 60s of raw 250 SPS data as a safety cap
         self._buf = deque(maxlen=maxlen)
         self._lock = threading.Lock()
 
-    def append(self, sample: RawSample) -> None:
+    def append(self, sample: AnySample) -> None:
         with self._lock:
             self._buf.append(sample)
 
-    def drain(self, n: int) -> list[RawSample]:
-        """Pop up to n oldest samples (FIFO); returns fewer if not enough buffered yet."""
+    def drain(self, n: int) -> List[AnySample]:
         with self._lock:
             n = min(n, len(self._buf))
             return [self._buf.popleft() for _ in range(n)]
@@ -43,20 +36,16 @@ class RawSampleBuffer:
         with self._lock:
             return len(self._buf)
 
-    def peek_recent(self, n: int) -> list:
-        """Returns up to the n most recently appended samples WITHOUT
-        removing them -- for a live preview push that runs independently
-        of (and doesn't compete with) drain()'s FIFO block consumption."""
+    def peek_recent(self, n: int) -> List[AnySample]:
         with self._lock:
-            if n >= len(self._buf):
+            length = len(self._buf)
+            if n >= length:
                 return list(self._buf)
-            return list(self._buf)[-n:]
+            # Highly optimized memory read using itertools
+            return list(itertools.islice(self._buf, length - n, length))
 
 
-def parse_payload(payload: str) -> list[RawSample]:
-    """Parses the firmware's batched payload: ';'-separated "millis,ch1,ch2"
-    records (publishBatch() in the .ino). A malformed individual record is
-    dropped on its own rather than discarding the whole batch."""
+def parse_payload(payload: str) -> List[RawSample]:
     samples = []
     for record in payload.strip().split(';'):
         record = record.strip()
@@ -73,22 +62,48 @@ def parse_payload(payload: str) -> list[RawSample]:
     return samples
 
 
+def parse_bipolar_payload(payload: str) -> List[BipolarRawSample]:
+    samples = []
+    for record in payload.strip().split(';'):
+        record = record.strip()
+        if not record:
+            continue
+        parts = record.split(',')
+        if len(parts) != 2:
+            continue
+        try:
+            millis_str, code_str = parts
+            samples.append(BipolarRawSample(millis=int(millis_str), code=int(code_str)))
+        except ValueError:
+            continue
+    return samples
+
+
 def make_client(broker: str, port: int, topic: str, buffer: RawSampleBuffer, client_id: str = 'eeg_inference',
                  username: str = None, password: str = None, ca_cert: str = None):
-    """Returns a connected, already-looping paho-mqtt client wired to append
-    parsed samples into `buffer` (connection/subscribe/loop_start wiring
-    lives in backend/common/mqtt_bridge.py, shared with the ring's bridge).
-    Caller owns eventual .loop_stop()/.disconnect().
-
-    username/password/ca_cert: see connect_mqtt()'s docstring -- required
-    for EMQX Cloud Serverless, omit all three for a plain/anonymous broker.
-    """
     from backend.common.mqtt_bridge import connect_mqtt
 
     def on_message(client, userdata, msg):
         samples = parse_payload(msg.payload.decode('utf-8', errors='replace'))
         if not samples:
             print(f'[mqtt] dropped malformed/empty payload: {msg.payload!r}')
+            return
+        for sample in samples:
+            buffer.append(sample)
+
+    return connect_mqtt(broker, port, topic, on_message, client_id=client_id,
+                         username=username, password=password, ca_cert=ca_cert)
+
+
+def make_bipolar_client(broker: str, port: int, topic: str, buffer: RawSampleBuffer,
+                         client_id: str = 'eeg_inference_bipolar',
+                         username: str = None, password: str = None, ca_cert: str = None):
+    from backend.common.mqtt_bridge import connect_mqtt
+
+    def on_message(client, userdata, msg):
+        samples = parse_bipolar_payload(msg.payload.decode('utf-8', errors='replace'))
+        if not samples:
+            print(f'[mqtt] dropped malformed/empty bipolar payload: {msg.payload!r}')
             return
         for sample in samples:
             buffer.append(sample)

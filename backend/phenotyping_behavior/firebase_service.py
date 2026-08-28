@@ -1,6 +1,7 @@
 import firebase_admin
 from firebase_admin import credentials, db
 from datetime import datetime, timezone, timedelta
+import csv
 import os
 import sys
 
@@ -12,6 +13,11 @@ if _BACKEND_ROOT not in sys.path:
 
 # Import the group's shared credentials and URL
 from common.config import FIREBASE_CRED_FILE, FIREBASE_DB_URL, FIREBASE_CRED_DICT
+# FUSION_EN_ROOT/fusion_window_key: the newer fusion_en/ convention (see
+# save_fusion_en_rtdb() below) -- separate module from common.config above,
+# both coexist under backend/common/.
+from backend.common.firebase_config import FUSION_EN_ROOT
+from backend.common.fusion import fusion_window_key
 
 # --- RESEARCH NAMESPACE ---
 # This ensures your data is stored under 'phenotyping/' in the database
@@ -103,13 +109,30 @@ def save_behavioral_window(user_id, window_data):
 def save_stress_prediction(user_id, result):
     """
     Saves the model's decision: Normal, Pre-Stress, or High Stress.
+    v4.1: Also persists all 5 z-score fields and composite_z so the
+    PhenotypingAnalysisScreen can display the full signal breakdown
+    directly from Firebase without recomputing on the client.
     """
     ref = _ref(f'predictions/{user_id}')
     ref.push({
-        'timestamp': datetime.now().isoformat(),
-        'label': result['label'],
+        'timestamp':   datetime.now().isoformat(),
+        'label':       result['label'],
         'stress_score': result['score'],
-        'is_anomaly': result['is_anomaly']
+        'confidence':  result.get('confidence', 0.5),
+        'signal_quality': result.get('signal_quality', 1.0),
+        'is_anomaly':  result['is_anomaly'],
+        'composite_z': result.get('composite_z', 0),
+        'z_dwell':     result.get('z_dwell', 0),
+        'z_flight':    result.get('z_flight', 0),
+        'z_scroll':    result.get('z_scroll', 0),
+        'z_tilt':      result.get('z_tilt', 0),
+        'z_cpm':       result.get('z_cpm', 0),
+        'raw_dwell':   result.get('raw_dwell', 0),
+        'raw_flight':  result.get('raw_flight', 0),
+        'raw_scroll':  result.get('raw_scroll', 0),
+        'raw_tilt':    result.get('raw_tilt', 0),
+        'raw_cpm':     result.get('raw_cpm', 0),
+        'model_type':  result.get('model_type', 'global'),
     })
 
 def get_latest_stress_prediction(user_id):
@@ -241,40 +264,57 @@ def get_physiological_predictions(user_id):
 # Firebase path: fusion_engine/{display_name}/live_session_{YYYYMMDD}/{push-key}
 # This mirrors the format used by: Wehara (physiological) and Hiruni (EEG).
 
-# Known accuracy of the One-Class SVM behavioral model.
+# Accuracy of the One-Class SVM behavioral model, read live from the last
+# real evaluation of the deployed artifact (stress_engine.pkl +
+# feature_scaler.pkl) instead of a hand-typed constant.
 #
-# HISTORY: originally hardcoded to 0.78 as an unvalidated placeholder
-# (comment said "update after validation" but nothing ever did — it turned
-# out to closely match published literature accuracy for a DIFFERENT
-# keystroke-stress study, not a number ever measured on this system).
-# Later corrected to 0.3286 (StudentLife macro F1) — but that number came
-# from a model trained on activity/motion features (stationary/walking
-# ratios), not typing data, and scored a DIFFERENT model object than the one
-# actually deployed. Neither number was ever about stress_engine.pkl, the
-# file actually shipped to production.
+# HISTORY: this used to be a hardcoded number, updated by manually re-running
+# phenotyping/s9_evaluate_production_model.py, reading the mean accuracy off
+# its printed summary or research_synthesis/outputs/production_model_eval.csv,
+# and pasting it in here. That number went stale every time s9 was re-run
+# without someone remembering to also edit this file, and there was no way to
+# tell from Firebase alone whether the constant still matched the model
+# actually running in production.
 #
-# CURRENT VALUE: the first-ever evaluation of the REAL deployed artifact
-# (stress_engine.pkl + feature_scaler.pkl), run in
-# phenotyping/s9_evaluate_production_model.py via an inter-subject anomaly
-# proxy on held-out CMU subjects (same proxy methodology used elsewhere in
-# this repo, since no real participant stress ground truth exists yet).
-# Result across 51 held-out subjects: accuracy=0.4998, F1=0.1804,
-# precision=0.6738, recall=0.1098.
+# Note this is still measured via an inter-subject anomaly proxy (this user's
+# held-out samples vs. a random other user's, since the Kaggle Mobile dataset
+# used to train stress_engine.pkl has no real participant stress labels) —
+# not accuracy against real stress ground truth. See evaluate_accuaracy.py for
+# the one script in this repo that scores against real PSS-4/SISS survey data.
 #
-# This is a materially weaker result than the per-user models validated
-# elsewhere in the research pipeline (e.g. SWELL personalized: F1=0.72) —
-# likely because s8_deploy_production.py fits the OC-SVM on the ENTIRE
-# population at once rather than per-user, producing a boundary loose enough
-# to contain everyone's typing style as "normal," which makes it far less
-# sensitive to any one person's deviation. Using accuracy here since that's
-# what this field name claims to represent; F1 tells a worse story still.
-#
-# TODO: replace this static constant with a live value once
-# evaluate_accuracy.py has enough PSS-4/SISS samples (MIN_SAMPLES_VALID=30+)
-# to produce a trustworthy number against real (not proxy) ground truth —
-# and consider whether stress_engine.pkl should be retrained per-user rather
-# than on the pooled population, given this result.
-BEHAVIORAL_MODEL_ACCURACY = 0.4998
+# TODO: once evaluate_accuaracy.py has enough PSS-4/SISS samples per user
+# (MIN_SAMPLES_VALID=30+) to produce a trustworthy number against real (not
+# proxy) ground truth, prefer that over this proxy figure — and consider
+# whether stress_engine.pkl should be retrained per-user rather than on the
+# pooled population, since personalized OC-SVMs score materially higher
+# elsewhere in the research pipeline (e.g. SWELL personalized: F1≈0.72).
+_PROD_EVAL_CSV = os.path.abspath(os.path.join(
+    _BACKEND_ROOT, "..", "phenotyping", "research_synthesis", "outputs",
+    "production_model_eval.csv"
+))
+
+def _load_behavioral_model_accuracy():
+    """
+    Mean 'accuracy' column across all evaluated users in the most recent
+    phenotyping/s9_evaluate_production_model.py run. Returns None (rather
+    than a guessed fallback number) if that run hasn't happened yet or its
+    output can't be read, so a missing evaluation is visible instead of
+    silently reporting a fabricated accuracy.
+    """
+    try:
+        with open(_PROD_EVAL_CSV, newline='', encoding='utf-8') as f:
+            scores = [float(row['accuracy']) for row in csv.DictReader(f) if row.get('accuracy')]
+        if not scores:
+            raise ValueError("no 'accuracy' rows found in production_model_eval.csv")
+        return round(sum(scores) / len(scores), 4)
+    except (OSError, ValueError, KeyError) as e:
+        print(f"[WARN] Could not load behavioral model accuracy from {_PROD_EVAL_CSV} ({e}). "
+              f"model_accuracy will be reported as null until "
+              f"phenotyping/s9_evaluate_production_model.py is run.")
+        return None
+
+BEHAVIORAL_MODEL_ACCURACY = _load_behavioral_model_accuracy()
+
 
 def get_user_display_name(user_id):
     """
@@ -306,6 +346,81 @@ def get_user_display_name(user_id):
         pass
     # Fallback: no usable display name — just the UUID prefix (already unique)
     return str(user_id)[:8]
+
+def _compute_signal_quality(window_features, is_valid):
+    """Completeness of the 3 features the OC-SVM model actually reads
+    (avg_dwell, avg_flight, scroll_velocity -- see predictor.py step 1),
+    equally weighted, halved if the context filter marked this window
+    invalid (walking/gaming). Shared by save_to_fusion_engine() (legacy
+    table) and save_fusion_en_rtdb() (fusion_en) so both report the exact
+    same number for the exact same window, rather than two independently
+    maintained copies of this logic silently drifting apart.
+    """
+    has_dwell  = window_features.get('avg_dwell', 0) > 0
+    has_flight = window_features.get('avg_flight', 0) > 0
+    has_scroll = window_features.get('scroll_velocity', 0) > 0
+    signal_quality = round(
+        (int(has_dwell) + int(has_flight) + int(has_scroll)) / 3.0, 2
+    )
+    if not is_valid:
+        signal_quality = round(signal_quality * 0.5, 2)
+    return signal_quality
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  RTDB `fusion_en` -- the live fusion store fusion_engin.py's
+#  MODALITIES=["eeg", "hrv_gsr", "behav"] and fusion_live_session.py's
+#  poll loop actually read (see backend/physiological/firebase_service.py's
+#  _hrv_gsr_fusion_fields()/save_fusion_en_rtdb() for the sibling
+#  implementation this mirrors field-for-field). save_to_fusion_engine()
+#  below writes to a DIFFERENT, older path (fusion_engine/{display_name}/...)
+#  that predates this convention and that live fusion never reads -- kept
+#  running alongside this for now since other things may still read it,
+#  not because both are needed going forward.
+# ═══════════════════════════════════════════════════════════════════
+
+def _behav_fusion_fields(confidence, signal_quality, stress_score, label):
+    now_iso = datetime.now(timezone.utc).isoformat()
+    return {
+        'window':               fusion_window_key(),
+        'timestamp_behav':      now_iso,
+        'prob_behav':           float(stress_score),
+        'conf_behav':           float(confidence),
+        'model_acc_behav':      BEHAVIORAL_MODEL_ACCURACY,
+        'signal_quality_behav': float(signal_quality),
+        'stress_label_behav':   label,
+    }
+
+
+def save_fusion_en_rtdb(user_id, session_id, result, window_features, is_valid=True):
+    """Writes this window's behavioral fusion fields to
+    fusion_en/{user_id}/{session_id}/{window} -- the path fusion_engin.py
+    and fusion_live_session.py actually poll for the "behav" modality.
+    update() (not set()), same reasoning as the HRV/GSR and EEG writers:
+    another modality's write to this same window key must merge, not be
+    clobbered. No-ops (logs and returns) if session_id is missing -- this
+    endpoint currently isn't guaranteed to receive one from every caller,
+    see app.py's /behavior/predict.
+    """
+    if not session_id:
+        print("[fusion_en] WARNING: no session_id provided -- skipping fusion_en write "
+              "(user_id={}); this window still reaches the legacy fusion_engine table "
+              "via save_to_fusion_engine().".format(user_id))
+        return
+    confidence = round(float(result.get('confidence', 0.5)), 4)
+    signal_quality = _compute_signal_quality(window_features, is_valid)
+    fields = _behav_fusion_fields(
+        confidence=confidence,
+        signal_quality=signal_quality,
+        stress_score=float(result.get('score', 0.1)),
+        label=result.get('label', 'Normal'),
+    )
+    key = fields['window']
+    try:
+        db.reference(f'{FUSION_EN_ROOT}/{user_id}/{session_id}/{key}').update(fields)
+    except Exception as e:  # noqa: BLE001 -- one failed write shouldn't break /behavior/predict
+        print(f'[fusion_en] WARNING: write failed for {user_id}/{session_id}/{key}: {e}')
+
 
 def save_to_fusion_engine(user_id, result, window_features, is_valid=True):
     """
@@ -339,29 +454,10 @@ def save_to_fusion_engine(user_id, result, window_features, is_valid=True):
     composite_z  = float(result.get('composite_z', 0.0))
     is_anomaly   = bool(result.get('is_anomaly',   False))
 
-    # -- Signal quality --
-    # How complete is this window's data, specifically for the features the
-    # OC-SVM model actually consumes (predictor.py only ever reads avg_dwell,
-    # avg_flight, scroll_velocity — see predictor.py step 1).
-    #
-    # PREVIOUSLY this checked has_typing/has_scroll/has_apps with hand-picked
-    # weights 0.50/0.30/0.20, and "has_apps" checked interaction_rate — a
-    # field the model never reads at all, so its presence/absence had no
-    # bearing on how trustworthy the prediction actually was.
-    #
-    # FIX: check completeness of the 3 real model inputs, equally weighted.
-    # Equal weighting is used because there's no feature-importance analysis
-    # backing any other split — StandardScaler treats all 3 independently
-    # before the OC-SVM sees them, so no feature is a priori "worth more."
-    has_dwell  = window_features.get('avg_dwell', 0) > 0
-    has_flight = window_features.get('avg_flight', 0) > 0
-    has_scroll = window_features.get('scroll_velocity', 0) > 0
-    signal_quality = round(
-        (int(has_dwell) + int(has_flight) + int(has_scroll)) / 3.0, 2
-    )
-    # Reduce quality if context filter marked data as invalid (walking/gaming)
-    if not is_valid:
-        signal_quality = round(signal_quality * 0.5, 2)
+    # -- Signal quality -- (see _compute_signal_quality()'s docstring for
+    # what this measures and why; shared with save_fusion_en_rtdb() so both
+    # tables report the same number for the same window).
+    signal_quality = _compute_signal_quality(window_features, is_valid)
 
     # -- Confidence --
     # PREVIOUSLY recomputed here from composite_z alone via hardcoded divisors
@@ -381,7 +477,20 @@ def save_to_fusion_engine(user_id, result, window_features, is_valid=True):
         'confidence':           confidence,
         'signal_quality':       signal_quality,
         'model_accuracy':       BEHAVIORAL_MODEL_ACCURACY,
+        
+        # Behavioral specific phenotyping data
         'composite_z':          round(composite_z, 4),
+        'z_dwell':              result.get('z_dwell', 0),
+        'z_flight':             result.get('z_flight', 0),
+        'z_scroll':             result.get('z_scroll', 0),
+        'z_tilt':               result.get('z_tilt', 0),
+        'z_cpm':                result.get('z_cpm', 0),
+        'raw_dwell':            result.get('raw_dwell', 0),
+        'raw_flight':           result.get('raw_flight', 0),
+        'raw_scroll':           result.get('raw_scroll', 0),
+        'raw_tilt':             result.get('raw_tilt', 0),
+        'raw_cpm':              result.get('raw_cpm', 0),
+        
         'is_anomaly':           is_anomaly,
         'trending_toward_stress': stress_score > 0.5,
         'timestamp':            datetime.now(lk_tz).isoformat(),

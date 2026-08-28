@@ -111,11 +111,24 @@ export default function PhenotypingAnalysisScreen() {
         return { episodes, total, confidence };
     }, [predictions]);
 
+    // v4.1: Use composite_z from the latest saved prediction (all 5 features averaged
+    // by the backend: dwell + flight + scroll + tilt + cpm). Falls back to a
+    // client-side dwell z-score if no prediction record exists yet.
     const zScore = useMemo(() => {
+        if (predictions && predictions.length > 0) {
+            // Predictions are now saved with composite_z from the 5-feature engine
+            const withZ = predictions.filter((p) => typeof p.composite_z === 'number');
+            if (withZ.length > 0) {
+                const latest = withZ[withZ.length - 1];
+                return Math.round(latest.composite_z * 100) / 100;
+            }
+        }
+        // Fallback: compute from dwell alone (pre-v4.1 records or no data)
         if (!latestWindow || !baselines) return null;
         const z = computeZ(latestWindow.avg_dwell, baselines.avg_dwell?.mean, baselines.avg_dwell?.std);
         return Math.round(z * 100) / 100;
-    }, [latestWindow, baselines]);
+    }, [predictions, latestWindow, baselines]);
+
     const zLabel = zScore === null ? 'Pending data' : zScore > 2.0 ? 'Pre-stress alert' : zScore > 1.0 ? 'Drifting' : 'Within baseline';
     const zColor = zScore === null ? t.textMuted : zScore > 2.0 ? COLORS.stress : zScore > 1.0 ? COLORS.warning : COLORS.normal;
 
@@ -124,6 +137,8 @@ export default function PhenotypingAnalysisScreen() {
             { feature: 'Dwell Time (Typing)', current: '--', std: '--' },
             { feature: 'Flight Time (Inter-key)', current: '--', std: '--' },
             { feature: 'Scroll Velocity', current: '--', std: '--' },
+            { feature: 'Device Tilt Angle', current: '--', std: '--' },
+            { feature: 'Typing Speed (CPM)', current: '--', std: '--' },
             { feature: 'App Switching Rate', current: '--', std: '--' },
         ];
         const bl = baselines;
@@ -131,6 +146,8 @@ export default function PhenotypingAnalysisScreen() {
             { feature: 'Dwell Time (Typing)', current: `${Math.round(bl.avg_dwell?.mean ?? 0)} ms`, std: `±${Math.round(bl.avg_dwell?.std ?? 0)} ms` },
             { feature: 'Flight Time (Inter-key)', current: `${Math.round(bl.avg_flight?.mean ?? 0)} ms`, std: `±${Math.round(bl.avg_flight?.std ?? 0)} ms` },
             { feature: 'Scroll Velocity', current: `${Math.round(bl.scroll_velocity?.mean ?? 0)} px/s`, std: `±${Math.round(bl.scroll_velocity?.std ?? 0)} px/s` },
+            { feature: 'Device Tilt Angle', current: `${Math.round(bl.tilt_angle?.mean ?? 0)}°`, std: `±${Math.round(bl.tilt_angle?.std ?? 0)}°` },
+            { feature: 'Typing Speed (CPM)', current: `${Math.round(bl.cpm?.mean ?? 0)} cpm`, std: `±${Math.round(bl.cpm?.std ?? 0)} cpm` },
             { feature: 'App Switching Rate', current: `${(bl.app_switch_rate?.mean ?? 0).toFixed(1)} /min`, std: `±${(bl.app_switch_rate?.std ?? 0).toFixed(1)}` },
         ];
     }, [baselines]);
@@ -139,10 +156,12 @@ export default function PhenotypingAnalysisScreen() {
         if (!latestWindow || !baselines) return null;
         const lw = latestWindow, bl = baselines;
         return [
-            { signal: '⌨️ Typing Dwell', z: computeZ(lw.avg_dwell, bl.avg_dwell?.mean, bl.avg_dwell?.std), current: `${Math.round(lw.avg_dwell || 0)} ms`, baseline: bl.avg_dwell?.mean ? `${Math.round(bl.avg_dwell.mean)} ms` : '--' },
-            { signal: '✈️ Flight Time', z: computeZ(lw.avg_flight, bl.avg_flight?.mean, bl.avg_flight?.std), current: `${Math.round(lw.avg_flight || 0)} ms`, baseline: bl.avg_flight?.mean ? `${Math.round(bl.avg_flight.mean)} ms` : '--' },
-            { signal: '📜 Scroll Speed', z: computeZ(lw.scroll_velocity, bl.scroll_velocity?.mean, bl.scroll_velocity?.std), current: `${Math.round(lw.scroll_velocity || 0)} px/s`, baseline: bl.scroll_velocity?.mean ? `${Math.round(bl.scroll_velocity.mean)} px/s` : '--' },
-            { signal: '🔀 App Switching', z: computeZ(lw.app_switch_rate, bl.app_switch_rate?.mean, bl.app_switch_rate?.std), current: `${(lw.app_switch_rate || 0).toFixed(1)}/min`, baseline: bl.app_switch_rate?.mean ? `${bl.app_switch_rate.mean.toFixed(1)}/min` : '--' },
+            { signal: '⌨️ Typing Dwell',  z: computeZ(lw.avg_dwell,      bl.avg_dwell?.mean,      bl.avg_dwell?.std),      current: `${Math.round(lw.avg_dwell || 0)} ms`,          baseline: bl.avg_dwell?.mean      ? `${Math.round(bl.avg_dwell.mean)} ms`       : '--' },
+            { signal: '✈️ Flight Time',   z: computeZ(lw.avg_flight,     bl.avg_flight?.mean,     bl.avg_flight?.std),     current: `${Math.round(lw.avg_flight || 0)} ms`,         baseline: bl.avg_flight?.mean     ? `${Math.round(bl.avg_flight.mean)} ms`      : '--' },
+            { signal: '📜 Scroll Speed',  z: computeZ(lw.scroll_velocity,bl.scroll_velocity?.mean,bl.scroll_velocity?.std),current: `${Math.round(lw.scroll_velocity || 0)} px/s`,   baseline: bl.scroll_velocity?.mean? `${Math.round(bl.scroll_velocity.mean)} px/s`: '--' },
+            { signal: '📐 Device Tilt',   z: computeZ(lw.tilt_angle,    bl.tilt_angle?.mean,     bl.tilt_angle?.std),     current: `${Math.round(lw.tilt_angle || 0)}°`,          baseline: bl.tilt_angle?.mean     ? `${Math.round(bl.tilt_angle.mean)}°`       : '--' },
+            { signal: '🔡 Typing Speed',  z: computeZ(lw.cpm,           bl.cpm?.mean,            bl.cpm?.std),            current: `${Math.round(lw.cpm || 0)} cpm`,              baseline: bl.cpm?.mean            ? `${Math.round(bl.cpm.mean)} cpm`           : '--' },
+            { signal: '🔀 App Switching', z: computeZ(lw.app_switch_rate,bl.app_switch_rate?.mean,bl.app_switch_rate?.std),current: `${(lw.app_switch_rate || 0).toFixed(1)}/min`,  baseline: bl.app_switch_rate?.mean? `${bl.app_switch_rate.mean.toFixed(1)}/min`  : '--' },
         ];
     }, [latestWindow, baselines]);
 
