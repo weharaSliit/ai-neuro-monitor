@@ -246,12 +246,15 @@ def compute_fusion_for_records(rows: list[dict]) -> list[dict]:
 #  model_acc is read from each modality's OWN model_acc_{m} field already
 #  present in modalities_data (written once, at the source, by each
 #  modality's own pipeline -- 0.706 for the deployed bipolar-only EEG
-#  model, 0.851 for HRV/GSR, 0.78 for behavioral; see
+#  model, 0.851 for HRV/GSR, 0.4998 for behavioral (a proxy evaluation,
+#  see BEHAVIORAL_MODEL_ACCURACY's own provenance comment); see
 #  backend/psychological/realtime/firebase_sync.py::MODEL_ACCURACY_AUC,
 #  backend/physiological/firebase_service.py::MODEL_ACC_HRV_GSR,
 #  backend/phenotyping_behavior/firebase_service.py::BEHAVIORAL_MODEL_ACCURACY)
 #  rather than a second hardcoded constant here that could drift out of
-#  sync with the real, measured value each pipeline already reports.
+#  sync with the real, measured value each pipeline already reports --
+#  this note previously said "0.78 for behavioral", already-stale evidence
+#  of exactly the drift this paragraph warns about.
 # ═══════════════════════════════════════════════════════════════════
 
 def normalize_to_unit(val, max_val: float = 1.0) -> float:

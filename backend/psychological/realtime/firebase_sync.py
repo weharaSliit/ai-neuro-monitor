@@ -3,7 +3,7 @@ from pathlib import Path
 
 from backend.common.fusion import fusion_window_key
 
-TASK_STATE_LABEL_THRESHOLD = 0.5  # >=: high task-state; <: low
+TASK_STATE_LABEL_THRESHOLD = 0.5
 
 MODEL_ACCURACY_AUC = {
     'bipolar_only_v1': 0.706,  
@@ -26,16 +26,6 @@ BIPOLAR_FEATURE_SUFFIXES = [
 
 
 def _lookup_model_accuracy(feature_set: str) -> float:
-    """Raises instead of returning None for an unrecognized feature_set --
-    MODEL_ACCURACY_AUC.get(feature_set) used to fail silently here, writing
-    model_accuracy=None into the fusion record. fusion_engin.py's
-    handle_missing_values() then fills that None with 0.0, which zeroes
-    EEG's entire reliability weight for every window in the session -- a
-    config/version mismatch (feature_set not registered above) would look
-    identical to "EEG had a low-quality window," not what it actually was.
-    feature_set is a fixed per-deployment constant (see app.py's MODEL_VERSION),
-    so this fails on the very first prediction rather than degrading fusion
-    silently for an entire session."""
     try:
         return MODEL_ACCURACY_AUC[feature_set]
     except KeyError:
@@ -83,8 +73,7 @@ def make_eeg_output_record(result: dict, window_sec: float, model_version: str,
         'ch2_reconstructed': bool(result.get('ch2_reconstructed', False)),
     }
 
-
-    if result.get('T7_total_power') is not None:
+    if result.get('T7_total_power') is not None or result.get('bipolar_delta_power') is not None:
         record['features_eeg'] = {
             't7_power': result.get('T7_total_power'),
             't8_power': result.get('T8_total_power'),
@@ -123,11 +112,6 @@ class FirebaseSync:
 
         import firebase_admin
         from firebase_admin import credentials, db
-
-        # dict -- the parsed FIREBASE_CRED_JSON env var (Render's ephemeral
-        # filesystem has no room for a real credential file); str -- a real
-        # file path (FIREBASE_CREDENTIALS, local dev only). Both are valid
-        # credentials.Certificate() inputs.
         if isinstance(credential, dict):
             cred = credentials.Certificate(credential)
         else:
@@ -169,28 +153,19 @@ class FirebaseSync:
             raise ValueError('merge() requires record["window"] -- there is no keyless push() equivalent')
         try:
             self._ref.child(key).update(record)
-        except Exception as e:  # noqa: BLE001 -- one failed merge shouldn't kill a live session
+        except Exception as e:  
             print(f'[firebase] WARNING: merge failed for window={window}: {e}')
 
     def set(self, record: dict) -> None:
-        """Overwrites this ref's root value entirely -- for a single
-        'latest snapshot' node (e.g. a live raw-signal preview) rather than
-        push()'s keyed/appended children. No history is kept at this path;
-        every call replaces the previous value."""
         try:
             self._ref.set(record)
-        except Exception as e:  # noqa: BLE001 -- one failed write shouldn't kill a live session
+        except Exception as e:  
             print(f'[firebase] WARNING: set failed for session_id={self.session_id}: {e}')
 
     def get(self) -> dict | None:
-        """Reads this ref's current value -- the read-side counterpart to
-        set(), for a single 'latest snapshot' node. Returns None both when
-        nothing has been written yet and when the read itself fails, since
-        callers (e.g. a cross-session profile lookup) should treat either
-        case the same way: fall back to behaving as if nothing were stored."""
         try:
             return self._ref.get()
-        except Exception as e:  # noqa: BLE001 -- a failed read should look like "nothing stored", not crash the caller
+        except Exception as e:  
             print(f'[firebase] WARNING: get failed for session_id={self.session_id}: {e}')
             return None
 

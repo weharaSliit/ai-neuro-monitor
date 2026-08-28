@@ -1,73 +1,14 @@
-"""Raw ADS1292R ADC code -> microvolts conversion.
-
-Decoded from the Arduino firmware's register writes (best-effort -- NOT
-independently verified against a live device, see warning below):
-
-    CH1SET = CH2SET = 0x60 = 0b0110_0000
-        bit7 PD=0        -> channel powered on
-        bits6:4 GAIN=110 -> Gain code 6 -> PGA gain = 12 (ADS1292R GAIN
-                             table: 000=6, 001=1, 010=2, 011=3, 100=4,
-                             101=8, 110=12)
-        bits3:0 MUX=0000 -> normal electrode input
-
-    CONFIG2 was 0xA0 = 0b1010_0000 (bit6 PDB_REFBUF=0, bit5 VREF_4V=1, bit4 RLD_REF_INT=0)
-        -> ambiguous: VREF_4V=1 nominally selects the 4V reference, but
-           PDB_REFBUF=0 (reference buffer disabled) made it unclear whether
-           that reference was actually being driven -- a short-input bench
-           test on real hardware showed a large (~-4200 to -6100uV), non-zero
-           DC offset on both channels under a dead short, consistent with an
-           undriven/floating reference.
-
-    CONFIG2 is now 0xE0 = 0b1110_0000 (bit6 PDB_REFBUF=1, bit5 VREF_4V=1,
-    bit4 RLD_REF_INT=0) -- reference buffer enabled, changed in firmware/
-    eeg_t7t8/eeg_t7t8.ino's initADS() specifically to address that offset.
-
-    OPEN QUESTION, NOT YET RESOLVED: with the buffer now actually driving
-    VREF_4V=1, the true reference is likely 4.0V, not the 2.42V (ADS1292R's
-    internal default) assumed below for the old 0xA0 config -- that would
-    change every decoded uV value (and every uV-scale threshold downstream:
-    max_amplitude=7000, etc.) by a factor of ~1.65x. DO NOT hardcode 4.0
-    here without re-running scripts/adc_bench_verify.py's short + sine
-    tests against the 0xE0 firmware first -- this project has repeatedly
-    found datasheet-nominal assumptions wrong for this specific board (see
-    the GAIN/PGA mixup documented in scripts/adc_bench_verify.py's own
-    history); re-verify empirically, don't guess from the register name.
-
-DO NOT TRUST ABSOLUTE AMPLITUDE-DEPENDENT FEATURES (raw/log band power,
-Hjorth activity, RMS, ptp) from this conversion until GAIN/VREF are
-verified against the real device -- e.g. shorting the electrodes should
-read ~0 uV, and a known injected test signal should read its true
-amplitude. Relative/ratio features (band ratios, PLV/PLI, spectral
-entropy, spectral slope) are far less sensitive to a wrong overall scale
-factor and are safer to trust before that verification is done.
-"""
-
 import numpy as np
 
 ADC_BITS = 24
-ADC_FULL_SCALE = 2 ** (ADC_BITS - 1) - 1  # signed 24-bit max code (matches the hardware verification protocol's formula)
-
-GAIN = 12          # decoded from CH1SET/CH2SET=0x60, see module docstring
-VREF_VOLTS = 2.42  # ASSUMED, for the OLD CONFIG2=0xA0 -- re-verify against 0xE0 hardware, see docstring above
-
+ADC_FULL_SCALE = 2 ** (ADC_BITS - 1) - 1  
+GAIN = 12          
+VREF_VOLTS = 2.42  
 
 def code_to_microvolts(code: np.ndarray | int, gain: float = GAIN, vref: float = VREF_VOLTS) -> np.ndarray:
-    """ADS1292R transfer function: V_uV = (code * VREF / (Gain * (2^23 - 1))) * 1e6."""
     volts = np.asarray(code, dtype=np.float64) * vref / (gain * ADC_FULL_SCALE)
     return volts * 1e6  # -> microvolts, matching SAM40's feature-extraction scale
 
-
-# TEMPORARY debug clamp: the deployed electrode/reference setup has been
-# observed producing +-150,000-200,000uV blocks (railed/shorted contact,
-# ~3000x a normal +-tens-of-uV EEG signal) -- clamping to a physiological
-# range keeps the filter chain and model from mathematically exploding on
-# that input (the sigmoid otherwise fully underflows, e.g. task_state_score
-# ~1e-291) so the pipeline stays exercisable end-to-end. A clamped block is
-# NOT recovered signal -- it's a railed/flat-topped waveform, and any
-# task_state_score computed from it reflects that clipping artifact, not a
-# real EEG reading. Remove once the actual hardware fault (RLD/reference
-# connection, electrode contact -- see this module's docstring) is fixed;
-# do not treat clamped-block scores as trustworthy in the meantime.
 CLIP_UV = 100.0
 
 
@@ -76,9 +17,37 @@ def clip_physiological_uv(uv: np.ndarray) -> np.ndarray:
 
 
 def microvolts_to_code(uv: np.ndarray | float, gain: float = GAIN, vref: float = VREF_VOLTS) -> np.ndarray:
-    """Inverse of code_to_microvolts -- for synthesizing/reconstructing raw ADC codes
-    from a uV-domain signal (scripts/generate_synthetic_eeg.py, realtime_inference.py's
-    --reconstruct-ch2-from-ch1)."""
     volts = np.asarray(uv, dtype=np.float64) / 1e6
     code = volts * (gain * ADC_FULL_SCALE) / vref
     return np.round(code).astype(np.int64)
+
+BIPOLAR_GAIN = 6
+BIPOLAR_VREF_VOLTS = 2.42
+BIPOLAR_UV_PER_COUNT = (2.0 * BIPOLAR_VREF_VOLTS / BIPOLAR_GAIN) / ADC_FULL_SCALE * 1e6  # == 0.0961538...
+
+
+def bipolar_code_to_microvolts(code: np.ndarray | int) -> np.ndarray:
+    return np.asarray(code, dtype=np.float64) * BIPOLAR_UV_PER_COUNT
+
+
+# Coarse, cheap early-reject threshold -- checked on the RAW (unfiltered)
+# bipolar signal, before any spike-removal/resample/filter work runs, so an
+# unambiguous hardware fault (railed electrode, disconnected reference) is
+# rejected without wasting a filter pass on it. This is NOT a substitute for
+# CLIP_UV/the quality gate's amplitude checks: tested empirically against
+# real captured wearable02 data, a block with max|raw_uv| well under
+# MAX_RAW_UV (e.g. ~31,000uV, 3-4x under this threshold) still had 96.7% of
+# its samples exceed the physiologically-motivated CLIP_UV=100uV clamp and
+# produced unstable, preprocessing-recipe-dependent model predictions
+# (0.4473 under one filter chain, 0.9447 under another) -- this threshold
+# only catches the most extreme, unambiguous faults (multiple real blocks
+# measured at 350,000-655,000uV), not "merely" 100-300x too large for real
+# EEG. Always use alongside, never instead of, the tighter checks.
+MAX_RAW_UV = 100_000.0
+
+
+def raw_magnitude_ok(uv: np.ndarray) -> bool:
+    """True if this block's raw (pre-filter) signal doesn't have an
+    unambiguous, extreme hardware-fault magnitude -- see MAX_RAW_UV above."""
+    arr = np.asarray(uv, dtype=np.float64)
+    return bool(arr.size > 0 and np.max(np.abs(arr)) <= MAX_RAW_UV)

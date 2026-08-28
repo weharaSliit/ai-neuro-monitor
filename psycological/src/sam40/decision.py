@@ -23,27 +23,44 @@ import pandas as pd
 
 @dataclass(frozen=True)
 class DecisionThresholds:
-    """Probability thresholds updated 2026-08-18 from the original hand-picked
-    0.70/0.75/0.30 to the "sensitivity-optimized" set (threshold_set_C) chosen
-    from scripts/nested_threshold_selection.py + scripts/threshold_set_comparison.py's
-    A/B/C comparison: percentile-based candidates (50th-70th of the deployed
-    bipolar-only model's calibrated LOSO score distribution) scored against
-    false-alert-rate-capped sensitivity, a deliberate middle ground between
-    the original (way oversensitive: 95% of sessions alert, 0 cooldown events
-    ever since 0.30 is never reached) and the strict nested-selected set
-    (highest specificity but misses more true high-load subjects). See
-    results/CURRENT_SYSTEM.md Section 6 for the full A/B/C comparison this
-    was chosen from, including known limits (persistence-duration blocks
-    below are still unvalidated at literal minute timescales).
+    """Probability thresholds updated 2026-08-28 from the 2026-08-18
+    "sensitivity-optimized" set (threshold_set_C, 0.758/0.775/0.725) to the
+    nested-LOSO-selected set (threshold_set_B) produced by
+    scripts/nested_threshold_selection.py: outer LOSO x inner grouped CV,
+    leakage-free Platt-calibrated inner scores, candidate thresholds =
+    percentiles of that inner distribution, each scored against a
+    false-alert-rate-capped sensitivity objective (high_load/break) or
+    minimized false-recovery rate (cooldown), locked per outer fold and
+    applied unchanged to the held-out subject. Values below are the mean
+    locked threshold across all 40 outer folds (std < 0.006 on each --
+    stable selection); see nested_threshold_per_fold.csv /
+    nested_threshold_outer_predictions.csv in results/final_analysis/.
+
+    KNOWN TRADEOFF, evaluated deliberately: this set was tried once before
+    (2026-08-18) and reverted in favor of threshold_set_C specifically
+    because pooled OUTER (truly held-out) sensitivity is only 29.4%
+    (high_load) / 19.7% (break) at the target false-alert-rate cap -- i.e.
+    it misses 70-80% of real high-load blocks in a subject the model
+    wasn't tuned on. Re-adopted anyway as of 2026-08-28, prioritizing the
+    lower false-alert rate / higher specificity this set buys over
+    catching more true high-load blocks. If that tradeoff turns out wrong
+    in practice, threshold_set_C (0.758 / 0.775 / cooldown_high 0.758 /
+    cooldown_low 0.725) is the documented fallback. See
+    results/CURRENT_SYSTEM.md Section 6 for the original A/B/C comparison.
+
+    cooldown_high_p is not itself an output of the nested selection (that
+    script only tunes cooldown_low_p, i.e. cooldown_t) -- kept equal to
+    high_load_p here, same coupling threshold_set_C used ("was previously
+    in a high-load state" = the same bar as the high-load alert itself).
     """
-    high_load_p: float = 0.758
+    high_load_p: float = 0.7933008189294708
     high_load_persistence_blocks: int = 3          # spec: ">=3 consecutive blocks"
-    break_p: float = 0.775
+    break_p: float = 0.8104568085102677
     break_persistence_blocks: int = 20              # spec: "sustained over 10 min"; blocks, not minutes -- see module docstring
     fatigue_theta_ratio_p75: float = None            # filled in per-series (75th percentile) if None
     fatigue_persistence_blocks: int = 60             # spec: "over 30 min"; blocks, not minutes -- see module docstring
-    cooldown_high_p: float = 0.758
-    cooldown_low_p: float = 0.725
+    cooldown_high_p: float = 0.7933008189294708
+    cooldown_low_p: float = 0.6962175275425009
 
 
 def compute_states(series: pd.DataFrame, thresholds: DecisionThresholds = DecisionThresholds()) -> pd.DataFrame:
