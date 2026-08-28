@@ -47,7 +47,7 @@ export default function AdminUserListScreen({ navigation }) {
         <View style={styles.headerActions}>
           <TouchableOpacity
             style={styles.switchModeBtn}
-            onPress={() => navigation.navigate('CalibrationGate')}
+            onPress={() => navigation.navigate('Physiological')}
             activeOpacity={0.8}
           >
             <Icon name="swap-horizontal" size={18} color={COLORS.brand} />

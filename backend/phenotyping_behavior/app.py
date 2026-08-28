@@ -22,7 +22,9 @@ from backend.phenotyping_behavior.firebase_service import (
     get_latest_stress_prediction,             # T7-B: neuroadaptive bridge
     get_calibration_windows,                  # Objective 2: 7-day baseline
     set_user_calibration_status, create_user_profile,
-    save_to_fusion_engine                     # Shared fusion_engine table
+    save_to_fusion_engine,                    # legacy fusion_engine table
+    save_fusion_en_rtdb                       # fusion_en -- what fusion_engin.py/
+                                               # fusion_live_session.py actually poll
 )
 from backend.phenotyping_behavior.predictor import predictor
 from backend.phenotyping_behavior.ema_service import update_personalized_baseline
@@ -41,7 +43,12 @@ def predict_behavioral_stress():
     """
     data = request.json
     user_id = data.get('user_id')
-    
+    # Required for fusion_en (user_id/session_id/window-keyed, matching the
+    # EEG and HRV/GSR writers) -- see save_fusion_en_rtdb(), which just skips
+    # that write (logging a warning) if this is missing, same as before this
+    # field existed.
+    session_id = data.get('session_id')
+
     # 1. Aggregation Logic (Custom Keyboard Data)
     # The phone sends raw arrays of timing; we calculate window stats here
     raw_dwells = data.get('dwell_times', [])
@@ -82,7 +89,8 @@ def predict_behavioral_stress():
     save_behavioral_window(user_id, window_data)
     save_stress_prediction(user_id, result)
 
-    # 5b. Write to shared fusion_engine table (for group integration)
+    # 5b. Write to shared fusion_engine table (legacy path, kept running
+    #     alongside 5c for whatever else may still read it)
     #     Creates: fusion_engine/{display_name}/live_session_{YYYYMMDD}/{push-key}
     #     Fields: label, modality, prob_stress, prob_normal, confidence,
     #             signal_quality, model_accuracy, composite_z, timestamp
@@ -90,6 +98,14 @@ def predict_behavioral_stress():
         save_to_fusion_engine(user_id, result, window_features, is_valid)
     except Exception as fe:
         print(f"[WARN] fusion_engine write failed (non-critical): {fe}")
+
+    # 5c. Write to fusion_en -- the path fusion_engin.py's MODALITIES and
+    #     fusion_live_session.py's live poll loop actually read for the
+    #     "behav" modality (see save_fusion_en_rtdb()'s docstring).
+    try:
+        save_fusion_en_rtdb(user_id, session_id, result, window_features, is_valid)
+    except Exception as fe:
+        print(f"[WARN] fusion_en write failed (non-critical): {fe}")
 
     # Only update if the window is Normal AND the context is valid
     if not result['is_anomaly'] and is_valid:

@@ -18,7 +18,7 @@ import physiologicalApi from '../physiological/api/client';
 import { API_BASE, DEVICE_ID } from '../physiological/config/config';
 import { COLORS } from '../physiological/config/theme';
 import { eegClient } from './eegApiClient';
-import { useCalibrationSummary } from './CalibrationGate';
+import { useCalibrationSummary, useSignupAge } from './CalibrationGate';
 
 const RING_CONTACT_POLL_MS = 5000;
 
@@ -68,20 +68,32 @@ function useCaptureRunner(onUpdate) {
   return run;
 }
 
-function DayBars({ label, status }) {
-  if (!status?.ok || !status.exists) return null;
-  const filled = Math.min(7, Math.floor(status.age_days ?? 0));
+// Two clocks feed this: the real one (days since THIS modality's own last
+// calibration, once it has one) and a fallback (days since account
+// creation, via signupAgeDays -- see CalibrationGate.js's useSignupAge)
+// for a modality that's never been calibrated at all, so a brand-new user
+// still sees a real filling countdown instead of nothing.
+function DayBars({ label, status, signupAgeDays }) {
+  if (!status?.ok) return null;
+  const usingSignup = !status.exists;
+  if (usingSignup && signupAgeDays == null) return null;
+
+  const ageDays = usingSignup ? signupAgeDays : (status.age_days ?? 0);
+  const filled = Math.min(7, Math.floor(ageDays));
+  const softStale = usingSignup ? signupAgeDays >= 7 : status.is_stale_soft;
+  const hardStale = usingSignup ? false : status.is_stale_hard;
+
   return (
     <View style={styles.dayBarsBlock}>
-      <Text style={styles.dayBarsLabel}>{label}</Text>
+      <Text style={styles.dayBarsLabel}>{label}{usingSignup ? ' — since you joined' : ''}</Text>
       <View style={styles.dayBarsRow}>
         {[1, 2, 3, 4, 5, 6, 7].map((d) => (
           <View key={d} style={[styles.dayBarFill, d <= filled ? styles.dayBarFillOn : styles.dayBarFillOff]} />
         ))}
       </View>
-      {status.is_stale_soft && (
+      {softStale && (
         <Text style={styles.dayBarsNote}>
-          {status.is_stale_hard ? 'Expired — recalibrate' : 'Recommended to recalibrate'}
+          {hardStale ? 'Expired — recalibrate' : usingSignup ? '7 days reached — recommended to calibrate' : 'Recommended to recalibrate'}
         </Text>
       )}
     </View>
@@ -90,6 +102,7 @@ function DayBars({ label, status }) {
 
 export default function CalibrateBreathingCard({ userId, token, ringOnline, eegDb, onComplete }) {
   const { ring, eeg, refresh } = useCalibrationSummary(userId, token);
+  const signupAgeDays = useSignupAge(userId, eegDb);
 
   // 'idle' | 'running' | 'complete' | 'error'
   const [stage, setStage] = useState('idle');
@@ -262,8 +275,8 @@ export default function CalibrateBreathingCard({ userId, token, ringOnline, eegD
 
   return (
     <View style={styles.container}>
-      <DayBars label="Ring" status={ring} />
-      <DayBars label="EEG" status={eeg} />
+      <DayBars label="Ring" status={ring} signupAgeDays={signupAgeDays} />
+      <DayBars label="EEG" status={eeg} signupAgeDays={signupAgeDays} />
 
       <View style={styles.visualArea}>
         <Animated.View style={[styles.outerHalo, { opacity: haloOpacity, transform: [{ scale: displayScale }] }]}>

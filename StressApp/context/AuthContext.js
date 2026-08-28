@@ -179,8 +179,22 @@ export function AuthProvider({ children }) {
     }
   };
 
+  // Called once the new-user setup screen (device check + first
+  // calibration, or an explicit skip) is done -- flips isNewUser off so
+  // App.js's RootNavigator stops routing this user back to that screen on
+  // future opens. Persisted immediately (not just in-memory state), since
+  // a killed app should remember this was already shown.
+  const completeOnboarding = useCallback(async () => {
+    setUser((u) => {
+      if (!u || !u.isNewUser) return u;
+      const updated = { ...u, isNewUser: false };
+      AsyncStorage.setItem(USER_KEY, JSON.stringify(updated)).catch(() => {});
+      return updated;
+    });
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, token, sessionId, isLoading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, token, sessionId, isLoading, login, register, logout, completeOnboarding }}>
       {children}
     </AuthContext.Provider>
   );

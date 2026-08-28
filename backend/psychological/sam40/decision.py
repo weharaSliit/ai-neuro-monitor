@@ -8,14 +8,43 @@ import pandas as pd
 
 @dataclass(frozen=True)
 class DecisionThresholds:
-    high_load_p: float = 0.758
+    """Probability thresholds updated 2026-08-28 from the 2026-08-18
+    "sensitivity-optimized" set (threshold_set_C, 0.758/0.775/0.725) to the
+    nested-LOSO-selected set (threshold_set_B, from
+    scripts/nested_threshold_selection.py): outer LOSO x inner grouped CV,
+    leakage-free Platt-calibrated inner scores, candidate thresholds =
+    percentiles of that inner distribution, each scored against a
+    false-alert-rate-capped sensitivity objective (high_load/break) or
+    minimized false-recovery rate (cooldown), locked per outer fold and
+    applied unchanged to the held-out subject. Values below are the mean
+    locked threshold across all 40 outer folds (std < 0.006 on each --
+    stable selection); see nested_threshold_per_fold.csv /
+    nested_threshold_outer_predictions.csv in results/final_analysis/.
+
+    KNOWN TRADEOFF, evaluated deliberately: this set was tried once before
+    (2026-08-18) and reverted in favor of threshold_set_C specifically
+    because pooled OUTER (truly held-out) sensitivity is only 29.4%
+    (high_load) / 19.7% (break) at the target false-alert-rate cap -- i.e.
+    it misses 70-80% of real high-load blocks in a subject the model
+    wasn't tuned on. Re-adopted anyway as of 2026-08-28, prioritizing the
+    lower false-alert rate / higher specificity this set buys over
+    catching more true high-load blocks. If that tradeoff turns out wrong
+    in practice, threshold_set_C (0.758 / 0.775 / cooldown_high 0.758 /
+    cooldown_low 0.725) is the documented fallback.
+
+    cooldown_high_p is not itself an output of the nested selection (that
+    script only tunes cooldown_low_p, i.e. cooldown_t) -- kept equal to
+    high_load_p here, same coupling threshold_set_C used ("was previously
+    in a high-load state" = the same bar as the high-load alert itself).
+    """
+    high_load_p: float = 0.7933008189294708
     high_load_persistence_blocks: int = 3          # spec: ">=3 consecutive blocks"
-    break_p: float = 0.775
+    break_p: float = 0.8104568085102677
     break_persistence_blocks: int = 20              # spec: "sustained over 10 min"; blocks, not minutes -- see module docstring
     fatigue_theta_ratio_p75: float = None            # filled in per-series (75th percentile) if None
     fatigue_persistence_blocks: int = 60             # spec: "over 30 min"; blocks, not minutes -- see module docstring
-    cooldown_high_p: float = 0.758
-    cooldown_low_p: float = 0.725
+    cooldown_high_p: float = 0.7933008189294708
+    cooldown_low_p: float = 0.6962175275425009
 
 # Lives INSIDE backend/psychological/ (not the separate psycological/
 # research tree, 3 parents up) so it deploys with this service regardless
@@ -45,10 +74,13 @@ def _load_population_percentiles(json_path: Path = _PERCENTILES_JSON) -> tuple[f
 
 
 POPULATION_P5, POPULATION_MEDIAN_P, POPULATION_P95 = _load_population_percentiles()
-# high_load_p (DecisionThresholds above) was chosen independently via a
-# separate sensitivity/specificity comparison and happens to land near
-# POPULATION_MEDIAN_P -- see that dataclass's own docstring; the two are not
-# derived from each other.
+# high_load_p (DecisionThresholds above) is chosen independently of this
+# population median -- see that dataclass's own docstring for how it's
+# actually derived (nested-LOSO threshold selection, not a percentile of
+# this same distribution). The two happened to sit close together back
+# when high_load_p was threshold_set_C (~0.76); that's no longer true now
+# that it's threshold_set_B (~0.79), and was never a derived relationship
+# either way.
 MAX_THRESHOLD_SHIFT = (POPULATION_P95 - POPULATION_P5) / 2  # ~0.11, from the loaded percentiles
 
 
@@ -63,6 +95,41 @@ def compute_baseline_shift(resting_scores: list[float]) -> float | None:
 
     shift = resting_mean - POPULATION_MEDIAN_P
     return max(-MAX_THRESHOLD_SHIFT, min(MAX_THRESHOLD_SHIFT, shift))
+
+
+def compute_personal_threshold(resting_scores: list[float], task_scores: list[float]) -> float | None:
+    """Personal high_load_p from a deliberate onboarding task: a short,
+    known-high-load period (e.g. a timed mental-arithmetic quiz) captured
+    right after resting-baseline calibration. threshold = the midpoint
+    between this user's own resting mean and their own task mean -- a
+    personal Rest-vs-Task cut, same spirit as the population nested-LOSO
+    threshold selection (scripts/nested_threshold_selection.py) but n=this
+    user's own blocks instead of 40 SAM40 subjects.
+
+    Returns None (caller should keep the population threshold_set_B
+    default) if the two groups aren't separated by at least
+    MAX_THRESHOLD_SHIFT (~0.11) -- reusing that existing, already-derived
+    constant as the noise floor here too, rather than inventing a second
+    arbitrary one: if a user's task-induced rise is smaller than the
+    largest shift compute_baseline_shift() would ever apply for baseline
+    personalization, it's not clearly distinguishable from resting noise
+    (e.g. a task block failed to actually induce load, or the model
+    doesn't discriminate well for this individual -- see this project's
+    own LOSO finding that per-subject AUC ranges 0.07-1.00).
+
+    Clamped to [POPULATION_P5, POPULATION_P95] so one wild task score
+    can't produce a threshold outside the range this project has ever
+    actually observed."""
+    if len(resting_scores) < 1 or len(task_scores) < 1:
+        return None
+
+    resting_mean = float(np.mean(resting_scores))
+    task_mean = float(np.mean(task_scores))
+    if task_mean - resting_mean < MAX_THRESHOLD_SHIFT:
+        return None
+
+    midpoint = (resting_mean + task_mean) / 2.0
+    return max(POPULATION_P5, min(POPULATION_P95, midpoint))
 
 
 def compute_states(series: pd.DataFrame, thresholds: DecisionThresholds = DecisionThresholds()) -> pd.DataFrame:

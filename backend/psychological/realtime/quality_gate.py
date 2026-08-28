@@ -83,61 +83,115 @@ class SignalQualityGate:
     these two didn't match).
     """
 
+    # A block collapsed to a handful of repeated values (almost always from
+    # upstream clamping on wildly out-of-range raw input) can still score
+    # well on the 7 factors below -- a near-flat signal has LOW variance
+    # and LOW kurtosis-deviation, which amp_score/stat_score/var_score
+    # reward rather than penalize. Confirmed repeatedly against real
+    # captured hardware data this project has tested: false-positive GOOD
+    # blocks had 1-28 distinct filtered values out of 3200-6250 samples
+    # (<1% unique); genuinely clean blocks captured later in the same
+    # testing had 2900+ distinct values (>90% unique) with near-Gaussian
+    # kurtosis. This is a more direct and reliable discriminator than raw
+    # clip-fraction, which was tried first and found NOT to reliably
+    # predict post-filter degeneracy -- a heavily-clamped-looking raw
+    # block can still filter down to a genuinely rich signal (real EEG
+    # riding on top of a large-but-linear offset the bandpass legitimately
+    # removes), and a raw block that looks only moderately clamped can
+    # still collapse to near-flat after filtering. Checked on the
+    # FILTERED signal specifically, and treated as an outright fail (not
+    # just another averaged factor) -- 7-factor averaging alone was
+    # observed to only partially discount a degenerate block (e.g. an
+    # 87.9 "GOOD" score with everything else passing), not exclude it.
+    MIN_UNIQUE_RATIO = 0.5
+
     def __init__(self, fs_raw=250, fs_filtered=128, max_adc_counts=1_000_000.0, max_uv=7000.0):
         self.fs_raw = fs_raw
         self.fs_filtered = fs_filtered
         self.max_adc_counts = max_adc_counts
         self.max_uv = max_uv
 
+    def _assess_channel(self, raw, filt) -> float | None:
+        """The 9-factor computation for ONE channel -- factors 1-4 on `raw`
+        (ADC codes), 5-9 on `filt` (already-processed signal). Returns None
+        (caller should treat as an immediate POOR/0.0) if the raw epoch is
+        incomplete/NaN/Inf. Shared by assess_epoch() (averages two channels)
+        and assess_epoch_single() (wearable02's one hardware-differential
+        channel -- see that method's docstring for why there's no second
+        channel to average against)."""
+        raw_arr = np.asarray(raw, dtype=float).flatten()
+        filt_uv = np.asarray(filt, dtype=float).flatten()
+
+        if len(raw_arr) < self.fs_raw or np.isnan(raw_arr).any() or np.isinf(raw_arr).any():
+            return None
+
+        # Degeneracy hard-fail -- see MIN_UNIQUE_RATIO's docstring above.
+        # Checked before the 7 factors below since a degenerate signal can
+        # otherwise pass several of them individually.
+        unique_ratio = len(np.unique(filt_uv.round(4))) / len(filt_uv)
+        if unique_ratio < self.MIN_UNIQUE_RATIO:
+            return 0.0
+
+        clipping_ratio = np.mean(np.abs(raw_arr) >= self.max_adc_counts)
+        clip_score = max(0.0, 100.0 * (1.0 - clipping_ratio * 10.0))
+
+        ptp_raw = np.ptp(raw_arr)
+        std_raw = np.std(raw_arr)
+        flatline_score = 0.0 if (ptp_raw < 1e-4 or std_raw < 1e-6) else 100.0
+
+        det_ptp = np.ptp(filt_uv)
+        amp_score = 100.0 if det_ptp <= self.max_uv else max(0.0, 100.0 - (det_ptp - self.max_uv) * 0.01)
+
+        nperseg = min(len(filt_uv), int(self.fs_filtered))
+        freqs, psd = signal.welch(filt_uv, fs=self.fs_filtered, nperseg=nperseg)
+        in_band = np.sum(psd[(freqs >= 0.5) & (freqs <= 45.0)]) + 1e-12
+        out_band = np.sum(psd[freqs > 45.0]) + 1e-12
+        noise_ratio = out_band / (in_band + out_band)
+        noise_score = max(0.0, 100.0 * (1.0 - noise_ratio * 2.0))
+
+        kurt = abs(kurtosis(filt_uv))
+        skw = abs(skew(filt_uv))
+        stat_score = 100.0 if (kurt <= 12.0 and skw <= 4.0) else 30.0
+
+        # filt_uv is already bandpassed (>=0.5Hz), so drift here reflects only
+        # residual filter-rolloff leakage below 0.5Hz, not raw baseline wander.
+        drift_power = np.sum(psd[freqs < 0.5]) + 1e-12
+        drift_ratio = drift_power / (in_band + drift_power)
+        drift_score = max(0.0, 100.0 * (1.0 - drift_ratio * 1.5))
+
+        var_score = 100.0 if np.var(filt_uv) > 0.01 else 0.0
+
+        return float(np.mean([clip_score, flatline_score, amp_score, noise_score, stat_score, drift_score, var_score]))
+
+    @staticmethod
+    def _rating_for(score: float) -> str:
+        if score >= 80.0:
+            return "GOOD"
+        elif score >= 40.0:
+            return "QUESTIONABLE"
+        return "POOR"
+
     def assess_epoch(self, ch1_raw, ch2_raw, ch1_filtered, ch2_filtered):
         scores = []
         for raw, filt in [(ch1_raw, ch1_filtered), (ch2_raw, ch2_filtered)]:
-            raw_arr = np.asarray(raw, dtype=float).flatten()
-            filt_uv = np.asarray(filt, dtype=float).flatten()
-
-            if len(raw_arr) < self.fs_raw or np.isnan(raw_arr).any() or np.isinf(raw_arr).any():
+            ch_score = self._assess_channel(raw, filt)
+            if ch_score is None:
                 return 0.0, "POOR", {"reason": "NaN/Inf/Incomplete epoch sample"}
-
-            clipping_ratio = np.mean(np.abs(raw_arr) >= self.max_adc_counts)
-            clip_score = max(0.0, 100.0 * (1.0 - clipping_ratio * 10.0))
-
-            ptp_raw = np.ptp(raw_arr)
-            std_raw = np.std(raw_arr)
-            flatline_score = 0.0 if (ptp_raw < 1e-4 or std_raw < 1e-6) else 100.0
-
-            det_ptp = np.ptp(filt_uv)
-            amp_score = 100.0 if det_ptp <= self.max_uv else max(0.0, 100.0 - (det_ptp - self.max_uv) * 0.01)
-
-            nperseg = min(len(filt_uv), int(self.fs_filtered))
-            freqs, psd = signal.welch(filt_uv, fs=self.fs_filtered, nperseg=nperseg)
-            in_band = np.sum(psd[(freqs >= 0.5) & (freqs <= 45.0)]) + 1e-12
-            out_band = np.sum(psd[freqs > 45.0]) + 1e-12
-            noise_ratio = out_band / (in_band + out_band)
-            noise_score = max(0.0, 100.0 * (1.0 - noise_ratio * 2.0))
-
-            kurt = abs(kurtosis(filt_uv))
-            skw = abs(skew(filt_uv))
-            stat_score = 100.0 if (kurt <= 12.0 and skw <= 4.0) else 30.0
-
-            # filt_uv is already bandpassed (>=0.5Hz), so drift here reflects only
-            # residual filter-rolloff leakage below 0.5Hz, not raw baseline wander.
-            drift_power = np.sum(psd[freqs < 0.5]) + 1e-12
-            drift_ratio = drift_power / (in_band + drift_power)
-            drift_score = max(0.0, 100.0 * (1.0 - drift_ratio * 1.5))
-
-            var_score = 100.0 if np.var(filt_uv) > 0.01 else 0.0
-
-            ch_score = np.mean([clip_score, flatline_score, amp_score, noise_score, stat_score, drift_score, var_score])
             scores.append(ch_score)
 
         final_score = float(np.mean(scores))
-        if final_score >= 80.0:
-            rating = "GOOD"
-        elif final_score >= 40.0:
-            rating = "QUESTIONABLE"
-        else:
-            rating = "POOR"
-        return final_score, rating, {"channel_scores": [round(s, 1) for s in scores]}
+        return final_score, self._rating_for(final_score), {"channel_scores": [round(s, 1) for s in scores]}
+
+    def assess_epoch_single(self, raw, filtered):
+        """wearable02 variant: ONE hardware T7-T8 differential channel, not
+        two channels to average -- see this class's docstring and
+        TrustedIoTEEGValidator.assess_only_single()/validate_epoch_single()
+        for the full reasoning (no second channel exists to average
+        against, or to compare PLI coupling with)."""
+        ch_score = self._assess_channel(raw, filtered)
+        if ch_score is None:
+            return 0.0, "POOR", {"reason": "NaN/Inf/Incomplete epoch sample"}
+        return ch_score, self._rating_for(ch_score), {"channel_scores": [round(ch_score, 1)]}
 
 
 class TraditionalEEGValidator:
@@ -383,5 +437,69 @@ class TrustedIoTEEGValidator:
             "kurtosis_ch2": stats2["kurtosis"],
             "skew": stats1["skew"],
             "skew_ch2": stats2["skew"],
+            "ml_rating": ml_rating,
+        }
+
+    def assess_only_single(self, raw, filtered) -> dict:
+        """assess_only()'s wearable02 (single hardware-differential channel)
+        counterpart -- used for calibration blocks, before any clean
+        baseline exists for the Itakura check."""
+        gate_score, gate_rating, _ = self.quality_gate.assess_epoch_single(raw, filtered)
+        return {
+            "is_trusted": gate_rating != "POOR",
+            "gate_rating": gate_rating,
+            "quality_score": round(gate_score, 1),
+        }
+
+    def validate_epoch_single(self, raw, filtered, baseline_filtered) -> dict:
+        """validate_epoch()'s wearable02 counterpart. Two checks from the
+        two-channel version are intentionally absent, not approximated:
+          - PLI-vs-surrogate: measures phase COUPLING BETWEEN two
+            independently recorded channels -- meaningless for a signal
+            that was already collapsed to one hardware differential before
+            it ever reached software. There is no second channel to
+            compare against, and comparing the signal to a time-shifted
+            copy of itself would test a different (and not validated)
+            hypothesis while looking like the same metric -- see this
+            module's design discussion for why that was rejected outright
+            rather than approximated.
+          - The CH1-healthy-masks-CH2-degraded failure mode validate_epoch()
+            guards against (see its own comment) doesn't apply here either:
+            there is only one channel, so there's no second channel's
+            numbers to separately check.
+        Everything else (SNR, amplitude/kurtosis/skew thresholds, Itakura
+        distance against this session's OWN bipolar calibration reference,
+        the self-calibrated ML rating) is unchanged in kind from the
+        two-channel version, just computed once instead of twice.
+        """
+        gate_score, gate_rating, gate_details = self.quality_gate.assess_epoch_single(raw, filtered)
+        if gate_rating == "POOR":
+            return {
+                "is_trusted": False,
+                "gate_rating": gate_rating,
+                "quality_score": round(gate_score, 1),
+                "reason": "Failed pre-filter quality gate (POOR rating)",
+            }
+
+        filt = np.asarray(filtered, dtype=float).flatten()
+
+        snr = self.trad_val.compute_snr(filt)
+        time_ok, stats = self.trad_val.check_time_domain_thresholds(filt, max_amplitude=self.max_amplitude)
+        itakura_d = self.itakura_val.compute_itakura_distance(filt, baseline_filtered)
+        ml_rating = self.ml_classifier.classify(filt)
+
+        is_trusted = bool(time_ok and (snr > -20.0) and (itakura_d < 6.0))
+
+        return {
+            "is_trusted": is_trusted,
+            "gate_rating": gate_rating,
+            "quality_score": round(gate_score, 1),
+            "snr_db": round(snr, 2),
+            "itakura_distance": round(itakura_d, 3),
+            "amplitude_ok": time_ok,
+            "peak_to_peak_uV": stats["ptp"],
+            "std_uV": stats["std"],
+            "kurtosis": stats["kurtosis"],
+            "skew": stats["skew"],
             "ml_rating": ml_rating,
         }
