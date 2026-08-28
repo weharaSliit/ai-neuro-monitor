@@ -11,6 +11,7 @@ import RegisterScreen from './screens/RegisterScreen';
 import AppModeScreen from './screens/AppModeScreen';
 import PhysiologicalNavigator from './modules/physiological/PhysiologicalNavigator';
 import AdminNavigator from './modules/admin/AdminNavigator';
+import RelaxationGuideModule from './modules/relaxation_guide';
 import CalibrationScreen from './modules/physiological/screens/CalibrationScreen';
 import EMAScreen from './modules/physiological/screens/EMAScreen';
 import PSS4Screen from './modules/physiological/screens/PSS4Screen';
