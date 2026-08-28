@@ -2,10 +2,13 @@ import React, { useContext } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Platform, StatusBar } from 'react-native';
 import { ThemeContext } from '../context/ThemeContext';
 
+// This module is StressApp's "Intervention" tab (one of five main tabs,
+// see PhysiologicalNavigator.js), not a standalone landing experience --
+// the header never shows a "back to host" affordance, logging out (Profile
+// screen) is the only way out, same as any other primary app screen.
+// Dark mode removed app-wide -- theme toggle button removed accordingly.
 export const Header = ({ title, showBack = false, onBack }) => {
   const { theme } = useContext(ThemeContext);
-
-  const paddingTop = Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 4 : 8;
 
   // Filter out any standalone "Home" text
   const displayTitle = (title && title !== 'Home') ? title : 'Welcome to MindPulse AI Relaxation Guide';

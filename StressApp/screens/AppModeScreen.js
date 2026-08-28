@@ -15,7 +15,7 @@ import { useCalibrationSummary } from '../modules/shared/CalibrationGate';
 // control gate.
 export default function AppModeScreen({ navigation }) {
   const { user, token } = useAuth();
-  const text  = COLORS.light.text;
+  const text = COLORS.light.text;
   const muted = COLORS.light.textMuted;
 
   // "Continue as User" still has to respect CalibrationGate -- Admin
@@ -49,12 +49,6 @@ export default function AppModeScreen({ navigation }) {
           />
           <View style={{ height: 12 }} />
           <Button
-            label="Open Relaxation Guide"
-            onPress={() => navigation.navigate('RelaxationGuide')}
-            variant="outline"
-          />
-          <View style={{ height: 12 }} />
-          <Button
             label="Enter Admin App"
             onPress={() => navigation.replace('Admin')}
             variant="outline"
@@ -67,8 +61,8 @@ export default function AppModeScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 28, justifyContent: 'space-between' },
-  hero:      { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  title:     { fontSize: 22, fontWeight: '900', marginTop: 16, textAlign: 'center' },
-  subtitle:  { fontSize: 14, marginTop: 8, textAlign: 'center' },
-  actions:   { paddingBottom: 12 },
+  hero: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  title: { fontSize: 22, fontWeight: '900', marginTop: 16, textAlign: 'center' },
+  subtitle: { fontSize: 14, marginTop: 8, textAlign: 'center' },
+  actions: { paddingBottom: 12 },
 });

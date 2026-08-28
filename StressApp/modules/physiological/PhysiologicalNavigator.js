@@ -11,7 +11,7 @@ import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import FusionSessionScreen from '../fusion/screens/FusionSessionScreen';
-import PhenotypingScreen   from '../phenotyping/screens/PhenotypingScreen';
+import PhenotypingScreen from '../phenotyping/screens/PhenotypingScreen';
 import RelaxationGuideModule from '../relaxation_guide';
 
 const Stack = createNativeStackNavigator();

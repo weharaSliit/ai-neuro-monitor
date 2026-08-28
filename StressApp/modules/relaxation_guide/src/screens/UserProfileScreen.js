@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Switch } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
@@ -71,22 +71,6 @@ export const UserProfileScreen = () => {
                 <Text style={[styles.statLbl, { color: theme.textMuted }]}>Completed</Text>
               </View>
             </View>
-          </View>
-
-          {/* Theme Settings Switcher */}
-          <View style={[styles.settingCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
-            <View style={styles.settingText}>
-              <Text style={[styles.settingTitle, { color: theme.textPrimary }]}>Appearance Theme</Text>
-              <Text style={[styles.settingSub, { color: theme.textMuted }]}>
-                Current Mode: {isDarkMode ? 'Dark Mode (Slate)' : 'Light Mode (Pure)'}
-              </Text>
-            </View>
-            <Switch
-              value={isDarkMode}
-              onValueChange={toggleTheme}
-              trackColor={{ false: '#CBD5E1', true: theme.accent }}
-              thumbColor={isDarkMode ? '#FFFFFF' : '#F1F5F9'}
-            />
           </View>
 
           {/* Badges & Achievements Catalog */}

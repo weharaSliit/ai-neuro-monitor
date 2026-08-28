@@ -326,15 +326,6 @@ export default function FusionSessionScreen({ navigation }) {
                     onPress={() => navigation.navigate('Phenotyping')} t={t}
                 />
 
-                <Text style={[styles.sectionsLabel, { color: t.textSub, marginTop: 14 }]}>Real-Time Interventions</Text>
-
-                <SectionCard
-                    icon={NAMES.intervention} iconColor="#10B981" title="Relaxation Guide"
-                    statusText="Active" statusColor="#10B981"
-                    summary="Personalized relaxation techniques, guided breathing & interactive games"
-                    onPress={() => navigation.navigate('RelaxationGuide')} t={t}
-                />
-
                 <View style={{ height: 20 }} />
             </ScrollView>
         </ScreenBackground>
@@ -342,25 +333,25 @@ export default function FusionSessionScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-    scroll:       { padding: 20, paddingBottom: 40 },
-    header:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18 },
-    dateStr:      { fontSize: 12, fontWeight: '600', marginBottom: 2 },
-    greeting:     { fontSize: 24, fontWeight: '900' },
-    subtitle:     { fontSize: 12, marginTop: 6, maxWidth: 240, lineHeight: 17 },
-    hint:         { fontSize: 11, lineHeight: 16 },
-    waiting:      { fontSize: 13, textAlign: 'center', marginTop: 10 },
-    emptyState:   { alignItems: 'center', paddingVertical: 16 },
-    gaugeRow:     { flexDirection: 'row', alignItems: 'center', marginBottom: 18 },
+    scroll: { padding: 20, paddingBottom: 40 },
+    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18 },
+    dateStr: { fontSize: 12, fontWeight: '600', marginBottom: 2 },
+    greeting: { fontSize: 24, fontWeight: '900' },
+    subtitle: { fontSize: 12, marginTop: 6, maxWidth: 240, lineHeight: 17 },
+    hint: { fontSize: 11, lineHeight: 16 },
+    waiting: { fontSize: 13, textAlign: 'center', marginTop: 10 },
+    emptyState: { alignItems: 'center', paddingVertical: 16 },
+    gaugeRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 18 },
     stateIconCircle: { width: 54, height: 54, borderRadius: 27, alignItems: 'center', justifyContent: 'center' },
-    stateLabel:   { fontSize: 22, fontWeight: '900' },
-    stateProb:    { fontSize: 13, marginTop: 2 },
-    trendChip:    { flexDirection: 'row', alignItems: 'center', gap: 4 },
-    trendChipText:{ fontSize: 11, fontWeight: '700', maxWidth: 70 },
-    trendBlock:   { marginBottom: 4 },
-    sectionsLabel:{ fontSize: 12, fontWeight: '800', letterSpacing: 0.4, textTransform: 'uppercase', marginTop: 6, marginBottom: 10 },
-    sectionRow:   { flexDirection: 'row', alignItems: 'center' },
+    stateLabel: { fontSize: 22, fontWeight: '900' },
+    stateProb: { fontSize: 13, marginTop: 2 },
+    trendChip: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    trendChipText: { fontSize: 11, fontWeight: '700', maxWidth: 70 },
+    trendBlock: { marginBottom: 4 },
+    sectionsLabel: { fontSize: 12, fontWeight: '800', letterSpacing: 0.4, textTransform: 'uppercase', marginTop: 6, marginBottom: 10 },
+    sectionRow: { flexDirection: 'row', alignItems: 'center' },
     sectionIconCircle: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center' },
-    sectionTopRow:{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    sectionTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
     sectionTitle: { fontSize: 15, fontWeight: '800' },
     sectionStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
     sectionStatusText: { fontSize: 11, fontWeight: '700' },
