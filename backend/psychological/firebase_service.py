@@ -123,6 +123,10 @@ class EegFirebaseSession:
             self._cred, FIREBASE_DB_URL, session_id=user_session_id, root_path=RTDB_NAMESPACE,
             extra_path="calibration_result"
         )
+        self._threshold_result_rtdb = FirebaseSync(
+            self._cred, FIREBASE_DB_URL, session_id=user_session_id, root_path=RTDB_NAMESPACE,
+            extra_path="threshold_result"
+        )
 
     def push(self, record: dict) -> None:
         if not self.enabled:
@@ -146,6 +150,23 @@ class EegFirebaseSession:
         if not self.enabled:
             return
         self._live_raw_rtdb.set(record)
+
+    def push_threshold_result(self, record: dict) -> None:
+        """One-shot snapshot of finalize_personal_threshold()'s outcome
+        (status, personal_high_load_p, resting_mean, task_mean,
+        n_task_blocks) -- {RTDB_NAMESPACE}/{user_id}/{session_id}/threshold_result,
+        same latest-snapshot pattern as push_calibration_result() (.set(),
+        overwritten on any re-run, no history kept). Lets the onboarding
+        threshold-calibration screen watch for the /calibrate/threshold
+        outcome without polling the HTTP endpoint itself -- the actual
+        POST to /calibrate/threshold is made by mqtt_bridge.py once it
+        sees this session's task_phase_requested flag (set by that
+        screen), not by the screen directly, since raw EEG samples are
+        only ever available to the bridge's live MQTT connection.
+        """
+        if not self.enabled:
+            return
+        self._threshold_result_rtdb.set(record)
 
     def push_calibration_result(self, record: dict) -> None:
         """One-shot snapshot of finalize_calibration()'s outcome (status,
@@ -192,6 +213,24 @@ def save_user_calibration_profile(user_id: str, baseline_shift: float, threshold
         'baseline_shift': baseline_shift,
         'thresholds_personalized': thresholds_personalized,
         'calibrated_at': time.time(),
+    })
+
+
+def save_user_personal_threshold(user_id: str, personal_high_load_p: float) -> None:
+    """Merges a personal high_load_p (from
+    sam40.decision.compute_personal_threshold(), derived from a deliberate
+    onboarding Rest-vs-Task calibration task) into this user's existing
+    calibration_profile node. .merge(), not .set() -- this is written by a
+    SEPARATE, later call than save_user_calibration_profile() (baseline
+    calibration finishes first, then the task phase), so .set() here would
+    silently wipe the baseline_shift/thresholds_personalized fields that
+    call already wrote."""
+    ref = _calibration_profile_ref(user_id)
+    if ref is None:
+        return
+    ref.merge({
+        'personal_high_load_p': personal_high_load_p,
+        'personal_threshold_calibrated_at': time.time(),
     })
 
 
