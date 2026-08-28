@@ -66,10 +66,13 @@ def evaluate_production_model():
             test_anomalous = other_df.sample(n=len(test_normal), random_state=rng.randint(0, 1_000_000))
 
             def extract_feats(sub_df):
-                dwell = sub_df["avg_dwell"].values * 1000.0
+                dwell  = sub_df["avg_dwell"].values * 1000.0
                 flight = sub_df["avg_flight"].values * 1000.0
                 scroll = sub_df["scroll_magnitude"].fillna(45.0).values
-                return np.column_stack([dwell, flight, scroll])
+                tilt   = sub_df["tilt_axis"].fillna(59.09).values
+                cpm    = sub_df["typing_speed"].fillna(39.40).values
+                return np.column_stack([dwell, flight, scroll, tilt, cpm])
+
 
             X_test = np.vstack([extract_feats(test_normal), extract_feats(test_anomalous)])
             y_test = np.array([1] * len(test_normal) + [-1] * len(test_anomalous))

@@ -1,6 +1,7 @@
 import firebase_admin
 from firebase_admin import credentials, db
 from datetime import datetime, timezone, timedelta
+import csv
 import os
 import sys
 
@@ -108,13 +109,30 @@ def save_behavioral_window(user_id, window_data):
 def save_stress_prediction(user_id, result):
     """
     Saves the model's decision: Normal, Pre-Stress, or High Stress.
+    v4.1: Also persists all 5 z-score fields and composite_z so the
+    PhenotypingAnalysisScreen can display the full signal breakdown
+    directly from Firebase without recomputing on the client.
     """
     ref = _ref(f'predictions/{user_id}')
     ref.push({
-        'timestamp': datetime.now().isoformat(),
-        'label': result['label'],
+        'timestamp':   datetime.now().isoformat(),
+        'label':       result['label'],
         'stress_score': result['score'],
-        'is_anomaly': result['is_anomaly']
+        'confidence':  result.get('confidence', 0.5),
+        'signal_quality': result.get('signal_quality', 1.0),
+        'is_anomaly':  result['is_anomaly'],
+        'composite_z': result.get('composite_z', 0),
+        'z_dwell':     result.get('z_dwell', 0),
+        'z_flight':    result.get('z_flight', 0),
+        'z_scroll':    result.get('z_scroll', 0),
+        'z_tilt':      result.get('z_tilt', 0),
+        'z_cpm':       result.get('z_cpm', 0),
+        'raw_dwell':   result.get('raw_dwell', 0),
+        'raw_flight':  result.get('raw_flight', 0),
+        'raw_scroll':  result.get('raw_scroll', 0),
+        'raw_tilt':    result.get('raw_tilt', 0),
+        'raw_cpm':     result.get('raw_cpm', 0),
+        'model_type':  result.get('model_type', 'global'),
     })
 
 def get_latest_stress_prediction(user_id):
@@ -246,40 +264,57 @@ def get_physiological_predictions(user_id):
 # Firebase path: fusion_engine/{display_name}/live_session_{YYYYMMDD}/{push-key}
 # This mirrors the format used by: Wehara (physiological) and Hiruni (EEG).
 
-# Known accuracy of the One-Class SVM behavioral model.
+# Accuracy of the One-Class SVM behavioral model, read live from the last
+# real evaluation of the deployed artifact (stress_engine.pkl +
+# feature_scaler.pkl) instead of a hand-typed constant.
 #
-# HISTORY: originally hardcoded to 0.78 as an unvalidated placeholder
-# (comment said "update after validation" but nothing ever did — it turned
-# out to closely match published literature accuracy for a DIFFERENT
-# keystroke-stress study, not a number ever measured on this system).
-# Later corrected to 0.3286 (StudentLife macro F1) — but that number came
-# from a model trained on activity/motion features (stationary/walking
-# ratios), not typing data, and scored a DIFFERENT model object than the one
-# actually deployed. Neither number was ever about stress_engine.pkl, the
-# file actually shipped to production.
+# HISTORY: this used to be a hardcoded number, updated by manually re-running
+# phenotyping/s9_evaluate_production_model.py, reading the mean accuracy off
+# its printed summary or research_synthesis/outputs/production_model_eval.csv,
+# and pasting it in here. That number went stale every time s9 was re-run
+# without someone remembering to also edit this file, and there was no way to
+# tell from Firebase alone whether the constant still matched the model
+# actually running in production.
 #
-# CURRENT VALUE: the first-ever evaluation of the REAL deployed artifact
-# (stress_engine.pkl + feature_scaler.pkl), run in
-# phenotyping/s9_evaluate_production_model.py via an inter-subject anomaly
-# proxy on held-out CMU subjects (same proxy methodology used elsewhere in
-# this repo, since no real participant stress ground truth exists yet).
-# Result across 51 held-out subjects: accuracy=0.4998, F1=0.1804,
-# precision=0.6738, recall=0.1098.
+# Note this is still measured via an inter-subject anomaly proxy (this user's
+# held-out samples vs. a random other user's, since the Kaggle Mobile dataset
+# used to train stress_engine.pkl has no real participant stress labels) —
+# not accuracy against real stress ground truth. See evaluate_accuaracy.py for
+# the one script in this repo that scores against real PSS-4/SISS survey data.
 #
-# This is a materially weaker result than the per-user models validated
-# elsewhere in the research pipeline (e.g. SWELL personalized: F1=0.72) —
-# likely because s8_deploy_production.py fits the OC-SVM on the ENTIRE
-# population at once rather than per-user, producing a boundary loose enough
-# to contain everyone's typing style as "normal," which makes it far less
-# sensitive to any one person's deviation. Using accuracy here since that's
-# what this field name claims to represent; F1 tells a worse story still.
-#
-# TODO: replace this static constant with a live value once
-# evaluate_accuracy.py has enough PSS-4/SISS samples (MIN_SAMPLES_VALID=30+)
-# to produce a trustworthy number against real (not proxy) ground truth —
-# and consider whether stress_engine.pkl should be retrained per-user rather
-# than on the pooled population, given this result.
-BEHAVIORAL_MODEL_ACCURACY = 0.4998
+# TODO: once evaluate_accuaracy.py has enough PSS-4/SISS samples per user
+# (MIN_SAMPLES_VALID=30+) to produce a trustworthy number against real (not
+# proxy) ground truth, prefer that over this proxy figure — and consider
+# whether stress_engine.pkl should be retrained per-user rather than on the
+# pooled population, since personalized OC-SVMs score materially higher
+# elsewhere in the research pipeline (e.g. SWELL personalized: F1≈0.72).
+_PROD_EVAL_CSV = os.path.abspath(os.path.join(
+    _BACKEND_ROOT, "..", "phenotyping", "research_synthesis", "outputs",
+    "production_model_eval.csv"
+))
+
+def _load_behavioral_model_accuracy():
+    """
+    Mean 'accuracy' column across all evaluated users in the most recent
+    phenotyping/s9_evaluate_production_model.py run. Returns None (rather
+    than a guessed fallback number) if that run hasn't happened yet or its
+    output can't be read, so a missing evaluation is visible instead of
+    silently reporting a fabricated accuracy.
+    """
+    try:
+        with open(_PROD_EVAL_CSV, newline='', encoding='utf-8') as f:
+            scores = [float(row['accuracy']) for row in csv.DictReader(f) if row.get('accuracy')]
+        if not scores:
+            raise ValueError("no 'accuracy' rows found in production_model_eval.csv")
+        return round(sum(scores) / len(scores), 4)
+    except (OSError, ValueError, KeyError) as e:
+        print(f"[WARN] Could not load behavioral model accuracy from {_PROD_EVAL_CSV} ({e}). "
+              f"model_accuracy will be reported as null until "
+              f"phenotyping/s9_evaluate_production_model.py is run.")
+        return None
+
+BEHAVIORAL_MODEL_ACCURACY = _load_behavioral_model_accuracy()
+
 
 def get_user_display_name(user_id):
     """
@@ -442,7 +477,20 @@ def save_to_fusion_engine(user_id, result, window_features, is_valid=True):
         'confidence':           confidence,
         'signal_quality':       signal_quality,
         'model_accuracy':       BEHAVIORAL_MODEL_ACCURACY,
+        
+        # Behavioral specific phenotyping data
         'composite_z':          round(composite_z, 4),
+        'z_dwell':              result.get('z_dwell', 0),
+        'z_flight':             result.get('z_flight', 0),
+        'z_scroll':             result.get('z_scroll', 0),
+        'z_tilt':               result.get('z_tilt', 0),
+        'z_cpm':                result.get('z_cpm', 0),
+        'raw_dwell':            result.get('raw_dwell', 0),
+        'raw_flight':           result.get('raw_flight', 0),
+        'raw_scroll':           result.get('raw_scroll', 0),
+        'raw_tilt':             result.get('raw_tilt', 0),
+        'raw_cpm':              result.get('raw_cpm', 0),
+        
         'is_anomaly':           is_anomaly,
         'trending_toward_stress': stress_score > 0.5,
         'timestamp':            datetime.now(lk_tz).isoformat(),
