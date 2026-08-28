@@ -5,17 +5,25 @@ import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
 
 export const BottomNavBar = () => {
-  const { currentScreen, setCurrentScreen } = useContext(AppContext);
+  const { currentScreen, setCurrentScreen, userId } = useContext(AppContext);
   const { theme } = useContext(ThemeContext);
   const navigation = useNavigation();
 
-  const navItems = [
+  const u = (userId || '').toLowerCase();
+  const isAdmin = u === 'ojani' || u.includes('ojani') || u === 'admin' || u.includes('admin');
+
+  const baseItems = [
     { id: 'Dashboard', label: 'Guide', icon: '🏠' },
     { id: 'Methods', label: 'Catalog', icon: '🌸' },
+    { id: 'PerformanceOverview', label: 'Overview', icon: '📈' },
+  ];
+
+  const adminItems = [
     { id: 'FusionPipeline', label: 'Pipeline', icon: '📡' },
     { id: 'History', label: 'History', icon: '📊' },
-    { id: 'UserProfile', label: 'Profile', icon: '👤' }
   ];
+
+  const navItems = isAdmin ? [...baseItems, ...adminItems] : baseItems;
 
   // Hide bottom nav during full-screen immersive games
   const hideScreens = ['GamePlayer'];

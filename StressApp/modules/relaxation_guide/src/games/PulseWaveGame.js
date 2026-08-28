@@ -10,6 +10,8 @@ import {
   Vibration,
   Platform,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { ThemeContext } from '../context/ThemeContext';
 
 const { width, height } = Dimensions.get('window');
 const WAVE_BAR_COUNT = 24;
@@ -33,7 +35,7 @@ const AMBIENT_TICK_MS = 50;
 // meta-analysis. Psychological Medicine, 47(15), 2578–2586.
 // ---------------------------------------------------------------------------
 const PACE_OPTIONS = [4.5, 5, 5.5, 6, 6.5, 7]; // breaths per minute
-const DURATION_OPTIONS_MIN = [2, 5, 10];
+const DURATION_OPTIONS_MIN = [1, 2, 3];
 
 const COLORS = {
   background: '#1A1040',
@@ -43,14 +45,23 @@ const COLORS = {
   text: '#E9E4FF',
 };
 
-const ResonancePulseBreathing = () => {
-  const [screen, setScreen] = useState('setup'); // 'setup' | 'session' | 'complete'
-  const [paceBpm, setPaceBpm] = useState(6);
-  const [durationMin, setDurationMin] = useState(5);
+const ResonancePulseBreathing = ({ onStartSession, onDurationChange, initialScreen = 'session' }) => {
+  const themeContext = React.useContext(ThemeContext);
+  const theme = themeContext?.theme || {};
+  const isDarkMode = themeContext?.isDarkMode ?? true;
+
+  const primaryTextColor = isDarkMode ? '#E9E4FF' : (theme.textPrimary || '#0F172A');
+  const secondaryTextColor = isDarkMode ? 'rgba(233,228,255,0.75)' : (theme.textSecondary || '#334155');
+  const mutedTextColor = isDarkMode ? 'rgba(233,228,255,0.45)' : (theme.textMuted || '#64748B');
+  const containerBg = isDarkMode ? COLORS.backgroundDeep : (theme.bgPrimary || '#F8FAFC');
+
+  const [screen, setScreen] = useState(initialScreen); // 'setup' | 'session' | 'complete'
+  const [paceBpm, setPaceBpm] = useState(6.0);
+  const [durationMin, setDurationMin] = useState(1);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [breathCount, setBreathCount] = useState(0);
-  const [isPaused, setIsPaused] = useState(false);
   const [breathDirection, setBreathDirection] = useState('in'); // 'in' | 'out'
+  const [isPaused, setIsPaused] = useState(false);
   const [waveBars, setWaveBars] = useState(Array(WAVE_BAR_COUNT).fill(0.3));
   const [orbs] = useState(() =>
     Array.from({ length: 6 }, (_, i) => ({
@@ -232,7 +243,10 @@ const ResonancePulseBreathing = () => {
             {DURATION_OPTIONS_MIN.map(min => (
               <TouchableOpacity
                 key={min}
-                onPress={() => setDurationMin(min)}
+                onPress={() => {
+                  setDurationMin(min);
+                  if (onDurationChange) onDurationChange(min * 60);
+                }}
                 style={[styles.durationChip, durationMin === min && styles.paceChipActive]}
               >
                 <Text style={[styles.paceChipText, durationMin === min && styles.paceChipTextActive]}>
@@ -242,7 +256,10 @@ const ResonancePulseBreathing = () => {
             ))}
           </View>
 
-          <TouchableOpacity style={styles.startButton} onPress={startSession}>
+          <TouchableOpacity style={styles.startButton} onPress={() => {
+            if (onStartSession) onStartSession(durationMin * 60);
+            startSession();
+          }}>
             <Text style={styles.startButtonText}>Begin</Text>
           </TouchableOpacity>
 
@@ -265,11 +282,11 @@ const ResonancePulseBreathing = () => {
   if (screen === 'session') {
     const progress = Math.min(1, elapsedSeconds / totalSeconds);
     return (
-      <View style={[styles.container, { backgroundColor: COLORS.backgroundDeep }]}>
+      <View style={[styles.container, { backgroundColor: containerBg }]}>
         <View style={styles.progressTrack}>
           <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
         </View>
-        <Text style={styles.sessionTime}>
+        <Text style={[styles.sessionTime, { color: mutedTextColor }]}>
           {Math.floor(elapsedSeconds / 60)}:{String(elapsedSeconds % 60).padStart(2, '0')}
           {'  /  '}
           {durationMin}:00
@@ -304,25 +321,25 @@ const ResonancePulseBreathing = () => {
           </Animated.View>
         </View>
 
-        <Text style={styles.phaseText}>{breathDirection === 'in' ? 'Breathe in…' : 'Breathe out…'}</Text>
-        <Text style={styles.breathCount}>{breathCount} breaths</Text>
+        <Text style={[styles.phaseText, { color: primaryTextColor }]}>{breathDirection === 'in' ? 'Breathe in…' : 'Breathe out…'}</Text>
+        <Text style={[styles.breathCount, { color: secondaryTextColor }]}>{breathCount} breaths</Text>
 
         <View style={styles.paceAdjustRow}>
-          <TouchableOpacity onPress={() => adjustPace(-0.5)} style={styles.stepperButton}>
-            <Text style={styles.stepperText}>–</Text>
+          <TouchableOpacity onPress={() => adjustPace(-0.5)} style={[styles.stepperButton, { borderColor: isDarkMode ? 'rgba(255,255,255,0.2)' : theme.border }]}>
+            <Text style={[styles.stepperText, { color: primaryTextColor }]}>–</Text>
           </TouchableOpacity>
-          <Text style={styles.paceReadout}>{paceBpm.toFixed(1)} breaths/min</Text>
-          <TouchableOpacity onPress={() => adjustPace(0.5)} style={styles.stepperButton}>
-            <Text style={styles.stepperText}>+</Text>
+          <Text style={[styles.paceReadout, { color: secondaryTextColor }]}>{paceBpm.toFixed(1)} breaths/min</Text>
+          <TouchableOpacity onPress={() => adjustPace(0.5)} style={[styles.stepperButton, { borderColor: isDarkMode ? 'rgba(255,255,255,0.2)' : theme.border }]}>
+            <Text style={[styles.stepperText, { color: primaryTextColor }]}>+</Text>
           </TouchableOpacity>
         </View>
 
         <View style={styles.footerButtons}>
           <TouchableOpacity onPress={togglePause}>
-            <Text style={styles.endLink}>{isPaused ? 'Resume' : 'Pause'}</Text>
+            <Text style={[styles.endLink, { color: mutedTextColor }]}>{isPaused ? 'Resume' : 'Pause'}</Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={endSessionEarly}>
-            <Text style={styles.endLink}>End session</Text>
+            <Text style={[styles.endLink, { color: mutedTextColor }]}>End session</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -404,42 +421,42 @@ const styles = StyleSheet.create({
 
   progressTrack: { position: 'absolute', top: 0, left: 0, right: 0, height: 3, backgroundColor: 'rgba(255,255,255,0.06)' },
   progressFill: { height: '100%', backgroundColor: COLORS.accent },
-  sessionTime: { color: 'rgba(233,228,255,0.4)', fontSize: 12, marginTop: 46 },
+  sessionTime: { color: 'rgba(233,228,255,0.4)', fontSize: 12, marginTop: 12 },
 
   waveRow: {
     flexDirection: 'row', alignItems: 'center', gap: 3,
-    height: 40, marginTop: 20,
+    height: 32, marginTop: 8,
   },
   waveBar: { width: 3, borderRadius: 2, backgroundColor: 'rgba(179,136,255,0.5)' },
 
-  pulseArea: { flex: 1, alignItems: 'center', justifyContent: 'center', width: '100%' },
+  pulseArea: { flex: 1, alignItems: 'center', justifyContent: 'center', width: '100%', minHeight: 140 },
   orbGlow: {
-    position: 'absolute', width: 200, height: 200, borderRadius: 100,
+    position: 'absolute', width: 170, height: 170, borderRadius: 85,
     backgroundColor: COLORS.accentSoft,
   },
   orb: {
-    width: 110, height: 110, borderRadius: 55,
+    width: 96, height: 96, borderRadius: 48,
     backgroundColor: 'rgba(179,136,255,0.25)',
     borderWidth: 2, borderColor: COLORS.accent,
     alignItems: 'center', justifyContent: 'center',
   },
   orbRing: {
-    width: 60, height: 60, borderRadius: 30,
+    width: 50, height: 50, borderRadius: 25,
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)',
   },
 
-  phaseText: { color: COLORS.text, fontSize: 16, fontWeight: '400', marginBottom: 4 },
-  breathCount: { color: 'rgba(233,228,255,0.5)', fontSize: 13, marginBottom: 18 },
+  phaseText: { color: COLORS.text, fontSize: 15, fontWeight: '400', marginBottom: 2 },
+  breathCount: { color: 'rgba(233,228,255,0.5)', fontSize: 12, marginBottom: 10 },
 
-  paceAdjustRow: { flexDirection: 'row', alignItems: 'center', gap: 18, marginBottom: 24 },
+  paceAdjustRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 10 },
   stepperButton: {
-    width: 34, height: 34, borderRadius: 17, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)',
+    width: 30, height: 30, borderRadius: 15, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)',
     alignItems: 'center', justifyContent: 'center',
   },
-  stepperText: { color: COLORS.text, fontSize: 18, lineHeight: 20 },
-  paceReadout: { color: 'rgba(233,228,255,0.55)', fontSize: 12, minWidth: 100, textAlign: 'center' },
+  stepperText: { color: COLORS.text, fontSize: 16, lineHeight: 18 },
+  paceReadout: { color: 'rgba(233,228,255,0.55)', fontSize: 12, minWidth: 90, textAlign: 'center' },
 
-  footerButtons: { flexDirection: 'row', gap: 24, marginBottom: 40 },
+  footerButtons: { flexDirection: 'row', gap: 20, marginBottom: 12 },
   endLink: { color: 'rgba(233,228,255,0.4)', fontSize: 12, textDecorationLine: 'underline' },
 
   completeTitle: { color: COLORS.text, fontSize: 24, fontWeight: '300', marginTop: 120, marginBottom: 30 },

@@ -90,10 +90,28 @@ def get_user(user_id: str) -> Optional[Dict[str, Any]]:
 def list_users() -> Dict[str, Any]:
     try:
         ref = _users_ref()
-        return ref.get() or {}
+        users = ref.get() or {}
+        if 'ojani' not in users:
+            users = {
+                'ojani': {
+                    'name': 'Ojani (Admin)',
+                    'role': 'admin',
+                    'is_admin': True,
+                    'session_count': 0
+                },
+                **users
+            }
+        return users
     except Exception as e:
         print(f"[Firebase Warning] list_users failed ({e}). Falling back to local.")
-        return {}
+        return {
+            'ojani': {
+                'name': 'Ojani (Admin)',
+                'role': 'admin',
+                'is_admin': True,
+                'session_count': 0
+            }
+        }
 
 
 # --- Intervention System operations ---

@@ -120,13 +120,20 @@ export const RecoveryScreen = () => {
   } = useContext(AppContext);
   const { theme } = useContext(ThemeContext);
 
-  const reward     = lastValidationResult?.reward ?? 1.0;
-  const recoveryPct = lastValidationResult?.recovery_percentage ?? 100.0;
-  const transition = lastValidationResult?.transition ?? 'Complete Recovery';
-  const alpha      = lastValidationResult?.alpha_updated ?? 2.0;
-  const beta       = lastValidationResult?.beta_updated ?? 1.0;
-  const isNormal   = lastValidationResult?.is_normal_reached ?? (postInterventionLabel === 'normal');
+  const postNorm    = (postInterventionLabel || '').toLowerCase();
+  const preNorm     = (preInterventionLabel || '').toLowerCase();
+  const isNormal    = lastValidationResult?.is_normal_reached ?? lastValidationResult?.is_normal ?? (postNorm === 'normal');
+  const recoveryPct = isNormal ? 100.0 : (lastValidationResult?.recovery_percentage ?? 45.0);
+  const transition  = isNormal ? '🎉 Baseline Achieved! (Normal Equilibrium Restored)' : (lastValidationResult?.transition ?? 'Partial Recovery');
+  const displayPre  = (preNorm === 'stress' || preNorm === 'high_stress' || preNorm === 'pre-stress') ? 'STRESS' : 'NORMAL';
+  const displayPost = (isNormal || postNorm === 'normal') ? 'NORMAL' : 'STRESS';
+  const preColor    = displayPre === 'STRESS' ? theme.danger : theme.success;
+  const postColor   = displayPost === 'NORMAL' ? theme.success : theme.danger;
   const altRec     = lastValidationResult?.alternative_recommendation;
+
+  const reward = lastValidationResult?.reward ?? (isNormal ? 1.0 : 0.2);
+  const alpha  = lastValidationResult?.alpha ?? (isNormal ? 2.0 : 1.0);
+  const beta   = lastValidationResult?.beta ?? (isNormal ? 1.0 : 2.0);
 
   const handleStartAlt = () => {
     if (altRec) {
@@ -196,8 +203,8 @@ export const RecoveryScreen = () => {
           <Text style={[styles.cardHeader, { color: theme.accent }]}>Closed-Loop Feedback Results</Text>
 
           {[
-            { label: 'Pre-Intervention State', value: preInterventionLabel.toUpperCase(), color: theme.danger },
-            { label: 'Post-Intervention State', value: postInterventionLabel.toUpperCase(), color: theme.success },
+            { label: 'Pre-Intervention State', value: displayPre, color: preColor },
+            { label: 'Post-Intervention State', value: displayPost, color: postColor },
             { label: 'Validator Reward Signal', value: `+${reward.toFixed(2)}`, color: rewardColor },
           ].map((row, i) => (
             <View key={i} style={[styles.row, i > 0 && { borderTopWidth: 1, borderTopColor: theme.border + '60', paddingTop: 8, marginTop: 4 }]}>
@@ -220,8 +227,16 @@ export const RecoveryScreen = () => {
           </View>
         </Animated.View>
 
-        {/* Guidance if baseline not yet reached */}
-        {!isNormal && (
+        {/* Guidance based on baseline status */}
+        {isNormal ? (
+          <View style={[styles.guidanceCard, { backgroundColor: theme.success + '14', borderColor: theme.success }]}>
+            <Text style={[styles.guidanceTitle, { color: theme.success }]}>🎯 Closed-Loop Adaptive Guidance — Baseline Achieved!</Text>
+            <Text style={[styles.guidanceText, { color: theme.textSecondary }]}>
+              {lastValidationResult?.closed_loop_status?.guidance_message ||
+                "🎉 Baseline Achieved! Real-time bio-feedback verified your live stress probability returned to optimal resting equilibrium."}
+            </Text>
+          </View>
+        ) : (
           <View style={[styles.guidanceCard, { backgroundColor: theme.warning + '12', borderColor: theme.warning }]}>
             <Text style={[styles.guidanceTitle, { color: theme.warning }]}>⚡ Closed-Loop Adaptive Guidance</Text>
             <Text style={[styles.guidanceText, { color: theme.textSecondary }]}>

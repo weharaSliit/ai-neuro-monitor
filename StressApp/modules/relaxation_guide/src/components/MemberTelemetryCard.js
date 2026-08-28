@@ -22,8 +22,12 @@ export const MemberTelemetryCard = ({
     return theme.success;
   };
 
+  const isStressState = (lbl) => {
+    const l = (lbl || '').toLowerCase();
+    return l === 'stress' || l === 'high_stress' || l === 'high' || l === 'acute' || l === 'pre-stress' || l === 'pre_stress';
+  };
   const probPct = (isCalibrated && isLive && typeof probVal === 'number') ? (probVal * 100).toFixed(0) + '%' : '--';
-  const displayLabel = (isCalibrated && isLive) ? (stressState || 'NORMAL').toUpperCase() : (!isCalibrated ? 'CALIBRATING' : 'AWAITING STREAM');
+  const displayLabel = (isCalibrated && isLive) ? (isStressState(stressState) ? 'STRESS' : 'NORMAL') : (!isCalibrated ? 'CALIBRATING' : 'AWAITING STREAM');
 
   return (
     <View style={[styles.card, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>

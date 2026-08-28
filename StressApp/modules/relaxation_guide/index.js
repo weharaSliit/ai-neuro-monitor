@@ -20,7 +20,6 @@ import { RealtimeStressTrendCard } from './src/components/RealtimeStressTrendCar
 import { BaselineAchievedModal } from './src/components/BaselineAchievedModal';
 import { BaselineNotReachedModal } from './src/components/BaselineNotReachedModal';
 
-import { UserProfileScreen } from './src/screens/UserProfileScreen';
 import { DashboardScreen } from './src/screens/DashboardScreen';
 import { FusionPipelineScreen } from './src/screens/FusionPipelineScreen';
 import { MethodsScreen } from './src/screens/MethodsScreen';
@@ -30,12 +29,26 @@ import { GamePlayerScreen } from './src/screens/GamePlayerScreen';
 import { RatingScreen } from './src/screens/RatingScreen';
 import { RecoveryScreen } from './src/screens/RecoveryScreen';
 import { HistoryScreen } from './src/screens/HistoryScreen';
+import { UserProfileScreen } from './src/screens/UserProfileScreen';
+import { PerformanceOverviewScreen } from './src/screens/PerformanceOverviewScreen';
+
+import { useFocusEffect } from '@react-navigation/native';
 
 LogBox.ignoreLogs(['Expo AV has been deprecated', 'Expo AV is deprecated']);
 
 const MainNavigator = () => {
-  const { currentScreen, identityChecked } = React.useContext(AppContext);
+  const { currentScreen, setCurrentScreen, identityChecked, userId } = React.useContext(AppContext);
   const { isDarkMode, theme } = React.useContext(ThemeContext);
+
+  const u = (userId || '').toLowerCase();
+  const isAdmin = u === 'ojani' || u.includes('ojani') || u === 'admin' || u.includes('admin');
+
+  // Reset to Relaxation Guide's Home Page (Dashboard) EVERY TIME screen comes into focus
+  useFocusEffect(
+    React.useCallback(() => {
+      setCurrentScreen('Dashboard');
+    }, [setCurrentScreen])
+  );
 
   const renderScreen = () => {
     if (!identityChecked) {
@@ -46,12 +59,10 @@ const MainNavigator = () => {
       );
     }
     switch (currentScreen) {
-      case 'UserProfile':
-        return <UserProfileScreen />;
       case 'Dashboard':
         return <DashboardScreen />;
       case 'FusionPipeline':
-        return <FusionPipelineScreen />;
+        return isAdmin ? <FusionPipelineScreen /> : <DashboardScreen />;
       case 'Methods':
         return <MethodsScreen />;
       case 'Intervention':
@@ -65,7 +76,11 @@ const MainNavigator = () => {
       case 'Recovery':
         return <RecoveryScreen />;
       case 'History':
-        return <HistoryScreen />;
+        return isAdmin ? <HistoryScreen /> : <DashboardScreen />;
+      case 'UserProfile':
+        return <UserProfileScreen />;
+      case 'PerformanceOverview':
+        return <PerformanceOverviewScreen />;
       default:
         return <DashboardScreen />;
     }

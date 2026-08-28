@@ -1,16 +1,36 @@
 import React, { useState } from 'react';
-import { View } from 'react-native';
+import { View, Platform, ActivityIndicator } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import CalibrationGate from './modules/shared/CalibrationGate';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
+
+if (Platform.OS === 'web' && typeof document !== 'undefined') {
+  const styleId = 'expo-web-root-fix';
+  if (!document.getElementById(styleId)) {
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = `
+      html, body, #root, #root > div {
+        height: 100%;
+        width: 100%;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+}
 
 import WelcomeScreen from './screens/WelcomeScreen';
 import LoginScreen from './screens/LoginScreen';
 import RegisterScreen from './screens/RegisterScreen';
 import PhysiologicalNavigator from './modules/physiological/PhysiologicalNavigator';
 import AdminNavigator from './modules/admin/AdminNavigator';
-import RelaxationGuideModule from './modules/relaxation_guide';
 import CalibrationScreen from './modules/physiological/screens/CalibrationScreen';
 import EMAScreen from './modules/physiological/screens/EMAScreen';
 import PSS4Screen from './modules/physiological/screens/PSS4Screen';
@@ -39,8 +59,9 @@ const linking = {
       Physiological: {
         path: '',
         screens: {
-          Fusion:       'fusion-tab',
-          Phenotyping:  'phenotyping-tab',
+          Fusion:          'fusion-tab',
+          Phenotyping:     'phenotyping-tab',
+          RelaxationGuide: 'relaxation-guide',
         },
       },
       CalibrationGate:        'calibration-gate',
@@ -64,7 +85,11 @@ function RootNavigator() {
   const { theme } = useTheme();
 
   if (isLoading) {
-    return <View style={{ flex: 1, backgroundColor: theme.bg }} />;
+    return (
+      <View style={{ flex: 1, backgroundColor: theme?.bg || '#F8F6F0', alignItems: 'center', justifyContent: 'center' }}>
+        <ActivityIndicator size="large" color="#6E68B2" />
+      </View>
+    );
   }
 
   // Every login/session-restore lands straight in the User app now -- no
@@ -98,7 +123,6 @@ function RootNavigator() {
           <Stack.Screen name="Admin" component={AdminNavigator} />
           <Stack.Screen name="CalibrationGate" component={CalibrationGate} />
           <Stack.Screen name="Physiological" component={PhysiologicalNavigator} />
-          <Stack.Screen name="RelaxationGuide" component={RelaxationGuideModule} />
           <Stack.Screen
             name="Profile"
             component={ProfileScreen}
@@ -179,15 +203,17 @@ export default function App() {
   };
 
   return (
-    <ThemeProvider>
-      <AuthProvider>
-        <AppContext.Provider value={sharedState}>
-          <NavigationContainer linking={linking}>
-            <ThemedStatusBar />
-            <RootNavigator />
-          </NavigationContainer>
-        </AppContext.Provider>
-      </AuthProvider>
-    </ThemeProvider>
+    <SafeAreaProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <AppContext.Provider value={sharedState}>
+            <NavigationContainer linking={linking}>
+              <ThemedStatusBar />
+              <RootNavigator />
+            </NavigationContainer>
+          </AppContext.Provider>
+        </AuthProvider>
+      </ThemeProvider>
+    </SafeAreaProvider>
   );
 }

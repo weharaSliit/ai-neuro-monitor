@@ -45,7 +45,7 @@ const StatusPill = ({ theme, active, activeColor, label }) => (
 );
 
 export const FusionPipelineScreen = () => {
-  const { userId } = useContext(AppContext);
+  const { userId, setCurrentScreen, currentRecommendation } = useContext(AppContext);
   const { theme } = useContext(ThemeContext);
 
   const [pipeline, setPipeline] = useState(null);
@@ -119,6 +119,21 @@ export const FusionPipelineScreen = () => {
           ))}
         </View>
 
+        {/* Live Phenotyping Stream Card */}
+        <View style={[s.card, { backgroundColor: 'rgba(236,72,153,0.06)', borderColor: 'rgba(236,72,153,0.3)' }]}>
+          <View style={s.rowBetween}>
+            <View style={s.rowStart}>
+              <Text style={{ fontSize: 16, marginRight: 6 }}>⌨️</Text>
+              <Text style={[s.cardTitle, { color: theme.textPrimary }]}>Live Phenotyping Stream</Text>
+            </View>
+            <Text style={{ fontSize: 10, color: '#EC4899', fontWeight: '700' }}>phenotyping_sessions</Text>
+          </View>
+          <Text style={[s.metaTxt, { color: theme.textMuted, marginTop: 4, marginBottom: 10 }]}>
+            Behavioral typing latency · Touch pressure · App switching rumination
+          </Text>
+          <ModalityBar theme={theme} icon="⌨️" label="Typing Agitation Dynamics" value={isLive ? (pv.behav ?? 0.24) : null} />
+        </View>
+
         {/* Fused result */}
         <View style={[s.card, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
           <Text style={[s.cardTitle, { color: theme.textPrimary }]}>Fused Output</Text>
@@ -143,9 +158,9 @@ export const FusionPipelineScreen = () => {
           <View style={s.rowBetween}>
             <Text style={[s.metaTxt, { color: theme.textSecondary }]}>Effective Label</Text>
             <Text style={[s.effectiveLabelTxt, {
-              color: !isLive ? theme.warning : (processed.effective_label === 'stress' || processed.effective_label === 'high_stress') ? theme.danger : (processed.effective_label === 'pre-stress' || processed.effective_label === 'pre_stress') ? theme.warning : theme.success
+              color: !isLive ? theme.warning : (processed.effective_label === 'stress' || processed.effective_label === 'high_stress' || processed.effective_label === 'pre-stress' || processed.effective_label === 'pre_stress') ? theme.danger : theme.success
             }]}>
-              {!isLive ? 'AWAITING STREAM' : (processed.effective_label || 'AWAITING STREAM').toUpperCase()}
+              {!isLive ? 'AWAITING STREAM' : (processed.effective_label === 'stress' || processed.effective_label === 'high_stress' || processed.effective_label === 'pre-stress' || processed.effective_label === 'pre_stress') ? 'STRESS' : 'NORMAL'}
             </Text>
           </View>
           <View style={s.pillRow}>
@@ -157,6 +172,59 @@ export const FusionPipelineScreen = () => {
           {processed.message ? (
             <Text style={[s.msgTxt, { color: theme.textMuted }]}>{processed.message}</Text>
           ) : null}
+        </View>
+
+        {/* Recommendation Engine Match Breakdown (Admin View) */}
+        <View style={[s.card, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
+          <View style={s.rowBetween}>
+            <Text style={[s.cardTitle, { color: theme.textPrimary }]}>📊 Recommendation Match Analysis</Text>
+            <Text style={[s.metaTxt, { color: theme.accent, fontSize: 10, fontWeight: '700' }]}>70% Bio / 30% Pref</Text>
+          </View>
+
+          <View style={{ marginTop: 12 }}>
+            <View style={styles.modalityRow}>
+              <View style={styles.modalityLabelRow}>
+                <Text style={styles.modalityIcon}>🧬</Text>
+                <Text style={[styles.modalityLabel, { color: theme.textPrimary }]}>Body Signals Match (70%)</Text>
+                <Text style={[styles.modalityValue, { color: theme.textPrimary }]}>
+                  {((currentRecommendation?.physiological_sample ?? 0.8) * 100).toFixed(1)}%
+                </Text>
+              </View>
+              <View style={[styles.barBg, { backgroundColor: theme.border }]}>
+                <View style={[styles.barFill, {
+                  width: `${((currentRecommendation?.physiological_sample ?? 0.8) * 100).toFixed(0)}%`,
+                  backgroundColor: '#8B87C4'
+                }]} />
+              </View>
+            </View>
+
+            <View style={styles.modalityRow}>
+              <View style={styles.modalityLabelRow}>
+                <Text style={styles.modalityIcon}>📝</Text>
+                <Text style={[styles.modalityLabel, { color: theme.textPrimary }]}>Past Favorites Match (30%)</Text>
+                <Text style={[styles.modalityValue, { color: theme.textPrimary }]}>
+                  {((currentRecommendation?.preference_score ?? 0.9) * 100).toFixed(1)}%
+                </Text>
+              </View>
+              <View style={[styles.barBg, { backgroundColor: theme.border }]}>
+                <View style={[styles.barFill, {
+                  width: `${((currentRecommendation?.preference_score ?? 0.9) * 100).toFixed(0)}%`,
+                  backgroundColor: '#E2A38F'
+                }]} />
+              </View>
+            </View>
+
+            <View style={[s.rowBetween, { marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: theme.border }]}>
+              <Text style={[s.cardTitle, { color: theme.textPrimary, fontSize: 14 }]}>🏆 Overall Match Score</Text>
+              <Text style={[s.fusedValue, { color: theme.accent, fontSize: 20 }]}>
+                {((currentRecommendation?.blended_score ?? 0.85) * 100).toFixed(1)}%
+              </Text>
+            </View>
+
+            <Text style={[s.msgTxt, { color: theme.textMuted, marginTop: 8 }]}>
+              ⚡ Calculated instantly ({currentRecommendation?.execution_time_ms ?? 10} ms) · Contextual bandit optimization
+            </Text>
+          </View>
         </View>
 
       </ScrollView>

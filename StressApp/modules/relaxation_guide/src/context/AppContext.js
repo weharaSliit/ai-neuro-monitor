@@ -86,6 +86,18 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
           if (telemetry.has_live_packet && activeBaseline && prob <= activeBaseline) {
             if (!hasNotifiedBaselineRef.current) {
               hasNotifiedBaselineRef.current = true;
+              setPostInterventionLabel('normal');
+              setLastValidationResult(prev => ({
+                ...(prev || {}),
+                reward: 1.0,
+                recovery_percentage: 100.0,
+                transition: '🎉 Baseline Achieved! (Normal Equilibrium Restored)',
+                is_normal: true,
+                is_normal_reached: true,
+                closed_loop_status: {
+                  guidance_message: '🎉 Baseline Achieved! Real-time bio-feedback verified your live stress probability returned to optimal resting equilibrium.'
+                }
+              }));
               setBaselineAchievedModal({
                 visible: true,
                 prob: (prob * 100).toFixed(1),

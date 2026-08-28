@@ -28,33 +28,33 @@ export const MethodsScreen = () => {
   const categories = [
     {
       id: "guided_meditation",
-      title: "Guided Meditation & Breathwork",
+      title: "Guided Breathwork & Vagal Pacing",
       icon: "🧘‍♀️",
       sub_options: [
-        { id: "water_lily_pond", title: "Lily Pond Diaphragmatic Exhale", description: "WESAD Rank #1 · 100% Recovery in 89s · 4-6 Exhalation Pacing" },
-        { id: "vagus_humming", title: "Vagal Humming Exhale", description: "WESAD Rank #2 · 80% Recovery in 134s · Resonant Humming Exhalation" },
-        { id: "diaphragmatic_pace", title: "Deep Abdominal Pacing", description: "WESAD Rank #5 · 66.7% Recovery in 169s · Deep Abdominal Pacing" },
-        { id: "box_meditation", title: "Box Breathing (4-4-4-4)", description: "WESAD Rank #6 · 60% Recovery in 184s · Equal Square Pacing" }
+        { id: "water_lily_pond", title: "Lily Pond Diaphragmatic Exhale", description: "Rapid HRV recovery with 4-6 diaphragmatic exhalations (WESAD Rank #1)" },
+        { id: "vagus_humming", title: "Vagal Humming Exhale", description: "Vagal nerve stimulation through resonant acoustic vibration (WESAD Rank #2)" },
+        { id: "diaphragmatic_pace", title: "Deep Abdominal Pacing", description: "Slow phrenic nerve breathing for rapid pulse reduction (WESAD Rank #5)" },
+        { id: "box_meditation", title: "Box Breathing (4-4-4-4)", description: "Structured 4-4-4-4 square respiration for ANS equilibrium (WESAD Rank #6)" }
       ]
     },
     {
       id: "breathing_garden",
-      title: "Breathing Garden",
+      title: "Breathing Garden Resonant Pacing",
       icon: "🌸",
       sub_options: [
-        { id: "cosmic_nebula", title: "Cosmic Nebula (6 bpm)", description: "WESAD Rank #3 · 80% Recovery in 137s · 0.1Hz Resonance Frequency" },
-        { id: "flower_meadow", title: "Flower Meadow (4-7-8)", description: "WESAD Rank #4 · 80% Recovery in 140s · 4-7-8 Parasympathetic Bloom" }
+        { id: "cosmic_nebula", title: "Cosmic Nebula (6 bpm)", description: "0.1 Hz baroreflex starlight pacing for heart coherence (WESAD Rank #3)" },
+        { id: "flower_meadow", title: "Flower Meadow (4-7-8)", description: "4-7-8 parasympathetic extended exhalation bloom (WESAD Rank #4)" }
       ]
     },
     {
       id: "cognitive_destress",
-      title: "Cognitive De-Stress Arcade",
+      title: "Cognitive & Somatic De-Stress Protocol",
       icon: "🌿",
       sub_options: [
-        { id: "soft_fascination", title: "Nature Restoration Viewing", description: "WESAD Rank #7 · 60% Recovery in 190s · Biophilic Attention Restoration" },
-        { id: "progressive_muscle", title: "Progressive Muscle Release", description: "WESAD Rank #8 · 46.7% Recovery in 217s · Somatic Tension Release" },
-        { id: "guided_imagery", title: "Guided Forest Walk", description: "WESAD Rank #9 · 26.7% Recovery in 254s · Forest Trail Imagery Walk" },
-        { id: "pattern_alignment", title: "Visuospatial Memory Alignment", description: "WESAD Rank #10 · 20% Recovery in 268s · Visuospatial Tile Memory" }
+        { id: "soft_fascination", title: "Nature Restoration Viewing", description: "Attention Restoration (ART) viewing for directed attention recovery (WESAD Rank #7)" },
+        { id: "progressive_muscle", title: "Progressive Muscle Release", description: "Step-by-step somatic muscle tension release (WESAD Rank #8)" },
+        { id: "guided_imagery", title: "Guided Forest Walk", description: "Multisensory forest imagery walk for limbic system calming (WESAD Rank #9)" },
+        { id: "pattern_alignment", title: "Visuospatial Memory Alignment", description: "Attentional refocusing memory alignment to disrupt rumination loops (WESAD Rank #10)" }
       ]
     }
   ];
@@ -85,7 +85,7 @@ export const MethodsScreen = () => {
     setCurrentRecommendation({
       technique_id: cat.id,
       title: cat.title,
-      description: `Selected ${subOpt.title} from Relaxation Catalog`,
+      description: `Selected ${subOpt.title} from Biofeedback Catalog`,
       selected_sub_option: subOpt,
       available_sub_options: cat.sub_options,
       context_cluster_id: 1,
@@ -99,7 +99,7 @@ export const MethodsScreen = () => {
       title: `Launching ${subOpt.title} ${cat.icon}`,
       text: subOpt.description,
       icon: 'info',
-      confirmButtonText: 'Play Session ▶️',
+      confirmButtonText: 'Start Session ⚡',
       onConfirm: () => setCurrentScreen('GamePlayer')
     });
   };
@@ -123,9 +123,9 @@ export const MethodsScreen = () => {
       />
 
       <ScrollView contentContainerStyle={styles.content}>
-        <Text style={[styles.heading, { color: theme.textPrimary }]}>All 15 Relaxation Techniques</Text>
+        <Text style={[styles.heading, { color: theme.textPrimary }]}>WESAD-Validated Biofeedback Catalog</Text>
         <Text style={[styles.sub, { color: theme.textSecondary }]}>
-          Explore our full catalog. Calm AI checks your live physiological signals before launching to ensure optimal vagus recovery.
+          Explore all 10 physiological stress relief protocols. Calm AI verifies your live autonomic signals before launching to maximize vagal tone recovery.
         </Text>
 
         {categories.map((cat) => (
@@ -150,7 +150,7 @@ export const MethodsScreen = () => {
                   {loadingId === sub.id ? (
                     <ActivityIndicator size="small" color={theme.accentText} />
                   ) : (
-                    <Text style={[styles.tryBtnTxt, { color: theme.accentText }]}>Try →</Text>
+                    <Text style={[styles.tryBtnTxt, { color: theme.accentText }]}>Start →</Text>
                   )}
                 </TouchableOpacity>
               </View>

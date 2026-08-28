@@ -31,7 +31,7 @@ from backend.relaxation_guide.services.kmeans_clusterer import kmeans_clusterer
 # 15 WESAD Subjects
 WESAD_SUBJECT_IDS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17]
 
-# Candidate Pool of 18 Techniques for Individual Validation
+# Candidate Pool of 20 Techniques for Individual Validation
 CANDIDATE_TECHNIQUES = {
     "water_lily_pond": {"title": "Lily Pond Diaphragmatic Exhale", "category": "Breathing Garden", "vagal_boost": 0.95, "time_scale": 0.90},
     "vagus_humming": {"title": "Vagal Humming Exhale", "category": "Deep Breathwork", "vagal_boost": 0.93, "time_scale": 0.95},
@@ -51,6 +51,8 @@ CANDIDATE_TECHNIQUES = {
     "soothing_rain": {"title": "Pink Noise Rain Pacing", "category": "Acoustic Biofeedback", "vagal_boost": 0.48, "time_scale": 2.40},
     "alternate_nostril": {"title": "Alternate Nostril Breathing", "category": "Deep Breathwork", "vagal_boost": 0.40, "time_scale": 2.55},
     "rhythmic_tapping": {"title": "EFT Rhythmic Tapping", "category": "Somatic Somatosensory", "vagal_boost": 0.25, "time_scale": 2.75},
+    "tactile_bubble_arcade": {"title": "Tactile De-Stress Pop Arcade", "category": "Cognitive Arcade", "vagal_boost": 0.18, "time_scale": 2.85},
+    "kinetic_focus_tracing": {"title": "Kinetic Spiral Focus Tracing", "category": "Cognitive Arcade", "vagal_boost": 0.12, "time_scale": 2.95},
 }
 
 

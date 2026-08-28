@@ -11,6 +11,9 @@ import {
   Platform,
 } from 'react-native';
 
+import { Ionicons } from '@expo/vector-icons';
+import { ThemeContext } from '../context/ThemeContext';
+
 const { width, height } = Dimensions.get('window');
 const CENTER_X = width / 2;
 const CENTER_Y = height / 2 - 30;
@@ -81,6 +84,10 @@ const rand = (min, max) => min + Math.random() * (max - min);
    COMPONENT
    ═══════════════════════════════════════════════════════ */
 export const FlowerMeadowGame = () => {
+  const themeContext = React.useContext(ThemeContext);
+  const theme = themeContext?.theme || {};
+  const isDarkMode = themeContext?.isDarkMode ?? true;
+
   // ── State ──────────────────────────────────────────
   const [breathPhase, setBreathPhase] = useState('ready');
   const [cycleCount, setCycleCount] = useState(0);
@@ -623,33 +630,47 @@ export const FlowerMeadowGame = () => {
   // ════════════════════════════════════════════════════
   //  DERIVED STATE
   // ════════════════════════════════════════════════════
+  const palette = isDarkMode ? PALETTE : {
+    ...PALETTE,
+    skyTop: '#E0F2FE',
+    skyMid: '#F0FDFA',
+    skyBottom: '#DCFCE7',
+    ground: '#D1FAE5',
+    groundGlow: '#A7F3D0',
+    hudBg: 'rgba(255, 255, 255, 0.94)',
+    hudBorder: 'rgba(15, 23, 42, 0.14)',
+    textMuted: '#475569',
+    textDim: '#0F172A',
+    white: '#0F172A',
+  };
+
   const getPhaseConfig = () => {
     switch (breathPhase) {
-      case 'inhale': return { icon: '🌱', text: 'Breathe In', sub: 'Expand with the flower', color: PALETTE.breathIn, ring: 'rgba(129,140,248,0.3)' };
-      case 'hold':   return { icon: '🕊️', text: 'Hold',       sub: 'Embrace the stillness',  color: PALETTE.breathHold, ring: 'rgba(96,165,250,0.3)' };
-      case 'exhale': return { icon: '🌺', text: 'Breathe Out', sub: 'Release and bloom',      color: PALETTE.breathOut, ring: 'rgba(52,211,153,0.3)' };
-      case 'rest':   return { icon: '🌙', text: 'Rest',        sub: 'Prepare for next cycle', color: PALETTE.breathRest, ring: 'rgba(167,139,250,0.3)' };
-      default:       return { icon: '🌸', text: 'Ready',       sub: 'Tap to begin',           color: PALETTE.petalPink, ring: 'rgba(244,114,182,0.2)' };
+      case 'inhale': return { icon: '🌱', text: 'Breathe In', sub: 'Expand with the flower', color: palette.breathIn, ring: 'rgba(129,140,248,0.3)' };
+      case 'hold':   return { icon: '🕊️', text: 'Hold',       sub: 'Embrace the stillness',  color: palette.breathHold, ring: 'rgba(96,165,250,0.3)' };
+      case 'exhale': return { icon: '🌺', text: 'Breathe Out', sub: 'Release and bloom',      color: palette.breathOut, ring: 'rgba(52,211,153,0.3)' };
+      case 'rest':   return { icon: '🌙', text: 'Rest',        sub: 'Prepare for next cycle', color: palette.breathRest, ring: 'rgba(167,139,250,0.3)' };
+      default:       return { icon: '🌸', text: 'Ready',       sub: 'Tap to begin',           color: palette.petalPink, ring: 'rgba(244,114,182,0.2)' };
     }
   };
 
   const phase = getPhaseConfig();
   const formattedTime = `${Math.floor(elapsedSec / 60).toString().padStart(2, '0')}:${(elapsedSec % 60).toString().padStart(2, '0')}`;
   const calmLevel = calmMeter >= 80 ? 'Deep Calm' : calmMeter >= 50 ? 'Relaxing' : calmMeter >= 25 ? 'Settling' : 'Warming Up';
-  const calmColor = calmMeter >= 80 ? PALETTE.emerald : calmMeter >= 50 ? PALETTE.breathOut : calmMeter >= 25 ? PALETTE.gold : PALETTE.textDim;
+  const calmColor = calmMeter >= 80 ? palette.emerald : calmMeter >= 50 ? palette.breathOut : calmMeter >= 25 ? palette.gold : palette.textDim;
 
   // ════════════════════════════════════════════════════
   //  RENDER
   // ════════════════════════════════════════════════════
   return (
     <TouchableWithoutFeedback onPress={sessionStarted ? handleTouch : startSession}>
-      <View style={styles.container}>
+      <View style={[styles.container, { backgroundColor: palette.skyTop }]}>
 
-        {/* ─── Layer 0: Night Sky ───────────────── */}
+        {/* ─── Layer 0: Sky Gradient ───────────────── */}
         <View style={styles.sky}>
-          <View style={[styles.skyLayer, { backgroundColor: PALETTE.skyTop, opacity: 0.95 }]} />
-          <View style={[styles.skyLayer, { backgroundColor: PALETTE.skyMid, opacity: 0.5, top: '30%' }]} />
-          <View style={[styles.skyLayer, { backgroundColor: PALETTE.skyBottom, opacity: 0.35, top: '55%' }]} />
+          <View style={[styles.skyLayer, { backgroundColor: palette.skyTop, opacity: 0.95 }]} />
+          <View style={[styles.skyLayer, { backgroundColor: palette.skyMid, opacity: 0.7, top: '30%' }]} />
+          <View style={[styles.skyLayer, { backgroundColor: palette.skyBottom, opacity: 0.5, top: '55%' }]} />
         </View>
 
         {/* ─── Layer 1: Stars ──────────────────── */}
@@ -884,19 +905,20 @@ export const FlowerMeadowGame = () => {
             ═══════════════════════════════════════ */}
         {sessionStarted && (
           <Animated.View style={[styles.phaseCard, {
+            backgroundColor: palette.hudBg,
             borderColor: phase.color,
             transform: [{ scale: phaseTextAnim }],
           }]}>
             <Text style={{ fontSize: 30 }}>{phase.icon}</Text>
             <View style={styles.phaseTextBlock}>
               <Text style={[styles.phaseTitle, { color: phase.color }]}>{phase.text}</Text>
-              <Text style={styles.phaseSub}>{phase.sub}</Text>
+              <Text style={[styles.phaseSub, { color: palette.textDim }]}>{phase.sub}</Text>
             </View>
             {/* Breath phase progress dots */}
             <View style={styles.phaseDots}>
               {['inhale', 'hold', 'exhale', 'rest'].map((p, i) => (
                 <View key={p} style={[styles.phaseDot, {
-                  backgroundColor: breathPhase === p ? phase.color : 'rgba(255,255,255,0.1)',
+                  backgroundColor: breathPhase === p ? phase.color : (isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'),
                   ...(breathPhase === p && { shadowColor: phase.color, shadowRadius: 6, shadowOpacity: 0.6 }),
                 }]} />
               ))}
@@ -911,31 +933,31 @@ export const FlowerMeadowGame = () => {
           <View style={styles.hud}>
             {/* Top stats row */}
             <View style={styles.hudRow}>
-              <View style={styles.hudChip}>
-                <Text style={styles.hudChipLabel}>⏱️ TIME</Text>
-                <Text style={styles.hudChipValue}>{formattedTime}</Text>
+              <View style={[styles.hudChip, { backgroundColor: palette.hudBg, borderColor: palette.hudBorder }]}>
+                <Text style={[styles.hudChipLabel, { color: palette.textMuted }]}>⏱️ TIME</Text>
+                <Text style={[styles.hudChipValue, { color: palette.white }]}>{formattedTime}</Text>
               </View>
-              <View style={styles.hudChip}>
-                <Text style={styles.hudChipLabel}>🌸 CYCLES</Text>
-                <Text style={styles.hudChipValue}>{cycleCount}</Text>
+              <View style={[styles.hudChip, { backgroundColor: palette.hudBg, borderColor: palette.hudBorder }]}>
+                <Text style={[styles.hudChipLabel, { color: palette.textMuted }]}>🌸 CYCLES</Text>
+                <Text style={[styles.hudChipValue, { color: palette.white }]}>{cycleCount}</Text>
               </View>
-              <View style={styles.hudChip}>
-                <Text style={styles.hudChipLabel}>✨ SCORE</Text>
-                <Text style={styles.hudChipValue}>{score}</Text>
+              <View style={[styles.hudChip, { backgroundColor: palette.hudBg, borderColor: palette.hudBorder }]}>
+                <Text style={[styles.hudChipLabel, { color: palette.textMuted }]}>✨ SCORE</Text>
+                <Text style={[styles.hudChipValue, { color: palette.white }]}>{score}</Text>
               </View>
-              <View style={[styles.hudChip, combo > 5 && { borderColor: PALETTE.lotus }]}>
-                <Text style={styles.hudChipLabel}>⚡ COMBO</Text>
-                <Text style={[styles.hudChipValue,
-                  combo > 5 && { color: PALETTE.lotus },
-                  combo > 10 && { color: PALETTE.gold },
+              <View style={[styles.hudChip, { backgroundColor: palette.hudBg, borderColor: palette.hudBorder }, combo > 5 && { borderColor: palette.lotus }]}>
+                <Text style={[styles.hudChipLabel, { color: palette.textMuted }]}>⚡ COMBO</Text>
+                <Text style={[styles.hudChipValue, { color: palette.white },
+                  combo > 5 && { color: palette.lotus },
+                  combo > 10 && { color: palette.gold },
                 ]}>{combo}x</Text>
               </View>
             </View>
 
             {/* Calm Meter */}
-            <View style={styles.calmMeterContainer}>
+            <View style={[styles.calmMeterContainer, { backgroundColor: palette.hudBg, borderColor: palette.hudBorder }]}>
               <View style={styles.calmMeterHeader}>
-                <Text style={styles.calmMeterTitle}>🧘 Calm Level</Text>
+                <Text style={[styles.calmMeterTitle, { color: palette.white }]}>🧘 Calm Level</Text>
                 <Text style={[styles.calmMeterLevel, { color: calmColor }]}>{calmLevel}</Text>
               </View>
               <View style={styles.calmMeterTrack}>
@@ -953,10 +975,10 @@ export const FlowerMeadowGame = () => {
                 ))}
               </View>
               <View style={styles.calmMeterLabels}>
-                <Text style={styles.calmMeterLabel}>Warming Up</Text>
-                <Text style={styles.calmMeterLabel}>Settling</Text>
-                <Text style={styles.calmMeterLabel}>Relaxing</Text>
-                <Text style={styles.calmMeterLabel}>Deep Calm</Text>
+                <Text style={[styles.calmMeterLabel, { color: palette.textMuted }]}>Warming Up</Text>
+                <Text style={[styles.calmMeterLabel, { color: palette.textMuted }]}>Settling</Text>
+                <Text style={[styles.calmMeterLabel, { color: palette.textMuted }]}>Relaxing</Text>
+                <Text style={[styles.calmMeterLabel, { color: palette.textMuted }]}>Deep Calm</Text>
               </View>
             </View>
           </View>
@@ -1039,10 +1061,10 @@ export const FlowerMeadowGame = () => {
             ═══════════════════════════════════════ */}
         {sessionStarted && (
           <View style={styles.controlHint}>
-            <Text style={styles.controlHintText}>
+            <Text style={[styles.controlHintText, { color: palette.textDim }]}>
               👆 Tap during Exhale or Hold for bloom points
             </Text>
-            <Text style={styles.controlHintSub}>
+            <Text style={[styles.controlHintSub, { color: palette.textMuted }]}>
               🌿 {gardenFlowers.length} flower{gardenFlowers.length !== 1 ? 's' : ''} planted  ·  🎯 {perfectBreaths} perfect breath{perfectBreaths !== 1 ? 's' : ''}
             </Text>
           </View>
@@ -1386,13 +1408,13 @@ const styles = StyleSheet.create({
   // ── Garden Progress ───────────────────────────────
   gardenProgress: {
     position: 'absolute',
-    bottom: 105,
-    left: 20,
-    right: 20,
+    bottom: 50,
+    left: 16,
+    right: 16,
     backgroundColor: PALETTE.hudBg,
-    borderRadius: 16,
-    paddingVertical: 6,
-    paddingHorizontal: 14,
+    borderRadius: 14,
+    paddingVertical: 4,
+    paddingHorizontal: 12,
     borderWidth: 1,
     borderColor: PALETTE.hudBorder,
   },
