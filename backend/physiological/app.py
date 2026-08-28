@@ -16,6 +16,7 @@ if __package__ is None:
 from backend.common.app_factory import create_app
 from backend.common.config import (
     STRESS_COLORS,
+    STRESS_LABELS,
     N_BASELINE_WIN,
     CALIBRATION_SOFT_AGE_DAYS, CALIBRATION_HARD_AGE_DAYS
 )
@@ -25,6 +26,7 @@ from backend.physiological.firebase_service import (
     create_user, get_user, list_users,
     create_user_with_password, set_password_hash,
     load_baseline, load_baseline_meta,
+    load_personal_stress_threshold,
     save_prediction, get_session_predictions,
     get_recent_sessions,
     save_pss4, get_pss4_history,
@@ -42,15 +44,22 @@ from backend.physiological.extract_features import (
     extract_features, compute_signal_quality
 )
 from backend.physiological.calibration_capture import (
-    save_calibration_windows, run_calibration_capture
+    save_calibration_windows, run_calibration_capture, run_task_calibration_capture
 )
 
 app = create_app(__name__)
 init_firebase()
 
-ring_sessions = {}  
+ring_sessions = {}
 
 _calibration_sessions = {}
+
+# user_id -> {'status': ..., ...} -- separate from _calibration_sessions
+# above (baseline capture progress) so a threshold-task capture in
+# progress never overwrites/gets overwritten by a concurrent baseline
+# capture's own status polling. Mirrors backend/psychological/app.py's
+# identical split.
+_threshold_sessions = {}
 
 USER_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{3,30}$')
 
@@ -184,6 +193,48 @@ def calibrate_status():
     state = _calibration_sessions.get(g.user_id, {'status': 'idle'})
     return jsonify(state)
 
+
+# -- /calibrate/threshold/start + /status -- personal STRESS_DECISION_THRESHOLD
+# from a deliberate onboarding task (mirrors backend/psychological/app.py's
+# /calibrate/threshold -- same idea, physiological's own on-demand-capture
+# shape since this modality has no equivalent to EEG's already-warm,
+# always-on mqtt_bridge.py session to submit pre-captured blocks to).
+# Call only after /calibrate (or /calibrate/start) has already saved a
+# baseline for this user -- run_task_calibration_capture() (calibration_capture.py)
+# needs the resting scores that call saves.
+@app.route('/calibrate/threshold/start', methods=['POST'])
+@require_auth
+def calibrate_threshold_start():
+    user_id = g.user_id
+    current = _threshold_sessions.get(user_id)
+    if current and current.get('status') in ('capturing', 'saving'):
+        return jsonify({'error': 'Threshold calibration already in progress'}), 409
+
+    _threshold_sessions[user_id] = {'status': 'capturing'}
+
+    def on_progress(status, extra):
+        entry = {'status': status}
+        if status == 'error':
+            entry['error'] = extra.get('message', 'Unknown error')
+        else:
+            entry.update(extra)
+            entry['status'] = status
+        _threshold_sessions[user_id] = entry
+
+    def worker():
+        run_task_calibration_capture(user_id, on_progress=on_progress)
+
+    threading.Thread(target=worker, daemon=True).start()
+    return jsonify({'status': 'started'})
+
+
+@app.route('/calibrate/threshold/status', methods=['GET'])
+@require_auth
+def calibrate_threshold_status():
+    state = _threshold_sessions.get(g.user_id, {'status': 'idle'})
+    return jsonify(state)
+
+
 @app.route('/predict', methods=['POST'])
 @require_auth
 def predict():
@@ -285,6 +336,19 @@ def predict():
             result = predict_window(features_2d, b_mean, b_std, sm, feat_dict)
     except RuntimeError as e:
         return jsonify({'error': 'Model unavailable', 'details': str(e)}), 503
+
+    # ── Personal STRESS_DECISION_THRESHOLD override, if this user has one ──
+    # (see /calibrate/threshold/start + calibration_capture.py::
+    # run_task_calibration_capture()) -- re-derives prediction/label from
+    # the SAME prob_stress predict_window()/predict_raw() already computed,
+    # just against this user's own threshold instead of the fixed
+    # population one. confidence is max(prob_normal, prob_stress) either
+    # way, so it's unaffected and left as-is.
+    personal_threshold = load_personal_stress_threshold(user_id)
+    if personal_threshold is not None:
+        result = dict(result)
+        result['prediction'] = 1 if result['prob_stress'] > personal_threshold else 0
+        result['label'] = STRESS_LABELS[result['prediction']]
 
     # ── Save structured data only ──────────────────────────────
     save_prediction(
@@ -494,6 +558,8 @@ if __name__ == '__main__':
     print(f"  POST /calibrate         ← real-ring baseline capture (auth required)")
     print(f"  POST /calibrate/start    (auth required) — live in-app capture trigger")
     print(f"  GET  /calibrate/status   (auth required) — poll capture progress")
+    print(f"  POST /calibrate/threshold/start  (auth required) — personal threshold task trigger")
+    print(f"  GET  /calibrate/threshold/status (auth required) — poll threshold task progress")
     print(f"  POST /predict           ← binary (Normal/Stress) + trend")
     print(f"  GET  /devices/<device_id>/status")
     print(f"  POST /pss4")

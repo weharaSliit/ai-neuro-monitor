@@ -103,6 +103,46 @@ def update_baseline_ema(old_mean, old_std,
     return updated_mean, updated_std
 
 
+# Minimum required separation between this user's own resting and task
+# prob_stress means before a personal threshold is trusted -- physiological's
+# own copy of the same idea as backend/psychological/sam40/decision.py's
+# compute_personal_threshold() (kept local, not shared, matching this
+# project's existing pattern of physiological/psychological never sharing
+# domain logic -- see backend/common/mqtt_bridge.py's module docstring for
+# the same reasoning applied to transport code). EEG derives its floor from
+# a real SAM40 LOSO population-percentile spread
+# (MAX_THRESHOLD_SHIFT ~= 0.11); physiological has no equivalent calibrated
+# percentile file for this WESAD-trained model, so this is a plain,
+# documented default of the same order of magnitude, not a data-derived
+# value -- revisit if a real percentile analysis for this model becomes
+# available.
+PERSONAL_THRESHOLD_MIN_SEPARATION = 0.10
+
+
+def compute_personal_stress_threshold(resting_scores, task_scores):
+    """Personal STRESS_DECISION_THRESHOLD from a deliberate onboarding task
+    (a short, known high-load period run right after baseline calibration):
+    threshold = midpoint between this user's own resting and task
+    prob_stress means, both scored via predict_window() (the same
+    baseline-normalized path /predict actually uses -- see
+    save_resting_scores()'s docstring, firebase_service.py). Returns None
+    (caller keeps the fixed population STRESS_DECISION_THRESHOLD) if the
+    two groups aren't separated by at least PERSONAL_THRESHOLD_MIN_SEPARATION.
+    Clamped to [0, 1] -- a plain probability bound, since (unlike EEG) no
+    calibrated population percentile range exists here to clamp against.
+    """
+    if len(resting_scores) < 1 or len(task_scores) < 1:
+        return None
+
+    resting_mean = float(np.mean(resting_scores))
+    task_mean = float(np.mean(task_scores))
+    if task_mean - resting_mean < PERSONAL_THRESHOLD_MIN_SEPARATION:
+        return None
+
+    midpoint = (resting_mean + task_mean) / 2.0
+    return max(0.0, min(1.0, midpoint))
+
+
 def normalize_features(X, baseline_mean, baseline_std):
     X_norm = X.copy().astype(np.float64)
     for i, feat in enumerate(feature_cols):

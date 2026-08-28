@@ -16,6 +16,7 @@ import PSS4Screen from './modules/physiological/screens/PSS4Screen';
 import ProfileScreen from './modules/physiological/screens/ProfileScreen';
 import RingSummaryScreen from './modules/physiological/screens/RingSummaryScreen';
 import EegSummaryScreen from './modules/eeg/screens/EegSummaryScreen';
+import EegThresholdTaskScreen from './modules/eeg/screens/EegThresholdTaskScreen';
 import PhenotypingEmaScreen from './modules/phenotyping/screens/PhenotypingEmaScreen';
 import PhenotypingSignalDetailScreen from './modules/phenotyping/screens/PhenotypingSignalDetailScreen';
 import PhenotypingSignalHistoryScreen from './modules/phenotyping/screens/PhenotypingSignalHistoryScreen';
@@ -35,6 +36,7 @@ const linking = {
       Login: 'login',
       Register: 'register',
       AccountSetup: 'account-setup',
+      ThresholdCalibration: 'threshold-calibration',
       Admin: 'admin',
       Physiological: {
         path: '',
@@ -104,6 +106,7 @@ function RootNavigator() {
               ProfileScreen.js. */}
           <Stack.Screen name="Admin" component={AdminNavigator} />
           <Stack.Screen name="AccountSetup" component={AccountSetupScreen} />
+          <Stack.Screen name="ThresholdCalibration" component={EegThresholdTaskScreen} />
           <Stack.Screen name="Physiological" component={PhysiologicalNavigator} />
           <Stack.Screen
             name="Profile"
