@@ -4,7 +4,8 @@
 // (weekly 4-question survey) -- both POST to the same
 // backend/phenotyping_behavior/app.py's /behavior/label route the
 // original used, unchanged. Local "already submitted this week" state
-// uses AsyncStorage instead of localStorage, namespaced per real userId.
+// uses AsyncStorage instead of localStorage, namespaced per this device's
+// own Digital Phenotyping tracking id (see utils/deviceIdentity.js).
 // ============================================================
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
@@ -12,7 +13,7 @@ import ScreenBackground from '../../shared/ScreenBackground';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import { COLORS as STATIC_COLORS } from '../../physiological/config/theme';
-import { useAuth } from '../../../context/AuthContext';
+import { usePhenotypingDeviceId } from '../utils/deviceIdentity';
 import { API_BASE } from '../config/config';
 
 const PSS4_QUESTIONS = [
@@ -44,8 +45,7 @@ function stressCategory(score) {
 
 export default function PhenotypingEmaScreen({ navigation, route }) {
     const { theme: t, COLORS } = useTheme();
-    const { user } = useAuth();
-    const userId = user?.userId;
+    const deviceId = usePhenotypingDeviceId();
 
     const [tab, setTab] = useState(route?.params?.initialTab === 'pss4' ? 'pss4' : 'siss');
     const [sissScore, setSissScore] = useState(3);
@@ -59,12 +59,12 @@ export default function PhenotypingEmaScreen({ navigation, route }) {
     const [message, setMessage] = useState(null);
 
     useEffect(() => {
-        if (!userId) return;
+        if (!deviceId) return;
         (async () => {
-            const savedSiss = await AsyncStorage.getItem(`siss_last_checkin_${userId}`);
+            const savedSiss = await AsyncStorage.getItem(`siss_last_checkin_${deviceId}`);
             if (savedSiss) { try { setLastSiss(JSON.parse(savedSiss)); } catch {} }
 
-            const savedPss4 = await AsyncStorage.getItem(`pss4_saved_data_${userId}`);
+            const savedPss4 = await AsyncStorage.getItem(`pss4_saved_data_${deviceId}`);
             if (savedPss4) {
                 try {
                     const parsed = JSON.parse(savedPss4);
@@ -76,7 +76,7 @@ export default function PhenotypingEmaScreen({ navigation, route }) {
                 } catch {}
             }
         })();
-    }, [userId]);
+    }, [deviceId]);
 
     const submitSiss = async () => {
         setSubmitting(true);
@@ -86,17 +86,17 @@ export default function PhenotypingEmaScreen({ navigation, route }) {
             const res = await fetch(`${API_BASE}/behavior/label`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user_id: userId, type: 'siss', score: sissScore, timestamp: nowIso }),
+                body: JSON.stringify({ user_id: deviceId, type: 'siss', score: sissScore, timestamp: nowIso }),
             });
             const data = await res.json();
             const checkin = { score: sissScore, timestamp: nowIso };
-            await AsyncStorage.setItem(`siss_last_checkin_${userId}`, JSON.stringify(checkin));
+            await AsyncStorage.setItem(`siss_last_checkin_${deviceId}`, JSON.stringify(checkin));
             setLastSiss(checkin);
             setMessage(res.ok ? 'SISS check-in saved!' : `Error: ${data.reason || 'Failed'}`);
             if (res.ok) setTimeout(() => navigation.goBack(), 1000);
         } catch {
             const checkin = { score: sissScore, timestamp: nowIso };
-            await AsyncStorage.setItem(`siss_last_checkin_${userId}`, JSON.stringify(checkin));
+            await AsyncStorage.setItem(`siss_last_checkin_${deviceId}`, JSON.stringify(checkin));
             setLastSiss(checkin);
             setMessage('Saved locally (offline)');
             setTimeout(() => navigation.goBack(), 1000);
@@ -121,16 +121,16 @@ export default function PhenotypingEmaScreen({ navigation, route }) {
             const res = await fetch(`${API_BASE}/behavior/label`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user_id: userId, type: 'pss4', score: totalScore, timestamp: nowIso }),
+                body: JSON.stringify({ user_id: deviceId, type: 'pss4', score: totalScore, timestamp: nowIso }),
             });
             const data = await res.json();
-            await AsyncStorage.setItem(`pss4_saved_data_${userId}`, JSON.stringify(dataObj));
+            await AsyncStorage.setItem(`pss4_saved_data_${deviceId}`, JSON.stringify(dataObj));
             setPss4Saved(dataObj);
             setEditingPss4(false);
             setMessage(res.ok ? `PSS-4 saved! Score: ${totalScore}/16` : `Error: ${data.reason || 'Failed'}`);
             if (res.ok) setTimeout(() => navigation.goBack(), 1200);
         } catch {
-            await AsyncStorage.setItem(`pss4_saved_data_${userId}`, JSON.stringify(dataObj));
+            await AsyncStorage.setItem(`pss4_saved_data_${deviceId}`, JSON.stringify(dataObj));
             setPss4Saved(dataObj);
             setEditingPss4(false);
             setMessage(`Saved locally (Score: ${totalScore}/16)`);

@@ -76,9 +76,9 @@ public class KeystrokeCollectorService extends AccessibilityService {
     private static final String FLASK_BASE_URL   = "https://ai-neuro-monitor-8wsv.onrender.com";
     private static final String PREDICT_ENDPOINT = FLASK_BASE_URL + "/behavior/predict";
 
-    // Firebase REST — only used for the UI dashboard display
-    private static final String FIREBASE_BASE_URL =
-        "https://stress-monitor-c39ee-default-rtdb.asia-southeast1.firebasedatabase.app/phenotyping/metrics/";
+    // NOTE: No direct Firebase writes from Android.
+    // All data flows through Flask (/behavior/predict) which writes
+    // to phenotyping/data_logs and phenotyping/predictions via firebase_service.py.
 
     // Upload window — production value. 5 minutes matches what a real
     // behavioral window is meant to represent.
@@ -533,6 +533,10 @@ public class KeystrokeCollectorService extends AccessibilityService {
         final boolean windowCategoryValid = this.appCategoryValid;
         final boolean windowDataValid     = windowMotionValid && windowCategoryValid;
 
+        // ── Clear buffers NOW so new events accumulate into the next window ──
+        // On Flask failure we re-add the snapshot back (see handler below),
+        // which merges it into the next 5-min window. This prevents silent
+        // data loss when the Render backend is cold-starting or offline.
         flightTimes.clear();
         dwellTimes.clear();
         scrollSpeeds.clear();
@@ -599,14 +603,23 @@ public class KeystrokeCollectorService extends AccessibilityService {
                 String flaskResponse = httpPost(PREDICT_ENDPOINT, payload.toString());
                 if (flaskResponse != null) {
                     Log.d(TAG, "Flask response: " + flaskResponse);
-
-                    JSONObject resp = new JSONObject(flaskResponse);
-                    String label    = resp.optString("prediction", "Unknown");
-                    double severity = resp.optDouble("severity", 0.0);
-                    pushDashboardUpdate(currentUserId, label, severity, unlockSnapshot);
+                    // Flask handles all Firebase writes (phenotyping/data_logs + phenotyping/predictions).
+                    // No direct Firebase push from Android needed.
                 } else {
-                    Log.w(TAG, "Flask unreachable -- writing raw metrics to Firebase only");
-                    pushRawMetricsToFirebase(currentUserId, flightSnapshot, avgScroll, unlockSnapshot, elapsed);
+                    // Flask was unreachable (cold-start, no network, etc.).
+                    // Re-add the snapshot back to the live buffers so this window's
+                    // data merges into the next 5-minute upload instead of being lost.
+                    Log.w(TAG, "Flask unreachable -- re-queuing " + flightSnapshot.size()
+                        + " flight samples into next window.");
+                    handler.post(() -> {
+                        flightTimes.addAll(0, flightSnapshot);
+                        dwellTimes.addAll(0, dwellSnapshot);
+                        scrollSpeeds.addAll(0, scrollSnapshot);
+                        // Note: unlockCount and appSwitchCount are counts, not lists —
+                        // re-adding them would double-count events already in the next
+                        // window's tally. We accept that trade-off (counts are minor
+                        // features) to keep the re-queue logic simple.
+                    });
                 }
 
             } catch (Exception e) {
@@ -615,44 +628,15 @@ public class KeystrokeCollectorService extends AccessibilityService {
         }).start();
     }
 
-    private void pushDashboardUpdate(String userId, String label, double severity, int unlocks) {
-        try {
-            JSONObject payload = new JSONObject();
-            payload.put("stress_score",  severity);
-            payload.put("label",         label);
-            payload.put("unlocks_count", unlocks);
-            payload.put("source",        "flask_ocsvm");
-            payload.put("timestamp",     System.currentTimeMillis());
-
-            String targetUrl = FIREBASE_BASE_URL + userId + ".json";
-            String result = httpPatch(targetUrl, payload.toString());
-            Log.d(TAG, "Dashboard updated: " + label + " (" + severity + ") -> " + result);
-        } catch (Exception e) {
-            Log.e(TAG, "Firebase dashboard update failed", e);
-        }
-    }
-
-    private void pushRawMetricsToFirebase(String userId, List<Long> flights, double avgScroll,
-                                          int unlocks, long elapsedMin) {
-        try {
-            long avgFlight = flights.isEmpty() ? 0 :
-                (long) flights.stream().mapToLong(Long::longValue).average().orElse(0);
-            int  wpm       = (int) (flights.size() / 5.0 / Math.max(1, elapsedMin));
-
-            JSONObject payload = new JSONObject();
-            payload.put("typing_speed",     Math.max(wpm, 1));
-            payload.put("typing_rhythm_ms", avgFlight);
-            payload.put("scroll_velocity",  avgScroll);
-            payload.put("unlocks_count",    unlocks);
-            payload.put("source",           "raw_accessibility");
-            payload.put("timestamp",        System.currentTimeMillis());
-
-            String targetUrl = FIREBASE_BASE_URL + userId + ".json";
-            httpPatch(targetUrl, payload.toString());
-        } catch (Exception e) {
-            Log.e(TAG, "Firebase raw fallback failed", e);
-        }
-    }
+    // pushDashboardUpdate() and pushRawMetricsToFirebase() removed.
+    // Rationale: Android must NOT write directly to Firebase. All behavioral
+    // data must flow through Flask (/behavior/predict) so that:
+    //   1. The OC-SVM prediction engine processes it first.
+    //   2. The canonical phenotyping/data_logs and phenotyping/predictions
+    //      tables are written with the correct, complete schema.
+    //   3. The fusion_engine table receives the standardized group format.
+    // Direct Firebase writes bypassed all three of these steps and wrote
+    // an incomplete schema to the rogue phenotyping/metrics path.
 
     private static String activityName(int type) {
         switch (type) {

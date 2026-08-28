@@ -2,9 +2,10 @@
 // PhenotypingOnboardingScreen.js -- consolidated RN port of the standalone
 // app's welcome.jsx + BaselineSurvey.jsx + permissions.jsx + SetupComplete.jsx.
 // Identity/registration (the original's first survey question, "what's your
-// name") is dropped entirely -- StressApp's real login already provides
-// that (see the "Bring Phenotyping Into StressApp" plan's identity
-// decision). What's kept: the 5 real lifestyle-context questions (stored
+// name") is dropped entirely -- this screen keys everything off this
+// device's own randomly-generated Digital Phenotyping tracking id instead
+// (see modules/phenotyping/utils/deviceIdentity.js), not an account name.
+// What's kept: the 5 real lifestyle-context questions (stored
 // for research purposes, not consumed by the prediction model itself),
 // the Accessibility Settings instructions (this grant genuinely can't be
 // triggered by any app, Android requires manual Settings navigation), and
@@ -17,7 +18,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, NativeModules, Pl
 import ScreenBackground from '../../shared/ScreenBackground';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../../physiological/config/ThemeContext';
-import { useAuth } from '../../../context/AuthContext';
+import { getOrCreateDeviceId } from '../utils/deviceIdentity';
 
 const { PhenotypingIdentity } = NativeModules;
 
@@ -34,20 +35,18 @@ const SURVEY_QUESTIONS = [
       options: ['Stress awareness', 'Research study', 'Improve focus', 'Health tracking'] },
 ];
 
-export async function markPhenotypingOnboarded(userId, answers) {
-    await AsyncStorage.setItem(`phenotyping_onboarded_${userId}`, JSON.stringify({
+export async function markPhenotypingOnboarded(deviceId, answers) {
+    await AsyncStorage.setItem(`phenotyping_onboarded_${deviceId}`, JSON.stringify({
         completed_at: new Date().toISOString(), survey_answers: answers,
     }));
 }
 
-export async function isPhenotypingOnboarded(userId) {
-    return !!(await AsyncStorage.getItem(`phenotyping_onboarded_${userId}`));
+export async function isPhenotypingOnboarded(deviceId) {
+    return !!(await AsyncStorage.getItem(`phenotyping_onboarded_${deviceId}`));
 }
 
 export default function PhenotypingOnboardingScreen({ navigation }) {
     const { theme: t, COLORS } = useTheme();
-    const { user } = useAuth();
-    const userId = user?.userId;
 
     const [answers, setAnswers] = useState({});
     const [permissionsRequested, setPermissionsRequested] = useState(false);
@@ -66,7 +65,11 @@ export default function PhenotypingOnboardingScreen({ navigation }) {
 
     const finish = async () => {
         setSaving(true);
-        await markPhenotypingOnboarded(userId, answers);
+        // Await directly rather than trusting the deviceId state var, in case
+        // this fires before usePhenotypingDeviceId()'s effect has resolved --
+        // getOrCreateDeviceId() is cached/idempotent so this is cheap either way.
+        const id = await getOrCreateDeviceId();
+        await markPhenotypingOnboarded(id, answers);
         setSaving(false);
         navigation.goBack();
     };

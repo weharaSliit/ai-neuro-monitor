@@ -5,6 +5,8 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Build;
+import android.view.accessibility.AccessibilityManager;
+import android.accessibilityservice.AccessibilityServiceInfo;
 
 import androidx.annotation.NonNull;
 import androidx.core.app.ActivityCompat;
@@ -124,5 +126,39 @@ public class PhenotypingIdentityModule extends ReactContextBaseJavaModule implem
             pendingPermissionPromise = null;
         }
         return true;
+    }
+
+    /**
+     * Checks whether the PhenoCare Accessibility Service (KeystrokeCollectorService)
+     * is currently enabled in Android's Accessibility Settings.
+     * Called from PhenotypingScreen.js on every screen focus to show a live
+     * warning banner if the user has revoked the permission after onboarding.
+     * Resolves to true (enabled) or false (disabled/revoked).
+     */
+    @ReactMethod
+    public void isAccessibilityServiceEnabled(Promise promise) {
+        try {
+            AccessibilityManager am = (AccessibilityManager)
+                getReactApplicationContext().getSystemService(Context.ACCESSIBILITY_SERVICE);
+            if (am == null) {
+                promise.resolve(false);
+                return;
+            }
+            // Iterate enabled accessibility services and look for ours by package name.
+            java.util.List<AccessibilityServiceInfo> enabled =
+                am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK);
+            String ourPackage = getReactApplicationContext().getPackageName();
+            for (AccessibilityServiceInfo info : enabled) {
+                android.content.pm.ServiceInfo si = info.getResolveInfo().serviceInfo;
+                if (ourPackage.equals(si.packageName)) {
+                    promise.resolve(true);
+                    return;
+                }
+            }
+            promise.resolve(false);
+        } catch (Exception e) {
+            // Fail open: if we can't check, assume enabled so we don't spam a false warning.
+            promise.resolve(true);
+        }
     }
 }
