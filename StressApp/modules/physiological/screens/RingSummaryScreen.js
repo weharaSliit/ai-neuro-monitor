@@ -226,7 +226,7 @@ export default function RingSummaryScreen({ navigation }) {
               Your Ring hasn't been calibrated yet. Predictions before that would use a generic model with no personal baseline, so they're hidden until you calibrate.
             </Text>
             <TouchableOpacity
-              onPress={() => navigation.navigate('Fusion')}
+              onPress={() => navigation.navigate('Physiological', { screen: 'Fusion' })}
               activeOpacity={0.85}
               style={[styles.calibrateCta, { backgroundColor: COLORS.brandSoft, borderColor: COLORS.brand + '30' }]}
             >

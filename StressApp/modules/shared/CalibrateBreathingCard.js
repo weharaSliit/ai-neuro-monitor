@@ -224,6 +224,14 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
     const anySaving = (ringState.triggered && ringState.status === 'saving') || (eegState.triggered && eegState.status === 'saving');
     if (anySettling) return 'Settling — first few seconds discarded';
     if (anySaving) return 'Saving your personal baseline…';
+    // Ring's own window_idx/n_windows already arrive on every /calibrate/status
+    // poll (app.py's on_progress) and get merged into ringState -- just never
+    // displayed before. Dynamically sized off n_windows (not a hardcoded 3)
+    // so this stays correct if N_BASELINE_WIN changes again.
+    if (ringState.triggered && ringState.status === 'capturing'
+        && ringState.window_idx != null && ringState.n_windows != null) {
+      return `Capturing — sit still and breathe calmly (${ringState.window_idx}/${ringState.n_windows})`;
+    }
     return 'Capturing — sit still and breathe calmly';
   };
 
