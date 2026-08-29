@@ -15,7 +15,7 @@
 // and continues into the app; there's no dead end here.
 // ============================================================
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
 import ScreenBackground from '../modules/shared/ScreenBackground';
 import Card from '../modules/shared/Card';
