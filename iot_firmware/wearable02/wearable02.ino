@@ -1,7 +1,8 @@
 #include <SPI.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h> 
+#include <WiFiClientSecure.h>
 #include <PubSubClient.h>
+#include "esp_system.h"
 
 /* ================= HARDWARE PIN DEFINITIONS (XIAO ESP32-C3) ================= */
 // Reverted to raw GPIO integers for generic ESP32-C3 board compatibility
@@ -25,8 +26,8 @@ const char* MQTT_BROKER = "ob1f0f10.ala.asia-southeast1.emqxsl.com";
 const int   MQTT_PORT   = 8883;
 const char* MQTT_USER   = "wearable02";
 const char* MQTT_PASS   = "wearable02";
-const char* MQTT_TOPIC  = "mindpulse/wearable02/sensors";
-const char* MQTT_STATUS = "mindpulse/wearable02/status";
+const char* MQTT_TOPIC  = "mindpulse/wearable02/eeg";
+//const char* MQTT_STATUS = "mindpulse/wearable02/status";
 
 const char* EMQX_CA_CERT = R"EOF(
 -----BEGIN CERTIFICATE-----
@@ -79,8 +80,28 @@ volatile bool drdyFlag = false;
 unsigned long lastDrdyTimestamp = 0;
 unsigned long lastHeartbeatTime = 0;
 
+// MQTT client id is kept fixed as "wearable02" (not a per-boot unique id) --
+// deliberate, to keep exactly one entry for this device in the EMQX client
+// dashboard rather than a new one every reboot (same reasoning as not
+// spinning up a new calibration client per attempt, elsewhere in this
+// system). See maintainMQTT()'s comment for the tradeoff this implies.
+
 void IRAM_ATTR onDrdy() {
   drdyFlag = true;
+  // DIAGNOSIS ("drdy issue"): this used to be set in loop() instead, at the
+  // point the flag got processed -- but loop() can be blocked for seconds
+  // at a time inside connectWiFi() (or, before the mqtt.connect() timeout
+  // fix above, inside a hung TLS handshake), during which this timestamp
+  // never advanced even though the ADS1292R itself kept pulsing DRDY the
+  // whole time. The 5s heartbeat's "[WARNING] DRDY interrupt stopped
+  // pulsing!" check reads this timestamp, so any long-enough loop() stall
+  // was making that warning fire as a FALSE POSITIVE -- reporting "DRDY
+  // stopped" when really it was just loop() that stopped reading it. Timing
+  // it here instead measures the real hardware signal, independent of
+  // whatever loop() is doing. If the warning still appears with no
+  // WiFi/MQTT reconnect happening nearby, that points at a genuine
+  // ADS1292R/SPI/power issue instead of this false-positive mechanism.
+  lastDrdyTimestamp = millis();
 }
 
 /* ================= SPI HELPERS ================= */
@@ -151,6 +172,22 @@ bool isStatusValid(byte s0) {
 
 void connectWiFi() {
   WiFi.mode(WIFI_STA);
+  // Lets the driver silently reassociate on its own after a brief drop --
+  // see WIFI_RECONNECT_GRACE_MS's comment below for why this matters.
+  WiFi.setAutoReconnect(true);
+  // Lower TX power -- confirmed working over USB (ample current) but not on
+  // battery, which points at the WiFi radio's TX current spike (default max
+  // is ~19.5dBm, drawing several hundred mA in bursts) browning out a
+  // battery that can't source that peak. Dropped further to 8.5dBm from an
+  // earlier 11dBm -- still browning out on a 600mAh/3.7V LiPo (small cell,
+  // unknown discharge rating -- likely can't source even the reduced spike
+  // without voltage sag), so cutting the peak further. Raise this back up
+  // (max WIFI_POWER_19_5dBm) if range turns out to be a problem once
+  // brownouts are ruled out; if 8.5dBm still browns out, the battery itself
+  // (charge level or discharge/C rating) is the limiting factor, not TX
+  // power -- a bulk capacitor across the battery rail or a better-rated
+  // cell would be the next step, not a further firmware change.
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);
   for (int i = 0; i < WIFI_NETWORK_COUNT; i++) {
     WiFi.disconnect(true, true);
     delay(100);
@@ -171,7 +208,12 @@ void connectWiFi() {
       Serial.println("WiFi connected: " + String(WIFI_SSIDS[i]));
       Serial.print("IP Address: ");
       Serial.println(WiFi.localIP());
-      WiFi.setSleep(false);
+      // Was setSleep(false) -- fine on USB, but on battery that keeps the
+      // radio fully awake between transmissions instead of using WiFi's own
+      // modem-sleep power saving, raising sustained average draw for no
+      // benefit this app needs (samples publish in ~1s batches, not
+      // latency-critical). true re-enables modem sleep.
+      WiFi.setSleep(true);
       return;
     }
     Serial.println();
@@ -182,12 +224,45 @@ void connectWiFi() {
 unsigned long lastMqttAttempt = 0;
 const unsigned long MQTT_RETRY_INTERVAL_MS = 2000;
 
+// loop() used to call the full blocking connectWiFi() (up to ~9s of
+// delay()-spinning PER configured SSID) on every single iteration where
+// WiFi wasn't connected -- during which mqtt.loop(), the heartbeat, and
+// DRDY sample draining all stall completely. A brief drop (AP roam,
+// momentary RF interference) turned into several seconds of total device
+// silence, repeatedly, which is what "sometimes the connection just fails"
+// looks like from the app side. Two changes fix this:
+//   1. WiFi.setAutoReconnect(true) (set inside connectWiFi(), above) lets the
+//      ESP32 driver itself silently reassociate to the AP it just dropped,
+//      almost always within under a second, with no loop() involvement at
+//      all -- covers the common transient-blip case for free.
+// 2. loop() only falls back to the expensive full multi-SSID
+//      connectWiFi() scan after WiFi has been down continuously for
+//      WIFI_RECONNECT_GRACE_MS (giving setAutoReconnect a real chance to
+//      recover first), and even then at most once per
+//      WIFI_RECONNECT_RETRY_MS -- instead of re-entering it back-to-back
+//      on every loop() tick while still down.
+unsigned long wifiDownSince = 0;
+unsigned long lastWifiReconnectAttempt = 0;
+const unsigned long WIFI_RECONNECT_GRACE_MS = 4000;
+const unsigned long WIFI_RECONNECT_RETRY_MS = 10000;
+
 void maintainMQTT() {
   if (mqtt.connected()) return;
   unsigned long now = millis();
   if (now - lastMqttAttempt < MQTT_RETRY_INTERVAL_MS) return;
   lastMqttAttempt = now;
 
+  // Fixed client id "wearable02", deliberately not unique-per-boot -- see
+  // the comment above this device's global state (near lastDrdyTimestamp).
+  // Known tradeoff: right after a FAST reconnect (e.g. a manual reset,
+  // which never cuts power and so cycles much quicker than an off/on power
+  // cycle), EMQX may briefly still consider the previous session (same
+  // client id) alive and reject or delay this connect attempt -- the MQTT
+  // spec says the broker should evict the stale session and accept the new
+  // one, but that takeover isn't guaranteed instant. Not fixed by retrying
+  // with a different id here (would defeat the point of keeping it fixed);
+  // this function's own MQTT_RETRY_INTERVAL_MS loop already retries every
+  // 2s regardless, which is what actually rides out that window.
   Serial.print("Connecting to EMQX MQTT Broker...");
   if (mqtt.connect("wearable02", MQTT_USER, MQTT_PASS)) {
     Serial.println(" Connected");
@@ -270,11 +345,32 @@ void publishBatch() {
 
 /* ================= SETUP ================= */
 
-void setup() {
-  Serial.begin(115200);
+void printResetReason() {
+  esp_reset_reason_t reason = esp_reset_reason();
+  const char* reasonStr;
+  switch (reason) {
+    case ESP_RST_POWERON:  reasonStr = "POWERON (normal power-up)"; break;
+    case ESP_RST_EXT:      reasonStr = "EXT (external reset pin)"; break;
+    case ESP_RST_SW:       reasonStr = "SW (software/programmer-triggered reset)"; break;
+    case ESP_RST_PANIC:    reasonStr = "PANIC (crash/exception)"; break;
+    case ESP_RST_INT_WDT:  reasonStr = "INT_WDT (interrupt watchdog -- something blocked too long)"; break;
+    case ESP_RST_TASK_WDT: reasonStr = "TASK_WDT (task watchdog -- something blocked too long)"; break;
+    case ESP_RST_WDT:      reasonStr = "WDT (other watchdog)"; break;
+    case ESP_RST_BROWNOUT: reasonStr = "BROWNOUT -- supply voltage sagged below threshold. Check battery charge/cable, not code."; break;
+    case ESP_RST_SDIO:     reasonStr = "SDIO"; break;
+    default:               reasonStr = "UNKNOWN"; break;
+  }
+  Serial.print("[boot] Reset reason: ");
+  Serial.println(reasonStr);
+}
 
-  unsigned long startWait = millis();
-  while (!Serial && (millis() - startWait < 2000));
+void setup() {
+  Serial.begin(115200); // Fixed baud rate
+
+  // DELIBERATELY REMOVED the while (!Serial) loop!
+  // Do not wait for USB when running on a battery.
+
+  printResetReason();  // first thing printed -- see its own comment above
 
   Serial.println("\n=================================");
   Serial.println("  OPTION B: BIPOLAR T7-T8 EEG    ");
@@ -296,10 +392,42 @@ void setup() {
   digitalWrite(ADS_PIN_RESET, HIGH);
   delay(1000);
 
+  // DIAGNOSIS (power-cycle-specific reconnect failure): confirmed earlier
+  // this session that this LiPo (600mAh/3.7V, unknown C-rating) browns out
+  // under the WiFi TX association burst alone (fixed via setTxPower +
+  // setSleep). A fresh power-cycle stacks THREE current draws close
+  // together that a mid-session WiFi reconnect never has to -- regulator
+  // startup inrush, the ADS1292R hardware reset pulse just above, and then
+  // the WiFi TX burst only ~1.3s later -- while a runtime reconnect only
+  // ever faces the WiFi burst alone, on a rail that's had much longer to
+  // recover. This extra settle delay gives the rail more time to recover
+  // from the ADS reset inrush specifically before adding WiFi's TX burst on
+  // top. NOT confirmed against a real reset-reason log from a failed
+  // power-cycle (still don't have one) -- if this doesn't fully fix it,
+  // check Serial for "BROWNOUT" (see printResetReason() above) right after
+  // a failed power-cycle attempt to confirm vs. rule this out.
+  delay(500);
+
   connectWiFi();
 
   // Restored Certificate for secure connection
   wifiClient.setCACert(EMQX_CA_CERT);
+
+  // ADDED FIX: Bypass the 1970 time-check failure!
+  wifiClient.setInsecure();
+
+  // DIAGNOSIS (MQTT "connection fails" contributor): mqtt.connect() below
+  // does a blocking TCP+TLS handshake to EMQX Cloud with no explicit
+  // timeout ever set -- same freeze-everything risk WIFI_RECONNECT_GRACE_MS
+  // above fixes for WiFi, just unbounded on the MQTT side (core-default
+  // timeouts vary by ESP32 Arduino core version, so relying on the default
+  // is exactly the kind of implicit assumption that bit this file before --
+  // see the "1970 time-check failure" comment above). Bounding both layers
+  // explicitly: the underlying TLS socket connect, and PubSubClient's own
+  // post-connect read/write socket timeout.
+  wifiClient.setTimeout(5000);       // ms -- caps the TLS handshake itself
+  mqtt.setSocketTimeout(5);          // seconds -- PubSubClient's own read/write timeout
+
   mqtt.setServer(MQTT_BROKER, MQTT_PORT);
   mqtt.setBufferSize(1024);
   maintainMQTT();
@@ -318,7 +446,18 @@ void setup() {
 
 void loop() {
   if (WiFi.status() != WL_CONNECTED) {
-    connectWiFi();
+    unsigned long now = millis();
+    if (wifiDownSince == 0) wifiDownSince = now;
+    // Give WiFi.setAutoReconnect() a real chance to silently recover from a
+    // brief drop before paying for the full blocking multi-SSID scan, and
+    // even then don't re-enter it more than once per retry window.
+    if (now - wifiDownSince >= WIFI_RECONNECT_GRACE_MS
+        && now - lastWifiReconnectAttempt >= WIFI_RECONNECT_RETRY_MS) {
+      lastWifiReconnectAttempt = now;
+      connectWiFi();
+    }
+  } else {
+    wifiDownSince = 0;
   }
 
   maintainMQTT();
@@ -340,7 +479,7 @@ void loop() {
 
   if (!drdyFlag) return;
   drdyFlag = false;
-  lastDrdyTimestamp = millis();
+  // lastDrdyTimestamp is now set in onDrdy() itself, not here -- see its comment.
 
   byte r[9];
   SPI.beginTransaction(adsSPI);

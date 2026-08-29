@@ -12,10 +12,24 @@
 # would have meant duplicating it (and its various edge-case fixes:
 # settling period, min-sample thresholds) a second time for the
 # in-app trigger. Kept here once instead.
+#
+# ONE shared, process-lifetime MQTT client (see _get_shared_client()
+# below) -- an earlier version of this file opened a brand-new
+# mqtt.Client() for every single capture call (baseline AND task-phase,
+# every retry included) and disconnected it again at the end. Functionally
+# fine, but every call registered as its own connected client in EMQX's
+# dashboard/client list, and that list only ever grew with repeated
+# attempts. Both capture functions below now share one connection, opened
+# lazily on first use and kept alive for the lifetime of this process --
+# only where the raw samples come from changed; save_baseline() /
+# save_calibration_windows() still write the resulting baseline to
+# Firebase exactly as before.
 # ============================================================
 
 import json
 import math
+import os
+import threading
 import time
 
 import numpy as np
@@ -45,6 +59,72 @@ from backend.physiological.firebase_service import (
 # instead of the user seeing a post-quiz wait) is independent of this
 # constant -- no extra constant needed here beyond WINDOW_SEC itself.
 N_TASK_WIN = 1
+
+# Hard wall-clock ceiling on both capture loops below. Both are entirely
+# message-driven (close_window() only ever runs from inside on_message()),
+# so a ring that loses finger contact mid-capture -- plausible here
+# specifically, since the user's hands are busy on the phone answering the
+# arithmetic task -- leaves on_message() never firing again, and the
+# "while len(...) < N: sleep()" loop blocks forever with no other exit.
+# Worse, that stuck 'capturing' status also blocks every future retry --
+# /calibrate(/threshold)/start's own in-progress check refuses to start a
+# new attempt until the status actually changes. This timeout is what
+# breaks that deadlock: generous margin over the real data volume needed
+# (N_BASELINE_WIN/N_TASK_WIN windows * WINDOW_SEC, at full rate). On
+# timeout the SHARED client (below) is left connected -- only this one
+# capture attempt aborts, so a retry reuses the live connection instantly
+# instead of registering yet another one with EMQX.
+CAPTURE_TIMEOUT_SEC = 120
+
+# Fail-fast companion to CAPTURE_TIMEOUT_SEC above: rather than always
+# waiting out the full ceiling, abort as soon as no new MQTT message has
+# arrived for this long -- 15s matches the "still connected" freshness
+# window this project already uses elsewhere for this same device
+# (firebase_service.py's own get_device_status() offline_after_sec, and
+# CalibrationGate.js's useDeviceStatus polling on the frontend) rather
+# than inventing a tighter, untested bound that risks false-failing a
+# capture on ordinary MQTT/network jitter. CAPTURE_TIMEOUT_SEC is kept as
+# a backstop in case last-sample tracking itself never resets.
+INACTIVITY_TIMEOUT_SEC = 15
+
+# ---------------------------------------------------------------------
+# Shared, process-lifetime MQTT connection -- see module docstring for
+# why this replaced a fresh client per capture call. One fixed client_id
+# per OS process (not per-call) so a restart or a second worker process
+# doesn't collide with a still-connected previous instance's id, but a
+# given running process only ever registers once with EMQX. Capture
+# functions below reassign client.on_message to their own closure for the
+# duration of their own capture (only one capture ever runs at a time in
+# this app's single-session model, same assumption app.py's global
+# eeg_sessions/_threshold_sessions dicts already make) and never call
+# client.disconnect() themselves -- only this helper ever tears the
+# connection down, and nothing in this file currently does.
+# ---------------------------------------------------------------------
+_shared_client_lock = threading.Lock()
+_shared_client: mqtt.Client | None = None
+
+
+def _get_shared_client() -> mqtt.Client:
+    """Returns the one shared, already-connected ring MQTT client for this
+    process, creating and connecting it on first use."""
+    global _shared_client
+    with _shared_client_lock:
+        if _shared_client is not None:
+            return _shared_client
+
+        def on_connect(client, userdata, flags, rc):
+            client.subscribe(MQTT_TOPIC)
+
+        client = mqtt.Client(client_id=f"ring_calib_shared_{os.getpid()}")
+        if MQTT_CA_CERT:
+            client.tls_set(ca_certs=MQTT_CA_CERT)
+        if MQTT_USER:
+            client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
+        client.on_connect = on_connect
+        client.connect(MQTT_BROKER, MQTT_PORT, 60)
+        client.loop_start()
+        _shared_client = client
+        return client
 
 
 def save_calibration_windows(user_id, raw_windows):
@@ -137,8 +217,9 @@ def save_calibration_windows(user_id, raw_windows):
 
 
 def run_calibration_capture(user_id, on_progress=None):
-    """Connects to MQTT, settles, captures N_BASELINE_WIN windows of raw
-    sensor data, then saves them as user_id's personal baseline.
+    """Settles, captures N_BASELINE_WIN windows of raw sensor data from the
+    shared MQTT connection (see _get_shared_client()), then saves them as
+    user_id's personal baseline.
 
     on_progress(status, extra) is called at:
       'settling'         extra={}
@@ -158,7 +239,8 @@ def run_calibration_capture(user_id, on_progress=None):
     collected_windows = []
     state = {
         'window_start': time.time(),
-        'ibi_buf': [], 'gsr_buf': [], 'acc_buf': []
+        'ibi_buf': [], 'gsr_buf': [], 'acc_buf': [],
+        'last_sample_time': time.time(),
     }
 
     def close_window():
@@ -187,15 +269,13 @@ def run_calibration_capture(user_id, on_progress=None):
         state['ibi_buf'], state['gsr_buf'], state['acc_buf'] = [], [], []
         state['window_start'] = time.time()
 
-    def on_connect(client, userdata, flags, rc):
-        client.subscribe(MQTT_TOPIC)
-
     def on_message(client, userdata, msg):
         try:
             data = json.loads(msg.payload.decode())
         except Exception:
             return
 
+        state['last_sample_time'] = time.time()
         state['ibi_buf'].extend(data.get("ibi", []))
         state['gsr_buf'].append(data.get("gsr", 0))
 
@@ -206,22 +286,17 @@ def run_calibration_capture(user_id, on_progress=None):
 
         if time.time() - state['window_start'] >= WINDOW_SEC:
             close_window()
-            if len(collected_windows) >= N_BASELINE_WIN:
-                client.disconnect()
+            # No client.disconnect() here -- this is the shared,
+            # process-lifetime connection now (see _get_shared_client()),
+            # not a per-call one; the while-loop below is what actually
+            # ends this capture, by simply stopping reading from it.
 
-    client = mqtt.Client()
-    client.on_connect = on_connect
-    client.on_message = on_message
-    if MQTT_CA_CERT:
-        client.tls_set(ca_certs=MQTT_CA_CERT)
-    if MQTT_USER:
-        client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
     try:
-        client.connect(MQTT_BROKER, MQTT_PORT, 60)
+        client = _get_shared_client()
     except Exception as e:
         _notify('error', message=f'Could not connect to MQTT broker: {e}')
         return None
-    client.loop_start()
+    client.on_message = on_message
 
     _notify('settling')
     time.sleep(SETTLE_SEC)
@@ -230,12 +305,23 @@ def run_calibration_capture(user_id, on_progress=None):
     # capture window fresh from here.
     state['ibi_buf'], state['gsr_buf'], state['acc_buf'] = [], [], []
     state['window_start'] = time.time()
+    state['last_sample_time'] = time.time()
 
+    capture_deadline = time.time() + CAPTURE_TIMEOUT_SEC
     while len(collected_windows) < N_BASELINE_WIN:
+        if time.time() > capture_deadline:
+            _notify('error', message=(
+                f'No ring data received within {CAPTURE_TIMEOUT_SEC:.0f}s -- '
+                f'check the ring is worn and connected, then try again.'
+            ))
+            return None
+        if time.time() - state['last_sample_time'] > INACTIVITY_TIMEOUT_SEC:
+            _notify('error', message=(
+                f'Ring signal lost -- no data for {INACTIVITY_TIMEOUT_SEC:.0f}s. '
+                f'Check the ring is still worn and connected, then try again.'
+            ))
+            return None
         time.sleep(1)
-
-    client.loop_stop()
-    client.disconnect()
 
     _notify('saving')
     try:
@@ -249,17 +335,17 @@ def run_calibration_capture(user_id, on_progress=None):
 
 
 def run_task_calibration_capture(user_id, on_progress=None):
-    """Personal-threshold task-phase capture: connects to MQTT (no settle
-    delay -- baseline calibration, run moments earlier via
-    run_calibration_capture(), already confirmed good ring contact),
-    captures exactly N_TASK_WIN=1 window (WINDOW_SEC=60, the shared task
-    duration this project settled on -- see EEG's mirror,
-    backend/psychological/mqtt_bridge.py's N_THRESHOLD_TASK_BLOCKS /
-    THRESHOLD_TASK_POLL_INTERVAL_SEC), scores it the same way
-    save_calibration_windows() scores resting windows (predict_window(),
-    baseline-normalized), and computes this user's personal
-    STRESS_DECISION_THRESHOLD against the resting scores that capture
-    already saved (see compute_personal_stress_threshold(), predictor.py).
+    """Personal-threshold task-phase capture: captures exactly N_TASK_WIN=1
+    window (WINDOW_SEC=60, the shared task duration this project settled
+    on -- see EEG's mirror, backend/psychological/mqtt_bridge.py's
+    N_THRESHOLD_TASK_BLOCKS / THRESHOLD_TASK_POLL_INTERVAL_SEC) from the
+    shared MQTT connection (see _get_shared_client() -- no settle delay,
+    baseline calibration run moments earlier already confirmed good ring
+    contact), scores it the same way save_calibration_windows() scores
+    resting windows (predict_window(), baseline-normalized), and computes
+    this user's personal STRESS_DECISION_THRESHOLD against the resting
+    scores that capture already saved (see
+    compute_personal_stress_threshold(), predictor.py).
 
     on_progress(status, extra) is called at:
       'capturing'      extra={}
@@ -288,7 +374,10 @@ def run_task_calibration_capture(user_id, on_progress=None):
         return None
 
     collected_windows = []
-    state = {'window_start': time.time(), 'ibi_buf': [], 'gsr_buf': [], 'acc_buf': []}
+    state = {
+        'window_start': time.time(), 'ibi_buf': [], 'gsr_buf': [], 'acc_buf': [],
+        'last_sample_time': time.time(),
+    }
 
     def close_window():
         duration = time.time() - state['window_start']
@@ -305,43 +394,44 @@ def run_task_calibration_capture(user_id, on_progress=None):
         state['ibi_buf'], state['gsr_buf'], state['acc_buf'] = [], [], []
         state['window_start'] = time.time()
 
-    def on_connect(client, userdata, flags, rc):
-        client.subscribe(MQTT_TOPIC)
-
     def on_message(client, userdata, msg):
         try:
             data = json.loads(msg.payload.decode())
         except Exception:
             return
+        state['last_sample_time'] = time.time()
         state['ibi_buf'].extend(data.get("ibi", []))
         state['gsr_buf'].append(data.get("gsr", 0))
         ax, ay, az = data.get("acc_x", 0), data.get("acc_y", 0), data.get("acc_z", 0)
         state['acc_buf'].append(math.sqrt(ax * ax + ay * ay + az * az) / 9.81)
         if time.time() - state['window_start'] >= WINDOW_SEC:
             close_window()
-            if len(collected_windows) >= N_TASK_WIN:
-                client.disconnect()
+            # No client.disconnect() here -- shared connection, see
+            # run_calibration_capture()'s identical comment above.
 
-    client = mqtt.Client()
-    client.on_connect = on_connect
-    client.on_message = on_message
-    if MQTT_CA_CERT:
-        client.tls_set(ca_certs=MQTT_CA_CERT)
-    if MQTT_USER:
-        client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
     try:
-        client.connect(MQTT_BROKER, MQTT_PORT, 60)
+        client = _get_shared_client()
     except Exception as e:
         _notify('error', message=f'Could not connect to MQTT broker: {e}')
         return None
-    client.loop_start()
+    client.on_message = on_message
 
     _notify('capturing')
+    capture_deadline = time.time() + CAPTURE_TIMEOUT_SEC
     while len(collected_windows) < N_TASK_WIN:
+        if time.time() > capture_deadline:
+            _notify('error', message=(
+                f'No ring data received within {CAPTURE_TIMEOUT_SEC:.0f}s -- '
+                f'check the ring is worn and connected, then try again.'
+            ))
+            return None
+        if time.time() - state['last_sample_time'] > INACTIVITY_TIMEOUT_SEC:
+            _notify('error', message=(
+                f'Ring signal lost -- no data for {INACTIVITY_TIMEOUT_SEC:.0f}s. '
+                f'Check the ring is still worn and connected, then try again.'
+            ))
+            return None
         time.sleep(1)
-
-    client.loop_stop()
-    client.disconnect()
 
     _notify('saving')
     try:

@@ -23,22 +23,16 @@ from backend.psychological.realtime.resample import SOURCE_FS
 BLOCK_SEC = 25.0
 BLOCK_SAMPLES = int(BLOCK_SEC * SOURCE_FS)
 N_CALIBRATION_BLOCKS = 3
-LIVE_RAW_SAMPLES = 250
-LIVE_RAW_INTERVAL_SEC = 1.0
 EMPTY_BUFFER_WARN_INTERVAL_SEC = 5.0
 
-# Personal high_load_p threshold task (see backend/psychological/sam40/
-# decision.py::compute_personal_threshold() and app.py's POST
-# /calibrate/threshold): once calibrated, the bridge polls this session's
-# task_phase_requested flag -- set by the onboarding threshold-calibration
-# screen the moment the user starts their arithmetic task -- and once seen,
-# captures the next N_THRESHOLD_TASK_BLOCKS blocks as task-labeled data
-# instead of feeding them to /predict. The frontend has no raw-EEG access
-# of its own (it only ever reads Firebase, never the live MQTT stream), so
-# this bridge is the only thing that CAN capture the task blocks -- the
-# screen's job is just to set the flag and then watch for threshold_result.
+# Personal high_load_p threshold task block count (see
+# backend/psychological/sam40/decision.py::compute_personal_threshold()).
+# NOT used by this always-on bridge -- kept here only because
+# eeg_calibration_capture.py::run_eeg_threshold_capture() imports it. That
+# module captures its own short-lived MQTT connection on demand (driven by
+# EegThresholdTaskScreen.js's POST /calibrate/threshold/start), independent
+# of whether this bridge process is even running.
 N_THRESHOLD_TASK_BLOCKS = 2
-THRESHOLD_TASK_POLL_INTERVAL_SEC = 3.0
 
 # A block already drained from the buffer is gone from it either way -- a
 # transient failure (Render cold start, a network blip) shouldn't mean it's
@@ -57,7 +51,16 @@ _UNSAFE_FILENAME_CHARS = re.compile(r'[^A-Za-z0-9_-]')
 _fallback_csv_loggers: dict[str, CsvLogger] = {}
 EEG_MQTT_BROKER = os.environ.get("EEG_MQTT_BROKER", "ob1f0f10.ala.asia-southeast1.emqxsl.com")
 EEG_MQTT_PORT = int(os.environ.get("EEG_MQTT_PORT", "8883"))
-EEG_MQTT_TOPIC = os.environ.get("EEG_MQTT_TOPIC", "mindpulse/wearable02/sensors")
+# No env-var override here, unlike the other EEG_MQTT_* settings above --
+# deliberate, matching physiological's MQTT_TOPIC (backend/common/config.py),
+# the one setting on that side with no override either. This code's own
+# default drifted out of sync with the firmware's real topic for a while
+# (firmware moved to "mindpulse/wearable02/eeg", this stayed on the old
+# ".../sensors" default) -- an override would only add a SECOND place that
+# value could silently diverge from the firmware's, with no trace of it in
+# the codebase. Change the literal below if the firmware's topic ever
+# changes again; don't reintroduce an override.
+EEG_MQTT_TOPIC = "mindpulse/wearable02/eeg"
 EEG_MQTT_USER = os.environ.get("EEG_MQTT_USER", "wearable02")
 EEG_MQTT_PASSWORD = os.environ.get("EEG_MQTT_PASSWORD", "wearable02")
 EEG_MQTT_CA_CERT = os.path.join(
@@ -95,23 +98,6 @@ def _poll_user_pointer() -> str | None:
         return value if isinstance(value, str) and value else None
     except Exception:
         return None
-
-
-def _poll_task_phase_requested(user_id: str, session_id: str) -> bool:
-    """psychological/{user_id}/{session_id}/task_phase_requested -- a flag
-    the onboarding threshold-calibration screen sets directly in Firebase
-    (plain RTDB write, not an API call) the moment the user starts their
-    arithmetic task. Session-scoped, not the bare current_session_id
-    pointer other polls here use, since this only ever matters for
-    whichever session is actively mid-threshold-calibration."""
-    try:
-        resp = requests.get(
-            f"{FIREBASE_DB_URL}{RTDB_NAMESPACES['psychological']}/{user_id}/{session_id}/task_phase_requested.json",
-            timeout=5,
-        )
-        return bool(resp.json())
-    except Exception:
-        return False
 
 
 def block_payload(samples) -> dict:
@@ -155,25 +141,6 @@ def _get_fallback_logger(session_id: str) -> CsvLogger:
     return logger
 
 
-def _post_live_raw(samples) -> None:
-    """Best-effort -- fires every ~1s, and losing an occasional preview
-    frame to a dropped request doesn't matter the way losing a /predict
-    result would; the next one lands a second later regardless. Still
-    logs failures (just not every success, to avoid spamming once/sec):
-    silently swallowing every outcome made "is the raw preview even
-    reaching Firebase" unanswerable from these logs alone."""
-    try:
-        resp = requests.post(
-            f"{FLASK_URL}/live_raw",
-            json={"session_id": SESSION_ID, **block_payload(samples)},
-            headers=AUTH_HEADERS, timeout=15,
-        )
-        if not resp.ok:
-            print(f"[live_raw] {resp.status_code} {resp.text[:200]}")
-    except Exception as e:
-        print(f"[live_raw] request failed: {e}")
-
-
 def run():
     global SESSION_ID, USER_ID, AUTH_HEADERS
     print("=" * 60)
@@ -196,13 +163,8 @@ def run():
     calibration_blocks = []
     calibrated = False
     block_idx = 0
-    last_live_raw_push = 0.0
     last_pointer_poll = 0.0
     last_empty_buffer_warn = 0.0
-    task_phase_blocks = []
-    task_phase_triggered = False
-    task_phase_done = False
-    last_task_phase_poll = 0.0
 
     try:
         while True:
@@ -214,9 +176,9 @@ def run():
             # still propagates straight to the outer handler below.
             try:
                 # Rotation check: has StressApp started a new session since we
-                # last looked? Throttled the same way LIVE_RAW_INTERVAL_SEC
-                # throttles the preview push below -- this is a cheap read, but
-                # no reason to hit Firebase every 0.5s loop iteration.
+                # last looked? Throttled to POINTER_POLL_INTERVAL_SEC -- this is
+                # a cheap read, but no reason to hit Firebase every 0.5s loop
+                # iteration.
                 now = time.time()
                 if now - last_pointer_poll >= POINTER_POLL_INTERVAL_SEC:
                     pointer_session_id = _poll_session_pointer()
@@ -227,9 +189,6 @@ def run():
                         calibrated = False
                         calibration_blocks = []
                         block_idx = 0
-                        task_phase_blocks = []
-                        task_phase_triggered = False
-                        task_phase_done = False
 
                     pointer_user_id = _poll_user_pointer()
                     if pointer_user_id and pointer_user_id != USER_ID:
@@ -240,23 +199,15 @@ def run():
 
                     last_pointer_poll = now
 
-                # Independent of the block-accumulation cycle below -- runs every
-                # loop iteration (both while waiting for a full block and right
-                # after processing one), throttled to LIVE_RAW_INTERVAL_SEC.
-                # Works during calibration too, so the dashboard can show signal
-                # while electrodes are still being positioned.
-                if now - last_live_raw_push >= LIVE_RAW_INTERVAL_SEC:
-                    recent = buffer.peek_recent(LIVE_RAW_SAMPLES)
-                    if recent:
-                        _post_live_raw(recent)
-                    elif now - last_empty_buffer_warn >= EMPTY_BUFFER_WARN_INTERVAL_SEC:
-                        # Distinguishes "no MQTT samples arrived at all" (an
-                        # EMQX/firmware-side problem) from "samples arrived but
-                        # the /live_raw POST failed" (logged in _post_live_raw
-                        # itself) -- both look identical from the dashboard.
-                        print("[live_raw] no raw samples buffered -- nothing arriving from wearable02 over MQTT")
-                        last_empty_buffer_warn = now
-                    last_live_raw_push = now
+                # Local-only liveness check -- no raw data leaves this process
+                # for this (see module docstring: raw samples only ever go out
+                # over the already-required /predict call, once a full block is
+                # ready, never as a standalone preview). Just a periodic log so
+                # "nothing arriving from wearable02" is still diagnosable from
+                # this process's own output, minus any Render/Firebase round-trip.
+                if buffer.peek_count() == 0 and now - last_empty_buffer_warn >= EMPTY_BUFFER_WARN_INTERVAL_SEC:
+                    print("[bridge] no raw samples buffered -- nothing arriving from wearable02 over MQTT")
+                    last_empty_buffer_warn = now
 
                 if buffer.peek_count() < BLOCK_SAMPLES:
                     time.sleep(0.5)
@@ -277,9 +228,19 @@ def run():
                         # backend/physiological/mqtt_bridge.py: Render's
                         # free-tier Flask can take 30s+ to wake from a cold
                         # start, and 30s was cutting it too close.
+                        #
+                        # allow_degraded=True -- backstop for the rare case
+                        # none of the N_CALIBRATION_BLOCKS clear even the
+                        # QUESTIONABLE bar (see RealtimeInference's
+                        # calibration_min_rating docstring): falls back to
+                        # whichever single block scored best instead of
+                        # failing outright and looping forever. Result is
+                        # explicitly flagged baseline_degraded=True
+                        # throughout (dashboard, decision confidence) --
+                        # never silently treated as a clean calibration.
                         data = _post_json_retrying(
                             f"{FLASK_URL}/calibrate",
-                            {"session_id": SESSION_ID, "blocks": calibration_blocks},
+                            {"session_id": SESSION_ID, "blocks": calibration_blocks, "allow_degraded": True},
                             AUTH_HEADERS, timeout=45, label="calibrate",
                         )
                         calibrated = bool(data and data.get("success"))
@@ -289,40 +250,15 @@ def run():
                             calibration_blocks = []
                     continue
 
-                # Personal threshold task phase: once calibrated, check for
-                # the onboarding screen's task_phase_requested flag until
-                # it's seen (or already done for this session) -- once
-                # triggered, the next N_THRESHOLD_TASK_BLOCKS blocks are
-                # captured as task data instead of going to /predict below.
-                # See N_THRESHOLD_TASK_BLOCKS's module-level comment for why
-                # this bridge (not the frontend) has to be the one capturing
-                # these blocks.
-                if not task_phase_done:
-                    if not task_phase_triggered and now - last_task_phase_poll >= THRESHOLD_TASK_POLL_INTERVAL_SEC:
-                        if _poll_task_phase_requested(USER_ID, SESSION_ID):
-                            task_phase_triggered = True
-                            print("[threshold] task phase requested -- capturing task blocks")
-                        last_task_phase_poll = now
-
-                    if task_phase_triggered:
-                        task_phase_blocks.append(block_payload(samples))
-                        print(f"[threshold] captured task block "
-                              f"{len(task_phase_blocks)}/{N_THRESHOLD_TASK_BLOCKS}")
-                        if len(task_phase_blocks) >= N_THRESHOLD_TASK_BLOCKS:
-                            data = _post_json_retrying(
-                                f"{FLASK_URL}/calibrate/threshold",
-                                {"session_id": SESSION_ID, "blocks": task_phase_blocks},
-                                AUTH_HEADERS, timeout=45, label="calibrate/threshold",
-                            )
-                            task_phase_done = True
-                            if data:
-                                print(f"[threshold] outcome={data.get('status')} "
-                                      f"personal_high_load_p={data.get('personal_high_load_p')}")
-                            else:
-                                print("[threshold] FAILED after retries -- personal "
-                                      "threshold not computed this session")
-                        continue  # a task block is never also fed to /predict below
-
+                # Personal threshold task (compute_personal_threshold(),
+                # sam40/decision.py) is captured on-demand now -- the
+                # onboarding screen (EegThresholdTaskScreen.js) calls
+                # POST /calibrate/threshold/start directly against a
+                # short-lived MQTT connection of its own (see
+                # eeg_calibration_capture.py::run_eeg_threshold_capture()),
+                # not by flagging this always-on bridge to intercept the
+                # next few live blocks. Every calibrated block just goes
+                # straight to /predict below.
                 data = _post_json_retrying(
                     f"{FLASK_URL}/predict",
                     {"session_id": SESSION_ID, **block_payload(samples)},

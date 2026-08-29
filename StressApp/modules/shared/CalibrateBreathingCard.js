@@ -1,24 +1,12 @@
-// ============================================================
-// CalibrateBreathingCard.js
-//
-// Self-contained "Calibrate" widget: a plain breathe-in/breathe-out visual
-// shown while REAL Ring + EEG calibration captures run in the background
-// (POST /calibrate/start on whichever modality is online, polled to
-// completion via GET /calibrate/status), plus each modality's 7-day
-// freshness bars. Deliberately independent of modules/relaxation_guide --
-// this lives in modules/shared so any screen (today: Fusion) can embed it
-// inline without navigating to a different module/screen.
-// ============================================================
-
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Animated, Easing } from 'react-native';
 import axios from 'axios';
-import { ref, get } from 'firebase/database';
 import physiologicalApi from '../physiological/api/client';
 import { API_BASE, DEVICE_ID } from '../physiological/config/config';
 import { COLORS } from '../physiological/config/theme';
 import { eegClient } from './eegApiClient';
-import { useCalibrationSummary, useSignupAge } from './CalibrationGate';
+import StatusDot from './StatusDot';
+import { useCalibrationSummary, useDeviceStatus, useSignupAge } from './CalibrationGate';
 
 const RING_CONTACT_POLL_MS = 5000;
 
@@ -26,10 +14,6 @@ const IN_PROGRESS_STATUSES = ['settling', 'capturing', 'saving'];
 const POLL_INTERVAL_MS = 2000;
 const BREATH_TIMINGS = { inhale: 4000, hold: 4000, exhale: 4000, rest: 2000 };
 
-// Starts a capture, then polls status until it leaves settling/capturing/
-// saving, reporting every change back via onUpdate -- same shape used by
-// both modalities below, they just differ in which client/session_id to
-// call it with.
 function useCaptureRunner(onUpdate) {
   const pollRef = useRef(null);
   const stop = useCallback(() => {
@@ -48,7 +32,6 @@ function useCaptureRunner(onUpdate) {
         onUpdate({ status: 'error', message: e?.response?.data?.error || e.message });
         return;
       }
-      // 409 -- already in progress somewhere; just start watching it.
     }
     pollRef.current = setInterval(async () => {
       try {
@@ -58,8 +41,7 @@ function useCaptureRunner(onUpdate) {
           stop();
         }
       } catch (e) {
-        // A single missed poll doesn't mean the capture failed -- the next
-        // tick tries again.
+
       }
     }, POLL_INTERVAL_MS);
   }, [onUpdate, stop]);
@@ -67,12 +49,6 @@ function useCaptureRunner(onUpdate) {
   useEffect(() => () => stop(), [stop]);
   return run;
 }
-
-// Two clocks feed this: the real one (days since THIS modality's own last
-// calibration, once it has one) and a fallback (days since account
-// creation, via signupAgeDays -- see CalibrationGate.js's useSignupAge)
-// for a modality that's never been calibrated at all, so a brand-new user
-// still sees a real filling countdown instead of nothing.
 function DayBars({ label, status, signupAgeDays }) {
   if (!status?.ok) return null;
   const usingSignup = !status.exists;
@@ -100,11 +76,10 @@ function DayBars({ label, status, signupAgeDays }) {
   );
 }
 
-export default function CalibrateBreathingCard({ userId, token, ringOnline, eegDb, onComplete }) {
+export default function CalibrateBreathingCard({ userId, token, eegDb, onComplete }) {
   const { ring, eeg, refresh } = useCalibrationSummary(userId, token);
   const signupAgeDays = useSignupAge(userId, eegDb);
-
-  // 'idle' | 'running' | 'complete' | 'error'
+  const { ringOnline, eegOnline, eegSessionId } = useDeviceStatus(userId, eegDb);
   const [stage, setStage] = useState('idle');
   const [ringState, setRingState] = useState({ triggered: false, status: 'idle' });
   const [eegState, setEegState] = useState({ triggered: false, status: 'idle' });
@@ -113,24 +88,16 @@ export default function CalibrateBreathingCard({ userId, token, ringOnline, eegD
   const runRing = useCaptureRunner((data) => setRingState((r) => ({ ...r, ...data })));
   const runEeg = useCaptureRunner((data) => setEegState((e) => ({ ...e, ...data })));
 
-  const start = useCallback(async () => {
+  const start = useCallback(() => {
     setErrorMsg(null);
-    setStage('running');
 
-    let eegSessionId = null;
-    try {
-      const snap = await get(ref(eegDb, 'psychological/current_session_id'));
-      eegSessionId = snap.val() || null;
-    } catch (e) {
-      eegSessionId = null;
-    }
-
-    if (!ringOnline && !eegSessionId) {
+    if (!ringOnline && !eegOnline) {
       setErrorMsg('No device detected — connect your Ring or EEG headband first.');
       setStage('error');
       return;
     }
 
+    setStage('running');
     if (ringOnline) {
       setRingState((r) => ({ ...r, triggered: true }));
       runRing(
@@ -138,7 +105,7 @@ export default function CalibrateBreathingCard({ userId, token, ringOnline, eegD
         () => physiologicalApi.get('/calibrate/status'),
       );
     }
-    if (eegSessionId) {
+    if (eegOnline && eegSessionId) {
       setEegState((e) => ({ ...e, triggered: true }));
       const headers = token ? { Authorization: `Bearer ${token}` } : {};
       runEeg(
@@ -146,10 +113,8 @@ export default function CalibrateBreathingCard({ userId, token, ringOnline, eegD
         () => eegClient.get('/calibrate/status', { headers }),
       );
     }
-  }, [ringOnline, eegDb, token, runRing, runEeg]);
+  }, [ringOnline, eegOnline, eegSessionId, token, runRing, runEeg]);
 
-  // Aggregate completion: once every triggered modality has left
-  // settling/capturing/saving, refresh the freshness bars and report back.
   useEffect(() => {
     if (stage !== 'running') return;
     const ringSettled = !ringState.triggered || !IN_PROGRESS_STATUSES.includes(ringState.status);
@@ -171,15 +136,8 @@ export default function CalibrateBreathingCard({ userId, token, ringOnline, eegD
 
   useEffect(() => {
     if (stage === 'complete' && onComplete) onComplete();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stage]);
 
-  // Live finger-contact feedback while a Ring capture is actually running --
-  // the single biggest cause of a failed/short calibration is the pulse
-  // sensor not touching skin; this surfaces that mid-capture (the bridge
-  // already writes finger_detected to Firebase every ~5s from the live
-  // payload -- see backend/physiological/mqtt_bridge.py's on_message)
-  // instead of only being discoverable afterward.
   const [ringFingerDetected, setRingFingerDetected] = useState(null);
   useEffect(() => {
     if (!(ringState.triggered && stage === 'running')) {
@@ -202,10 +160,6 @@ export default function CalibrateBreathingCard({ userId, token, ringOnline, eegD
     return () => { cancelled = true; clearInterval(id); };
   }, [ringState.triggered, stage]);
 
-  // -- Breathing visual: plain breathe-in/breathe-out. Runs the real 4-4-4-2s
-  // cycle while a capture is in progress; a slower, gentler idle pulse the
-  // rest of the time so the circle feels alive and inviting rather than
-  // static before/after a capture.
   const [breathPhase, setBreathPhase] = useState('inhale');
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const glowAnim = useRef(new Animated.Value(0.35)).current;
@@ -277,6 +231,28 @@ export default function CalibrateBreathingCard({ userId, token, ringOnline, eegD
     <View style={styles.container}>
       <DayBars label="Ring" status={ring} signupAgeDays={signupAgeDays} />
       <DayBars label="EEG" status={eeg} signupAgeDays={signupAgeDays} />
+
+      {/* Real, live connectivity -- same useDeviceStatus() values start()
+          actually gates on below, so this can never show "connected"
+          while the capture it's about to trigger silently skips that
+          device (or vice versa). Only shown before/after a run -- during
+          'running' the breathing visual + statusText() below take over. */}
+      {stage !== 'running' && (
+        <View style={styles.deviceStatusRow}>
+          <View style={styles.deviceStatusItem}>
+            <StatusDot color={ringOnline ? COLORS.normal : COLORS.light.border} active={ringOnline} size={7} />
+            <Text style={[styles.deviceStatusItemText, { color: ringOnline ? COLORS.normalDark : COLORS.light.textMuted }]}>
+              Ring {ringOnline ? 'connected' : 'not connected'}
+            </Text>
+          </View>
+          <View style={styles.deviceStatusItem}>
+            <StatusDot color={eegOnline ? COLORS.normal : COLORS.light.border} active={eegOnline} size={7} />
+            <Text style={[styles.deviceStatusItemText, { color: eegOnline ? COLORS.normalDark : COLORS.light.textMuted }]}>
+              EEG {eegOnline ? 'connected' : 'not connected'}
+            </Text>
+          </View>
+        </View>
+      )}
 
       <View style={styles.visualArea}>
         <Animated.View style={[styles.outerHalo, { opacity: haloOpacity, transform: [{ scale: displayScale }] }]}>
@@ -356,6 +332,21 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: COLORS.warningDark,
     marginTop: 4,
+  },
+  deviceStatusRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 16,
+    marginBottom: 8,
+  },
+  deviceStatusItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  deviceStatusItemText: {
+    fontSize: 11,
+    fontWeight: '700',
   },
   visualArea: {
     alignItems: 'center',

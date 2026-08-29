@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Easing } from 'react-native';
-import { ref, onValue, off } from 'firebase/database';
+import { ref, onValue, off, query, orderByChild, limitToLast } from 'firebase/database';
 import { db } from '../../../eeg/firebase';
 import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
@@ -37,10 +37,9 @@ export const BaselineCalibrationScreen = () => {
 
   // permMember1 (PermissionsScreen.js) is a CONSENT toggle, not a live
   // connectivity check -- it defaults true and has no hardware awareness.
-  // eegConnected is the real signal: whether wearable02's live_raw is
-  // actually arriving in Firebase right now for the live EEG session
-  // (backend/psychological/firebase_service.py -- same path
-  // EegSessionScreen.js already reads). Both are required: a user who
+  // eegConnected is the real signal: whether at least one derived-output
+  // block record has landed in Firebase for this live EEG session (see
+  // this file's eegConnected effect below). Both are required: a user who
   // declined the EEG permission should never see "EEG Recording" even if
   // hardware happens to be streaming, and a user who granted it but has no
   // wearable on should never see it either.
@@ -135,9 +134,9 @@ export const BaselineCalibrationScreen = () => {
 
   // Real EEG connectivity, only while actively calibrating and only if the
   // user hasn't declined the EEG permission -- follows the SAME
-  // current_session_id pointer + live_raw path EegSessionScreen.js reads,
-  // so this screen can never disagree with the real EEG tab about whether
-  // wearable02 is actually connected right now.
+  // current_session_id pointer this file's eegConnected effect below
+  // reads, so this screen can never disagree with the real EEG tab about
+  // whether wearable02 is actually connected right now.
   useEffect(() => {
     if (!isCalibrating || !permMember1 || !userId) {
       setEegSessionId(null);
@@ -156,11 +155,20 @@ export const BaselineCalibrationScreen = () => {
       setEegConnected(false);
       return;
     }
-    const rawRef = ref(db, `psychological/${userId}/${eegSessionId}/live_raw`);
-    const rawHandler = onValue(rawRef, (snapshot) => {
+    // The backend no longer writes a live_raw preview node (raw EEG
+    // samples are never sent to Firebase at all -- see
+    // backend/psychological/app.py's /predict route). "Connected" here
+    // just means at least one derived-output block record has landed for
+    // this session -- same {window: record} path CalibrationGate.js's
+    // useDeviceStatus() now queries the same way.
+    const latestRef = query(
+      ref(db, `psychological/${userId}/${eegSessionId}`),
+      orderByChild('window'), limitToLast(1),
+    );
+    const rawHandler = onValue(latestRef, (snapshot) => {
       setEegConnected(!!snapshot.val());
     });
-    return () => off(rawRef, 'value', rawHandler);
+    return () => off(latestRef, 'value', rawHandler);
   }, [eegSessionId, userId]);
 
   // finalize_calibration()'s outcome for this session, once mqtt_bridge.py's
@@ -183,9 +191,10 @@ export const BaselineCalibrationScreen = () => {
     if (isCalibrating && secondsLeft === 0) {
       setIsCalibrated(true);
       apiService.completeCalibration(userId);
-      // EEG is only claimed as captured if wearable02 was genuinely
-      // streaming live_raw at some point during this window (eegConnected) --
-      // this screen's own 2-minute timer completing doesn't by itself mean
+      // EEG is only claimed as captured if wearable02 genuinely produced
+      // at least one block record at some point during this window
+      // (eegConnected) -- this screen's own 2-minute timer completing
+      // doesn't by itself mean
       // backend/psychological's finalize_calibration() ever ran; that
       // requires real blocks to have reached /calibrate via mqtt_bridge.py.
       const eegCaptured = permMember1 && eegConnected;
@@ -278,8 +287,8 @@ export const BaselineCalibrationScreen = () => {
         )}
 
         {/* Sensor indicators -- EEG reflects REAL connectivity (permMember1
-            consent + live_raw actually arriving), not assumed-on like
-            HRV/GSR still are here. */}
+            consent + at least one block record actually arriving), not
+            assumed-on like HRV/GSR still are here. */}
         {isCalibrating && (
           <View style={styles.sensorsRow}>
             {[

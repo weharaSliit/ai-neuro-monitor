@@ -11,7 +11,8 @@ import { ref, onValue, off } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import { COLORS as STATIC_COLORS } from '../../physiological/config/theme';
-import { useAuth } from '../../../context/AuthContext';
+import Icon, { NAMES } from '../../shared/Icon';
+import { usePhenotypingDeviceId } from '../utils/deviceIdentity';
 
 // STATIC_COLORS (not useTheme()'s COLORS) since this config object lives at
 // module scope, outside any component -- was previously hardcoded to the
@@ -67,10 +68,9 @@ function statusColor(status, COLORS) {
     return COLORS.normal;
 }
 
-export default function PhenotypingSignalDetailScreen({ route }) {
+export default function PhenotypingSignalDetailScreen({ navigation, route }) {
     const { theme: t, COLORS } = useTheme();
-    const { user } = useAuth();
-    const userId = user?.userId;
+    const deviceId = usePhenotypingDeviceId();
     const signalId = route?.params?.signalId || 'keyboard';
     const config = SIGNAL_CONFIG[signalId];
 
@@ -82,13 +82,13 @@ export default function PhenotypingSignalDetailScreen({ route }) {
 
     // ── Baseline listener ────────────────────────────────────────────────────
     useEffect(() => {
-        if (!userId) return;
-        const blRef = ref(db, `phenotyping/users/${userId}/baselines`);
+        if (!deviceId) return;
+        const blRef = ref(db, `phenotyping/users/${deviceId}/baselines`);
         const handler = onValue(blRef, (snap) => {
             setBl(snap.val() || null);
         });
         return () => off(blRef, 'value', handler);
-    }, [userId]);
+    }, [deviceId]);
 
     // ── Helper: format a personal baseline mean with fallback ────────────────
     // Returns e.g. "134 ms (personal)" if calibrated, or "120 ms (pop. avg)" if not.
@@ -102,8 +102,8 @@ export default function PhenotypingSignalDetailScreen({ route }) {
     }
 
     useEffect(() => {
-        if (!userId || !config) return;
-        const metricsRef = ref(db, `phenotyping/data_logs/${userId}`);
+        if (!deviceId || !config) return;
+        const metricsRef = ref(db, `phenotyping/data_logs/${deviceId}`);
         const handler = onValue(metricsRef, (snapshot) => {
             const raw = snapshot.val();
             if (!raw) {
@@ -168,7 +168,7 @@ export default function PhenotypingSignalDetailScreen({ route }) {
             }
         });
         return () => off(metricsRef, 'value', handler);
-    }, [userId, signalId, bl]);   // re-run when bl changes (calibration arrives mid-session)
+    }, [deviceId, signalId, bl]);   // re-run when bl changes (calibration arrives mid-session)
 
 
     if (!config) {
@@ -181,6 +181,17 @@ export default function PhenotypingSignalDetailScreen({ route }) {
 
     return (
         <ScreenBackground edges={['left', 'right']}>
+            {/* Header row */}
+            <View style={styles.header}>
+                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} activeOpacity={0.7}>
+                    <Icon name={NAMES.back} size={22} color={COLORS.brand} />
+                </TouchableOpacity>
+                <Text style={[styles.headerTitle, { color: t.text }]}>
+                    {config?.title || 'Signal Detail'}
+                </Text>
+                <View style={{ width: 22 }} />
+            </View>
+
             <ScrollView contentContainerStyle={styles.scroll}>
                 {(measures || []).map((m, i) => (
                     <View key={i} style={[styles.card, { backgroundColor: t.surface, borderColor: t.border }]}>
@@ -216,4 +227,7 @@ const styles = StyleSheet.create({
     statusPill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
     explainBox: { borderRadius: 12, padding: 12 },
     explainText: { fontSize: 12, lineHeight: 18 },
+    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 10 },
+    backBtn: { padding: 4 },
+    headerTitle: { fontSize: 16, fontWeight: '900', letterSpacing: -0.2 },
 });
