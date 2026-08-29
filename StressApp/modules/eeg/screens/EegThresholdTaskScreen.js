@@ -1,38 +1,3 @@
-// ============================================================
-// EegThresholdTaskScreen.js
-//
-// Onboarding personal-threshold calibration for BOTH components: a short
-// (75s) deliberate mental-arithmetic task run right after resting-baseline
-// calibration (AccountSetupScreen's CalibrateBreathingCard), so each
-// modality's own high-load/stress threshold can be derived from how THIS
-// user's own score moves between Rest and Task, instead of a fixed
-// population value -- see:
-//   - backend/psychological/sam40/decision.py::compute_personal_threshold()
-//   - backend/physiological/predictor.py::compute_personal_stress_threshold()
-//
-// Same transport for both now: EEG and Ring each expose an on-demand
-// POST /calibrate/threshold/start + poll /calibrate/threshold/status,
-// same shape as their own baseline capture -- no dependency on
-// mqtt_bridge.py's always-on loop (an earlier version of this screen set
-// a Firebase flag for EEG's always-on bridge to notice, which only
-// worked if that separate process happened to be running; EEG's
-// eeg_calibration_capture.py now has its own on-demand capture, mirroring
-// physiological's calibration_capture.py exactly -- see
-// backend/psychological/eeg_calibration_capture.py::run_eeg_threshold_capture()).
-//
-// EEG and Ring are tracked and shown INDEPENDENTLY (each its own status
-// row, own retry) -- NOT gated on both settling before either is visible,
-// so one running slower than the other never hides an already-successful
-// result behind a generic timeout.
-//
-// Reached from AccountSetupScreen.js once CalibrateBreathingCard's
-// baseline capture completes -- see App.js's 'ThresholdCalibration' route.
-// Skippable, same "no dead end" philosophy as the rest of onboarding
-// (AccountSetupScreen.js's own header comment) -- Done is always
-// available once the task starts, whether or not either side has
-// actually finished; finishing OR skipping both flips isNewUser off via
-// completeOnboarding() and continues into the app.
-// ============================================================
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, Keyboard } from 'react-native';
 import { ref, onValue, off } from 'firebase/database';
@@ -46,16 +11,7 @@ import physiologicalApi from '../../physiological/api/client';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import { useAuth } from '../../../context/AuthContext';
 
-// 75s, not a bare 60s -- chosen to comfortably exceed BOTH backends'
-// worst-case capture time (EEG: up to ~53s from flag-detection to 2 full
-// 25s blocks; physiological: one full 60s window from trigger), so the
-// quiz's own countdown absorbs that time instead of the user hitting a
-// visible "Working…" gap after it ends on the common case.
 const TASK_DURATION_SEC = 75;
-// Per-side "this looks stuck" warning -- independent per side now, not a
-// single combined gate (see file header). 90s from when EACH side was
-// triggered, not from quiz-end, so a side that's slow but still working
-// isn't unfairly flagged just because the other side already finished.
 const STUCK_WARNING_SEC = 90;
 const POLL_INTERVAL_MS = 2000;
 const IN_PROGRESS = ['capturing', 'saving'];
@@ -64,9 +20,6 @@ function randomInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-// Simple two-operand problems, mixed operators, difficulty roughly
-// matched to "solvable in a few seconds of real mental arithmetic" --
-// the goal is genuine cognitive load for the task's duration, not a hard puzzle.
 function generateProblem() {
   const ops = ['+', '-', '×'];
   const op = ops[randomInt(0, ops.length - 1)];
@@ -115,11 +68,6 @@ export default function EegThresholdTaskScreen({ navigation }) {
     navigation.replace('Physiological');
   }, [completeOnboarding, navigation]);
 
-  // Same current_session_id pointer EegSummaryScreen.js already watches --
-  // this screen assumes baseline calibration for that session has already
-  // succeeded (both /calibrate/start routes only produce a usable session/
-  // baseline once they've actually finished; triggering the threshold
-  // task before then just has nothing to score against).
   useEffect(() => {
     if (!userId) return undefined;
     const pointerRef = ref(db, 'psychological/current_session_id');
@@ -133,10 +81,7 @@ export default function EegThresholdTaskScreen({ navigation }) {
     if (!userId || !sessionId) return;
     setEegResult(null);
     setEegTriggeredAt(Date.now());
-    // On-demand, same shape as Ring's own trigger below -- see file header.
-    // A 409 here just means a capture from an earlier attempt is still
-    // running; that's fine, the poll below picks up whatever's in
-    // progress either way.
+
     const headers = token ? { Authorization: `Bearer ${token}` } : {};
     eegClient.post('/calibrate/threshold/start', { session_id: sessionId }, { headers }).catch(() => {});
   }, [userId, sessionId, token]);
@@ -144,9 +89,6 @@ export default function EegThresholdTaskScreen({ navigation }) {
   const triggerRing = useCallback(() => {
     setRingResult(null);
     setRingTriggeredAt(Date.now());
-    // A 409 here just means a capture from an earlier attempt is still
-    // running; that's fine, the poll below picks up whatever's in
-    // progress either way.
     physiologicalApi.post('/calibrate/threshold/start', {}).catch(() => {});
   }, []);
 
@@ -185,12 +127,6 @@ export default function EegThresholdTaskScreen({ navigation }) {
     setAnswerText('');
   }, [problem, answerText]);
 
-  // Polls EEG's /calibrate/threshold/status -- same on-demand shape as
-  // Ring's own poll below, and the same pattern CalibrateBreathingCard.js's
-  // useCaptureRunner already uses for baseline capture (kept local here
-  // rather than importing that unexported hook). Independent of Ring's
-  // own state entirely -- keeps polling and reporting its own result
-  // regardless of whether Ring ever settles (see file header).
   useEffect(() => {
     if (!eegTriggeredAt || eegResult != null) return undefined;
     const headers = token ? { Authorization: `Bearer ${token}` } : {};
@@ -202,7 +138,7 @@ export default function EegThresholdTaskScreen({ navigation }) {
           clearInterval(eegPollRef.current);
         }
       } catch {
-        // a single missed poll doesn't mean it failed -- the next tick tries again
+
       }
     };
     poll();
@@ -229,9 +165,6 @@ export default function EegThresholdTaskScreen({ navigation }) {
     return () => clearInterval(ringPollRef.current);
   }, [ringTriggeredAt, ringResult]);
 
-  // Local clock tick for the "still working, N s" / stuck-warning display
-  // -- only runs while something is actually pending, not the whole time
-  // the screen is mounted.
   useEffect(() => {
     const eegPending = eegTriggeredAt && !eegResult;
     const ringPending = ringTriggeredAt && !ringResult;
