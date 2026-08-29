@@ -61,6 +61,13 @@ function currentStateLabel(latest) {
   return latest.high_load_alert ? 'High Load' : 'Relaxed';
 }
 
+// live_raw is overwritten roughly every 1s while wearable02 is genuinely
+// streaming (backend/psychological/mqtt_bridge.py's _post_live_raw()) --
+// 10s gives generous margin for jitter/a slow poll cycle while still
+// flipping "connected" off promptly once the device actually drops,
+// rather than staying stuck at whatever the last successful write said.
+const LIVE_RAW_STALE_SEC = 10;
+
 function latestWindow(windowsObj) {
   if (!windowsObj) return null;
   const keys = Object.keys(windowsObj).filter((k) => /^\d+$/.test(k));
@@ -96,12 +103,39 @@ export default function EegSummaryScreen() {
     if (!userId) return;
     const pRef = ref(db, 'psychological/current_session_id');
     const h = onValue(pRef, (snap) => {
-      const sid = snap.val();
-      setCurrentSessionId(sid || null);
-      setHasSession(!!sid);
+      setCurrentSessionId(snap.val() || null);
     });
     return () => off(pRef, 'value', h);
   }, [userId]);
+
+  // hasSession reflects whether wearable02 is genuinely streaming right
+  // now. The session pointer alone isn't enough -- it's never cleared, so
+  // it stays truthy forever once any session has existed. live_raw's own
+  // existence isn't enough either -- it's overwritten in place, so once
+  // written it stays "there" even after the device goes offline for the
+  // rest of that session. Only the write's own timestamp actually tells
+  // you whether it's still live -- recomputed on an interval since a
+  // Firebase listener alone won't notice time passing with no new writes.
+  const [lastRawTs, setLastRawTs] = useState(null);
+
+  useEffect(() => {
+    if (!userId || !currentSessionId) {
+      setLastRawTs(null);
+      return;
+    }
+    const rawRef = ref(db, `psychological/${userId}/${currentSessionId}/live_raw`);
+    const h = onValue(rawRef, (snap) => setLastRawTs(snap.val()?.timestamp ?? null));
+    return () => off(rawRef, 'value', h);
+  }, [userId, currentSessionId]);
+
+  useEffect(() => {
+    const evaluate = () => {
+      setHasSession(lastRawTs != null && (Date.now() / 1000 - lastRawTs) < LIVE_RAW_STALE_SEC);
+    };
+    evaluate();
+    const t = setInterval(evaluate, 3000);
+    return () => clearInterval(t);
+  }, [lastRawTs]);
 
   useEffect(() => {
     if (!userId || !currentSessionId) {
