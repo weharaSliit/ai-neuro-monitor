@@ -1,116 +1,77 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import {
-  View, Text, StyleSheet, TouchableOpacity,
-  ScrollView, ActivityIndicator, Alert
-} from 'react-native';
+// ============================================================
+// CalibrationScreen.js
+// Reachable from ProfileScreen's "Calibration & Baseline" card -- the ONE
+// place a returning user can recalibrate after onboarding. Used to only
+// recalibrate the Ring (physiological) baseline via its own hand-rolled
+// capture stepper, with no way to touch EEG's baseline/threshold at all
+// from here. Now reuses the SAME CalibrateBreathingCard onboarding already
+// uses (AccountSetupScreen.js/FusionSessionScreen.js), UNCHANGED, so a
+// recalibration here behaves identically and covers BOTH Ring + EEG
+// baselines together -- its own breathing animation/capture-trigger/polling
+// logic is not touched here, just reused as a prop-driven component, plus a
+// link into the same ThresholdCalibration (EegThresholdTaskScreen.js)
+// onboarding already uses for the personal high-load/stress threshold task.
+// Both backends already persist whatever gets calibrated here per-user
+// (backend/physiological/firebase_service.py's baselines/{user_id} +
+// personal_thresholds/{user_id}; backend/psychological/firebase_service.py's
+// {user_id}/calibration_profile) and reuse it on every future session/
+// prediction until this screen is used again -- see save_baseline()/
+// load_baseline(), save_personal_stress_threshold()/
+// load_personal_stress_threshold(), and load_user_calibration_profile()'s
+// own "skip-ahead" docstring.
+// ============================================================
+import React from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
 import ScreenBackground from '../../shared/ScreenBackground';
-import { useFocusEffect } from '@react-navigation/native';
+import CalibrateBreathingCard from '../../shared/CalibrateBreathingCard';
+import { useCalibrationSummary } from '../../shared/CalibrationGate';
 import { useTheme } from '../config/ThemeContext';
-import { COLORS } from '../config/theme';
 import { useAuth } from '../../../context/AuthContext';
-import api from '../api/client';
+import { db } from '../../../firebase';
 
-const STEPS = [
-  { key: 'settling',  label: 'Settling',      hint: 'Electrode contact stabilizing (~30s)' },
-  { key: 'capturing', label: 'Capturing',      hint: 'Sit still and relaxed (~1 min per window, 3 windows)' },
-  { key: 'saving',    label: 'Saving',        hint: 'Computing your personal baseline' },
-  { key: 'done',      label: 'Done',          hint: 'Baseline saved' },
-];
+function StatusLine({ label, status, personalizedText, COLORS }) {
+  if (!status?.ok) return null;
+  if (!status.exists) {
+    return (
+      <Text style={[styles.statusLine, { color: COLORS.warningDark }]}>
+        {label}: no baseline calibrated yet
+      </Text>
+    );
+  }
+  const ageText = `${Math.floor(status.age_days ?? 0)} days old`;
+  if (status.is_stale_hard) {
+    return (
+      <Text style={[styles.statusLine, { color: COLORS.warningDark }]}>
+        {label}: ⚠ needs renewing ({ageText})
+      </Text>
+    );
+  }
+  return (
+    <Text style={[styles.statusLine, { color: status.is_stale_soft ? COLORS.warningDark : COLORS.normalDark }]}>
+      {label}: ✓ active ({ageText}){personalizedText ? ` — ${personalizedText}` : ''}
+    </Text>
+  );
+}
 
-const IN_PROGRESS_STATUSES = ['settling', 'capturing', 'saving'];
-
-export default function CalibrationScreen() {
+export default function CalibrationScreen({ navigation }) {
   const { theme, COLORS } = useTheme();
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const userId = user?.userId;
+  // Same hook AccountSetupScreen/FusionSessionScreen/CalibrateBreathingCard
+  // already use -- ring from physiological's GET /baseline/{userId},
+  // eeg from psychological's GET /calibration/status. refresh() re-fetches
+  // both, called once CalibrateBreathingCard reports a completed capture.
+  const { ring, eeg, refresh } = useCalibrationSummary(userId, token);
 
-  const [baseline, setBaseline]   = useState(null);
-  const [phase, setPhase]         = useState('idle'); // idle|settling|capturing|saving|done|error
-  const [windowIdx, setWindowIdx] = useState(0);
-  const [nWindows, setNWindows]   = useState(3);
-  const [errorMsg, setErrorMsg]   = useState(null);
-  const pollRef = useRef(null);
+  const text = theme.text;
+  const muted = theme.textMuted;
 
-  const bg     = theme.bg;
-  const card   = theme.card;
-  const border = theme.border;
-  const text   = theme.text;
-  const muted  = theme.textMuted;
-
-  const loadBaseline = async () => {
-    if (!userId) return;
-    try {
-      const res = await api.get(`/baseline/${userId}`);
-      setBaseline(res.data);
-    } catch (e) {
-      console.log('Baseline load error:', e.message);
-    }
-  };
-
-  const applyStatus = (data) => {
-    setPhase(data.status || 'idle');
-    if (data.window_idx != null) setWindowIdx(data.window_idx);
-    if (data.n_windows != null) setNWindows(data.n_windows);
-    if (data.status === 'error') setErrorMsg(data.error || 'Calibration failed');
-    if (data.status === 'done') {
-      setErrorMsg(null);
-      loadBaseline();
-    }
-  };
-
-  const pollStatus = useCallback(async () => {
-    try {
-      const res = await api.get('/calibrate/status');
-      applyStatus(res.data);
-      return res.data.status;
-    } catch (e) {
-      return null;
-    }
-  }, []);
-
-  const startPolling = () => {
-    if (pollRef.current) return;
-    pollRef.current = setInterval(async () => {
-      const status = await pollStatus();
-      if (status && !IN_PROGRESS_STATUSES.includes(status)) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-    }, 2000);
-  };
-
-  useEffect(() => {
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, []);
-
-  useFocusEffect(useCallback(() => {
-    loadBaseline();
-    // Resume watching if a capture was already running (e.g. navigated
-    // away mid-capture and came back).
-    pollStatus().then((status) => {
-      if (status && IN_PROGRESS_STATUSES.includes(status)) startPolling();
-    });
-  }, [userId]));
-
-  const start = async () => {
-    setErrorMsg(null);
-    setWindowIdx(0);
-    try {
-      await api.post('/calibrate/start', {});
-      setPhase('settling');
-      startPolling();
-    } catch (e) {
-      if (e?.response?.status === 409) {
-        // Already running somewhere — just start watching it.
-        startPolling();
-        return;
-      }
-      Alert.alert('Could not start calibration', e?.response?.data?.error || e.message);
-    }
-  };
-
-  const inProgress = IN_PROGRESS_STATUSES.includes(phase);
-  const stepIndex = STEPS.findIndex(s => s.key === phase);
+  const ringThresholdText = ring?.personal_stress_threshold != null
+    ? `stress threshold personalized at ${Math.round(ring.personal_stress_threshold * 100)}%`
+    : null;
+  const eegThresholdText = eeg?.personal_high_load_p != null
+    ? `high-load threshold personalized at ${Math.round(eeg.personal_high_load_p * 100)}%`
+    : null;
 
   return (
     <ScreenBackground>
@@ -118,101 +79,39 @@ export default function CalibrationScreen() {
         <View style={styles.header}>
           <Text style={[styles.title, { color: text }]}>Baseline Calibration</Text>
           <Text style={[styles.subtitle, { color: muted }]}>
-            Establishes your personal resting baseline — comparing your unique physiology against your own relaxed state rather than a generic average.
+            Establishes your personal resting baseline for both the Ring and EEG headband --
+            comparing your own relaxed state against your own readings, not a population average.
+            Whatever gets calibrated here stays in effect for every future session until you
+            recalibrate again.
           </Text>
         </View>
 
-        {/* Current status */}
-        <View style={[styles.card, { backgroundColor: card, borderColor: border }]}>
-          <Text style={[styles.cardTitle, { color: text }]}>Current Status</Text>
-          {baseline?.exists ? (
-            <View style={[styles.statusBanner, { backgroundColor: baseline.is_stale_soft ? COLORS.warningSoft : COLORS.normalSoft }]}>
-              <Text style={[styles.statusLine, { color: baseline.is_stale_soft ? COLORS.warningDark : COLORS.normalDark }]}>
-                {baseline.is_stale_hard
-                  ? '⚠ Your baseline needs renewing (>30 days old)'
-                  : baseline.is_stale_soft
-                    ? `✓ Active — ${Math.floor(baseline.age_days ?? 0)} days old (recalibrate when convenient)`
-                    : '✓ Baseline is active, accurate, and up to date'}
-              </Text>
-            </View>
-          ) : (
-            <View style={[styles.statusBanner, { backgroundColor: COLORS.warningSoft }]}>
-              <Text style={[styles.statusLine, { color: COLORS.warningDark }]}>No baseline calibrated yet</Text>
-            </View>
-          )}
+        <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
+          <Text style={[styles.cardTitle, { color: text, marginBottom: 8 }]}>Current Status</Text>
+          <StatusLine label="Ring" status={ring} personalizedText={ringThresholdText} COLORS={COLORS} />
+          <StatusLine label="EEG" status={eeg} personalizedText={eegThresholdText} COLORS={COLORS} />
         </View>
 
-        {/* Progress / start */}
-        <View style={[styles.card, { backgroundColor: card, borderColor: border }]}>
-          {inProgress || phase === 'done' ? (
-            <>
-              <Text style={[styles.cardTitle, { color: text }]}>
-                {phase === 'done' ? 'Calibration Complete' : 'Calibrating Baseline…'}
-              </Text>
-              <View style={styles.stepperRow}>
-                {STEPS.map((s, i) => (
-                  <View key={s.key} style={styles.stepDotWrap}>
-                    <View style={[
-                      styles.stepDot,
-                      { borderColor: border },
-                      i < stepIndex && { backgroundColor: COLORS.normal, borderColor: COLORS.normal },
-                      i === stepIndex && { backgroundColor: COLORS.brand, borderColor: COLORS.brand },
-                    ]} />
-                    {i < STEPS.length - 1 && (
-                      <View style={[styles.stepLine, { backgroundColor: i < stepIndex ? COLORS.normal : border }]} />
-                    )}
-                  </View>
-                ))}
-              </View>
-              <Text style={[styles.stepLabel, { color: text }]}>
-                {STEPS[stepIndex]?.label || 'Working…'}
-                {phase === 'capturing' ? ` (${windowIdx}/${nWindows})` : ''}
-              </Text>
-              <Text style={[styles.stepHint, { color: muted }]}>{STEPS[stepIndex]?.hint}</Text>
-              {inProgress && (
-                <View style={[styles.spinnerRow, { backgroundColor: COLORS.brandSoft }]}>
-                  <ActivityIndicator color={COLORS.brand} size="small" />
-                  <Text style={[styles.spinnerText, { color: COLORS.brandDark }]}>
-                    Keep the ring worn, sit comfortably, and breathe calmly…
-                  </Text>
-                </View>
-              )}
-              {phase === 'done' && (
-                <View style={[styles.doneBox, { backgroundColor: COLORS.normalSoft }]}>
-                  <Text style={[styles.doneText, { color: COLORS.normalDark }]}>
-                    ✓ Your personal baseline has been saved and is now active for stress scoring.
-                  </Text>
-                </View>
-              )}
-            </>
-          ) : (
-            <>
-              <Text style={[styles.cardTitle, { color: text }]}>Begin Guided Capture</Text>
-              <Text style={[styles.cardSub, { color: muted }]}>
-                Takes about 3.5 minutes. Wear the smart ring, rest your hands comfortably in your lap, and stay relaxed throughout the capture.
-              </Text>
-              {phase === 'error' && errorMsg && (
-                <Text style={[styles.errorText, { color: COLORS.stress }]}>{errorMsg}</Text>
-              )}
-              <TouchableOpacity
-                style={[styles.startBtn, { backgroundColor: COLORS.brand }]}
-                onPress={start}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.startBtnText}>Start Calibration →</Text>
-              </TouchableOpacity>
-            </>
-          )}
+        {/* CalibrateBreathingCard, unmodified -- same component, same
+            breathing animation/capture-and-poll mechanism as onboarding
+            (AccountSetupScreen.js) and the Fusion dashboard
+            (FusionSessionScreen.js). Not rebuilt here. */}
+        <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
+          <Text style={[styles.cardTitle, { color: text, marginBottom: 4 }]}>Recalibrate Baseline</Text>
+          <CalibrateBreathingCard userId={userId} token={token} eegDb={db} onComplete={refresh} />
         </View>
 
-        {phase === 'done' && (
-          <TouchableOpacity
-            style={[styles.recalibrateBtn, { backgroundColor: card, borderColor: border }]}
-            onPress={() => { setPhase('idle'); setErrorMsg(null); }}
-          >
-            <Text style={[styles.recalibrateText, { color: COLORS.brand }]}>Recalibrate Baseline</Text>
-          </TouchableOpacity>
-        )}
+        <TouchableOpacity
+          style={[styles.card, { backgroundColor: theme.card, borderColor: theme.border }]}
+          onPress={() => navigation.navigate('ThresholdCalibration')}
+          activeOpacity={0.85}
+        >
+          <Text style={[styles.cardTitle, { color: text }]}>Recalibrate Personal Threshold</Text>
+          <Text style={[styles.cardSub, { color: muted, marginTop: 6 }]}>
+            Run the short mental-load task again to refresh your high-load (EEG) and stress (Ring)
+            thresholds against your current physiology.
+          </Text>
+        </TouchableOpacity>
 
         <View style={{ height: 60 }} />
       </ScrollView>
@@ -221,28 +120,12 @@ export default function CalibrationScreen() {
 }
 
 const styles = StyleSheet.create({
-  container:       { padding: 20, paddingTop: 16 },
-  header:          { marginBottom: 16 },
-  title:           { fontSize: 24, fontWeight: '900', letterSpacing: -0.3 },
-  subtitle:        { fontSize: 13, marginTop: 4, lineHeight: 19 },
-  card:            { padding: 20, borderRadius: 22, borderWidth: 1, marginBottom: 16 },
-  cardTitle:       { fontSize: 16, fontWeight: '800' },
-  cardSub:         { fontSize: 12, marginTop: 6, lineHeight: 18 },
-  statusBanner:    { padding: 12, borderRadius: 14, marginTop: 10 },
-  statusLine:      { fontSize: 13, fontWeight: '800', lineHeight: 18 },
-  stepperRow:      { flexDirection: 'row', alignItems: 'center', marginTop: 14, marginBottom: 14 },
-  stepDotWrap:     { flexDirection: 'row', alignItems: 'center', flex: 1 },
-  stepDot:         { width: 14, height: 14, borderRadius: 7, borderWidth: 2 },
-  stepLine:        { flex: 1, height: 2, marginHorizontal: 2 },
-  stepLabel:       { fontSize: 15, fontWeight: '800', marginBottom: 4 },
-  stepHint:        { fontSize: 12, marginBottom: 12 },
-  spinnerRow:      { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: 14, marginTop: 4 },
-  spinnerText:     { fontSize: 12, fontWeight: '700', flex: 1 },
-  doneBox:         { padding: 12, borderRadius: 14, marginTop: 8 },
-  doneText:        { fontSize: 13, fontWeight: '800', lineHeight: 18 },
-  errorText:       { fontSize: 13, marginTop: 8, marginBottom: 8 },
-  startBtn:        { marginTop: 16, padding: 15, borderRadius: 28, alignItems: 'center', shadowColor: COLORS.brandDark, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8, elevation: 3 },
-  startBtnText:    { color: '#fff', fontSize: 15, fontWeight: '800' },
-  recalibrateBtn:  { padding: 14, borderRadius: 28, alignItems: 'center', borderWidth: 1 },
-  recalibrateText: { fontSize: 14, fontWeight: '800' },
+  container:    { padding: 20, paddingTop: 16 },
+  header:       { marginBottom: 16 },
+  title:        { fontSize: 24, fontWeight: '900', letterSpacing: -0.3 },
+  subtitle:     { fontSize: 13, marginTop: 4, lineHeight: 19 },
+  card:         { padding: 20, borderRadius: 22, borderWidth: 1, marginBottom: 16 },
+  cardTitle:    { fontSize: 16, fontWeight: '800' },
+  cardSub:      { fontSize: 12, lineHeight: 18 },
+  statusLine:   { fontSize: 13, fontWeight: '700', lineHeight: 19 },
 });
