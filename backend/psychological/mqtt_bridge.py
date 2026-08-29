@@ -51,7 +51,16 @@ _UNSAFE_FILENAME_CHARS = re.compile(r'[^A-Za-z0-9_-]')
 _fallback_csv_loggers: dict[str, CsvLogger] = {}
 EEG_MQTT_BROKER = os.environ.get("EEG_MQTT_BROKER", "ob1f0f10.ala.asia-southeast1.emqxsl.com")
 EEG_MQTT_PORT = int(os.environ.get("EEG_MQTT_PORT", "8883"))
-EEG_MQTT_TOPIC = os.environ.get("EEG_MQTT_TOPIC", "mindpulse/wearable02/sensors")
+# No env-var override here, unlike the other EEG_MQTT_* settings above --
+# deliberate, matching physiological's MQTT_TOPIC (backend/common/config.py),
+# the one setting on that side with no override either. This code's own
+# default drifted out of sync with the firmware's real topic for a while
+# (firmware moved to "mindpulse/wearable02/eeg", this stayed on the old
+# ".../sensors" default) -- an override would only add a SECOND place that
+# value could silently diverge from the firmware's, with no trace of it in
+# the codebase. Change the literal below if the firmware's topic ever
+# changes again; don't reintroduce an override.
+EEG_MQTT_TOPIC = "mindpulse/wearable02/eeg"
 EEG_MQTT_USER = os.environ.get("EEG_MQTT_USER", "wearable02")
 EEG_MQTT_PASSWORD = os.environ.get("EEG_MQTT_PASSWORD", "wearable02")
 EEG_MQTT_CA_CERT = os.path.join(

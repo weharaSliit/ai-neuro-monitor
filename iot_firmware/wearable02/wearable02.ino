@@ -26,8 +26,8 @@ const char* MQTT_BROKER = "ob1f0f10.ala.asia-southeast1.emqxsl.com";
 const int   MQTT_PORT   = 8883;
 const char* MQTT_USER   = "wearable02";
 const char* MQTT_PASS   = "wearable02";
-const char* MQTT_TOPIC  = "mindpulse/wearable02/sensors";
-const char* MQTT_STATUS = "mindpulse/wearable02/status";
+const char* MQTT_TOPIC  = "mindpulse/wearable02/eeg";
+//const char* MQTT_STATUS = "mindpulse/wearable02/status";
 
 const char* EMQX_CA_CERT = R"EOF(
 -----BEGIN CERTIFICATE-----
