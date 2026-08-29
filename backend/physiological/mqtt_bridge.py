@@ -162,17 +162,20 @@ def send_window():
     if USER_ID is None:
         print(f"[Window {window_idx}] skipped — no user logged in yet "
               f"(waiting for the app's current_user_id pointer)")
-    elif not baseline_exists(USER_ID):
-        # Never posted to /predict at all pre-calibration -- app.py's
-        # predict_raw() fallback (used when load_baseline() returns None)
-        # is a real, working prediction, just not personalized, and
-        # showing/storing it as if it were a normal reading is misleading
-        # for a brand-new user. This is the actual gate; the frontend's
-        # own ring.exists check (RingSummaryScreen.js) only hides output
-        # that would otherwise already exist in Firebase -- this stops it
-        # from being generated at all.
-        print(f"[Window {window_idx}] skipped — {USER_ID} has no baseline yet "
-              f"(calibrate first; predict_raw() fallback not used here)")
+    # TEMPORARILY DISABLED (2026-08-30) -- diagnostic: calibration's own
+    # save step has been failing/hanging/resetting for multiple test users
+    # this session (mahesh1, kasu, suha), independent of this gate. This
+    # is commented out, not removed, specifically to check whether the
+    # live MQTT->/predict->Firebase pipeline itself is healthy using
+    # predict_raw()'s non-personalized fallback, decoupled from whether
+    # calibration ever successfully saves a baseline. RE-ENABLE once that
+    # separate calibration-save issue is actually fixed -- this existed
+    # specifically so predictions for a never-calibrated user (real
+    # fallback-model output, not personalized) don't get shown/stored as
+    # if they were normal, and that reason hasn't gone away.
+    # elif not baseline_exists(USER_ID):
+    #     print(f"[Window {window_idx}] skipped — {USER_ID} has no baseline yet "
+    #           f"(calibrate first; predict_raw() fallback not used here)")
     elif len(ibi_buf) < 10 or len(gsr_buf) < 20 or len(acc_buf) < 10:
         print(f"[Window {window_idx}] skipped — insufficient data "
               f"(ibi={len(ibi_buf)}, gsr={len(gsr_buf)}, acc={len(acc_buf)})")
