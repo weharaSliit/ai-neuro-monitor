@@ -1,6 +1,15 @@
 import os
 import sys
 
+# Forces line buffering regardless of `python -u`/PYTHONUNBUFFERED -- same
+# fix as the bridge scripts (backend/common/mqtt_bridge.py's identical
+# comment). Without it, print()s from run_calibration_capture()'s
+# background thread (app.py's /calibrate/start) sit queued in stdout's
+# default block buffer instead of showing up live in Render's log viewer --
+# a whole calibration attempt could finish before anything appeared, or
+# some lines might never flush at all depending on buffer/thread timing.
+sys.stdout.reconfigure(line_buffering=True)
+
 from flask import jsonify, request, g
 from werkzeug.security import generate_password_hash, check_password_hash
 import re
