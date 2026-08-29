@@ -31,7 +31,7 @@ if __package__ is None:
         sys.path.insert(0, str(repo_root))
 
 from backend.physiological.firebase_service import (
-    init_firebase, save_device_heartbeat
+    init_firebase, save_device_heartbeat, baseline_exists
 )
 from backend.common.mqtt_bridge import auth_headers, connect_mqtt, post_json
 from backend.common.config import (
@@ -69,6 +69,16 @@ AUTH_HEADERS = auth_headers(USER_ID) if USER_ID else None
 
 HEARTBEAT_MIN_GAP_SEC = 5   # don't hammer Firebase at ~5 msgs/sec
 POINTER_POLL_INTERVAL_SEC = 10  # how often to check for a new app-driven session
+
+# Sliding window: still analyzes a full WINDOW_SEC (60s) span each time --
+# HRV feature quality is unchanged -- but re-emits a prediction every
+# SLIDE_INTERVAL_SEC instead of waiting a full fresh WINDOW_SEC between
+# predictions. Two real benefits over the old tumbling (reset-to-empty)
+# window: the live chart gets a new point every ~20s instead of ~60-70s,
+# and a window is no longer all-or-nothing against a contact dropout --
+# recovery only needs SLIDE_INTERVAL_SEC of renewed good contact within
+# the trailing 60s, not a whole fresh cycle.
+SLIDE_INTERVAL_SEC = 20
 
 # StressApp (App.js) is the authority on the current session_id -- written
 # to {FUSION_EN_ROOT}/current_session_id when the app opens/reuses a
@@ -122,16 +132,29 @@ def _poll_user_pointer():
 
 init_firebase()
 
-window_start = time.time()
 window_idx   = 0
+# Each buffer holds (timestamp, value) pairs so send_window() can trim off
+# anything older than WINDOW_SEC instead of wiping the buffer wholesale --
+# that's the entire difference between this and the old tumbling window.
 ibi_buf, gsr_buf, acc_buf = [], [], []
 last_heartbeat_write = 0.0
+last_window_emit = 0.0
 
 
 def send_window():
-    global window_idx, ibi_buf, gsr_buf, acc_buf, window_start
+    global window_idx, ibi_buf, gsr_buf, acc_buf
 
-    duration = time.time() - window_start
+    now = time.time()
+    cutoff = now - WINDOW_SEC
+    ibi_buf[:] = [(t, v) for t, v in ibi_buf if t >= cutoff]
+    gsr_buf[:] = [(t, v) for t, v in gsr_buf if t >= cutoff]
+    acc_buf[:] = [(t, v) for t, v in acc_buf if t >= cutoff]
+
+    # Actual span covered by what's left after trimming -- ramps up from 0
+    # toward WINDOW_SEC as history accumulates, rather than assuming a full
+    # 60s is already there (matters for the first ~60s after startup/a
+    # contact dropout, when the buffer is still filling back up).
+    duration = (now - gsr_buf[0][0]) if gsr_buf else WINDOW_SEC
     if duration <= 0:
         duration = WINDOW_SEC
     actual_fs = max(1, round(len(gsr_buf) / duration))
@@ -139,6 +162,17 @@ def send_window():
     if USER_ID is None:
         print(f"[Window {window_idx}] skipped — no user logged in yet "
               f"(waiting for the app's current_user_id pointer)")
+    elif not baseline_exists(USER_ID):
+        # Never posted to /predict at all pre-calibration -- app.py's
+        # predict_raw() fallback (used when load_baseline() returns None)
+        # is a real, working prediction, just not personalized, and
+        # showing/storing it as if it were a normal reading is misleading
+        # for a brand-new user. This is the actual gate; the frontend's
+        # own ring.exists check (RingSummaryScreen.js) only hides output
+        # that would otherwise already exist in Firebase -- this stops it
+        # from being generated at all.
+        print(f"[Window {window_idx}] skipped — {USER_ID} has no baseline yet "
+              f"(calibrate first; predict_raw() fallback not used here)")
     elif len(ibi_buf) < 10 or len(gsr_buf) < 20 or len(acc_buf) < 10:
         print(f"[Window {window_idx}] skipped — insufficient data "
               f"(ibi={len(ibi_buf)}, gsr={len(gsr_buf)}, acc={len(acc_buf)})")
@@ -147,9 +181,9 @@ def send_window():
             "user_id":         USER_ID,
             "session_id":      SESSION_ID,
             "window_idx":      window_idx,
-            "ibi_array":       ibi_buf,
-            "gsr_adc_array":   gsr_buf,
-            "acc_array":       acc_buf,
+            "ibi_array":       [v for _, v in ibi_buf],
+            "gsr_adc_array":   [v for _, v in gsr_buf],
+            "acc_array":       [v for _, v in acc_buf],
             "gsr_calibration": GSR_CAL,
             "actual_fs":       actual_fs
         }
@@ -159,13 +193,14 @@ def send_window():
         # happens instead of just waiting it out.
         post_json(FLASK_URL, payload, AUTH_HEADERS, timeout=45, label=f"Window {window_idx}")
 
+    # No buffer reset here -- that's what makes this a sliding window
+    # instead of a tumbling one. The next send_window() call trims from
+    # this same retained history rather than starting over from empty.
     window_idx += 1
-    ibi_buf, gsr_buf, acc_buf = [], [], []
-    window_start = time.time()
 
 
 def on_message(client, userdata, msg):
-    global ibi_buf, gsr_buf, acc_buf, window_start, last_heartbeat_write
+    global ibi_buf, gsr_buf, acc_buf, last_heartbeat_write, last_window_emit
 
     try:
         data = json.loads(msg.payload.decode())
@@ -175,7 +210,7 @@ def on_message(client, userdata, msg):
     device_id = data.get("device_id", "wearable01")
 
     # Throttled heartbeat — proves the device is alive right now,
-    # independent of whether a full 60s window has completed yet.
+    # independent of whether a window has been emitted yet.
     now = time.time()
     if now - last_heartbeat_write >= HEARTBEAT_MIN_GAP_SEC:
         save_device_heartbeat(device_id, extra={
@@ -183,17 +218,22 @@ def on_message(client, userdata, msg):
         })
         last_heartbeat_write = now
 
-    ibi_buf.extend(data.get("ibi", []))
-    gsr_buf.append(data.get("gsr", 0))
+    # IBI entries aren't individually timestamped by the device -- this
+    # message's arrival time is accurate enough for a 60s trim window
+    # (published every ~200ms, so at most that much error per beat).
+    for beat in data.get("ibi", []):
+        ibi_buf.append((now, beat))
+    gsr_buf.append((now, data.get("gsr", 0)))
 
     ax = data.get("acc_x", 0)
     ay = data.get("acc_y", 0)
     az = data.get("acc_z", 0)
     magnitude = math.sqrt(ax * ax + ay * ay + az * az)
-    acc_buf.append(magnitude / 9.81)
+    acc_buf.append((now, magnitude / 9.81))
 
-    if time.time() - window_start >= WINDOW_SEC:
+    if now - last_window_emit >= SLIDE_INTERVAL_SEC:
         send_window()
+        last_window_emit = now
 
 
 print("Starting MQTT -> Flask bridge...")
@@ -207,8 +247,8 @@ time.sleep(SETTLE_SEC)
 
 # Discard whatever accumulated during settling and start window 0 fresh.
 ibi_buf, gsr_buf, acc_buf = [], [], []
-window_start = time.time()
 window_idx   = 0
+last_window_emit = time.time()
 print("Settling done — live predictions starting now.\n")
 
 try:
