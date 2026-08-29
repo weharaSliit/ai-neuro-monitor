@@ -4,58 +4,6 @@ import Svg, { Circle, Line as SvgLine } from 'react-native-svg';
 import { LineChart as GiftedLineChart } from 'react-native-gifted-charts';
 import { COLORS } from '../physiological/config/theme';
 
-// Pure-JS/SVG chart (react-native-gifted-charts) -- works inside plain
-// Expo Go on every platform with no custom native build required, unlike
-// @shopify/react-native-skia, which needs Skia's native module compiled
-// into the app binary and was crashing with "installTurboModule" errors
-// on a stock Expo Go client (no android/ dir, no expo-dev-client).
-//
-// `points` keeps the same {value, date}[] shape every caller already
-// produces (originally for react-native-graph's GraphPoint). `date` used
-// to be accepted but silently ignored -- every point got equal visual
-// spacing regardless of the real time gap between readings, so a fast rise
-// and a slow rise over the same number of windows looked identical. Now
-// each gap's on-screen width is proportional to the real elapsed time
-// between consecutive points (falling back to equal spacing only when a
-// point is missing a usable `date`, so a caller that never passed dates
-// still renders exactly as before).
-//
-// `maxValue`/`suffix` are optional -- callers plotting a real 0-100%
-// probability (Ring/Fusion/HrvGsr) pass maxValue={100} suffix="%"; callers
-// plotting something else entirely (EEG's raw µV signal chart) leave them
-// unset and get gifted-charts' own data-driven auto-scaling instead. Y-axis
-// numbers/rules are shown by default so every caller gets a real scale to
-// judge magnitude by -- except `hideValues`, which User-app screens pass to
-// show only the line's shape (rising/falling/flat) with no numeric scale at
-// all, since the user app deliberately never surfaces raw stress
-// probabilities (see predictor.py's STRESS_DECISION_THRESHOLD). Admin keeps
-// the numbers by leaving this unset.
-//
-// (hideValues note: gifted-charts' own `hideAxesAndRules` prop is a no-op
-// in the installed version -- traced into gifted-charts-core's actual
-// render path and it's never read anywhere; `hideRules`/`hideOrigin`/
-// `hideYAxisText` are the three that are genuinely wired, so those are
-// what get toggled here instead.)
-//
-// `baselineValue`/`baselineLabel` (and `baseline2Value`/`baseline2Label`)
-// draw dashed horizontal reference lines -- e.g. the Stress decision
-// threshold and a user's own session baseline -- as plain absolutely-
-// positioned Views overlaid on the chart, computed from `height`/`maxValue`
-// directly rather than gifted-charts' own `referenceLinesConfig` (positions
-// in raw pixels against an internal containerHeight that isn't reliably
-// predictable from the outside).
-//
-// `colorZones` switches to a fully custom-drawn chart (see ZoneChart below)
-// instead of gifted-charts at all: a straight-segment line colored per point
-// (green below the Stress line, red -- dashed -- at/above it; a third
-// "trending" orange zone only appears when a caller also passes a real
-// baseline2Value), no numeric y-axis -- still no raw probability numbers --
-// horizontally SCROLLABLE so points get real breathing room instead of
-// being squeezed to fit a fixed card width, and tappable: tapping any point
-// shows its state/time (and deviation from baseline2Value, when there is
-// one) in a small fixed detail bar above the chart. Only charts that pass a
-// real baselineValue opt into this; everything else (Admin, EEG raw signal)
-// keeps the plain gifted-charts path below, untouched.
 function ReferenceLine({ value, label, color, height, maxValue, labelSide }) {
     if (value === undefined || value === null || !maxValue) return null;
     const top = height * (1 - Math.min(1, Math.max(0, value / maxValue)));
@@ -84,22 +32,6 @@ function LegendSwatch({ color, label }) {
     );
 }
 
-// Fully custom-drawn chart (no gifted-charts involved at all) -- one Svg,
-// three layers: a plain axis frame, one or two dashed reference lines, and
-// the reading itself as straight per-point segments colored by zone (red
-// segments dashed too, so "in the stress zone" reads the same way on the
-// line as it does on the threshold it crossed). Everything reference-line-
-// related is a fixed color/dash, drawn identically here and in the legend
-// below, rather than floating text glued to the line's own position --
-// floating labels would collide whenever the two reference lines happen to
-// sit close together, which a fixed legend row can't.
-//
-// Deliberately NO area fill: a single flat fill color under a line that
-// itself changes color along its length would misrepresent the earlier
-// (differently-colored) part of the reading -- e.g. a session that started
-// green and ended red would shade the whole area red, including the part
-// that was never in the stress zone. Dropping the fill removes that
-// inaccuracy outright rather than trying to patch it with a gradient.
 function ZoneChart({
     raw, width, height, maxValue,
     baselineLabel, baselineColor,
@@ -107,14 +39,7 @@ function ZoneChart({
     zoneLowColor, zoneMidColor, zoneHighColor,
 }) {
     const [selectedIndex, setSelectedIndex] = useState(null);
-
-    // Real per-point spacing (proportional to elapsed time, same idea as
-    // the plain chart below) but with a real minimum gap now -- so a
-    // session with many windows grows WIDER than the card instead of
-    // cramming every point into a fixed width. The outer ScrollView (below)
-    // is what actually makes that width reachable by panning.
     const contentWidth = Math.max(width, MIN_POINT_GAP * Math.max(1, raw.length - 1) + 20);
-
     const times = raw.map((p) => (p.date ? new Date(p.date).getTime() : null));
     const haveAllTimes = times.every((t) => t !== null && !Number.isNaN(t));
     const totalSpan = haveAllTimes ? times[times.length - 1] - times[0] : 0;
@@ -132,13 +57,6 @@ function ZoneChart({
         xs.push(xs[i - 1] + spacing);
     });
 
-    // Dots (up to r=5 when selected) and the reference lines' own stroke
-    // need real room -- mapping values straight onto [0, height] put a
-    // 100%-reading's dot center exactly at y=0, and Svg clips anything
-    // outside its own canvas bounds, so the top half of that dot (and the
-    // bottom half of a 0%-reading's dot) was genuinely being cut off, not
-    // just visually tight. Reserving a real margin here fixes that outright
-    // rather than trying to clip-proof every element separately.
     const PAD_Y = 7;
     const clamp01 = (v) => Math.min(1, Math.max(0, v));
     const valueToY = (v) => PAD_Y + (height - PAD_Y * 2) * (1 - clamp01(v / maxValue));
@@ -198,10 +116,6 @@ function ZoneChart({
                         <SvgLine x1={0} y1={0} x2={0} y2={height} stroke={COLORS.light.border} strokeWidth={1} />
                         <SvgLine x1={0} y1={height} x2={contentWidth} y2={height} stroke={COLORS.light.border} strokeWidth={1} />
 
-                        {/* A faint vertical line under each time label below
-                            -- without one, a label just floats under the
-                            chart with nothing marking exactly which point
-                            (or window boundary) it belongs to. */}
                         {haveAllTimes && raw.map((_p, i) => {
                             if (!(i % labelStep === 0 || i === raw.length - 1)) return null;
                             return (
@@ -234,20 +148,6 @@ function ZoneChart({
 
                         {raw.map((_p, i) => (
                             <React.Fragment key={i}>
-                                {/* Slightly larger invisible tap target than
-                                    the visible dot (r=3) -- but deliberately
-                                    NOT much larger: with MIN_POINT_GAP=30
-                                    between points, a r=14 target (28px
-                                    across) left almost no gap between
-                                    adjacent points' touch areas, so nearly
-                                    every touch-down on the chart landed on
-                                    SOME touchable Circle and claimed the
-                                    gesture responder before the ScrollView
-                                    ever got a chance to recognize a
-                                    horizontal drag -- the chart couldn't be
-                                    scrolled at all. r=8 leaves ~14px of real
-                                    gap between adjacent points' targets for
-                                    a scroll gesture to actually start in. */}
                                 <Circle cx={xs[i]} cy={ys[i]} r={8} fill={zoneColorOf(zones[i])} fillOpacity={0.001}
                                     onPress={() => setSelectedIndex(i)} />
                                 <Circle cx={xs[i]} cy={ys[i]} r={selectedIndex === i ? 5 : 3} fill={zoneColorOf(zones[i])}
@@ -272,15 +172,121 @@ function ZoneChart({
                 </View>
             </ScrollView>
 
-            {/* Legend -- fixed position, outside the scroll, so it never
-                collides with the data and is always visible regardless of
-                where the reference line(s) sit or how far the chart is
-                scrolled. */}
             <View style={styles.legendRow}>
                 {baseline2Value != null && (
                     <LegendSwatch color={baseline2Color} label={baseline2Label || 'Your baseline'} />
                 )}
                 <LegendSwatch color={baselineColor} label={baselineLabel || 'Stress level'} />
+            </View>
+        </View>
+    );
+}
+function MultiLineChart({
+    points, width, height, maxValue,
+    seriesColors, seriesLabels,
+    baselineValue, baselineLabel, baselineColor,
+}) {
+    const contentWidth = Math.max(width, MIN_POINT_GAP * Math.max(1, points.length - 1) + 20);
+
+    const times = points.map((p) => (p.date ? new Date(p.date).getTime() : null));
+    const haveAllTimes = times.every((t) => t !== null && !Number.isNaN(t));
+    const totalSpan = haveAllTimes ? times[times.length - 1] - times[0] : 0;
+
+    const xs = [];
+    points.forEach((_p, i) => {
+        if (i === 0) { xs.push(0); return; }
+        let spacing;
+        if (haveAllTimes && totalSpan > 0) {
+            const frac = (times[i] - times[i - 1]) / totalSpan;
+            spacing = Math.max(MIN_POINT_GAP * 0.6, frac * contentWidth);
+        } else {
+            spacing = Math.max(MIN_POINT_GAP, contentWidth / (points.length - 1));
+        }
+        xs.push(xs[i - 1] + spacing);
+    });
+
+    const PAD_Y = 7;
+    const clamp01 = (v) => Math.min(1, Math.max(0, v));
+    const valueToY = (v) => PAD_Y + (height - PAD_Y * 2) * (1 - clamp01(v / maxValue));
+
+    const targetLabelCount = Math.max(4, Math.round(contentWidth / 90));
+    const labelStep = Math.max(1, Math.ceil(points.length / targetLabelCount));
+
+    const baselineY = baselineValue != null ? valueToY(baselineValue) : null;
+
+    return (
+        <View style={{ width }}>
+            <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={{ width }}
+                nestedScrollEnabled
+                directionalLockEnabled
+            >
+                <View style={{ width: contentWidth, height: height + X_LABEL_HEIGHT }}>
+                    <Svg width={contentWidth} height={height} style={{ position: 'absolute', top: 0, left: 0 }}>
+                        <SvgLine x1={0} y1={0} x2={0} y2={height} stroke={COLORS.light.border} strokeWidth={1} />
+                        <SvgLine x1={0} y1={height} x2={contentWidth} y2={height} stroke={COLORS.light.border} strokeWidth={1} />
+
+                        {haveAllTimes && points.map((_p, i) => {
+                            if (!(i % labelStep === 0 || i === points.length - 1)) return null;
+                            return (
+                                <SvgLine key={`grid-${i}`} x1={xs[i]} y1={0} x2={xs[i]} y2={height}
+                                    stroke={COLORS.light.borderSoft} strokeWidth={1} />
+                            );
+                        })}
+
+                        {baselineY !== null && (
+                            <SvgLine x1={0} y1={baselineY} x2={contentWidth} y2={baselineY}
+                                stroke={baselineColor} strokeWidth={1.5} strokeDasharray="5,4" />
+                        )}
+
+                        {seriesColors.map((seriesColor, s) => (
+                            <React.Fragment key={`series-${s}`}>
+                                {points.slice(1).map((_p, idx) => {
+                                    const i = idx + 1;
+                                    const v0 = points[i - 1].values[s];
+                                    const v1 = points[i].values[s];
+                                    if (v0 == null || v1 == null) return null;
+                                    return (
+                                        <SvgLine
+                                            key={`seg-${s}-${i}`}
+                                            x1={xs[i - 1]} y1={valueToY(v0)} x2={xs[i]} y2={valueToY(v1)}
+                                            stroke={seriesColor} strokeWidth={2.5} strokeLinecap="round"
+                                        />
+                                    );
+                                })}
+                                {points.map((p, i) => {
+                                    const v = p.values[s];
+                                    if (v == null) return null;
+                                    return (
+                                        <Circle key={`dot-${s}-${i}`} cx={xs[i]} cy={valueToY(v)} r={2.5} fill={seriesColor} />
+                                    );
+                                })}
+                            </React.Fragment>
+                        ))}
+                    </Svg>
+
+                    <View pointerEvents="none" style={{ position: 'absolute', top: height + 2, left: 0, width: contentWidth, height: X_LABEL_HEIGHT }}>
+                        {haveAllTimes && points.map((p, i) => {
+                            if (!(i % labelStep === 0 || i === points.length - 1)) return null;
+                            return (
+                                <Text key={i} style={[styles.xLabel, { left: xs[i] - 18, color: COLORS.light.textMuted }]}>
+                                    {new Date(p.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </Text>
+                            );
+                        })}
+                    </View>
+                </View>
+            </ScrollView>
+
+            <View style={styles.legendRow}>
+                {seriesLabels.map((label, s) => (
+                    <LegendSwatch key={label} color={seriesColors[s]} label={label} />
+                ))}
+                {baselineValue != null && (
+                    <LegendSwatch color={baselineColor} label={baselineLabel || 'Threshold'} />
+                )}
             </View>
         </View>
     );
@@ -292,10 +298,21 @@ export default function LineChart({
     baseline2Value, baseline2Label, baseline2Color = COLORS.brand,
     colorZones = false,
     zoneLowColor = COLORS.normal, zoneMidColor = COLORS.warning, zoneHighColor = COLORS.stress,
+    multiLine = false, seriesColors, seriesLabels,
 }) {
     const raw = points || [];
     if (raw.length === 0) {
         return fallback || null;
+    }
+
+    if (multiLine && seriesColors && seriesLabels) {
+        return (
+            <MultiLineChart
+                points={raw} width={width} height={height} maxValue={maxValue || 100}
+                seriesColors={seriesColors} seriesLabels={seriesLabels}
+                baselineValue={baselineValue} baselineLabel={baselineLabel} baselineColor={baselineColor}
+            />
+        );
     }
 
     if (colorZones && maxValue && baselineValue !== undefined && baselineValue !== null) {
@@ -312,22 +329,8 @@ export default function LineChart({
     const times = raw.map((p) => (p.date ? new Date(p.date).getTime() : null));
     const haveAllTimes = times.every((t) => t !== null && !Number.isNaN(t));
     const totalSpan = haveAllTimes ? times[times.length - 1] - times[0] : 0;
-
-    // A handful of time labels along the x-axis -- a real timeline readers
-    // can orient against -- without crowding every single point with text.
-    // ~4 evenly-spaced labels regardless of how many points are plotted.
     const targetLabelCount = 4;
     const labelStep = Math.max(1, Math.ceil(raw.length / targetLabelCount));
-
-    // xPositions mirrors gifted-charts' own internal spacing math exactly
-    // (same formula, same initialSpacing=10 origin below) -- tracked here in
-    // parallel so the vertical grid-line overlay lines up with where
-    // gifted-charts actually draws each point, without depending on that
-    // library's own showVerticalLines/verticalLinesAr feature (its
-    // positioning math has fragile, version-specific magic numbers --
-    // `bottom: 60 + xAxisLabelsVerticalShift` -- not confident that's
-    // reliable without testing on-device, so drawing this ourselves instead
-    // of trusting it).
     const xPositions = [10];
     const data = raw.map((p, i) => {
         const point = { value: p.value };
@@ -335,19 +338,8 @@ export default function LineChart({
             point.label = new Date(p.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         }
         if (i > 0) {
-            // gifted-charts' `spacing` prop is a single global gap value, not
-            // per-point -- so an uneven-time series is built with explicit
-            // per-point x-offsets via `spacing` on EACH point past the first,
-            // which gifted-charts does honor individually.
             let spacing;
             if (haveAllTimes && totalSpan > 0) {
-                // sum(frac_i) across the whole series is exactly 1, so
-                // sum(spacing_i) must be `width` for the chart to fill its
-                // container correctly -- multiplying by (raw.length - 1)
-                // here was a real bug: it made the series overshoot its
-                // container by that factor (e.g. 4x too wide for 5
-                // points), which is what was actually causing charts to
-                // look squished/misaligned/off-scale.
                 const frac = (times[i] - times[i - 1]) / totalSpan;
                 spacing = Math.max(4, frac * width);
             } else {

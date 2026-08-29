@@ -77,6 +77,16 @@ function chartRange(values) {
     let lo = percentile(sorted, 0.05);
     let hi = percentile(sorted, 0.95);
     if (hi <= lo) { lo -= 1; hi += 1; }
+    // 10% vertical headroom applied only to the PLOTTED points, not the
+    // min/max returned below (still true p5-p95, used for the "this block's
+    // range" text) -- no maxValue is passed to LineChart for this raw µV
+    // chart, so gifted-charts auto-scales its y-axis to exactly the range of
+    // the data it's given. Clamping points straight to [lo, hi] left the
+    // waveform's own extremes sitting flush against the chart's top/bottom
+    // edge with no breathing room, which is what made the line hard to read.
+    const pad = (hi - lo) * 0.1;
+    const clampLo = lo - pad;
+    const clampHi = hi + pad;
     const { values: dsValues } = downsampleWithIndices(values);
     const now = Date.now();
     // wave_uv (pipeline.py::_downsample_wave()) is already decimated
@@ -84,7 +94,7 @@ function chartRange(values) {
     // evenly across the block's real BLOCK_SEC duration instead of a millis
     // alignment, which is all a shape-preview chart needs.
     const points = dsValues.map((v, i) => ({
-        value: Math.min(hi, Math.max(lo, v)),
+        value: Math.min(clampHi, Math.max(clampLo, v)),
         date: new Date(now - (dsValues.length - i) * 1000 * (25 / dsValues.length)),
     }));
     return { points, min: lo, max: hi };

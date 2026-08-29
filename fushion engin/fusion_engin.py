@@ -295,6 +295,32 @@ def compute_realtime_multimodal_fusion(modalities_data: dict) -> dict:
     both contributed weight AND supplied a threshold, so a modality
     temporarily missing a threshold doesn't silently drag the fused
     threshold toward 0.
+
+    WHY a weighted COMBINATION of two still-separate probabilities, rather
+    than either averaging blindly or collapsing them into one derived
+    signal, per the interaction between EEG cognitive load and HRV/GSR
+    autonomic arousal this fusion is modeling:
+      - Shared response: a genuinely high-load mental task (e.g. this
+        project's own onboarding arithmetic threshold task,
+        EegThresholdTaskScreen.js) drives sympathetic activation too --
+        cognitive load and autonomic arousal tend to rise TOGETHER under
+        real stress, which is exactly why reliability weighting lets
+        whichever modality currently has the stronger/cleaner signal
+        dominate fused_prob rather than needing both to agree before
+        registering anything.
+      - Resource competition: sustained high arousal can itself degrade
+        cognitive performance (and vice versa), so the two are not
+        independent noise sources being averaged down -- they're expected
+        to correlate under load, which modality_concordance below makes
+        explicit instead of silently burying it inside one blended number.
+      - Independent effects: the two can still diverge -- they act through
+        separate physiological/mental pathways and don't always move
+        together (e.g. elevated arousal with no measurable EEG load
+        change, or the reverse). This is exactly why they're kept as two
+        separately-tracked, reliability-weighted probabilities instead of
+        one merged pre-fusion feature: a real divergence stays visible
+        (see active_modalities/modality_weights) rather than being averaged
+        away before it could ever be seen.
     """
     raw_weights = {}
     probs = {}
@@ -339,12 +365,36 @@ def compute_realtime_multimodal_fusion(modalities_data: dict) -> dict:
         fused_prob = None
         fused_threshold = None
 
+    # modality_concordance -- makes the shared-response / independent-effects
+    # tension explicit rather than letting the weighted average silently
+    # paper over it: each active, threshold-capable modality is "elevated"
+    # if ITS OWN prob is at/above ITS OWN effective threshold (not a shared
+    # cutoff). All elevated (or all not) = 'concordant' -- EEG and HRV/GSR
+    # agreeing is exactly what a genuine shared stress response predicts.
+    # A split = 'discordant' -- not an error, just the independent-pathway
+    # case surfacing (e.g. autonomic arousal up with no matching cognitive-
+    # load rise, or vice versa) -- worth a caller's attention even though
+    # fused_prob/fused_threshold above already handle it numerically via
+    # reliability weighting. 'insufficient_data' when fewer than two
+    # modalities are both active and threshold-capable this window, since
+    # concordance/discordance isn't a meaningful comparison with only one
+    # (or zero) real reading. Purely additive/observational -- does NOT
+    # feed back into fused_prob/fused_threshold above.
+    concordance_capable = [m for m in MODALITIES if raw_weights[m] > 0 and thresholds[m] is not None]
+    modality_elevated = {m: (probs[m] >= thresholds[m]) for m in concordance_capable}
+    if len(concordance_capable) >= 2:
+        modality_concordance = "concordant" if len(set(modality_elevated.values())) == 1 else "discordant"
+    else:
+        modality_concordance = "insufficient_data"
+
     return {
         "fused_stress_probability": fused_prob,
         "fused_stress_threshold": fused_threshold,
         "fused_stress_label": None if fused_prob is None else ("HIGH_STRESS" if fused_prob >= fused_threshold else "NORMAL"),
         "active_modalities": [m for m in MODALITIES if raw_weights[m] > 0],
         "modality_weights": norm_weights,
+        "modality_concordance": modality_concordance,
+        "modality_elevated": modality_elevated,
     }
 
 

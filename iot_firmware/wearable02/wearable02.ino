@@ -12,7 +12,7 @@ constexpr int8_t ADS_PIN_DRDY  = 4;   // GPIO4 (D2)
 constexpr int8_t ADS_PIN_CS    = 7;   // GPIO7 (D5)
 
 constexpr int8_t SPI_PIN_SCK   = 8;   // GPIO8 (D8)
-constexpr int8_t SPI_PIN_MISO  = 9;   // GPIO9 (D9)
+constexpr int8_t SPI_PIN_MISO  = 20;  // GPIO9 (D9)
 constexpr int8_t SPI_PIN_MOSI  = 10;  // GPIO10 (D10)
 
 /* ================= WIFI CONFIGURATION ================= */
@@ -27,7 +27,7 @@ const int   MQTT_PORT   = 8883;
 const char* MQTT_USER   = "wearable02";
 const char* MQTT_PASS   = "wearable02";
 const char* MQTT_TOPIC  = "mindpulse/wearable02/eeg";
-//const char* MQTT_STATUS = "mindpulse/wearable02/status";
+const char* MQTT_STATUS = "mindpulse/wearable02/status";
 
 const char* EMQX_CA_CERT = R"EOF(
 -----BEGIN CERTIFICATE-----

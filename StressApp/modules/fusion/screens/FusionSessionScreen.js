@@ -198,6 +198,32 @@ export default function FusionSessionScreen({ navigation }) {
             .map(({ v, key }) => ({ value: Math.round(v * 100), date: new Date(Number(key) * 60000) }));
     }, [windows]);
 
+    // Cognitive load (EEG), autonomic arousal (HRV/GSR), and the fused
+    // probability -- all three already live on the SAME fusion_en/{window}
+    // record (prob_eeg/prob_hrv_gsr are written directly by each backend's
+    // own /predict route, fused_probability is fusion_live_session.py's
+    // reliability-weighted combination of them -- see backend/common/fusion.py
+    // and fushion engin/fusion_live_session.py), so one shared window-key
+    // timeline covers all three with no separate alignment needed. null
+    // where a given window has no reading for that series (e.g. only one
+    // modality reported that block) -- MultiLineChart breaks the line there
+    // instead of interpolating across missing data.
+    const multiSeriesPoints = useMemo(() => {
+        const keys = sortedWindowKeys(windows);
+        return keys.map((k) => {
+            const w = windows[k] || {};
+            return {
+                date: new Date(Number(k) * 60000),
+                values: [
+                    w.prob_eeg != null ? Math.round(w.prob_eeg * 100) : null,
+                    w.prob_hrv_gsr != null ? Math.round(w.prob_hrv_gsr * 100) : null,
+                    w.fused_probability != null ? Math.round(w.fused_probability * 100) : null,
+                ],
+            };
+        });
+    }, [windows]);
+    const hasMultiSeriesData = multiSeriesPoints.filter((p) => p.values.some((v) => v != null)).length > 1;
+
     const label = latest?.fused_label;
     const trend = latest?.stress_trend;
     const stateColor = label === 1
@@ -295,6 +321,31 @@ export default function FusionSessionScreen({ navigation }) {
                             baselineValue={STRESS_DECISION_THRESHOLD_PERCENT}
                             baselineLabel="Stress threshold"
                             colorZones
+                            fallback={<Text style={[styles.waiting, { color: t.textMuted }]}>Loading chart…</Text>}
+                        />
+                    </Card>
+                )}
+
+                {/* Cognitive load (EEG) / autonomic arousal (HRV-GSR) / fused
+                    probability, all three on one shared timeline -- see
+                    multiSeriesPoints above for why no cross-series alignment
+                    is needed. */}
+                {hasMultiSeriesData && (
+                    <Card elevated style={styles.chartCard}>
+                        <Text style={[styles.chartTitle, { color: t.text }]}>Cognitive Load, Autonomic Arousal & Fused Probability</Text>
+                        <Text style={[styles.chartSub, { color: t.textMuted, marginBottom: 10 }]}>
+                            EEG cognitive-load trend, ring HRV/GSR autonomic-arousal trend, and the combined fused probability
+                        </Text>
+                        <LineChart
+                            points={multiSeriesPoints}
+                            multiLine
+                            seriesColors={[COLORS.eeg, COLORS.hrv, COLORS.brand]}
+                            seriesLabels={['Cognitive load (EEG)', 'Autonomic arousal (HRV/GSR)', 'Fused probability']}
+                            width={CHART_WIDTH}
+                            height={160}
+                            maxValue={100}
+                            baselineValue={STRESS_DECISION_THRESHOLD_PERCENT}
+                            baselineLabel="Stress threshold"
                             fallback={<Text style={[styles.waiting, { color: t.textMuted }]}>Loading chart…</Text>}
                         />
                     </Card>
