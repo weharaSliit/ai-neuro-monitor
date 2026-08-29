@@ -75,22 +75,35 @@ N_TASK_WIN = 1
 # Worse, that stuck 'capturing' status also blocks every future retry --
 # /calibrate(/threshold)/start's own in-progress check refuses to start a
 # new attempt until the status actually changes. This timeout is what
-# breaks that deadlock: generous margin over the real data volume needed
-# (N_BASELINE_WIN/N_TASK_WIN windows * WINDOW_SEC, at full rate). On
-# timeout this attempt's dedicated client is disconnected (see the
-# try/finally around each capture function below) -- a retry always opens
-# its own fresh connection, never reuses a possibly-wedged one.
-CAPTURE_TIMEOUT_SEC = 120
+# breaks that deadlock.
+#
+# NOT a flat 120s -- that used to equal exactly N_BASELINE_WIN*WINDOW_SEC
+# (2*60=120) with ZERO margin for even a single skipped/replacement
+# window, which close_window() explicitly supports (see "capturing a
+# replacement window instead"). A flat ceiling that size meant literally
+# any one bad window anywhere in the attempt made the whole thing
+# unrecoverable, no matter how good conditions got afterward -- observed
+# live as calibration that neither finishes nor fails cleanly within its
+# own nominal duration, just runs past it. EXTRA_RETRY_WINDOWS below adds
+# real headroom: enough time for several replacement windows, not zero.
+EXTRA_RETRY_WINDOWS = 4
 
-# Fail-fast companion to CAPTURE_TIMEOUT_SEC above: rather than always
+
+def _capture_timeout_sec(n_windows_needed: int) -> float:
+    """Real ceiling for one capture attempt -- the strict minimum
+    (n_windows_needed * WINDOW_SEC) plus room for EXTRA_RETRY_WINDOWS
+    skipped/replacement windows, not the bare minimum itself."""
+    return (n_windows_needed + EXTRA_RETRY_WINDOWS) * WINDOW_SEC
+
+# Fail-fast companion to _capture_timeout_sec() above: rather than always
 # waiting out the full ceiling, abort as soon as no new MQTT message has
 # arrived for this long -- 15s matches the "still connected" freshness
 # window this project already uses elsewhere for this same device
 # (firebase_service.py's own get_device_status() offline_after_sec, and
 # CalibrationGate.js's useDeviceStatus polling on the frontend) rather
 # than inventing a tighter, untested bound that risks false-failing a
-# capture on ordinary MQTT/network jitter. CAPTURE_TIMEOUT_SEC is kept as
-# a backstop in case last-sample tracking itself never resets.
+# capture on ordinary MQTT/network jitter. _capture_timeout_sec() is kept
+# as a backstop in case last-sample tracking itself never resets.
 INACTIVITY_TIMEOUT_SEC = 15
 
 # ---------------------------------------------------------------------
@@ -132,7 +145,7 @@ def _connect_capture_client(on_message) -> mqtt.Client:
     # the TCP handshake with no application-level timeout of its own; if
     # the network hangs (routing issue, broker briefly unreachable) rather
     # than cleanly failing, this call can sit for minutes -- well past
-    # CAPTURE_TIMEOUT_SEC/INACTIVITY_TIMEOUT_SEC below, because the code
+    # this call's timeout/INACTIVITY_TIMEOUT_SEC below, because the code
     # that enforces those never even gets to run while stuck here.
     # connect_async() returns immediately and hands the actual connect
     # attempt to the background thread loop_start() starts, so this
@@ -338,13 +351,6 @@ def run_calibration_capture(user_id, on_progress=None):
         state['window_start'] = time.time()
 
     def on_message(client, userdata, msg):
-        # Guards against overshoot: on_message runs on this connection's
-        # own background network thread, independent of the main thread's
-        # `while len(collected_windows) < N_BASELINE_WIN` loop below --
-        # that loop only stops WAITING once enough windows exist, it
-        # doesn't stop THIS callback from continuing to close and append
-        # more windows if messages keep arriving in the moment right
-        # before the connection is torn down.
         if len(collected_windows) >= N_BASELINE_WIN:
             return
 
@@ -381,12 +387,22 @@ def run_calibration_capture(user_id, on_progress=None):
         state['window_start'] = time.time()
         state['last_sample_time'] = time.time()
 
-        capture_deadline = time.time() + CAPTURE_TIMEOUT_SEC
+        # Real ceiling, not the bare minimum -- see _capture_timeout_sec()'s
+        # docstring for why a flat 120s (== N_BASELINE_WIN*WINDOW_SEC
+        # exactly) gave zero room for even one retried window.
+        capture_deadline = time.time() + _capture_timeout_sec(N_BASELINE_WIN)
         while len(collected_windows) < N_BASELINE_WIN:
             if time.time() > capture_deadline:
+                # NOT "no data received" -- messages may well have been
+                # arriving the whole time (see window_skipped above); this
+                # fires when too many windows got skipped to finish within
+                # the ceiling, which is a different, more specific problem
+                # than the ring being silent (that's INACTIVITY_TIMEOUT_SEC
+                # below, a real "no messages at all" case).
                 _notify('error', message=(
-                    f'No ring data received within {CAPTURE_TIMEOUT_SEC:.0f}s -- '
-                    f'check the ring is worn and connected, then try again.'
+                    f'Took too long to capture {N_BASELINE_WIN} clean window(s) -- '
+                    f'too many were rejected for insufficient heart-rate signal '
+                    f'or movement. Check ring fit/contact and try again.'
                 ))
                 return None
             if time.time() - state['last_sample_time'] > INACTIVITY_TIMEOUT_SEC:
@@ -499,12 +515,13 @@ def run_task_calibration_capture(user_id, on_progress=None):
 
     try:
         _notify('capturing')
-        capture_deadline = time.time() + CAPTURE_TIMEOUT_SEC
+        capture_deadline = time.time() + _capture_timeout_sec(N_TASK_WIN)
         while len(collected_windows) < N_TASK_WIN:
             if time.time() > capture_deadline:
                 _notify('error', message=(
-                    f'No ring data received within {CAPTURE_TIMEOUT_SEC:.0f}s -- '
-                    f'check the ring is worn and connected, then try again.'
+                    f'Took too long to capture {N_TASK_WIN} clean window(s) -- '
+                    f'too many were rejected for insufficient heart-rate signal '
+                    f'or movement. Check ring fit/contact and try again.'
                 ))
                 return None
             if time.time() - state['last_sample_time'] > INACTIVITY_TIMEOUT_SEC:
