@@ -325,6 +325,19 @@ def run_calibration_capture(user_id, on_progress=None):
         state['window_start'] = time.time()
 
     def on_message(client, userdata, msg):
+        # Guards against a real race: this callback runs on the shared
+        # client's own background network thread, independent of the main
+        # thread's `while len(collected_windows) < N_BASELINE_WIN` loop
+        # below -- that loop only stops WAITING once enough windows exist,
+        # it never stops THIS callback from continuing to close and append
+        # more windows to the same list if messages keep arriving. Without
+        # this guard, a capture could overshoot to 3, 4, 5+ windows in the
+        # background (window_idx > n_windows on screen, e.g. "3/2"), and
+        # save_calibration_windows() could end up reading collected_windows
+        # while it's still being mutated concurrently.
+        if len(collected_windows) >= N_BASELINE_WIN:
+            return
+
         try:
             data = json.loads(msg.payload.decode())
         except Exception:
@@ -450,6 +463,13 @@ def run_task_calibration_capture(user_id, on_progress=None):
         state['window_start'] = time.time()
 
     def on_message(client, userdata, msg):
+        # Same overshoot guard as run_calibration_capture()'s identical
+        # fix -- this callback runs on the shared client's background
+        # thread and would otherwise keep closing/appending windows past
+        # N_TASK_WIN for as long as messages keep arriving.
+        if len(collected_windows) >= N_TASK_WIN:
+            return
+
         try:
             data = json.loads(msg.payload.decode())
         except Exception:
