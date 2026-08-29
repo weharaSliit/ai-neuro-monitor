@@ -51,7 +51,7 @@ export default function CalibrationScreen() {
     setPhase(data.status || 'idle');
     if (data.window_idx != null) setWindowIdx(data.window_idx);
     if (data.n_windows != null) setNWindows(data.n_windows);
-    if (data.status === 'error') setErrorMsg(data.error || 'Calibration failed');
+    if (data.status === 'error') setErrorMsg(data.message || 'Calibration failed');
     if (data.status === 'done') {
       setErrorMsg(null);
       loadBaseline();
