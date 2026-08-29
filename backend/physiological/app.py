@@ -174,7 +174,13 @@ def calibrate_start():
                 user_id, {}
             ).get('window_idx', 0)
         elif status == 'error':
-            entry['error'] = extra.get('message', 'Unknown error')
+            # 'message', not 'error' -- CalibrateBreathingCard.js reads
+            # ringState.message specifically; this used to be named 'error'
+            # here, which that field never matched, so the real reason
+            # (e.g. "insufficient clean heart-rate data -- check ring
+            # contact/fit and retry") never reached the screen and it fell
+            # through to the generic "Calibration failed" every time.
+            entry['message'] = extra.get('message', 'Unknown error')
         else:
             entry.update(extra)
             entry['status'] = status

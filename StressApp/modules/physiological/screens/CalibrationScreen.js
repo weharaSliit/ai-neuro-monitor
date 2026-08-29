@@ -189,7 +189,7 @@ export default function CalibrationScreen() {
             <>
               <Text style={[styles.cardTitle, { color: text }]}>Begin Guided Capture</Text>
               <Text style={[styles.cardSub, { color: muted }]}>
-                Takes about 3.5 minutes. Wear the smart ring, rest your hands comfortably in your lap, and stay relaxed throughout the capture.
+                Takes about 2.5 minutes. Wear the smart ring, rest your hands comfortably in your lap, and stay relaxed throughout the capture.
               </Text>
               {phase === 'error' && errorMsg && (
                 <Text style={[styles.errorText, { color: COLORS.stress }]}>{errorMsg}</Text>

@@ -215,7 +215,7 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
     : breathPhase === 'hold' ? 'Hold'
       : breathPhase === 'exhale' ? 'Breathe Out' : 'Rest';
 
-  const durationHint = ringState.triggered ? '~3.5 minutes' : eegState.triggered ? '~85 seconds' : '';
+  const durationHint = ringState.triggered ? '~2.5 minutes' : eegState.triggered ? '~85 seconds' : '';
 
   const statusText = () => {
     if (stage === 'error') return errorMsg || 'Calibration failed';

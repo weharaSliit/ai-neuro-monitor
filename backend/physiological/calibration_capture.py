@@ -233,6 +233,28 @@ def run_calibration_capture(user_id, on_progress=None):
     in-app trigger) run it in a background thread.
     """
     def _notify(status, **extra):
+        # Printed here (not just handed to on_progress) so calibration
+        # progress shows up in Render's log viewer -- on_progress alone
+        # only updates app.py's in-memory _calibration_sessions dict for
+        # the app's own /calibrate/status polling, which is invisible from
+        # the server logs someone's actually watching during a capture --
+        # a rejected/failed calibration used to be completely silent here.
+        if status == 'settling':
+            print(f"[calibrate {user_id}] settling for {SETTLE_SEC}s...")
+        elif status == 'window_captured':
+            print(f"[calibrate {user_id}] window {extra['window_idx']}/{N_BASELINE_WIN} "
+                  f"captured (fs={extra['fs']}Hz)")
+        elif status == 'window_skipped':
+            print(f"[calibrate {user_id}] window skipped — insufficient data "
+                  f"(ibi={extra['ibi']}, gsr={extra['gsr']}, acc={extra['acc']}) "
+                  f"-- capturing a replacement window instead")
+        elif status == 'saving':
+            print(f"[calibrate {user_id}] {N_BASELINE_WIN}/{N_BASELINE_WIN} windows captured "
+                  f"-- extracting features and saving baseline...")
+        elif status == 'done':
+            print(f"[calibrate {user_id}] baseline saved successfully")
+        elif status == 'error':
+            print(f"[calibrate {user_id}] FAILED -- {extra.get('message')}")
         if on_progress:
             on_progress(status, extra)
 
