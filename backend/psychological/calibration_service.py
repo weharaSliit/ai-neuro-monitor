@@ -83,7 +83,7 @@ def run_eeg_calibration_from_blocks(user_id: str, session_id: str, blocks_sample
        'firebase_enabled': bool,
        'session_state': {'engine', 'firebase', 'csv_logger', 'score_history'}}
     session_state is what the caller stores into app.py's eeg_sessions dict
-    so later /predict and /calibrate/threshold(/start) calls on this
+    so later /predict and /calibrate/threshold/start calls on this
     session_id work.
 
     Raises CalibrationFailedError (message already user-facing) if no block
@@ -132,10 +132,15 @@ def run_eeg_calibration_from_blocks(user_id: str, session_id: str, blocks_sample
     firebase.push_calibration_result(outcome)
     if outcome["status"] == "failed":
         csv_logger.close()
+        # With the degraded-fallback pool now actually populated (see
+        # calibrate_bipolar_block()'s comment), reaching "failed" even with
+        # allow_degraded=True means EVERY block hit an unambiguous hardware
+        # fault (raw-magnitude or timing) -- not just low quality.
         raise CalibrationFailedError(
-            "No calibration block reached the required quality bar (GOOD by default) -- "
-            "check electrode contact, or retry with allow_degraded=true to proceed with a "
-            "flagged degraded baseline."
+            f"No usable EEG data in any calibration block (required quality bar: "
+            f"{engine.calibration_min_rating}) -- every block failed an unambiguous "
+            f"hardware check (raw signal out of range, or dropped-packet gaps). "
+            f"Check the headband is worn and the electrodes are making contact, then try again."
         )
 
     return {
@@ -150,9 +155,9 @@ def run_eeg_threshold_from_blocks(session_state: dict, blocks_samples: list[list
     CALIBRATED engine from this session's session_state (see
     run_eeg_calibration_from_blocks()'s return shape / app.py's
     eeg_sessions dict) and computes/saves this user's personal
-    high_load_p -- same body as app.py's synchronous /calibrate/threshold
-    route, factored out here so eeg_calibration_capture.py's on-demand
-    run_eeg_threshold_capture() can reuse it exactly."""
+    high_load_p -- called by eeg_calibration_capture.py's on-demand
+    run_eeg_threshold_capture(), the only caller (POST
+    /calibrate/threshold/start's background worker)."""
     engine = session_state["engine"]
     firebase = session_state["firebase"]
 

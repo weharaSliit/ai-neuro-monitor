@@ -50,7 +50,8 @@ def _trend_direction(history_scores: list[float], lookback: int = 3) -> str:
 
 
 def make_eeg_output_record(result: dict, window_sec: float, model_version: str,
-                            feature_set: str, history_scores: list[float]) -> dict:
+                            feature_set: str, history_scores: list[float],
+                            high_load_p: float | None = None) -> dict:
     now = time.time()
     ts_end = now
     ts_start = ts_end - window_sec
@@ -61,6 +62,14 @@ def make_eeg_output_record(result: dict, window_sec: float, model_version: str,
         'timestamp_center': (ts_start + ts_end) / 2,
         'window': result.get('window'),
         'skipped': bool(result.get('skipped', False)),
+        # This session's EFFECTIVE high_load_p at the moment of this block --
+        # personal_high_load_p if finalize_personal_threshold() succeeded for
+        # this user, else the population default (engine.thresholds.high_load_p
+        # either way -- see app.py's /predict route, the only caller that
+        # passes this). Read by make_eeg_fusion_record() below for the
+        # fusion engine's own weighted-threshold combination (see
+        # fushion engin/fusion_engin.py::compute_realtime_multimodal_fusion()).
+        'effective_high_load_p': high_load_p,
         'model_version': model_version,
         'feature_set': feature_set,
         'eeg_missing': bool(result.get('skipped', False)),
@@ -71,6 +80,12 @@ def make_eeg_output_record(result: dict, window_sec: float, model_version: str,
         'baseline_degraded': bool(result.get('baseline_degraded', False)),
         'ch2_mirrored': bool(result.get('ch2_mirrored', False)),
         'ch2_reconstructed': bool(result.get('ch2_reconstructed', False)),
+        # Downsampled PREPROCESSED (filtered, uV-scale) waveform for the
+        # live dashboard -- see pipeline.py::_downsample_wave(). Present
+        # even for a skipped/rejected block (still real signal, just not
+        # trusted enough to score) so the dashboard can show what a
+        # rejected block actually looked like, not just a pass/fail flag.
+        'wave_uv': result.get('wave_uv'),
     }
 
     if result.get('T7_total_power') is not None or result.get('bipolar_delta_power') is not None:
@@ -184,4 +199,9 @@ def make_eeg_fusion_record(record: dict) -> dict:
             'unknown' if p is None
             else ('high_task_state' if label == 1 else 'low_task_state')
         ),
+        # This user's own effective high_load_p (personal if calibrated,
+        # else population default) -- see make_eeg_output_record()'s
+        # 'effective_high_load_p' field. Consumed by fusion_engin.py's
+        # weighted-threshold combination, not just its probability one.
+        'threshold_eeg': record.get('effective_high_load_p'),
     }

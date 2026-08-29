@@ -307,7 +307,7 @@ def _hrv_gsr_fusion_fields(user_id, session_id, window_idx,
                            confidence, signal_quality,
                            prob_normal, prob_stress,
                            label, trending_toward_stress,
-                           feat_dict=None):
+                           feat_dict=None, threshold=None):
     """Field-mapping for the HRV/GSR side of the fusion schema, used by
     save_fusion_en_rtdb() (Realtime Database) below. `prob_stress`
     (not prob_normal) maps to prob_hrv_gsr, matching fusion_engin.py's
@@ -349,6 +349,12 @@ def _hrv_gsr_fusion_fields(user_id, session_id, window_idx,
         'signal_quality_hrv_gsr':  float(signal_quality),
         'stress_label_hrv_gsr':    label,
         'trending_toward_stress_hrv_gsr': bool(trending_toward_stress),
+        # This user's own effective STRESS_DECISION_THRESHOLD -- personal if
+        # load_personal_stress_threshold() found one, else the population
+        # default (app.py's /predict passes whichever applied to THIS
+        # prediction). Consumed by fusion_engin.py's weighted-threshold
+        # combination alongside threshold_eeg.
+        'threshold_hrv_gsr':       float(threshold) if threshold is not None else None,
         'features_hrv_gsr': {
             'avnn':     float(feat_dict.get('AVNN', 0)),
             'sd1':      float(feat_dict.get('SD1', 0)),
@@ -381,7 +387,7 @@ def save_fusion_en_rtdb(user_id, session_id, window_idx,
                         confidence, signal_quality,
                         prob_normal, prob_stress,
                         label, trending_toward_stress,
-                        feat_dict=None):
+                        feat_dict=None, threshold=None):
     """Writes this session's HRV/GSR fusion fields (via the shared
     _hrv_gsr_fusion_fields() helper) to fusion_en/{user_id}/{session_id}/{key}
     -- user-scoped like every other per-session store, since a "session" is
@@ -396,7 +402,8 @@ def save_fusion_en_rtdb(user_id, session_id, window_idx,
     clobbering it -- RTDB's analogue of Firestore's set(doc, merge=True).
     """
     fields = _hrv_gsr_fusion_fields(user_id, session_id, window_idx, confidence, signal_quality,
-                                    prob_normal, prob_stress, label, trending_toward_stress, feat_dict)
+                                    prob_normal, prob_stress, label, trending_toward_stress, feat_dict,
+                                    threshold)
     key = fusion_window_key()
     try:
         _global_ref(f'{FUSION_EN_ROOT}/{user_id}/{session_id}/{key}').update(fields)
