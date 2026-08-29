@@ -132,6 +132,13 @@ def poll_once(session_ref, session_meta_ref) -> dict:
             "stress_trend": trend,
             "eeg_weight": weights.get("eeg"),
             "hrv_gsr_weight": weights.get("hrv_gsr"),
+            # 'concordant'/'discordant'/'insufficient_data' -- see
+            # compute_realtime_multimodal_fusion()'s own docstring
+            # (fusion_engin.py) for the shared-response-vs-independent-
+            # effects rationale. Purely observational -- doesn't feed back
+            # into fused_probability/fused_threshold above.
+            "modality_concordance": fused["modality_concordance"],
+            "modality_elevated": fused["modality_elevated"],
         }
 
         if "eeg" in fused["active_modalities"]:
@@ -164,6 +171,7 @@ def poll_once(session_ref, session_meta_ref) -> dict:
                 "hrv_gsr": windows[k].get("prob_hrv_gsr"),
                 "fused": windows[k]["fused_probability"],
             },
+            "modality_concordance": fused["modality_concordance"],
         })
         updated.append(k)
 
