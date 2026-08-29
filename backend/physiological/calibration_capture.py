@@ -142,7 +142,19 @@ def _get_shared_client() -> mqtt.Client:
         if MQTT_USER:
             client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
         client.on_connect = on_connect
-        client.connect(MQTT_BROKER, MQTT_PORT, 60)
+        # connect_async(), not connect() -- connect() blocks synchronously
+        # on the TCP handshake with no application-level timeout of its
+        # own; if the network hangs (routing issue, broker briefly
+        # unreachable) rather than cleanly failing, this call can sit for
+        # minutes -- well past CAPTURE_TIMEOUT_SEC/INACTIVITY_TIMEOUT_SEC
+        # below, because the code that enforces those never even gets to
+        # run while stuck here. connect_async() returns immediately and
+        # hands the actual connect attempt (with retries) to the
+        # background thread loop_start() starts, so this function itself
+        # can never hang -- a stuck connection now correctly surfaces via
+        # the 120s/15s checks in run_calibration_capture() instead of
+        # hanging silently before those checks are ever reached.
+        client.connect_async(MQTT_BROKER, MQTT_PORT, 60)
         client.loop_start()
         _shared_client = client
         return client
