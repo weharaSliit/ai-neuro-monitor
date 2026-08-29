@@ -106,16 +106,37 @@ _shared_client: mqtt.Client | None = None
 
 def _get_shared_client() -> mqtt.Client:
     """Returns the one shared, already-connected ring MQTT client for this
-    process, creating and connecting it on first use."""
+    process, creating and connecting it on first use.
+
+    Re-connects if the cached client has silently dropped -- this used to
+    return _shared_client unconditionally once created, so a single
+    connection drop (network blip, broker-side session timeout) anywhere
+    in this process's lifetime would leave every future calibration
+    attempt silently handed a dead client -- looking exactly like
+    "No ring data received within {CAPTURE_TIMEOUT_SEC}s" with no way to
+    tell that from the ring genuinely being offline. The always-on bridge
+    (backend/common/mqtt_bridge.py) is a separate process/connection, so
+    it keeps working fine even while this one is stuck -- that mismatch
+    (live predictions still flowing, calibration still timing out) is
+    what actually points at this function rather than the device."""
     global _shared_client
     with _shared_client_lock:
-        if _shared_client is not None:
+        if _shared_client is not None and _shared_client.is_connected():
             return _shared_client
 
-        def on_connect(client, userdata, flags, rc):
+        # Also VERSION2 -- matches backend/common/mqtt_bridge.py's
+        # connect_mqtt(), the confirmed-working pattern elsewhere in this
+        # codebase. The old on_connect(client, userdata, flags, rc) form
+        # here previously ignored the connection result entirely --
+        # subscribed unconditionally even on a rejected connect, so a
+        # failed connect and a successful one looked identical from here.
+        def on_connect(client, userdata, flags, reason_code, properties=None):
+            print(f"[calib-mqtt] {'connected' if reason_code == 0 else f'connect failed (reason_code={reason_code})'}, "
+                  f"subscribing to {MQTT_TOPIC}")
             client.subscribe(MQTT_TOPIC)
 
-        client = mqtt.Client(client_id=f"ring_calib_shared_{os.getpid()}")
+        client = mqtt.Client(client_id=f"ring_calib_shared_{os.getpid()}",
+                              callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
         if MQTT_CA_CERT:
             client.tls_set(ca_certs=MQTT_CA_CERT)
         if MQTT_USER:
