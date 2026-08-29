@@ -290,7 +290,7 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
         <Text style={styles.noDeviceText}>No device detected — connect your Ring or EEG headband first.</Text>
       )}
 
-      <DeviceCalibrateRow label="Ring" expected={ringExpected} state={ringState} onStart={startRing} durationHint="2.5 minutes" />
+      <DeviceCalibrateRow label="Ring" expected={ringExpected} state={ringState} onStart={startRing} durationHint="3.5 minutes" />
       <DeviceCalibrateRow label="Headband" expected={eegExpected} state={eegState} onStart={startEeg} durationHint="85 seconds" />
 
       <View style={styles.visualArea}>

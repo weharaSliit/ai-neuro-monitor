@@ -86,7 +86,11 @@ N_TASK_WIN = 1
 # live as calibration that neither finishes nor fails cleanly within its
 # own nominal duration, just runs past it. EXTRA_RETRY_WINDOWS below adds
 # real headroom: enough time for several replacement windows, not zero.
-EXTRA_RETRY_WINDOWS = 4
+# Raised 4 -> 6 alongside N_BASELINE_WIN going back to 3 -- keeps the
+# retry margin generous (not just the total ceiling longer) specifically
+# because "too many windows rejected" is the actual failure mode being
+# tolerated here, not raw capture duration.
+EXTRA_RETRY_WINDOWS = 6
 
 
 def _capture_timeout_sec(n_windows_needed: int) -> float:
