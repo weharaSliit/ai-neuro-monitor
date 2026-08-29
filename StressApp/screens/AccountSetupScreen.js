@@ -30,6 +30,10 @@ import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
 
 const DEVICE_POLL_MS = 8000;
+// live_raw is overwritten roughly every 1s while wearable02 is genuinely
+// streaming -- 10s gives generous margin for jitter while still flipping
+// "connected" off promptly once the device actually drops.
+const LIVE_RAW_STALE_SEC = 10;
 
 export default function AccountSetupScreen({ navigation }) {
   const { user, token, completeOnboarding } = useAuth();
@@ -51,14 +55,54 @@ export default function AccountSetupScreen({ navigation }) {
     pollRing();
     ringTimer = setInterval(pollRing, DEVICE_POLL_MS);
 
-    const eegPointerRef = ref(db, 'psychological/current_session_id');
-    const eegHandler = onValue(eegPointerRef, (snap) => setEegConnected(!!snap.val()));
-
     return () => {
       clearInterval(ringTimer);
-      off(eegPointerRef, 'value', eegHandler);
     };
   }, []);
+
+  // eegConnected reflects whether wearable02 is genuinely streaming right
+  // now. current_session_id alone isn't enough -- it's never cleared, so
+  // it stays truthy forever once any session has existed. live_raw's own
+  // existence isn't enough either -- it's overwritten in place, so once
+  // written it stays "there" even after the device goes offline for the
+  // rest of that session. Only the write's own timestamp actually tells
+  // you whether it's still live -- recomputed on an interval since a
+  // Firebase listener alone won't notice time passing with no new writes.
+  const [eegLastRawTs, setEegLastRawTs] = useState(null);
+
+  useEffect(() => {
+    if (!userId) return;
+    const eegPointerRef = ref(db, 'psychological/current_session_id');
+    let rawRef = null;
+    let rawHandler = null;
+    const eegHandler = onValue(eegPointerRef, (snap) => {
+      const eegSessionId = snap.val();
+      if (rawRef) {
+        off(rawRef, 'value', rawHandler);
+        rawRef = null;
+      }
+      if (!eegSessionId) {
+        setEegLastRawTs(null);
+        return;
+      }
+      rawRef = ref(db, `psychological/${userId}/${eegSessionId}/live_raw`);
+      rawHandler = (rawSnap) => setEegLastRawTs(rawSnap.val()?.timestamp ?? null);
+      onValue(rawRef, rawHandler);
+    });
+    return () => {
+      off(eegPointerRef, 'value', eegHandler);
+      if (rawRef) off(rawRef, 'value', rawHandler);
+    };
+  }, [userId]);
+
+  useEffect(() => {
+    const evaluate = () => {
+      setEegConnected(eegLastRawTs != null && (Date.now() / 1000 - eegLastRawTs) < LIVE_RAW_STALE_SEC);
+    };
+    evaluate();
+    const t = setInterval(evaluate, 3000);
+    return () => clearInterval(t);
+  }, [eegLastRawTs]);
 
   // "Skip for now" (below) still goes straight to the dashboard --
   // skipping baseline calibration makes the threshold task meaningless
