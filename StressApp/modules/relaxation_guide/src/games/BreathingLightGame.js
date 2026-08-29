@@ -22,7 +22,7 @@ const POLL_INTERVAL_MS = 2000;
 
 // Breathing cycle timing (in milliseconds) -- purely the visual pace, no
 // relation to how long the underlying capture actually takes (Ring
-// ~150s, EEG ~85s -- see the capture status text instead).
+// ~210s, EEG ~85s -- see the capture status text instead).
 const BREATH_TIMINGS = { inhale: 4000, hold: 2000, exhale: 4000, rest: 1000 };
 
 // -- one modality's capture: start it, poll until it leaves settling/
@@ -241,7 +241,7 @@ export const BreathingLightGame = ({ onCalibrationComplete }) => {
   };
   const breathInfo = getBreathInfo();
 
-  const durationHint = ring.triggered ? '~2.5 minutes' : eeg.triggered ? '~85 seconds' : '';
+  const durationHint = ring.triggered ? '~3.5 minutes' : eeg.triggered ? '~85 seconds' : '';
 
   const statusText = () => {
     if (stage === 'detecting') return 'Looking for your Ring / EEG headband…';
