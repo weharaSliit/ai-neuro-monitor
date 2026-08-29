@@ -83,7 +83,7 @@ export const GamePlayerScreen = () => {
   };
 
   // The calibration flow drives its own completion (once every triggered
-  // capture -- Ring ~210s, EEG ~85s -- actually reports done/error) via
+  // capture -- Ring ~150s, EEG ~85s -- actually reports done/error) via
   // onCalibrationComplete above, not a fixed timer -- a 60s force-end would
   // cut a real capture short mid-flight. No footer "abandon" button either,
   // so a capture can't be walked away from by accident.
