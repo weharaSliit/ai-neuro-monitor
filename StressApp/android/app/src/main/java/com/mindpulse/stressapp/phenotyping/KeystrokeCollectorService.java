@@ -76,9 +76,9 @@ public class KeystrokeCollectorService extends AccessibilityService {
     private static final String FLASK_BASE_URL   = "https://ai-neuro-monitor-8wsv.onrender.com";
     private static final String PREDICT_ENDPOINT = FLASK_BASE_URL + "/behavior/predict";
 
-    // Firebase REST — only used for the UI dashboard display
-    private static final String FIREBASE_BASE_URL =
-        "https://stress-monitor-c39ee-default-rtdb.asia-southeast1.firebasedatabase.app/phenotyping/metrics/";
+    // NOTE: No direct Firebase writes from Android.
+    // All data flows through Flask (/behavior/predict) which writes
+    // to phenotyping/data_logs and phenotyping/predictions via firebase_service.py.
 
     // Upload window — production value. 5 minutes matches what a real
     // behavioral window is meant to represent.
@@ -599,14 +599,10 @@ public class KeystrokeCollectorService extends AccessibilityService {
                 String flaskResponse = httpPost(PREDICT_ENDPOINT, payload.toString());
                 if (flaskResponse != null) {
                     Log.d(TAG, "Flask response: " + flaskResponse);
-
-                    JSONObject resp = new JSONObject(flaskResponse);
-                    String label    = resp.optString("prediction", "Unknown");
-                    double severity = resp.optDouble("severity", 0.0);
-                    pushDashboardUpdate(currentUserId, label, severity, unlockSnapshot);
+                    // Flask handles all Firebase writes (phenotyping/data_logs + phenotyping/predictions).
+                    // No direct Firebase push from Android needed.
                 } else {
-                    Log.w(TAG, "Flask unreachable -- writing raw metrics to Firebase only");
-                    pushRawMetricsToFirebase(currentUserId, flightSnapshot, avgScroll, unlockSnapshot, elapsed);
+                    Log.w(TAG, "Flask unreachable -- data will be re-sent on next window. No direct Firebase fallback.");
                 }
 
             } catch (Exception e) {
@@ -615,44 +611,15 @@ public class KeystrokeCollectorService extends AccessibilityService {
         }).start();
     }
 
-    private void pushDashboardUpdate(String userId, String label, double severity, int unlocks) {
-        try {
-            JSONObject payload = new JSONObject();
-            payload.put("stress_score",  severity);
-            payload.put("label",         label);
-            payload.put("unlocks_count", unlocks);
-            payload.put("source",        "flask_ocsvm");
-            payload.put("timestamp",     System.currentTimeMillis());
-
-            String targetUrl = FIREBASE_BASE_URL + userId + ".json";
-            String result = httpPatch(targetUrl, payload.toString());
-            Log.d(TAG, "Dashboard updated: " + label + " (" + severity + ") -> " + result);
-        } catch (Exception e) {
-            Log.e(TAG, "Firebase dashboard update failed", e);
-        }
-    }
-
-    private void pushRawMetricsToFirebase(String userId, List<Long> flights, double avgScroll,
-                                          int unlocks, long elapsedMin) {
-        try {
-            long avgFlight = flights.isEmpty() ? 0 :
-                (long) flights.stream().mapToLong(Long::longValue).average().orElse(0);
-            int  wpm       = (int) (flights.size() / 5.0 / Math.max(1, elapsedMin));
-
-            JSONObject payload = new JSONObject();
-            payload.put("typing_speed",     Math.max(wpm, 1));
-            payload.put("typing_rhythm_ms", avgFlight);
-            payload.put("scroll_velocity",  avgScroll);
-            payload.put("unlocks_count",    unlocks);
-            payload.put("source",           "raw_accessibility");
-            payload.put("timestamp",        System.currentTimeMillis());
-
-            String targetUrl = FIREBASE_BASE_URL + userId + ".json";
-            httpPatch(targetUrl, payload.toString());
-        } catch (Exception e) {
-            Log.e(TAG, "Firebase raw fallback failed", e);
-        }
-    }
+    // pushDashboardUpdate() and pushRawMetricsToFirebase() removed.
+    // Rationale: Android must NOT write directly to Firebase. All behavioral
+    // data must flow through Flask (/behavior/predict) so that:
+    //   1. The OC-SVM prediction engine processes it first.
+    //   2. The canonical phenotyping/data_logs and phenotyping/predictions
+    //      tables are written with the correct, complete schema.
+    //   3. The fusion_engine table receives the standardized group format.
+    // Direct Firebase writes bypassed all three of these steps and wrote
+    // an incomplete schema to the rogue phenotyping/metrics path.
 
     private static String activityName(int type) {
         switch (type) {
