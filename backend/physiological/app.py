@@ -70,6 +70,18 @@ _calibration_sessions = {}
 # identical split.
 _threshold_sessions = {}
 
+# Guards the check-then-set in /calibrate/start and /calibrate/threshold/
+# start below -- app.run() is started with threaded=True (see bottom of
+# this file), so two near-simultaneous requests for the same user (a
+# double-tap, a retry racing the original) can genuinely land on separate
+# threads at the same time. Without this lock both requests can read
+# _calibration_sessions.get(user_id) before either has written its own
+# update, both pass the "already in progress" check, and both proceed --
+# the second one resets window_idx back to 0 and starts a second capture
+# thread competing with the first for the same status dict. Observed live
+# as calibration progress reading "1/2" then suddenly "0/2".
+_session_start_lock = threading.Lock()
+
 USER_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{3,30}$')
 
 @app.route('/health', methods=['GET'])
@@ -164,13 +176,14 @@ def calibrate():
 @require_auth
 def calibrate_start():
     user_id = g.user_id
-    current = _calibration_sessions.get(user_id)
-    if current and current.get('status') in ('settling', 'capturing', 'saving'):
-        return jsonify({'error': 'Calibration already in progress'}), 409
+    with _session_start_lock:
+        current = _calibration_sessions.get(user_id)
+        if current and current.get('status') in ('settling', 'capturing', 'saving'):
+            return jsonify({'error': 'Calibration already in progress'}), 409
 
-    _calibration_sessions[user_id] = {
-        'status': 'settling', 'window_idx': 0, 'n_windows': N_BASELINE_WIN
-    }
+        _calibration_sessions[user_id] = {
+            'status': 'settling', 'window_idx': 0, 'n_windows': N_BASELINE_WIN
+        }
 
     def on_progress(status, extra):
         entry = {'status': status, 'n_windows': N_BASELINE_WIN}
@@ -221,11 +234,12 @@ def calibrate_status():
 @require_auth
 def calibrate_threshold_start():
     user_id = g.user_id
-    current = _threshold_sessions.get(user_id)
-    if current and current.get('status') in ('capturing', 'saving'):
-        return jsonify({'error': 'Threshold calibration already in progress'}), 409
+    with _session_start_lock:
+        current = _threshold_sessions.get(user_id)
+        if current and current.get('status') in ('capturing', 'saving'):
+            return jsonify({'error': 'Threshold calibration already in progress'}), 409
 
-    _threshold_sessions[user_id] = {'status': 'capturing'}
+        _threshold_sessions[user_id] = {'status': 'capturing'}
 
     def on_progress(status, extra):
         if status == 'error':
