@@ -11,7 +11,8 @@ import ScreenBackground from '../../shared/ScreenBackground';
 import { ref, onValue, off, get } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
-import { useAuth } from '../../../context/AuthContext';
+import Icon, { NAMES } from '../../shared/Icon';
+import { usePhenotypingDeviceId } from '../utils/deviceIdentity';
 import { getCalibrationStatus } from '../utils/calibrationStatus';
 
 function buildWeeklyChart(predictions) {
@@ -23,8 +24,11 @@ function buildWeeklyChart(predictions) {
     });
     predictions.forEach((p) => {
         if (!p.timestamp) return;
-        const bucket = days.find((d) => d.date === new Date(p.timestamp).toDateString());
-        if (bucket && typeof p.stress_score === 'number') bucket.scores.push(p.stress_score);
+        const pDateStr = new Date(p.timestamp).toDateString();
+        const bucket = days.find((d) => d.date === pDateStr);
+        if (bucket) {
+            bucket.scores.push(p.stress_score);
+        }
     });
     return days.map((d) => ({
         day: d.day,
@@ -44,45 +48,60 @@ const TABS = [
     { id: 'baseline', label: 'Baseline' },
 ];
 
-export default function PhenotypingAnalysisScreen() {
+export default function PhenotypingAnalysisScreen({ navigation, route }) {
     const { isDark, theme: t, COLORS } = useTheme();
-    const { user } = useAuth();
-    const userId = user?.userId;
+    const deviceId = usePhenotypingDeviceId();
 
-    const [activeTab, setActiveTab] = useState('overview');
+    const [activeTab, setActiveTab] = useState(route?.params?.initialTab || 'overview');
     const [predictions, setPredictions] = useState(null);
     const [latestWindow, setLatestWindow] = useState(null);
-    const [recentWindows, setRecentWindows] = useState([]);
+    const [allEntries, setAllEntries] = useState([]);
+    const [timeRange, setTimeRange] = useState('7');
     const [baselines, setBaselines] = useState(null);
     const [dataLogCount, setDataLogCount] = useState(null);
     const [calibStatus, setCalibStatus] = useState(null);
 
     useEffect(() => {
-        if (!userId) return;
-        getCalibrationStatus(userId).then(setCalibStatus);
-    }, [userId]);
+        if (!deviceId) return;
+        getCalibrationStatus(deviceId).then(setCalibStatus);
+    }, [deviceId]);
 
     useEffect(() => {
-        if (!userId) return;
-        const predRef = ref(db, `phenotyping/predictions/${userId}`);
+        if (!deviceId) return;
+        const predRef = ref(db, `phenotyping/predictions/${deviceId}`);
         const handler = onValue(predRef, (snap) => {
             const raw = snap.val();
             setPredictions(raw ? Object.values(raw) : []);
         });
         return () => off(predRef, 'value', handler);
-    }, [userId]);
+    }, [deviceId]);
 
     useEffect(() => {
-        if (!userId) return;
-        get(ref(db, `phenotyping/users/${userId}/baselines`)).then((s) => { if (s.exists()) setBaselines(s.val()); });
-        get(ref(db, `phenotyping/data_logs/${userId}`)).then((s) => {
-            if (!s.exists()) return;
-            const entries = Object.entries(s.val()).sort((a, b) => a[0].localeCompare(b[0]));
-            setDataLogCount(entries.length);
-            setLatestWindow(entries[entries.length - 1][1]);
-            setRecentWindows(entries.slice(-10).map((e) => ({ ts: e[0], data: e[1] })));
+        if (!deviceId) return;
+        get(ref(db, `phenotyping/users/${deviceId}/baselines`)).then((s) => { if (s.exists()) setBaselines(s.val()); });
+        
+        const logsRef = ref(db, `phenotyping/data_logs/${deviceId}`);
+        const handler = onValue(logsRef, (snapshot) => {
+            const raw = snapshot.val();
+            if (raw) {
+                const entries = Object.entries(raw).sort((a, b) => a[0].localeCompare(b[0]));
+                setAllEntries(entries);
+                setDataLogCount(entries.length);
+                setLatestWindow(entries[entries.length - 1][1]);
+            }
         });
-    }, [userId]);
+        return () => off(logsRef, 'value', handler);
+    }, [deviceId]);
+
+    const recentWindows = useMemo(() => {
+        const limit = timeRange === '28' ? 40 : 10;
+        return allEntries.slice(-limit).map((e) => ({ ts: e[0], data: e[1] }));
+    }, [allEntries, timeRange]);
+
+    const maxDwell = useMemo(() => {
+        const dwells = recentWindows.map(w => w.data?.avg_dwell).filter(v => typeof v === 'number');
+        return dwells.length ? Math.max(...dwells) : 150;
+    }, [recentWindows]);
 
     const { weeklyScores, avgScore, peakDay, calmDay } = useMemo(() => {
         if (!predictions || predictions.length === 0) {
@@ -111,19 +130,14 @@ export default function PhenotypingAnalysisScreen() {
         return { episodes, total, confidence };
     }, [predictions]);
 
-    // v4.1: Use composite_z from the latest saved prediction (all 5 features averaged
-    // by the backend: dwell + flight + scroll + tilt + cpm). Falls back to a
-    // client-side dwell z-score if no prediction record exists yet.
     const zScore = useMemo(() => {
         if (predictions && predictions.length > 0) {
-            // Predictions are now saved with composite_z from the 5-feature engine
             const withZ = predictions.filter((p) => typeof p.composite_z === 'number');
             if (withZ.length > 0) {
                 const latest = withZ[withZ.length - 1];
                 return Math.round(latest.composite_z * 100) / 100;
             }
         }
-        // Fallback: compute from dwell alone (pre-v4.1 records or no data)
         if (!latestWindow || !baselines) return null;
         const z = computeZ(latestWindow.avg_dwell, baselines.avg_dwell?.mean, baselines.avg_dwell?.std);
         return Math.round(z * 100) / 100;
@@ -156,17 +170,49 @@ export default function PhenotypingAnalysisScreen() {
         if (!latestWindow || !baselines) return null;
         const lw = latestWindow, bl = baselines;
         return [
-            { signal: '⌨️ Typing Dwell',  z: computeZ(lw.avg_dwell,      bl.avg_dwell?.mean,      bl.avg_dwell?.std),      current: `${Math.round(lw.avg_dwell || 0)} ms`,          baseline: bl.avg_dwell?.mean      ? `${Math.round(bl.avg_dwell.mean)} ms`       : '--' },
-            { signal: '✈️ Flight Time',   z: computeZ(lw.avg_flight,     bl.avg_flight?.mean,     bl.avg_flight?.std),     current: `${Math.round(lw.avg_flight || 0)} ms`,         baseline: bl.avg_flight?.mean     ? `${Math.round(bl.avg_flight.mean)} ms`      : '--' },
-            { signal: '📜 Scroll Speed',  z: computeZ(lw.scroll_velocity,bl.scroll_velocity?.mean,bl.scroll_velocity?.std),current: `${Math.round(lw.scroll_velocity || 0)} px/s`,   baseline: bl.scroll_velocity?.mean? `${Math.round(bl.scroll_velocity.mean)} px/s`: '--' },
-            { signal: '📐 Device Tilt',   z: computeZ(lw.tilt_angle,    bl.tilt_angle?.mean,     bl.tilt_angle?.std),     current: `${Math.round(lw.tilt_angle || 0)}°`,          baseline: bl.tilt_angle?.mean     ? `${Math.round(bl.tilt_angle.mean)}°`       : '--' },
-            { signal: '🔡 Typing Speed',  z: computeZ(lw.cpm,           bl.cpm?.mean,            bl.cpm?.std),            current: `${Math.round(lw.cpm || 0)} cpm`,              baseline: bl.cpm?.mean            ? `${Math.round(bl.cpm.mean)} cpm`           : '--' },
-            { signal: '🔀 App Switching', z: computeZ(lw.app_switch_rate,bl.app_switch_rate?.mean,bl.app_switch_rate?.std),current: `${(lw.app_switch_rate || 0).toFixed(1)}/min`,  baseline: bl.app_switch_rate?.mean? `${bl.app_switch_rate.mean.toFixed(1)}/min`  : '--' },
+            { signal: '⌨️ Typing Dwell', z: computeZ(lw.avg_dwell, bl.avg_dwell?.mean, bl.avg_dwell?.std), current: `${Math.round(lw.avg_dwell || 0)} ms`, baseline: bl.avg_dwell?.mean ? `${Math.round(bl.avg_dwell.mean)} ms` : '--' },
+            { signal: '✈️ Flight Time', z: computeZ(lw.avg_flight, bl.avg_flight?.mean, bl.avg_flight?.std), current: `${Math.round(lw.avg_flight || 0)} ms`, baseline: bl.avg_flight?.mean ? `${Math.round(bl.avg_flight.mean)} ms` : '--' },
+            { signal: '📜 Scroll Speed', z: computeZ(lw.scroll_velocity, bl.scroll_velocity?.mean, bl.scroll_velocity?.std), current: `${Math.round(lw.scroll_velocity || 0)} px/s`, baseline: bl.scroll_velocity?.mean ? `${Math.round(bl.scroll_velocity.mean)} px/s` : '--' },
+            { signal: '📐 Device Tilt', z: computeZ(lw.tilt_angle, bl.tilt_angle?.mean, bl.tilt_angle?.std), current: `${Math.round(lw.tilt_angle || 0)}°`, baseline: bl.tilt_angle?.mean ? `${Math.round(bl.tilt_angle.mean)}°` : '--' },
+            { signal: '🔡 Typing Speed', z: computeZ(lw.cpm, bl.cpm?.mean, bl.cpm?.std), current: `${Math.round(lw.cpm || 0)} cpm`, baseline: bl.cpm?.mean ? `${Math.round(bl.cpm.mean)} cpm` : '--' },
+            { signal: '🔀 App Switching', z: computeZ(lw.app_switch_rate, bl.app_switch_rate?.mean, bl.app_switch_rate?.std), current: `${(lw.app_switch_rate || 0).toFixed(1)}/min`, baseline: bl.app_switch_rate?.mean ? `${bl.app_switch_rate.mean.toFixed(1)}/min` : '--' },
         ];
     }, [latestWindow, baselines]);
 
     return (
         <ScreenBackground edges={['left', 'right']}>
+            {/* Header row */}
+            <View style={styles.header}>
+                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} activeOpacity={0.7}>
+                    <Icon name={NAMES.back} size={22} color={COLORS.brand} />
+                </TouchableOpacity>
+                <View style={{ width: 22 }} />
+            </View>
+
+            {/* Title & Toggle row */}
+            <View style={styles.titleToggleRow}>
+                <View style={{ flex: 1 }}>
+                    <Text style={[styles.titleText, { color: t.text }]}>Pattern Charts</Text>
+                    <Text style={[styles.subTitleText, { color: t.textMuted }]}>Behavioral deviation & dwell dynamics for ui</Text>
+                </View>
+                <View style={[styles.toggleContainer, { backgroundColor: t.pillBg, borderColor: t.border }]}>
+                    <TouchableOpacity
+                        activeOpacity={0.8}
+                        onPress={() => setTimeRange('7')}
+                        style={[styles.toggleBtn, timeRange === '7' && { backgroundColor: COLORS.brand }]}
+                    >
+                        <Text style={[styles.toggleBtnText, { color: timeRange === '7' ? '#FFF' : t.textMuted }]}>7 Days</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        activeOpacity={0.8}
+                        onPress={() => setTimeRange('28')}
+                        style={[styles.toggleBtn, timeRange === '28' && { backgroundColor: COLORS.brand }]}
+                    >
+                        <Text style={[styles.toggleBtnText, { color: timeRange === '28' ? '#FFF' : t.textMuted }]}>28 Days</Text>
+                    </TouchableOpacity>
+                </View>
+            </View>
+
             <View style={styles.tabRow}>
                 {TABS.map((tab) => (
                     <TouchableOpacity
@@ -240,35 +286,145 @@ export default function PhenotypingAnalysisScreen() {
 
                 {activeTab === 'patterns' && (
                     <>
+                        {/* Card 1: Dwell Time Trend */}
                         <View style={[styles.card, { backgroundColor: t.surface, borderColor: t.border }]}>
-                            <Text style={[styles.cardTitle, { color: t.textMuted }]}>Current Z-Score Deviation</Text>
-                            <Text style={[styles.zScoreValue, { color: zColor }]}>{zScore !== null ? zScore.toFixed(2) : '--'}</Text>
-                            <Text style={[styles.hint, { color: zColor, fontWeight: '800' }]}>{zLabel}</Text>
-                            <Text style={[styles.hint, { color: t.textMuted, marginTop: 2 }]}>Anomaly trigger threshold: Z &gt; 2.0</Text>
+                            <View style={[styles.rowBetween, { alignItems: 'flex-start', marginBottom: 12 }]}>
+                                <View style={{ flex: 1, marginRight: 8 }}>
+                                    <Text style={[styles.cardTitle, { color: t.textMuted }]}>
+                                        DWELL TIME TREND (LAST {timeRange === '28' ? '40' : '10'} WINDOWS)
+                                    </Text>
+                                    <Text style={{ fontSize: 11, color: t.textMuted, marginTop: 4 }}>
+                                        Your live typing dwell time vs your personal baseline mean
+                                    </Text>
+                                </View>
+                                <View style={{ backgroundColor: COLORS.normalSoft, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 }}>
+                                    <Text style={{ fontSize: 9, fontWeight: '950', color: COLORS.normalDark }}>LIVE DATA</Text>
+                                </View>
+                            </View>
+
+                            {recentWindows.length > 0 ? (
+                                <>
+                                    <View style={[styles.rowBetween, { marginTop: 10, marginBottom: 15 }]}>
+                                        <View>
+                                            <Text style={[styles.hint, { color: t.textMuted }]}>Current</Text>
+                                            <Text style={[styles.dwellHeaderVal, { color: t.text }]}>
+                                                {latestWindow?.avg_dwell ? `${Math.round(latestWindow.avg_dwell)} ms` : 'pending'}
+                                            </Text>
+                                        </View>
+                                        <View>
+                                            <Text style={[styles.hint, { color: t.textMuted }]}>Baseline</Text>
+                                            <Text style={[styles.dwellHeaderVal, { color: t.text }]}>
+                                                {baselines?.avg_dwell?.mean ? `${Math.round(baselines.avg_dwell.mean)} ms` : 'pending'}
+                                            </Text>
+                                        </View>
+                                        <View>
+                                            <Text style={[styles.hint, { color: t.textMuted }]}>Z-Score</Text>
+                                            <Text style={[styles.dwellHeaderVal, { color: zScore !== null ? zScore : t.textMuted }]}>
+                                                {zScore !== null ? zScore.toFixed(2) : 'pending'}
+                                            </Text>
+                                        </View>
+                                    </View>
+
+                                    <View style={{ height: 100, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', marginVertical: 12 }}>
+                                        {recentWindows.map((w, idx) => {
+                                            const val = w.data?.avg_dwell;
+                                            if (typeof val !== 'number') return null;
+                                            const z = computeZ(val, baselines?.avg_dwell?.mean, baselines?.avg_dwell?.std);
+                                            const color = z > 2.0 ? COLORS.stress : z > 1.0 ? COLORS.warning : COLORS.normal;
+                                            const pctHeight = `${Math.max(15, Math.min(100, (val / maxDwell) * 100))}%`;
+                                            return (
+                                                <View key={idx} style={{ flex: 1, alignItems: 'center', marginHorizontal: 2 }}>
+                                                    <View style={{ width: '100%', height: '100%', backgroundColor: t.pillBg, borderRadius: 4, justifyContent: 'flex-end', overflow: 'hidden' }}>
+                                                        <View style={{ width: '100%', height: pctHeight, backgroundColor: color, borderRadius: 4 }} />
+                                                    </View>
+                                                </View>
+                                            );
+                                        })}
+                                    </View>
+
+                                    <View style={[styles.rowBetween, { marginTop: 8 }]}>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                            <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.normal }} />
+                                            <Text style={{ fontSize: 10, color: t.textMuted, fontWeight: '700' }}>Normal</Text>
+                                        </View>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                            <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.warning }} />
+                                            <Text style={{ fontSize: 10, color: t.textMuted, fontWeight: '700' }}>Elevated</Text>
+                                        </View>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                            <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.stress }} />
+                                            <Text style={{ fontSize: 10, color: t.textMuted, fontWeight: '700' }}>Pre-stress</Text>
+                                        </View>
+                                    </View>
+                                </>
+                            ) : (
+                                <Text style={[styles.hint, { color: t.textMuted, textAlign: 'center', marginVertical: 36 }]}>
+                                    No dwell data yet. Keep typing to see your trend!
+                                </Text>
+                            )}
                         </View>
 
-                        {signalDeviations ? (
-                            <View style={[styles.card, { backgroundColor: t.surface, borderColor: t.border }]}>
-                                <Text style={[styles.cardTitle, { color: t.textMuted, marginBottom: 12 }]}>Signal Deviation from Baseline</Text>
-                                {signalDeviations.map((s, i) => {
-                                    const pct = Math.round((s.z / 3.0) * 100);
-                                    const color = s.z > 2.0 ? COLORS.stress : s.z > 1.0 ? COLORS.warning : COLORS.normal;
-                                    return (
-                                        <View key={i} style={{ marginBottom: 12 }}>
-                                            <View style={styles.rowBetween}>
-                                                <Text style={[styles.signalName, { color: t.text }]}>{s.signal}</Text>
-                                                <Text style={[styles.hint, { color: t.textMuted }]}>{s.current} vs {s.baseline}</Text>
-                                            </View>
-                                            <View style={[styles.progressTrack, { backgroundColor: t.border }]}>
-                                                <View style={[styles.progressFill, { width: `${pct}%`, backgroundColor: color }]} />
-                                            </View>
+                        {/* Card 2: Signal Deviation */}
+                        <View style={[styles.card, { backgroundColor: t.surface, borderColor: t.border }]}>
+                            <Text style={[styles.cardTitle, { color: t.textMuted, marginBottom: 16 }]}>Signal Deviation from Baseline</Text>
+                            {calibStatus?.isCalibrated === false ? (
+                                <View style={{ alignItems: 'center', paddingVertical: 12 }}>
+                                    <Text style={{ fontSize: 32, marginBottom: 8 }}>📊</Text>
+                                    <Text style={{ fontSize: 15, fontWeight: '800', color: t.text }}>{calibStatus?.title || 'Learning your rhythm'}</Text>
+                                    <Text style={{ fontSize: 11.5, color: t.textSub, textAlign: 'center', marginVertical: 8, lineHeight: 17, paddingHorizontal: 16 }}>
+                                        {calibStatus?.dayNumber > 7 
+                                            ? "Your 7-day calibration window has closed, but we still need more valid behavioral windows to confirm your baseline."
+                                            : `${calibStatus?.displayDays || 'Day 1 of 7'} complete — signal deviation bars activate once your baseline is confirmed`
+                                        }
+                                    </Text>
+                                    <View style={{ width: '100%', marginTop: 12, paddingHorizontal: 8 }}>
+                                        <View style={[styles.progressTrack, { backgroundColor: t.pillBg, height: 8, borderRadius: 4 }]}>
+                                            <View style={[styles.progressFill, { width: `${calibStatus?.progressPct || 0}%`, backgroundColor: COLORS.brand, height: 8, borderRadius: 4 }]} />
                                         </View>
-                                    );
-                                })}
-                            </View>
-                        ) : (
-                            <Text style={[styles.hint, { color: t.textMuted, textAlign: 'center', marginTop: 20 }]}>Waiting for baseline data…</Text>
-                        )}
+                                        <Text style={{ fontSize: 10, fontWeight: '700', color: t.textMuted, textAlign: 'center', marginTop: 6 }}>
+                                            {calibStatus?.progressPct || 0}% of calibration complete
+                                        </Text>
+                                    </View>
+                                </View>
+                            ) : signalDeviations ? (
+                                <>
+                                    {signalDeviations.map((s, i) => {
+                                        const pct = Math.round((s.z / 3.0) * 100);
+                                        const color = s.z > 2.0 ? COLORS.stress : s.z > 1.0 ? COLORS.warning : COLORS.normal;
+                                        return (
+                                            <View key={i} style={{ marginBottom: 12 }}>
+                                                <View style={styles.rowBetween}>
+                                                    <Text style={[styles.signalName, { color: t.text }]}>{s.signal}</Text>
+                                                    <Text style={[styles.hint, { color: t.textMuted }]}>{s.current} vs {s.baseline}</Text>
+                                                </View>
+                                                <View style={[styles.progressTrack, { backgroundColor: t.border }]}>
+                                                    <View style={[styles.progressFill, { width: `${pct}%`, backgroundColor: color }]} />
+                                                </View>
+                                            </View>
+                                        );
+                                    })}
+                                </>
+                            ) : (
+                                <Text style={[styles.hint, { color: t.textMuted, textAlign: 'center', marginTop: 12 }]}>Waiting for baseline data…</Text>
+                            )}
+                        </View>
+
+                        {/* Card 3: Current Z-Score Deviation */}
+                        <View style={[styles.card, { backgroundColor: t.surface, borderColor: t.border }]}>
+                            <Text style={[styles.cardTitle, { color: t.textMuted }]}>Current Z-Score Deviation</Text>
+                            {calibStatus?.isCalibrated === false ? (
+                                <>
+                                    <Text style={[styles.zScoreValue, { color: t.textMuted }]}>--</Text>
+                                    <Text style={[styles.hint, { color: t.textMuted, fontWeight: '800' }]}>Awaiting calibration baseline</Text>
+                                </>
+                            ) : (
+                                <>
+                                    <Text style={[styles.zScoreValue, { color: zColor }]}>{zScore !== null ? zScore.toFixed(2) : '--'}</Text>
+                                    <Text style={[styles.hint, { color: zColor, fontWeight: '800' }]}>{zLabel}</Text>
+                                </>
+                            )}
+                            <Text style={[styles.hint, { color: t.textMuted, marginTop: 4 }]}>Anomaly trigger threshold: Z &gt; 2.0</Text>
+                        </View>
                     </>
                 )}
 
@@ -290,14 +446,33 @@ export default function PhenotypingAnalysisScreen() {
 
                         <View style={[styles.card, { backgroundColor: t.surface, borderColor: t.border }]}>
                             <Text style={[styles.cardTitle, { color: t.textMuted, marginBottom: 12 }]}>7-Day Calibration Status</Text>
-                            <View style={styles.rowBetween}>
+                            
+                            <View style={[styles.rowBetween, { marginBottom: 8 }]}>
+                                <Text style={[styles.hint, { color: t.textMuted }]}>Monitoring state</Text>
+                                <View style={{ 
+                                    backgroundColor: zScore === null ? t.border : zScore > 2.0 ? COLORS.stressSoft : zScore > 1.0 ? COLORS.warningSoft : COLORS.normalSoft, 
+                                    paddingHorizontal: 8, 
+                                    paddingVertical: 3, 
+                                    borderRadius: 8 
+                                }}>
+                                    <Text style={{ 
+                                        fontSize: 9, 
+                                        fontWeight: '900', 
+                                        color: zScore === null ? t.textMuted : zScore > 2.0 ? COLORS.stressDark : zScore > 1.0 ? COLORS.warningDark : COLORS.normalDark 
+                                    }}>{zScore === null ? 'PENDING' : zScore > 2.0 ? 'STRESS' : zScore > 1.0 ? 'ELEVATED' : 'NORMAL'}</Text>
+                                </View>
+                            </View>
+
+                            <View style={[styles.rowBetween, { marginTop: 8 }]}>
                                 <Text style={[styles.hint, { color: t.textMuted }]}>Monitoring period</Text>
                                 <Text style={[styles.signalName, { color: t.text }]}>{calibStatus?.displayDays || '—'}</Text>
                             </View>
+                            
                             <View style={[styles.rowBetween, { marginTop: 8 }]}>
-                                <Text style={[styles.hint, { color: t.textMuted }]}>Windows collected</Text>
-                                <Text style={[styles.signalName, { color: t.text }]}>{dataLogCount ?? '--'}</Text>
+                                <Text style={[styles.hint, { color: t.textMuted }]}>Behavioral windows collected</Text>
+                                <Text style={[styles.signalName, { color: t.text }]}>{dataLogCount !== null ? `${dataLogCount} windows` : '-- windows'}</Text>
                             </View>
+                            
                             <View style={[styles.rowBetween, { marginTop: 8 }]}>
                                 <Text style={[styles.hint, { color: t.textMuted }]}>Inference engine</Text>
                                 <Text style={[styles.signalName, { color: t.text }]}>One-Class SVM</Text>
@@ -334,4 +509,16 @@ const styles = StyleSheet.create({
     progressTrack: { height: 6, borderRadius: 3, overflow: 'hidden', marginTop: 6 },
     progressFill: { height: '100%', borderRadius: 3 },
     baselineRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 10, borderTopWidth: 1 },
+    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 6 },
+    backBtn: { padding: 4 },
+    headerTitle: { fontSize: 16, fontWeight: '900', letterSpacing: -0.2 },
+    
+    // Title toggle styling
+    titleToggleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 12 },
+    titleText: { fontSize: 22, fontWeight: '900', letterSpacing: -0.5 },
+    subTitleText: { fontSize: 10.5, marginTop: 2 },
+    toggleContainer: { flexDirection: 'row', borderRadius: 20, borderWidth: 1, padding: 2.5, gap: 2, alignItems: 'center' },
+    toggleBtn: { paddingHorizontal: 10, paddingVertical: 5.5, borderRadius: 16 },
+    toggleBtnText: { fontSize: 10.5, fontWeight: '800' },
+    dwellHeaderVal: { fontSize: 15, fontWeight: '850', marginTop: 4 },
 });

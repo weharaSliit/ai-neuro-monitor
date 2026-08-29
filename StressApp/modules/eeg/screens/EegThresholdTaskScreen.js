@@ -10,28 +10,38 @@
 //   - backend/psychological/sam40/decision.py::compute_personal_threshold()
 //   - backend/physiological/predictor.py::compute_personal_stress_threshold()
 //
-// Two different transports, same UI: EEG has no on-demand task-capture
-// endpoint (mqtt_bridge.py's always-on session is the only thing with
-// live MQTT access -- this screen just sets a Firebase flag and watches
-// for the result); physiological has a real on-demand
+// Same transport for both now: EEG and Ring each expose an on-demand
 // POST /calibrate/threshold/start + poll /calibrate/threshold/status,
-// same shape as its own baseline capture.
+// same shape as their own baseline capture -- no dependency on
+// mqtt_bridge.py's always-on loop (an earlier version of this screen set
+// a Firebase flag for EEG's always-on bridge to notice, which only
+// worked if that separate process happened to be running; EEG's
+// eeg_calibration_capture.py now has its own on-demand capture, mirroring
+// physiological's calibration_capture.py exactly -- see
+// backend/psychological/eeg_calibration_capture.py::run_eeg_threshold_capture()).
+//
+// EEG and Ring are tracked and shown INDEPENDENTLY (each its own status
+// row, own retry) -- NOT gated on both settling before either is visible,
+// so one running slower than the other never hides an already-successful
+// result behind a generic timeout.
 //
 // Reached from AccountSetupScreen.js once CalibrateBreathingCard's
 // baseline capture completes -- see App.js's 'ThresholdCalibration' route.
 // Skippable, same "no dead end" philosophy as the rest of onboarding
-// (AccountSetupScreen.js's own header comment) -- finishing OR skipping
-// both flips isNewUser off via completeOnboarding() and continues into
-// the app.
+// (AccountSetupScreen.js's own header comment) -- Done is always
+// available once the task starts, whether or not either side has
+// actually finished; finishing OR skipping both flips isNewUser off via
+// completeOnboarding() and continues into the app.
 // ============================================================
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, Keyboard } from 'react-native';
-import { ref, onValue, off, set } from 'firebase/database';
+import { ref, onValue, off } from 'firebase/database';
 import { db } from '../firebase';
 import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
 import Button from '../../shared/Button';
 import Icon, { NAMES } from '../../shared/Icon';
+import { eegClient } from '../../shared/eegApiClient';
 import physiologicalApi from '../../physiological/api/client';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import { useAuth } from '../../../context/AuthContext';
@@ -40,21 +50,15 @@ import { useAuth } from '../../../context/AuthContext';
 // worst-case capture time (EEG: up to ~53s from flag-detection to 2 full
 // 25s blocks; physiological: one full 60s window from trigger), so the
 // quiz's own countdown absorbs that time instead of the user hitting a
-// visible "Working…" gap after it ends on the common case. See this
-// project's own note on the tradeoff (slightly longer onboarding vs. a
-// gap that reads as "is this broken?").
+// visible "Working…" gap after it ends on the common case.
 const TASK_DURATION_SEC = 75;
-// Worst case per mqtt_bridge.py's own task-phase design: up to 2 full 25s
-// blocks (~50s) to accumulate from whenever the flag is first noticed
-// (polled every THRESHOLD_TASK_POLL_INTERVAL_SEC=3s there), plus the
-// /calibrate/threshold POST + its own retry margin -- with the quiz now
-// running 75s, this residual timeout mostly just covers a genuinely slow/
-// failed capture, not the normal case; 90s still gives a safe margin
-// without leaving the user staring at a spinner forever if something
-// actually did fail.
-const WAITING_TIMEOUT_SEC = 90;
-const RING_POLL_INTERVAL_MS = 2000;
-const RING_IN_PROGRESS = ['capturing', 'saving'];
+// Per-side "this looks stuck" warning -- independent per side now, not a
+// single combined gate (see file header). 90s from when EACH side was
+// triggered, not from quiz-end, so a side that's slow but still working
+// isn't unfairly flagged just because the other side already finished.
+const STUCK_WARNING_SEC = 90;
+const POLL_INTERVAL_MS = 2000;
+const IN_PROGRESS = ['capturing', 'saving'];
 
 function randomInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -85,22 +89,25 @@ function generateProblem() {
 
 export default function EegThresholdTaskScreen({ navigation }) {
   const { theme: t, COLORS } = useTheme();
-  const { user, completeOnboarding } = useAuth();
+  const { user, token, completeOnboarding } = useAuth();
   const userId = user?.userId;
 
   const [sessionId, setSessionId] = useState(null);
-  const [phase, setPhase] = useState('intro'); // intro | quiz | waiting | result
+  const [phase, setPhase] = useState('intro'); // intro | quiz | review
   const [secondsLeft, setSecondsLeft] = useState(TASK_DURATION_SEC);
   const [problem, setProblem] = useState(null);
   const [answerText, setAnswerText] = useState('');
   const [score, setScore] = useState({ correct: 0, total: 0 });
+
   const [eegResult, setEegResult] = useState(null);
+  const [eegTriggeredAt, setEegTriggeredAt] = useState(null);
   const [ringResult, setRingResult] = useState(null);
-  const [ringTriggered, setRingTriggered] = useState(false);
-  const [waitedSec, setWaitedSec] = useState(0);
+  const [ringTriggeredAt, setRingTriggeredAt] = useState(null);
+  const [now, setNow] = useState(Date.now());
 
   const quizTimerRef = useRef(null);
-  const waitTimerRef = useRef(null);
+  const tickRef = useRef(null);
+  const eegPollRef = useRef(null);
   const ringPollRef = useRef(null);
 
   const finish = useCallback(() => {
@@ -110,9 +117,9 @@ export default function EegThresholdTaskScreen({ navigation }) {
 
   // Same current_session_id pointer EegSummaryScreen.js already watches --
   // this screen assumes baseline calibration for that session has already
-  // succeeded (mqtt_bridge.py only starts polling task_phase_requested
-  // once its own `calibrated` flag is true; requesting the task phase
-  // before then just has nothing to capture it).
+  // succeeded (both /calibrate/start routes only produce a usable session/
+  // baseline once they've actually finished; triggering the threshold
+  // task before then just has nothing to score against).
   useEffect(() => {
     if (!userId) return undefined;
     const pointerRef = ref(db, 'psychological/current_session_id');
@@ -122,31 +129,37 @@ export default function EegThresholdTaskScreen({ navigation }) {
     return () => off(pointerRef, 'value', handler);
   }, [userId]);
 
+  const triggerEeg = useCallback(() => {
+    if (!userId || !sessionId) return;
+    setEegResult(null);
+    setEegTriggeredAt(Date.now());
+    // On-demand, same shape as Ring's own trigger below -- see file header.
+    // A 409 here just means a capture from an earlier attempt is still
+    // running; that's fine, the poll below picks up whatever's in
+    // progress either way.
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    eegClient.post('/calibrate/threshold/start', { session_id: sessionId }, { headers }).catch(() => {});
+  }, [userId, sessionId, token]);
+
+  const triggerRing = useCallback(() => {
+    setRingResult(null);
+    setRingTriggeredAt(Date.now());
+    // A 409 here just means a capture from an earlier attempt is still
+    // running; that's fine, the poll below picks up whatever's in
+    // progress either way.
+    physiologicalApi.post('/calibrate/threshold/start', {}).catch(() => {});
+  }, []);
+
   const startQuiz = useCallback(() => {
     if (!userId) return;
-
-    if (sessionId) {
-      // Plain Firebase write, not an API call -- mqtt_bridge.py is the
-      // only thing with live MQTT access to actually capture EEG task
-      // blocks, so this screen's job for EEG is just setting this flag
-      // and watching for the result (see file header comment).
-      set(ref(db, `psychological/${userId}/${sessionId}/task_phase_requested`), Date.now()).catch(() => {});
-    }
-
-    // Physiological's real on-demand trigger -- a 409 here just means a
-    // capture from an earlier attempt is still running; that's fine, the
-    // poll below picks up whatever's in progress either way.
-    setRingTriggered(true);
-    physiologicalApi.post('/calibrate/threshold/start', {}).catch(() => {});
-
-    setEegResult(null);
-    setRingResult(null);
+    triggerEeg();
+    triggerRing();
     setScore({ correct: 0, total: 0 });
     setProblem(generateProblem());
     setAnswerText('');
     setSecondsLeft(TASK_DURATION_SEC);
     setPhase('quiz');
-  }, [userId, sessionId]);
+  }, [userId, triggerEeg, triggerRing]);
 
   useEffect(() => {
     if (phase !== 'quiz') return undefined;
@@ -155,7 +168,7 @@ export default function EegThresholdTaskScreen({ navigation }) {
         if (s <= 1) {
           clearInterval(quizTimerRef.current);
           Keyboard.dismiss();
-          setPhase('waiting');
+          setPhase('review');
           return 0;
         }
         return s - 1;
@@ -172,30 +185,38 @@ export default function EegThresholdTaskScreen({ navigation }) {
     setAnswerText('');
   }, [problem, answerText]);
 
-  // Watches for mqtt_bridge.py's /calibrate/threshold POST landing --
-  // see push_threshold_result()'s docstring (backend/psychological/
-  // firebase_service.py). Left subscribed throughout so a result that
-  // happens to already exist from a prior attempt (e.g. screen re-entered)
-  // shows up immediately rather than needing a fresh task run.
+  // Polls EEG's /calibrate/threshold/status -- same on-demand shape as
+  // Ring's own poll below, and the same pattern CalibrateBreathingCard.js's
+  // useCaptureRunner already uses for baseline capture (kept local here
+  // rather than importing that unexported hook). Independent of Ring's
+  // own state entirely -- keeps polling and reporting its own result
+  // regardless of whether Ring ever settles (see file header).
   useEffect(() => {
-    if (!userId || !sessionId) return undefined;
-    const resultRef = ref(db, `psychological/${userId}/${sessionId}/threshold_result`);
-    const handler = onValue(resultRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data) setEegResult(data);
-    });
-    return () => off(resultRef, 'value', handler);
-  }, [userId, sessionId]);
+    if (!eegTriggeredAt || eegResult != null) return undefined;
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const poll = async () => {
+      try {
+        const res = await eegClient.get('/calibrate/threshold/status', { headers });
+        if (res.data?.status && !IN_PROGRESS.includes(res.data.status)) {
+          setEegResult(res.data);
+          clearInterval(eegPollRef.current);
+        }
+      } catch {
+        // a single missed poll doesn't mean it failed -- the next tick tries again
+      }
+    };
+    poll();
+    eegPollRef.current = setInterval(poll, POLL_INTERVAL_MS);
+    return () => clearInterval(eegPollRef.current);
+  }, [eegTriggeredAt, eegResult, token]);
 
-  // Polls physiological's /calibrate/threshold/status -- same shape
-  // CalibrateBreathingCard.js's useCaptureRunner already uses for baseline
-  // capture, kept local here rather than importing that unexported hook.
+  // Polls physiological's /calibrate/threshold/status.
   useEffect(() => {
-    if (phase !== 'waiting' || !ringTriggered) return undefined;
+    if (!ringTriggeredAt || ringResult != null) return undefined;
     const poll = async () => {
       try {
         const res = await physiologicalApi.get('/calibrate/threshold/status');
-        if (res.data?.status && !RING_IN_PROGRESS.includes(res.data.status)) {
+        if (res.data?.status && !IN_PROGRESS.includes(res.data.status)) {
           setRingResult(res.data);
           clearInterval(ringPollRef.current);
         }
@@ -204,43 +225,47 @@ export default function EegThresholdTaskScreen({ navigation }) {
       }
     };
     poll();
-    ringPollRef.current = setInterval(poll, RING_POLL_INTERVAL_MS);
+    ringPollRef.current = setInterval(poll, POLL_INTERVAL_MS);
     return () => clearInterval(ringPollRef.current);
-  }, [phase, ringTriggered]);
+  }, [ringTriggeredAt, ringResult]);
 
-  // Both sides settled (or were never triggered) -> show results.
+  // Local clock tick for the "still working, N s" / stuck-warning display
+  // -- only runs while something is actually pending, not the whole time
+  // the screen is mounted.
   useEffect(() => {
-    if (phase !== 'waiting') return;
-    const eegSettled = !sessionId || eegResult != null;
-    const ringSettled = !ringTriggered || ringResult != null;
-    if (eegSettled && ringSettled) setPhase('result');
-  }, [phase, sessionId, eegResult, ringTriggered, ringResult]);
+    const eegPending = eegTriggeredAt && !eegResult;
+    const ringPending = ringTriggeredAt && !ringResult;
+    if (!eegPending && !ringPending) return undefined;
+    tickRef.current = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(tickRef.current);
+  }, [eegTriggeredAt, eegResult, ringTriggeredAt, ringResult]);
 
-  useEffect(() => {
-    if (phase !== 'waiting') {
-      setWaitedSec(0);
-      return undefined;
+  function sideStatus(result, triggeredAt, personalizedKey, retry) {
+    if (!triggeredAt) return { detail: 'Not run this time.', color: COLORS.light?.textMuted || '#888', retry: null };
+    if (!result) {
+      const stuck = (now - triggeredAt) / 1000 >= STUCK_WARNING_SEC;
+      return stuck
+        ? { detail: 'Taking longer than expected -- check the device is still connected.', color: COLORS.warning, retry }
+        : { detail: 'Working…', color: COLORS.light?.textMuted || '#888', retry: null };
     }
-    waitTimerRef.current = setInterval(() => setWaitedSec((s) => s + 1), 1000);
-    return () => clearInterval(waitTimerRef.current);
-  }, [phase]);
-
-  const timedOut = phase === 'waiting' && waitedSec >= WAITING_TIMEOUT_SEC;
-
-  function summarize(label, result, personalizedKey) {
-    if (!result) return { label, detail: 'Not run this time.', color: COLORS.light?.textMuted || '#888' };
     if (result.status === 'ok') {
       const pct = Math.round((result[personalizedKey] || 0) * 100);
-      return { label, detail: `Personalized at ${pct}%.`, color: COLORS.normal };
+      return { detail: `Personalized at ${pct}%.`, color: COLORS.normal, retry: null };
     }
     if (result.status === 'error') {
-      return { label, detail: result.error || 'Failed -- standard threshold stays in place.', color: COLORS.warning };
+      return { detail: result.error || 'Failed -- standard threshold stays in place.', color: COLORS.warning, retry };
     }
-    return { label, detail: 'Rest and task scores weren’t different enough -- using the standard threshold.', color: COLORS.warning };
+    return { detail: 'Rest and task scores weren’t different enough -- using the standard threshold.', color: COLORS.normal, retry: null };
   }
 
-  const eegSummary = useMemo(() => summarize('EEG', eegResult, 'personal_high_load_p'), [eegResult, COLORS]);
-  const ringSummary = useMemo(() => summarize('Ring', ringResult, 'personal_stress_threshold'), [ringResult, COLORS]);
+  const eegStatus = useMemo(
+    () => sideStatus(eegResult, eegTriggeredAt, 'personal_high_load_p', triggerEeg),
+    [eegResult, eegTriggeredAt, now, COLORS, triggerEeg],
+  );
+  const ringStatus = useMemo(
+    () => sideStatus(ringResult, ringTriggeredAt, 'personal_stress_threshold', triggerRing),
+    [ringResult, ringTriggeredAt, now, COLORS, triggerRing],
+  );
 
   return (
     <ScreenBackground>
@@ -289,43 +314,41 @@ export default function EegThresholdTaskScreen({ navigation }) {
           </Card>
         )}
 
-        {phase === 'waiting' && (
-          <Card elevated style={styles.card}>
-            <Text style={[styles.title, { color: t.text }]}>Measuring your response…</Text>
-            <Text style={[styles.body, { color: t.textMuted, marginTop: 8 }]}>
-              You answered {score.correct}/{score.total} correctly. Hold still for a moment while your
-              last few readings are analyzed.
-            </Text>
-            {timedOut ? (
-              <>
-                <Text style={[styles.warn, { color: COLORS.warning, marginTop: 12 }]}>
-                  This is taking longer than expected -- check that your device(s) are still connected.
-                </Text>
-                <Button label="Try Again" onPress={startQuiz} variant="outline" style={{ marginTop: 12 }} />
-                <TouchableOpacity onPress={finish} activeOpacity={0.7} style={styles.skipRow}>
-                  <Text style={[styles.skipText, { color: t.textMuted }]}>Skip for now →</Text>
-                </TouchableOpacity>
-              </>
-            ) : (
-              <Text style={[styles.body, { color: t.textMuted, marginTop: 12 }]}>Working…</Text>
-            )}
-          </Card>
-        )}
-
-        {phase === 'result' && (
+        {phase === 'review' && (
           <Card elevated style={styles.card}>
             <View style={styles.headerRow}>
               <Icon name={NAMES.eeg} size={22} color={COLORS.brand} />
               <Text style={[styles.title, { color: t.text }]}>Threshold Results</Text>
             </View>
+            <Text style={[styles.body, { color: t.textMuted }]}>
+              You answered {score.correct}/{score.total} correctly. Each device reports independently
+              below -- one taking longer doesn't hold up the other.
+            </Text>
+
             <View style={styles.resultRow}>
-              <Text style={[styles.resultLabel, { color: t.text }]}>{eegSummary.label}</Text>
-              <Text style={[styles.resultDetail, { color: eegSummary.color }]}>{eegSummary.detail}</Text>
+              <View style={styles.resultRowHeader}>
+                <Text style={[styles.resultLabel, { color: t.text }]}>EEG</Text>
+                {eegStatus.retry && (
+                  <TouchableOpacity onPress={eegStatus.retry}>
+                    <Text style={[styles.retryText, { color: COLORS.brand }]}>Try Again</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+              <Text style={[styles.resultDetail, { color: eegStatus.color }]}>{eegStatus.detail}</Text>
             </View>
+
             <View style={styles.resultRow}>
-              <Text style={[styles.resultLabel, { color: t.text }]}>{ringSummary.label}</Text>
-              <Text style={[styles.resultDetail, { color: ringSummary.color }]}>{ringSummary.detail}</Text>
+              <View style={styles.resultRowHeader}>
+                <Text style={[styles.resultLabel, { color: t.text }]}>Ring</Text>
+                {ringStatus.retry && (
+                  <TouchableOpacity onPress={ringStatus.retry}>
+                    <Text style={[styles.retryText, { color: COLORS.brand }]}>Try Again</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+              <Text style={[styles.resultDetail, { color: ringStatus.color }]}>{ringStatus.detail}</Text>
             </View>
+
             <TouchableOpacity style={[styles.doneButton, { backgroundColor: COLORS.brand }]} onPress={finish}>
               <Text style={styles.doneButtonText}>Done</Text>
             </TouchableOpacity>
@@ -350,9 +373,11 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12,
     fontSize: 18, textAlign: 'center',
   },
-  resultRow: { paddingVertical: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#ffffff22' },
+  resultRow: { paddingVertical: 10, marginTop: 6, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#ffffff22' },
+  resultRowHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   resultLabel: { fontSize: 13, fontWeight: '800' },
   resultDetail: { fontSize: 12, marginTop: 3, lineHeight: 17 },
+  retryText: { fontSize: 12, fontWeight: '800' },
   doneButton: { marginTop: 18, borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
   doneButtonText: { color: '#fff', fontSize: 15, fontWeight: '800' },
   skipRow: { alignItems: 'center', paddingVertical: 14 },

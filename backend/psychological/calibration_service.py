@@ -1,29 +1,50 @@
 # ============================================================
 # calibration_service.py -- EEG calibration logic shared by TWO callers:
 #   1. app.py's POST /calibrate -- blocks arrive pre-recorded over HTTP
-#      (mqtt_bridge.py's old always-on flow, or any other HTTP caller).
-#   2. eeg_calibration_capture.py's run_eeg_calibration_capture() -- blocks
-#      captured live from a short-lived MQTT connection, driven by the new
-#      on-demand POST /calibrate/start. Mirrors the split already used for
-#      the ring (backend/physiological/calibration_capture.py, imported by
-#      backend/physiological/app.py, never the reverse) -- needed here too
-#      since eeg_calibration_capture.py must reach this same save logic
-#      without circularly importing app.py.
+#      (mqtt_bridge.py's always-on flow, or any other HTTP caller).
+#   2. eeg_calibration_capture.py's run_eeg_calibration_capture()/
+#      run_eeg_threshold_capture() -- blocks captured live from a
+#      short-lived MQTT connection, driven by the on-demand
+#      POST /calibrate/start and /calibrate/threshold/start. Mirrors the
+#      split already used for the ring (backend/physiological/
+#      calibration_capture.py, imported by backend/physiological/app.py,
+#      never the reverse) -- needed here too since
+#      eeg_calibration_capture.py must reach this same save logic without
+#      circularly importing app.py.
 #
-# Also owns the raw-signal-record/CSV-path helpers app.py's /predict and
-# /live_raw routes reuse -- kept here (not duplicated) since calibration is
-# what first defined their shape.
+# Bipolar-only throughout (BipolarRawSample / calibrate_bipolar_block() /
+# finalize_calibration_bipolar()) -- matching the deployed
+# sam40_t7t8_state_model (bipolar-only) and wearable02's actual hardware
+# output (ONE T7-T8 differential channel, not two separate ch1/ch2 codes;
+# see mqtt_client.py's module docstring). An earlier version of this file
+# used the legacy 2-channel RawSample/calibrate_block() path, which never
+# actually matched what real wearable02 hardware sends -- caught while
+# building the on-demand threshold-capture flow below, which reuses this
+# same module and would have inherited the same mismatch.
+#
+# Also owns the CSV-path helper app.py's /calibrate route reuses -- kept
+# here (not duplicated) since calibration is what first defined its shape.
+#
+# Raw EEG samples are NOT written to Firebase from here (or anywhere else
+# in this service) -- only the local CSV log (see raw_csv_path() below).
+# What DOES land in Firebase per block is the model's derived output
+# (preprocessed features + task_state_score/label, via
+# make_eeg_output_record() -- app.py's /predict route) -- raw ADC
+# code/millis never leave this process except over the already-required
+# bridge->API call that's what actually gets it processed in the first
+# place.
 # ============================================================
 
 import re
+from dataclasses import replace as replace_thresholds
 from pathlib import Path
 
 from backend.psychological.firebase_service import (
     EegFirebaseSession, load_user_calibration_profile, save_user_calibration_profile,
+    save_user_personal_threshold,
 )
-from backend.psychological.realtime.adc import code_to_microvolts
-from backend.psychological.realtime.csv_logger import CsvLogger, RAW_FIELDS, log_raw_block
-from backend.psychological.realtime.mqtt_client import RawSample
+from backend.psychological.realtime.csv_logger import CsvLogger, RAW_FIELDS_BIPOLAR, log_raw_block_bipolar
+from backend.psychological.realtime.mqtt_client import BipolarRawSample
 from backend.psychological.realtime.pipeline import RealtimeInference
 
 MODEL_DIR = Path(__file__).resolve().parent / "models"
@@ -38,8 +59,8 @@ _UNSAFE_FILENAME_CHARS = re.compile(r'[^A-Za-z0-9_-]')
 
 class CalibrationFailedError(Exception):
     """No calibration block reached the required quality bar -- see
-    finalize_calibration()'s 'failed' status. Callers translate this to
-    their own error-reporting mechanism (HTTP 400 vs on_progress('error'))."""
+    finalize_calibration_bipolar()'s 'failed' status. Callers translate this
+    to their own error-reporting mechanism (HTTP 400 vs on_progress('error'))."""
 
 
 def raw_csv_path(session_id: str) -> Path:
@@ -47,48 +68,37 @@ def raw_csv_path(session_id: str) -> Path:
     return RAW_CSV_DIR / f"{safe_id}_raw.csv"
 
 
-def raw_signal_record(window: int, samples: list[RawSample]) -> dict:
-    """One record per block: raw ADC codes + decoded uV, same RAW_FIELDS
-    shape as realtime/csv_logger.py's local CSV logging -- see
-    EegFirebaseSession.push_raw()'s docstring for why this is a sibling
-    RTDB path rather than nested into the derived-output record."""
-    return {
-        "window": window,
-        "millis": [s.millis for s in samples],
-        "ch1_code": [s.ch1_code for s in samples],
-        "ch2_code": [s.ch2_code for s in samples],
-        "ch1_uv": [round(code_to_microvolts(s.ch1_code), 3) for s in samples],
-        "ch2_uv": [round(code_to_microvolts(s.ch2_code), 3) for s in samples],
-    }
-
-
-def run_eeg_calibration_from_blocks(user_id: str, session_id: str, blocks_samples: list[list[RawSample]],
+def run_eeg_calibration_from_blocks(user_id: str, session_id: str, blocks_samples: list[list[BipolarRawSample]],
                                      disable_quality_gate: bool = False, allow_degraded: bool = False) -> dict:
-    """Runs a full calibrate_block()/finalize_calibration() pass over
-    already-parsed blocks and persists the result -- this is the exact body
-    app.py's /calibrate route used to run inline.
+    """Runs a full calibrate_bipolar_block()/finalize_calibration_bipolar()
+    pass over already-parsed blocks and persists the result -- same body as
+    app.py's /calibrate route (kept in sync deliberately; that route still
+    runs this inline rather than calling here, since mqtt_bridge.py's
+    always-on flow depends on its exact current behavior and this was
+    factored out for the NEW on-demand capture path instead of risking
+    that one).
 
     Returns on success:
-      {'outcome': <finalize_calibration() dict, skip-ahead-augmented>,
+      {'outcome': <finalize_calibration_bipolar() dict, skip-ahead-augmented>,
        'firebase_enabled': bool,
        'session_state': {'engine', 'firebase', 'csv_logger', 'score_history'}}
     session_state is what the caller stores into app.py's eeg_sessions dict
-    so a later /predict call on this session_id works.
+    so later /predict and /calibrate/threshold/start calls on this
+    session_id work.
 
     Raises CalibrationFailedError (message already user-facing) if no block
     reached the required quality bar -- the csv_logger is already closed by
     the time this raises, since nothing else will ever close it otherwise.
     """
     firebase = EegFirebaseSession(session_id, user_id)
-    csv_logger = CsvLogger(str(raw_csv_path(session_id)), RAW_FIELDS)
+    csv_logger = CsvLogger(str(raw_csv_path(session_id)), RAW_FIELDS_BIPOLAR)
 
     engine = RealtimeInference(MODEL_DIR, disable_quality_gate=disable_quality_gate)
     for i, samples in enumerate(blocks_samples):
-        firebase.push_raw(raw_signal_record(i, samples))
-        log_raw_block(csv_logger, samples)
-        engine.calibrate_block(samples)
+        log_raw_block_bipolar(csv_logger, samples)
+        engine.calibrate_bipolar_block(samples)
 
-    outcome = engine.finalize_calibration(allow_degraded=allow_degraded)
+    outcome = engine.finalize_calibration_bipolar(allow_degraded=allow_degraded)
 
     # "You've done this before, skip ahead": a returning user (already has a
     # recent calibration on file) reuses that baseline_shift instead of this
@@ -102,6 +112,16 @@ def run_eeg_calibration_from_blocks(user_id: str, session_id: str, blocks_sample
             outcome["baseline_shift"] = engine.baseline_shift
             outcome["thresholds_personalized"] = engine.thresholds_personalized
             outcome["skip_ahead_used"] = True
+            # A previously-computed personal high_load_p (see
+            # run_eeg_threshold_from_blocks() below) also carries forward
+            # here -- same skip-ahead spirit as baseline_shift just above.
+            personal_high_load_p = stored_profile.get("personal_high_load_p")
+            if personal_high_load_p is not None:
+                engine.personal_high_load_p = personal_high_load_p
+                engine.thresholds = replace_thresholds(
+                    engine.thresholds, high_load_p=personal_high_load_p, cooldown_high_p=personal_high_load_p
+                )
+                outcome["personal_high_load_p"] = personal_high_load_p
         else:
             outcome["skip_ahead_used"] = False
             if engine.thresholds_personalized:
@@ -112,10 +132,15 @@ def run_eeg_calibration_from_blocks(user_id: str, session_id: str, blocks_sample
     firebase.push_calibration_result(outcome)
     if outcome["status"] == "failed":
         csv_logger.close()
+        # With the degraded-fallback pool now actually populated (see
+        # calibrate_bipolar_block()'s comment), reaching "failed" even with
+        # allow_degraded=True means EVERY block hit an unambiguous hardware
+        # fault (raw-magnitude or timing) -- not just low quality.
         raise CalibrationFailedError(
-            "No calibration block reached the required quality bar (GOOD by default) -- "
-            "check electrode contact, or retry with allow_degraded=true to proceed with a "
-            "flagged degraded baseline."
+            f"No usable EEG data in any calibration block (required quality bar: "
+            f"{engine.calibration_min_rating}) -- every block failed an unambiguous "
+            f"hardware check (raw signal out of range, or dropped-packet gaps). "
+            f"Check the headband is worn and the electrodes are making contact, then try again."
         )
 
     return {
@@ -123,3 +148,27 @@ def run_eeg_calibration_from_blocks(user_id: str, session_id: str, blocks_sample
         "firebase_enabled": firebase.enabled,
         "session_state": {"engine": engine, "firebase": firebase, "csv_logger": csv_logger, "score_history": []},
     }
+
+
+def run_eeg_threshold_from_blocks(session_state: dict, blocks_samples: list[list[BipolarRawSample]]) -> dict:
+    """Scores deliberate high-load task blocks against the ALREADY-
+    CALIBRATED engine from this session's session_state (see
+    run_eeg_calibration_from_blocks()'s return shape / app.py's
+    eeg_sessions dict) and computes/saves this user's personal
+    high_load_p -- called by eeg_calibration_capture.py's on-demand
+    run_eeg_threshold_capture(), the only caller (POST
+    /calibrate/threshold/start's background worker)."""
+    engine = session_state["engine"]
+    firebase = session_state["firebase"]
+
+    for samples in blocks_samples:
+        engine.score_threshold_task_block(samples)
+
+    outcome = engine.finalize_personal_threshold()
+    if outcome["status"] == "ok":
+        save_user_personal_threshold(firebase.user_id, outcome["personal_high_load_p"])
+
+    # Written regardless of status (including "not_separated") -- see
+    # push_threshold_result()'s docstring (firebase_service.py).
+    firebase.push_threshold_result(outcome)
+    return outcome

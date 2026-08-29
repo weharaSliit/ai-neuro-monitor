@@ -22,6 +22,7 @@ import PhenotypingSignalDetailScreen from './modules/phenotyping/screens/Phenoty
 import PhenotypingSignalHistoryScreen from './modules/phenotyping/screens/PhenotypingSignalHistoryScreen';
 import PhenotypingAlertDetailScreen from './modules/phenotyping/screens/PhenotypingAlertDetailScreen';
 import PhenotypingOnboardingScreen from './modules/phenotyping/screens/PhenotypingOnboardingScreen';
+import PhenotypingAnalysisScreen from './modules/phenotyping/screens/PhenotypingAnalysisScreen';
 import { AppContext } from './modules/physiological/screens/AppState';
 import { ThemeProvider, useTheme } from './modules/physiological/config/ThemeContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -41,21 +42,21 @@ const linking = {
       Physiological: {
         path: '',
         screens: {
-          Fusion:       'fusion-tab',
-          Phenotyping:  'phenotyping-tab',
+          Fusion: 'fusion-tab',
+          Phenotyping: 'phenotyping-tab',
         },
       },
-      Calibration:            'calibration',
-      RingSummary:            'ring',
-      EegSummary:             'eeg',
-      EmaDetail:              'ema',
-      PSS4:                   'pss4',
-      Profile:                'profile',
-      PhenotypingEma:         'phenotyping-ema',
-      PhenotypingSignalDetail:  'phenotyping-signal',
+      Calibration: 'calibration',
+      RingSummary: 'ring',
+      EegSummary: 'eeg',
+      EmaDetail: 'ema',
+      PSS4: 'pss4',
+      Profile: 'profile',
+      PhenotypingEma: 'phenotyping-ema',
+      PhenotypingSignalDetail: 'phenotyping-signal',
       PhenotypingSignalHistory: 'phenotyping-signal-history',
-      PhenotypingAlertDetail:   'phenotyping-alert',
-      PhenotypingOnboarding:    'phenotyping-onboarding',
+      PhenotypingAlertDetail: 'phenotyping-alert',
+      PhenotypingOnboarding: 'phenotyping-onboarding',
     },
   },
 };
@@ -85,8 +86,20 @@ function RootNavigator() {
   // goes straight to Physiological like normal.
   const initialRoute = !user ? 'Welcome' : (user.isNewUser ? 'AccountSetup' : 'Physiological');
 
+  // `key={phase}` is load-bearing, not decoration: React Navigation only
+  // honors initialRouteName on a Stack.Navigator's FIRST mount -- it's the
+  // SAME navigator instance across register()/completeOnboarding() (only
+  // its Stack.Screen children below swap based on `user`), so a
+  // recomputed initialRoute above would otherwise silently never take
+  // effect (a well-documented React Navigation gotcha). Keying on the
+  // auth phase forces a real unmount+remount exactly when initialRoute
+  // needs to change (auth -> onboarding -> app), so e.g. a fresh
+  // registration actually lands on AccountSetup instead of wherever the
+  // stack happened to already be.
+  const phase = !user ? 'auth' : (user.isNewUser ? 'onboarding' : 'app');
+
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }} initialRouteName={initialRoute}>
+    <Stack.Navigator key={phase} screenOptions={{ headerShown: false }} initialRouteName={initialRoute}>
       {user ? (
         <>
           {/* User path: Physiological's 2-tab bar (Overview/Phenotyping --
@@ -163,6 +176,11 @@ function RootNavigator() {
             component={PhenotypingOnboardingScreen}
             options={{ headerShown: true, title: 'Set Up Tracking' }}
           />
+          <Stack.Screen
+            name="PhenotypingAnalysis"
+            component={PhenotypingAnalysisScreen}
+            options={{ headerShown: false, title: 'Pattern Charts' }}
+          />
         </>
       ) : (
         <>
@@ -181,10 +199,10 @@ function ThemedStatusBar() {
 }
 
 export default function App() {
-  const [lastSessionId,   setLastSessionId]   = useState(null);
+  const [lastSessionId, setLastSessionId] = useState(null);
 
   const sharedState = {
-    lastSessionId,   setLastSessionId,
+    lastSessionId, setLastSessionId,
   };
 
   return (

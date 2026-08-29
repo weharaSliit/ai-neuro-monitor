@@ -38,7 +38,7 @@ from backend.physiological.firebase_service import (
 )
 from backend.physiological.predictor import (
     predict_window, predict_raw,
-    feature_cols, StressStateMachine
+    feature_cols, StressStateMachine, STRESS_DECISION_THRESHOLD
 )
 from backend.physiological.extract_features import (
     extract_features, compute_signal_quality
@@ -213,12 +213,19 @@ def calibrate_threshold_start():
     _threshold_sessions[user_id] = {'status': 'capturing'}
 
     def on_progress(status, extra):
-        entry = {'status': status}
         if status == 'error':
-            entry['error'] = extra.get('message', 'Unknown error')
-        else:
-            entry.update(extra)
-            entry['status'] = status
+            entry = {'status': 'error', 'error': extra.get('message', 'Unknown error')}
+        elif status == 'done':
+            # extra IS run_task_calibration_capture()'s outcome dict, which
+            # already carries its own semantic 'status' ('ok'/'not_separated')
+            # -- that must win over the generic phase-status 'done', not get
+            # overwritten by it (an earlier version of this line did
+            # entry.update(extra) THEN entry['status']=status, which clobbered
+            # 'ok'/'not_separated' back to 'done' every time, so the frontend
+            # could never actually see a successful personalization).
+            entry = {'status': status, **extra}
+        else:  # 'capturing' / 'window_skipped' / 'saving'
+            entry = {'status': status, **extra}
         _threshold_sessions[user_id] = entry
 
     def worker():
@@ -349,6 +356,12 @@ def predict():
         result = dict(result)
         result['prediction'] = 1 if result['prob_stress'] > personal_threshold else 0
         result['label'] = STRESS_LABELS[result['prediction']]
+    # This user's EFFECTIVE threshold either way -- passed to
+    # save_fusion_en_rtdb() below for the fusion engine's own
+    # weighted-threshold combination (see fusion_engin.py::
+    # compute_realtime_multimodal_fusion()), alongside EEG's own
+    # effective_high_load_p.
+    effective_threshold = personal_threshold if personal_threshold is not None else STRESS_DECISION_THRESHOLD
 
     # ── Save structured data only ──────────────────────────────
     save_prediction(
@@ -369,7 +382,7 @@ def predict():
         result['confidence'], signal_quality,
         result['prob_normal'], result['prob_stress'],
         result['label'], result['trending_toward_stress'],
-        feat_dict
+        feat_dict, effective_threshold
     )
 
     return jsonify({
@@ -464,6 +477,11 @@ def _baseline_response(user_id):
         'age_days': age_days,
         'is_stale_soft': age_days is not None and age_days > CALIBRATION_SOFT_AGE_DAYS,
         'is_stale_hard': age_days is not None and age_days > CALIBRATION_HARD_AGE_DAYS,
+        # None until the onboarding threshold task has actually separated
+        # Rest from Task for this user (see compute_personal_stress_threshold()) --
+        # exposed here (not just written) so the Fusion dashboard can show
+        # what this user's stress threshold actually got personalized to.
+        'personal_stress_threshold': load_personal_stress_threshold(user_id),
         'baseline': {
             feature_cols[i]: {
                 'mean': float(b_mean[i]),
