@@ -170,8 +170,8 @@ export default function ProfileScreen({ navigation }) {
           </View>
           <Text style={[styles.cardSub, { color: muted }]}>
             {baseline?.exists
-              ? 'Your personal baseline is active and calibrated. Tap to recalibrate.'
-              : 'No personal baseline yet — tap to calibrate the smart ring.'}
+              ? 'Your Ring baseline is active and calibrated. Tap to recalibrate Ring + EEG.'
+              : 'No personal baseline yet — tap to calibrate your Ring and EEG headband.'}
           </Text>
         </Card>
 
