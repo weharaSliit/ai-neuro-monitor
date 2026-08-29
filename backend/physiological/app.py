@@ -38,7 +38,7 @@ from backend.physiological.firebase_service import (
 )
 from backend.physiological.predictor import (
     predict_window, predict_raw,
-    feature_cols, StressStateMachine
+    feature_cols, StressStateMachine, STRESS_DECISION_THRESHOLD
 )
 from backend.physiological.extract_features import (
     extract_features, compute_signal_quality
@@ -356,6 +356,12 @@ def predict():
         result = dict(result)
         result['prediction'] = 1 if result['prob_stress'] > personal_threshold else 0
         result['label'] = STRESS_LABELS[result['prediction']]
+    # This user's EFFECTIVE threshold either way -- passed to
+    # save_fusion_en_rtdb() below for the fusion engine's own
+    # weighted-threshold combination (see fusion_engin.py::
+    # compute_realtime_multimodal_fusion()), alongside EEG's own
+    # effective_high_load_p.
+    effective_threshold = personal_threshold if personal_threshold is not None else STRESS_DECISION_THRESHOLD
 
     # ── Save structured data only ──────────────────────────────
     save_prediction(
@@ -376,7 +382,7 @@ def predict():
         result['confidence'], signal_quality,
         result['prob_normal'], result['prob_stress'],
         result['label'], result['trending_toward_stress'],
-        feat_dict
+        feat_dict, effective_threshold
     )
 
     return jsonify({
