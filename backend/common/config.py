@@ -70,7 +70,14 @@ AUTH_TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 30  # 30 days
 
 
 #  App settings
-N_BASELINE_WIN    = 3    # windows for personal baseline
+N_BASELINE_WIN    = 2    # windows for personal baseline -- SETTLE_SEC(30s) +
+                          # 2*WINDOW_SEC(60s) = 150s (2.5min), down from 3
+                          # windows/210s. Tradeoff: baseline mean/std is
+                          # computed from 2 independent samples instead of 3
+                          # (~22% wider margin of error per-feature), traded
+                          # against meaningfully better odds of completing
+                          # calibration in one sitting without a mid-capture
+                          # contact/connectivity dropout forcing a restart.
 EMA_ALPHA         = 0.2  # EMA learning rate
 
 # Ring / MQTT — single source of truth. Previously duplicated as literals
