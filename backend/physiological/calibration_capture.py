@@ -172,6 +172,16 @@ def save_calibration_windows(user_id, raw_windows):
     if len(raw_windows) == 0:
         raise ValueError('No windows provided')
 
+    # Step-by-step prints -- this function does several Firebase Admin SDK
+    # calls (baseline_exists, load_baseline, save_baseline_adaptation,
+    # save_baseline, save_resting_scores below), none of which have an
+    # application-level timeout; a network hiccup reaching Firebase
+    # specifically (as opposed to MQTT/EMQX, a completely separate service)
+    # could hang any one of them indefinitely with nothing to show for it.
+    # These markers turn "stuck at 2/2, no idea why" into "stuck exactly
+    # here" from whatever gets pasted next, instead of needing a precise
+    # log search for one specific line.
+    print(f"[calibrate {user_id}] save: extracting features from {len(raw_windows)} window(s)...")
     feature_rows = []
     for i, w in enumerate(raw_windows):
         features_2d, motion_rejected, feat_dict, hrv_is_fallback = extract_features(
@@ -195,11 +205,14 @@ def save_calibration_windows(user_id, raw_windows):
                 f'(check ring contact/fit and retry)'
             )
         feature_rows.append(features_2d[0])
+    print(f"[calibrate {user_id}] save: features extracted, computing baseline mean/std...")
 
     windows_array = np.array(feature_rows)
     b_mean, b_std = compute_baseline(windows_array)
+    print(f"[calibrate {user_id}] save: baseline computed, checking for an existing one (Firebase read)...")
 
     if baseline_exists(user_id):
+        print(f"[calibrate {user_id}] save: existing baseline found, loading it for EMA blend (Firebase read)...")
         old_mean, old_std = load_baseline(user_id, feature_cols)
         if old_mean is not None:
             new_mean, b_std = update_baseline_ema(old_mean, old_std, b_mean, b_std)
@@ -216,10 +229,13 @@ def save_calibration_windows(user_id, raw_windows):
             # reconstructed client-side from raw numbers.
             summary = build_ema_summary(old_mean, new_mean, feature_cols)
             interpretation = interpret_ema_change(old_mean, new_mean, feature_cols)
+            print(f"[calibrate {user_id}] save: writing EMA adaptation record (Firebase write)...")
             save_baseline_adaptation(user_id, summary['features'], interpretation, EMA_ALPHA)
             b_mean = new_mean
 
+    print(f"[calibrate {user_id}] save: writing baseline to Firebase (save_baseline)...")
     save_baseline(user_id, b_mean, b_std, feature_cols)
+    print(f"[calibrate {user_id}] save: baseline write done.")
 
     # Resting prob_stress per window, via predict_window() -- the SAME
     # baseline-normalized scoring path /predict actually uses (not
@@ -229,14 +245,17 @@ def save_calibration_windows(user_id, raw_windows):
     # a given deploy (see predictor.py's own startup warning) without that
     # breaking baseline calibration itself, which doesn't need the model.
     try:
+        print(f"[calibrate {user_id}] save: scoring resting windows for the personal-threshold task...")
         resting_scores = [
             predict_window(windows_array[i:i + 1], b_mean, b_std)['prob_stress']
             for i in range(len(windows_array))
         ]
         save_resting_scores(user_id, resting_scores)
-    except Exception:
-        pass
+        print(f"[calibrate {user_id}] save: resting scores saved.")
+    except Exception as e:
+        print(f"[calibrate {user_id}] save: resting-score scoring failed (non-fatal, baseline already saved): {e}")
 
+    print(f"[calibrate {user_id}] save: complete.")
     return {
         'success':      True,
         'user_id':      user_id,
