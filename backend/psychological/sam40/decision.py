@@ -97,6 +97,41 @@ def compute_baseline_shift(resting_scores: list[float]) -> float | None:
     return max(-MAX_THRESHOLD_SHIFT, min(MAX_THRESHOLD_SHIFT, shift))
 
 
+def compute_personal_threshold(resting_scores: list[float], task_scores: list[float]) -> float | None:
+    """Personal high_load_p from a deliberate onboarding task: a short,
+    known-high-load period (e.g. a timed mental-arithmetic quiz) captured
+    right after resting-baseline calibration. threshold = the midpoint
+    between this user's own resting mean and their own task mean -- a
+    personal Rest-vs-Task cut, same spirit as the population nested-LOSO
+    threshold selection (scripts/nested_threshold_selection.py) but n=this
+    user's own blocks instead of 40 SAM40 subjects.
+
+    Returns None (caller should keep the population threshold_set_B
+    default) if the two groups aren't separated by at least
+    MAX_THRESHOLD_SHIFT (~0.11) -- reusing that existing, already-derived
+    constant as the noise floor here too, rather than inventing a second
+    arbitrary one: if a user's task-induced rise is smaller than the
+    largest shift compute_baseline_shift() would ever apply for baseline
+    personalization, it's not clearly distinguishable from resting noise
+    (e.g. a task block failed to actually induce load, or the model
+    doesn't discriminate well for this individual -- see this project's
+    own LOSO finding that per-subject AUC ranges 0.07-1.00).
+
+    Clamped to [POPULATION_P5, POPULATION_P95] so one wild task score
+    can't produce a threshold outside the range this project has ever
+    actually observed."""
+    if len(resting_scores) < 1 or len(task_scores) < 1:
+        return None
+
+    resting_mean = float(np.mean(resting_scores))
+    task_mean = float(np.mean(task_scores))
+    if task_mean - resting_mean < MAX_THRESHOLD_SHIFT:
+        return None
+
+    midpoint = (resting_mean + task_mean) / 2.0
+    return max(POPULATION_P5, min(POPULATION_P95, midpoint))
+
+
 def compute_states(series: pd.DataFrame, thresholds: DecisionThresholds = DecisionThresholds()) -> pd.DataFrame:
     """series: rows ordered by time, columns calibrated_p, spectral_slope, theta_ratio.
     Returns series with added boolean/flag columns for each trigger condition.

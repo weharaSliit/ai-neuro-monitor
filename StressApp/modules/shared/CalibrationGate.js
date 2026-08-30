@@ -1,39 +1,24 @@
-// ============================================================
-// CalibrationGate.js
-//
-// Combined Ring + EEG calibration-freshness check, per-plan (see
-// C:\Users\weha1\.claude\plans\zany-humming-scone.md, section 1):
-//   - Neither modality ever calibrated (or both now hard-stale, >30 days)
-//     -> blocking prompt, reachable at any time, not skippable.
-//   - At least one modality fresh or only soft-stale (<=30 days) -> not
-//     blocking; a dismissible per-session banner nudges renewal if either
-//     side is past the 7-day soft mark.
-//   - A service being unreachable (Render cold start, offline) is treated
-//     as "unknown", never as "not calibrated" -- so a network hiccup alone
-//     can never lock a user out. Only a definite response (calibrated:false
-//     or is_stale_hard:true) counts toward blocking.
-//
-// Ring's own manual calibration flow already exists
-// (modules/physiological/screens/CalibrationScreen.js, POST
-// /calibrate/start + poll /calibrate/status). EEG now has the same shape
-// (backend/psychological/app.py's POST /calibrate/start + GET
-// /calibrate/status), triggered together with Ring's from one screen --
-// modules/relaxation_guide/src/games/BreathingLightGame.js's Calibrate --
-// Calm Breathing flow, reached via the Relaxation Guide module. No
-// automatic calibration happens anymore on either side.
-// ============================================================
-
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
-import ScreenBackground from './ScreenBackground';
-import Card from './Card';
-import Button from './Button';
-import Icon, { NAMES } from './Icon';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import axios from 'axios';
+import { ref, get, onValue, off, query, orderByChild, limitToLast } from 'firebase/database';
 import { useTheme } from '../physiological/config/ThemeContext';
-import { useAuth } from '../../context/AuthContext';
 import physiologicalApi from '../physiological/api/client';
+import { API_BASE, DEVICE_ID } from '../physiological/config/config';
 import { eegClient } from './eegApiClient';
+
+const DEVICE_POLL_MS = 5000;
+// The backend no longer pushes a ~1s raw live_raw preview (raw EEG samples
+// are never sent to Firebase at all now -- see backend/psychological/
+// app.py's /predict route) -- EEG liveness is read from the latest
+// per-block derived-output record instead (psychological/{userId}/
+// {sessionId}/{window}, written once per BLOCK_SEC=25s block, skipped
+// blocks included -- see make_eeg_output_record()). 40s, not 15s: the
+// freshness window has to comfortably exceed the real ~25s write cadence
+// (plus network/processing jitter) or this would flap "offline" between
+// every normal block, unlike the old 1s live_raw cadence that 15s was
+// originally sized against.
+const EEG_LATEST_WINDOW_FRESH_SEC = 40;
 
 async function fetchSide(fn) {
   try {
@@ -44,10 +29,6 @@ async function fetchSide(fn) {
   }
 }
 
-// Shared by CalibrationGate (blocking decision) and CalibrationBanner's
-// renewal nudge (non-blocking, shown on the Overview/Fusion landing tab) --
-// one fetch, two consumers, so the two never disagree about what "stale"
-// means.
 export function useCalibrationSummary(userId, token) {
   const [state, setState] = useState({ loading: true, ring: null, eeg: null });
 
@@ -76,9 +57,6 @@ export function useCalibrationSummary(userId, token) {
 
   const { loading, ring, eeg } = state;
   const known = [ring, eeg].filter((s) => s && s.ok);
-  // Both sides unreachable -> "unknown", never blocks by itself (see file
-  // header). Otherwise: blocking only if every side we actually heard back
-  // from is either never-calibrated or past the hard 30-day cutoff.
   const blocking = !loading && known.length > 0
     && known.every((s) => !s.exists || s.is_stale_hard);
   const softStaleRing = !loading && ring?.ok && ring.exists && ring.is_stale_soft && !ring.is_stale_hard;
@@ -87,50 +65,151 @@ export function useCalibrationSummary(userId, token) {
   return { loading, ring, eeg, blocking, softStaleRing, softStaleEeg, refresh };
 }
 
-// Concrete age + days-remaining-until-the-30-day-hard-cutoff, instead of
-// the old vague "over a week old" -- age_days/is_stale_soft/is_stale_hard
-// all already come from the shared /baseline and /calibration/status
-// responses (see useCalibrationSummary above), so this is real data, not
-// an estimate.
+export function useDeviceStatus(userId, db) {
+  const [ringOnline, setRingOnline] = useState(false);
+  const [sessionId, setSessionId] = useState(null);
+  const [eegLastSeen, setEegLastSeen] = useState(null); // epoch seconds, from the latest block record's timestamp_end
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await axios.get(`${API_BASE}/devices/${DEVICE_ID}/status`);
+        if (!cancelled) setRingOnline((res.data?.status || 'offline') === 'online');
+      } catch {
+        if (!cancelled) setRingOnline(false);
+      }
+    };
+    poll();
+    const id = setInterval(poll, DEVICE_POLL_MS);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  useEffect(() => {
+    if (!userId || !db) return undefined;
+    const pointerRef = ref(db, 'psychological/current_session_id');
+    const handler = onValue(pointerRef, (snap) => setSessionId(snap.val() || null));
+    return () => off(pointerRef, 'value', handler);
+  }, [userId, db]);
+
+  useEffect(() => {
+    if (!userId || !sessionId || !db) {
+      setEegLastSeen(null);
+      return undefined;
+    }
+    // Latest per-block derived-output record (see EEG_LATEST_WINDOW_FRESH_SEC's
+    // comment above) -- same {window: record} shape AdminEegLiveScreen.js
+    // already queries this same way for its own "latest" read.
+    const latestRef = query(
+      ref(db, `psychological/${userId}/${sessionId}`),
+      orderByChild('window'), limitToLast(1),
+    );
+    const handler = onValue(latestRef, (snap) => {
+      const data = snap.val();
+      const latest = data ? Object.values(data)[0] : null;
+      setEegLastSeen(latest?.timestamp_end ?? null);
+    });
+    return () => off(latestRef, 'value', handler);
+  }, [userId, sessionId, db]);
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), DEVICE_POLL_MS);
+    return () => clearInterval(id);
+  }, []);
+
+  const eegOnline = eegLastSeen != null && (now / 1000 - eegLastSeen) <= EEG_LATEST_WINDOW_FRESH_SEC;
+
+  return { ringOnline, eegOnline, eegSessionId: sessionId };
+}
+export function useSignupAge(userId, db) {
+  const [signupAgeDays, setSignupAgeDays] = useState(null);
+
+  useEffect(() => {
+    if (!userId || !db) return;
+    let cancelled = false;
+    get(ref(db, `users/${userId}/created_at`))
+      .then((snap) => {
+        if (cancelled) return;
+        const createdAt = snap.val();
+        if (createdAt) {
+          setSignupAgeDays((Date.now() - new Date(createdAt).getTime()) / 86400000);
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [userId, db]);
+
+  return signupAgeDays;
+}
 function describeStale(name, side) {
   const age = Math.floor(side.age_days);
   const remaining = Math.max(0, Math.ceil(30 - side.age_days));
   return `${name} calibration is ${age} day${age === 1 ? '' : 's'} old — `
     + `renew within the next ${remaining} day${remaining === 1 ? '' : 's'} for best accuracy.`;
 }
-
-// Small dismissible nudge shown on the Overview (Fusion) landing tab --
-// never blocking, per-session dismissal only (re-appears next app open,
-// since this isn't meant to be permanently silenceable the way a real
-// "don't ask again" would be). Ring and EEG are tracked and shown
-// separately -- there's no single merged "your baseline" anywhere in this
-// backend (each modality calibrates and stores its own baseline
-// independently; the fusion engine's own session-level average is a
-// different, smaller thing -- see the "Session start" line on the Ring
-// chart), so this banner is honest about that rather than implying a
-// combined number that doesn't exist.
-export function CalibrationBanner({ userId, token }) {
+export function CalibrationBanner({ userId, token, db, navigation }) {
   const { theme, COLORS } = useTheme();
-  const { ring, eeg, softStaleRing, softStaleEeg } = useCalibrationSummary(userId, token);
+  const { loading, ring, eeg, softStaleRing, softStaleEeg } = useCalibrationSummary(userId, token);
+  const signupAgeDays = useSignupAge(userId, db);
   const [dismissed, setDismissed] = useState(false);
 
-  if (dismissed || (!softStaleRing && !softStaleEeg)) return null;
+  const neverCalibrated = !loading && ring?.ok && !ring.exists && eeg?.ok && !eeg.exists;
+  const newUserOverdue = neverCalibrated && signupAgeDays != null && signupAgeDays >= 7;
+  // Separate from age-based staleness (softStaleRing/Hard above) -- this
+  // fires even on a fresh-by-age baseline if recent live predictions have
+  // drifted meaningfully from the original resting-state mean (see
+  // compute_baseline_drift()'s docstring, backend/physiological/
+  // firebase_service.py, for exactly what this does and doesn't prove).
+  const ringDriftDetected = !loading && ring?.ok && ring.exists && ring.drift?.checked && ring.drift?.drift_detected;
+  // Same idea, EEG side -- see compute_eeg_baseline_drift()'s docstring
+  // (backend/psychological/firebase_service.py) for why EEG's reference
+  // point is its own earliest live samples rather than a stored resting
+  // mean the way Ring's is.
+  const eegDriftDetected = !loading && eeg?.ok && eeg.exists && eeg.drift?.checked && eeg.drift?.drift_detected;
+
+  if (dismissed || (!softStaleRing && !softStaleEeg && !newUserOverdue && !ringDriftDetected && !eegDriftDetected)) return null;
 
   return (
     <View style={[bannerStyles.wrap, { backgroundColor: COLORS.warning + '1a', borderColor: COLORS.warning + '55' }]}>
       <View style={{ flex: 1 }}>
-        {softStaleRing && (
-          <Text style={[bannerStyles.text, { color: theme.text }]}>{describeStale('Ring', ring)}</Text>
-        )}
-        {softStaleEeg && (
-          <Text style={[bannerStyles.text, { color: theme.text, marginTop: softStaleRing ? 4 : 0 }]}>
-            {describeStale('EEG', eeg)}
+        {newUserOverdue ? (
+          <Text style={[bannerStyles.text, { color: theme.text }]}>
+            It's been a week since you joined — set up your first calibration on the card below.
           </Text>
+        ) : (
+          <>
+            {softStaleRing && (
+              <Text style={[bannerStyles.text, { color: theme.text }]}>{describeStale('Ring', ring)}</Text>
+            )}
+            {softStaleEeg && (
+              <Text style={[bannerStyles.text, { color: theme.text, marginTop: softStaleRing ? 4 : 0 }]}>
+                {describeStale('EEG', eeg)}
+              </Text>
+            )}
+            {ringDriftDetected && (
+              <Text style={[bannerStyles.text, { color: theme.text, marginTop: (softStaleRing || softStaleEeg) ? 4 : 0 }]}>
+                Your recent Ring readings look different from your original calibration — new calibration recommended.
+              </Text>
+            )}
+            {eegDriftDetected && (
+              <Text style={[bannerStyles.text, { color: theme.text, marginTop: (softStaleRing || softStaleEeg || ringDriftDetected) ? 4 : 0 }]}>
+                Your recent EEG readings look different from your original calibration — new calibration recommended.
+              </Text>
+            )}
+          </>
         )}
       </View>
-      <TouchableOpacity onPress={() => setDismissed(true)} hitSlop={10}>
-        <Text style={[bannerStyles.dismiss, { color: COLORS.warning }]}>Dismiss</Text>
-      </TouchableOpacity>
+      <View style={{ alignItems: 'flex-end', gap: 8 }}>
+        {navigation && (
+          <TouchableOpacity onPress={() => navigation.navigate('Profile')} hitSlop={10}>
+            <Text style={[bannerStyles.dismiss, { color: COLORS.warning }]}>Calibrate →</Text>
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity onPress={() => setDismissed(true)} hitSlop={10}>
+          <Text style={[bannerStyles.dismiss, { color: COLORS.warning }]}>Dismiss</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -142,89 +221,4 @@ const bannerStyles = StyleSheet.create({
   },
   text: { fontSize: 12, fontWeight: '600', marginRight: 10, lineHeight: 17 },
   dismiss: { fontSize: 12, fontWeight: '800', paddingTop: 1 },
-});
-
-// The blocking full-screen prompt itself -- registered as a Stack.Screen in
-// App.js and chosen as initialRouteName when useCalibrationSummary(...)
-// .blocking is true (see App.js's RootNavigator).
-export default function CalibrationGate({ navigation }) {
-  const { theme, COLORS } = useTheme();
-  const { user, token } = useAuth();
-  const userId = user?.userId;
-  const { loading, ring, eeg, blocking, refresh } = useCalibrationSummary(userId, token);
-
-  // Re-check whenever this screen regains focus (e.g. returning from
-  // CalibrationScreen after finishing a Ring calibration, or from the EEG
-  // tab after a session auto-calibrated) -- once no longer blocking, move
-  // on to the app automatically rather than making the user tap a button.
-  useFocusEffect(useCallback(() => { refresh(); }, [refresh]));
-
-  useEffect(() => {
-    if (!loading && !blocking) {
-      navigation.replace('Physiological');
-    }
-  }, [loading, blocking, navigation]);
-
-  if (loading || !blocking) {
-    return (
-      <ScreenBackground>
-        <View style={styles.centerFill}>
-          <ActivityIndicator color={COLORS.brand} />
-        </View>
-      </ScreenBackground>
-    );
-  }
-
-  const everCalibrated = (ring?.ok && ring.exists) || (eeg?.ok && eeg.exists);
-
-  return (
-    <ScreenBackground>
-      <View style={styles.container}>
-        <Text style={[styles.title, { color: theme.text }]}>
-          {everCalibrated ? 'Time to Renew Calibration' : 'Let\u2019s Calibrate First'}
-        </Text>
-        <Text style={[styles.subtitle, { color: theme.textMuted }]}>
-          {everCalibrated
-            ? 'Your last calibration is over a month old, so predictions may drift from your real baseline. Renew with either Ring or EEG to continue.'
-            : 'Before your first session, we need a personal resting baseline from either your Ring or your EEG headset — whichever you have on hand.'}
-        </Text>
-
-        <Card elevated>
-          <View style={styles.cardHeaderRow}>
-            <Icon name={NAMES.my} size={18} color={COLORS.brand} />
-            <Text style={[styles.cardTitle, { color: theme.text }]}>Ring</Text>
-          </View>
-          <Text style={[styles.cardSub, { color: theme.textMuted }]}>
-            {ring?.ok && ring.exists
-              ? `Last calibrated ${Math.floor(ring.age_days)} days ago.`
-              : 'No baseline on file yet.'}
-          </Text>
-          <Button label="Calibrate Ring →" onPress={() => navigation.navigate('Calibration')} variant="primary" />
-        </Card>
-
-        <Card elevated>
-          <View style={styles.cardHeaderRow}>
-            <Icon name={NAMES.eeg} size={18} color={COLORS.warning} />
-            <Text style={[styles.cardTitle, { color: theme.text }]}>EEG</Text>
-          </View>
-          <Text style={[styles.cardSub, { color: theme.textMuted }]}>
-            {eeg?.ok && eeg.exists
-              ? `Last calibrated ${Math.floor(eeg.age_days)} days ago.`
-              : 'Run Calibrate — Calm Breathing from the Relaxation Guide to set an EEG baseline.'}
-          </Text>
-          <Button label="Open EEG →" onPress={() => navigation.navigate('EegSummary')} variant="secondary" />
-        </Card>
-      </View>
-    </ScreenBackground>
-  );
-}
-
-const styles = StyleSheet.create({
-  centerFill: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  container: { flex: 1, padding: 24, justifyContent: 'center' },
-  title: { fontSize: 24, fontWeight: '900', marginBottom: 8, textAlign: 'center' },
-  subtitle: { fontSize: 13, lineHeight: 19, textAlign: 'center', marginBottom: 24 },
-  cardHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
-  cardTitle: { fontSize: 16, fontWeight: '800' },
-  cardSub: { fontSize: 12, marginTop: 6, marginBottom: 14, lineHeight: 18 },
 });

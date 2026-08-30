@@ -30,6 +30,23 @@ def bipolar_code_to_microvolts(code: np.ndarray | int) -> np.ndarray:
     return np.asarray(code, dtype=np.float64) * BIPOLAR_UV_PER_COUNT
 
 
+def microvolts_to_bipolar_code(uv: np.ndarray | float) -> np.ndarray:
+    """Proper inverse of bipolar_code_to_microvolts() -- NOT the same as
+    microvolts_to_code() above, which inverts code_to_microvolts() instead
+    (GAIN=12/VREF_VOLTS, the 2-channel path's constants). The bipolar path
+    uses its own BIPOLAR_GAIN=6 and a 2x differential-signal factor
+    (BIPOLAR_UV_PER_COUNT ~= 0.0961538, ~4x code_to_microvolts()'s
+    per-count scale) -- round-tripping a real bipolar uV value through
+    microvolts_to_code() -> bipolar_code_to_microvolts() silently produces
+    a ~4x-inflated value instead of recovering the original, which is
+    exactly wrong for feeding real/synthetic bipolar uV data back into
+    BipolarRawSample.code for testing (see test_realtime_pipeline.py and
+    any script decoding a real device's already-uV-converted debug output
+    back into codes)."""
+    code = np.asarray(uv, dtype=np.float64) / BIPOLAR_UV_PER_COUNT
+    return np.round(code).astype(np.int64)
+
+
 # Coarse, cheap early-reject threshold -- checked on the RAW (unfiltered)
 # bipolar signal, before any spike-removal/resample/filter work runs, so an
 # unambiguous hardware fault (railed electrode, disconnected reference) is

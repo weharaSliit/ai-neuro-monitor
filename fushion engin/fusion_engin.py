@@ -10,7 +10,7 @@ import pandas as pd
 _HERE = Path(__file__).resolve().parent
 
 
-MODALITIES = ["eeg", "hrv_gsr", "behav"]
+MODALITIES = ["eeg", "hrv_gsr"]
 NUMERIC_SUFFIXES = ["prob", "conf", "model_acc", "signal_quality"]
 
 STALE_MAX_AGE_S = 30.0    # a modality's reading older than this is "stale"
@@ -164,14 +164,14 @@ def flag_usable(df: pd.DataFrame) -> pd.DataFrame:
 
 def compute_reliability_weight(df: pd.DataFrame) -> pd.DataFrame:
     """signal_quality_eeg is on a 0-100 scale (SignalQualityGate,
-    backend/psychological/realtime/quality_gate.py) while every other
-    modality's signal_quality is already 0-1 -- scaled here by each
-    modality's own real max (not an arbitrary tuning constant) so EEG's
-    weight isn't ~100x inflated whenever it has a real value, matching the
-    fix compute_realtime_multimodal_fusion() already applies on the live
-    path (see that function's docstring). This stage previously multiplied
+    backend/psychological/realtime/quality_gate.py) while HRV/GSR's
+    signal_quality is already 0-1 -- scaled here by each modality's own real
+    max (not an arbitrary tuning constant) so EEG's weight isn't ~100x
+    inflated whenever it has a real value, matching the fix
+    compute_realtime_multimodal_fusion() already applies on the live path
+    (see that function's docstring). This stage previously multiplied
     signal_quality_eeg raw, unlike the live path, silently double-counting
-    EEG relative to HRV/GSR and phenotyping in any batch/offline run.
+    EEG relative to HRV/GSR in any batch/offline run.
     """
     df = df.copy()
     for m in MODALITIES:
@@ -227,34 +227,32 @@ def compute_fusion_for_records(rows: list[dict]) -> list[dict]:
 #  pandas/DataFrame batch path above, which stays as-is for offline
 #  Firestore analysis).
 #
+#  (Behavioral/phenotyping was dropped as a fusion input -- MODALITIES is
+#  EEG + HRV/GSR only now; backend/phenotyping_behavior/ keeps writing its
+#  own predictions elsewhere, just not into this fusion.)
+#
 #  Fixes the scale mismatch compute_reliability_weight() silently had:
 #  signal_quality_eeg is a SignalQualityGate score on 0-100 (see
 #  backend/psychological/realtime/quality_gate.py), while
-#  signal_quality_hrv_gsr and signal_quality_behav are already 0.0-1.0
-#  (backend/physiological/extract_features.py::compute_signal_quality,
-#  backend/phenotyping_behavior/firebase_service.py's typing/scroll/apps
-#  completeness score) -- multiplying them together unnormalized let EEG's
-#  raw weight come out ~100x inflated over the other two whenever EEG
-#  actually had a real value, drowning out HRV/GSR and behavioral almost
-#  entirely regardless of their own quality/confidence. normalize_to_unit()
-#  below fixes that at the point weights are computed, not by changing what
-#  gets stored in Firebase (signal_quality_eeg stays 0-100 everywhere else
-#  it's read -- the EEG screen's own display, SignalQualityGate's GOOD/
-#  QUESTIONABLE/POOR bands -- only this function's internal math treats it
-#  as 0-1).
+#  signal_quality_hrv_gsr is already 0.0-1.0
+#  (backend/physiological/extract_features.py::compute_signal_quality) --
+#  multiplying them together unnormalized let EEG's raw weight come out
+#  ~100x inflated over HRV/GSR whenever EEG actually had a real value,
+#  drowning out HRV/GSR almost entirely regardless of its own
+#  quality/confidence. normalize_to_unit() below fixes that at the point
+#  weights are computed, not by changing what gets stored in Firebase
+#  (signal_quality_eeg stays 0-100 everywhere else it's read -- the EEG
+#  screen's own display, SignalQualityGate's GOOD/QUESTIONABLE/POOR bands --
+#  only this function's internal math treats it as 0-1).
 #
 #  model_acc is read from each modality's OWN model_acc_{m} field already
 #  present in modalities_data (written once, at the source, by each
 #  modality's own pipeline -- 0.706 for the deployed bipolar-only EEG
-#  model, 0.851 for HRV/GSR, 0.4998 for behavioral (a proxy evaluation,
-#  see BEHAVIORAL_MODEL_ACCURACY's own provenance comment); see
+#  model, 0.851 for HRV/GSR; see
 #  backend/psychological/realtime/firebase_sync.py::MODEL_ACCURACY_AUC,
-#  backend/physiological/firebase_service.py::MODEL_ACC_HRV_GSR,
-#  backend/phenotyping_behavior/firebase_service.py::BEHAVIORAL_MODEL_ACCURACY)
-#  rather than a second hardcoded constant here that could drift out of
-#  sync with the real, measured value each pipeline already reports --
-#  this note previously said "0.78 for behavioral", already-stale evidence
-#  of exactly the drift this paragraph warns about.
+#  backend/physiological/firebase_service.py::MODEL_ACC_HRV_GSR) rather
+#  than a second hardcoded constant here that could drift out of sync with
+#  the real, measured value each pipeline already reports.
 # ═══════════════════════════════════════════════════════════════════
 
 def normalize_to_unit(val, max_val: float = 1.0) -> float:
@@ -270,19 +268,87 @@ def normalize_to_unit(val, max_val: float = 1.0) -> float:
     return max(0.0, min(1.0, val / max_val))
 
 
+# A probability this close to 0 or 1 is not plausible confidence from
+# either deployed model (EEG LOSO AUC 0.706, HRV/GSR LOSO accuracy 0.851 --
+# see MODEL_ACCURACY_AUC/MODEL_ACC_HRV_GSR): reaching it requires the
+# underlying decision function to sit dozens of log-odds from center, which
+# real captured hardware sessions have shown happens only when live
+# features fall far outside the model's training distribution (EEG
+# raw_score collapsing to ~1e-37..1e-67 on real, quality-gate-PASSED
+# blocks during this project's own validation -- a domain-shift artifact,
+# not genuine certainty). 1e-6 sits comfortably below every plausible real
+# score this project has observed (0.01-0.13) and comfortably above every
+# observed underflow artifact, so it cleanly separates the two without
+# touching either model's own calibration.
+EXTREME_PROB_EPS = 1e-6
+
+
+def _is_implausibly_extreme(prob: float) -> bool:
+    return prob < EXTREME_PROB_EPS or prob > (1.0 - EXTREME_PROB_EPS)
+
+
 def compute_realtime_multimodal_fusion(modalities_data: dict) -> dict:
     """
     Reliability-weighted fusion of one already-bucketed fusion_en window
-    (see fusion_window_key()) across EEG, HRV/GSR, and behavioral streams,
-    for fusion_live_session.py's live poll loop.
+    (see fusion_window_key()) across EEG and HRV/GSR streams, for
+    fusion_live_session.py's live poll loop.
 
     modalities_data: {m: {"prob": ..., "confidence": ..., "signal_quality":
-    ..., "model_acc": ...}} for m in MODALITIES -- a modality dict missing
-    or with prob=None is treated as not reporting this window (weight 0),
-    same effect as handle_missing_values() has on the batch path above.
+    ..., "model_acc": ..., "threshold": ...}} for m in MODALITIES -- a
+    modality dict missing or with prob=None is treated as not reporting
+    this window (weight 0), same effect as handle_missing_values() has on
+    the batch path above. A modality reporting an IMPLAUSIBLY EXTREME prob
+    (see EXTREME_PROB_EPS/_is_implausibly_extreme()) gets the same
+    treatment -- weight 0, excluded from active_modalities -- since an
+    out-of-distribution artifact dominating the fused result under a false
+    appearance of certainty is worse than that modality simply not having
+    reported this window at all.
+
+    "threshold" is that modality's own EFFECTIVE decision boundary at the
+    moment this reading was made -- personal_high_load_p if this user has
+    completed EEG's onboarding threshold task, else the population
+    high_load_p default (same for HRV/GSR's personal_stress_threshold /
+    STRESS_DECISION_THRESHOLD); see make_eeg_fusion_record() and
+    save_fusion_en_rtdb()'s callers. fused_stress_label used to compare
+    fused_prob against a flat 0.5 -- disconnected from either modality's
+    own calibrated threshold (~0.79 EEG, ~0.71 HRV/GSR population defaults,
+    let alone either one's real personal value). fused_threshold below is
+    instead the SAME reliability-weighted combination already used for
+    fused_prob itself, just applied to each modality's threshold instead
+    of its probability -- renormalized across only the modalities that
+    both contributed weight AND supplied a threshold, so a modality
+    temporarily missing a threshold doesn't silently drag the fused
+    threshold toward 0.
+
+    WHY a weighted COMBINATION of two still-separate probabilities, rather
+    than either averaging blindly or collapsing them into one derived
+    signal, per the interaction between EEG cognitive load and HRV/GSR
+    autonomic arousal this fusion is modeling:
+      - Shared response: a genuinely high-load mental task (e.g. this
+        project's own onboarding arithmetic threshold task,
+        EegThresholdTaskScreen.js) drives sympathetic activation too --
+        cognitive load and autonomic arousal tend to rise TOGETHER under
+        real stress, which is exactly why reliability weighting lets
+        whichever modality currently has the stronger/cleaner signal
+        dominate fused_prob rather than needing both to agree before
+        registering anything.
+      - Resource competition: sustained high arousal can itself degrade
+        cognitive performance (and vice versa), so the two are not
+        independent noise sources being averaged down -- they're expected
+        to correlate under load, which modality_concordance below makes
+        explicit instead of silently burying it inside one blended number.
+      - Independent effects: the two can still diverge -- they act through
+        separate physiological/mental pathways and don't always move
+        together (e.g. elevated arousal with no measurable EEG load
+        change, or the reverse). This is exactly why they're kept as two
+        separately-tracked, reliability-weighted probabilities instead of
+        one merged pre-fusion feature: a real divergence stays visible
+        (see active_modalities/modality_weights) rather than being averaged
+        away before it could ever be seen.
     """
     raw_weights = {}
     probs = {}
+    thresholds = {}
 
     for m in MODALITIES:
         mod_info = modalities_data.get(m) or {}
@@ -290,6 +356,7 @@ def compute_realtime_multimodal_fusion(modalities_data: dict) -> dict:
         if prob is None:
             raw_weights[m] = 0.0
             probs[m] = 0.0
+            thresholds[m] = None
             continue
 
         conf = normalize_to_unit(mod_info.get("confidence"), 1.0)
@@ -299,20 +366,79 @@ def compute_realtime_multimodal_fusion(modalities_data: dict) -> dict:
 
         raw_weights[m] = quality * conf * acc
         probs[m] = normalize_to_unit(prob, 1.0)
+        thresholds[m] = mod_info.get("threshold")
+
+        # Plausibility gate -- see EXTREME_PROB_EPS's docstring. Zeroing the
+        # WEIGHT (not probs[m] itself, which stays as reported for anyone
+        # inspecting the raw record) means this modality contributes
+        # nothing to fused_prob/fused_threshold and is excluded from
+        # active_modalities/concordance below, identical to a missing prob.
+        if _is_implausibly_extreme(probs[m]):
+            raw_weights[m] = 0.0
 
     total_weight = sum(raw_weights.values())
     if total_weight > 1e-9:
         norm_weights = {m: w / total_weight for m, w in raw_weights.items()}
         fused_prob = sum(probs[m] * norm_weights[m] for m in MODALITIES)
+
+        threshold_capable = [m for m in MODALITIES if raw_weights[m] > 0 and thresholds[m] is not None]
+        if threshold_capable:
+            tw_total = sum(raw_weights[m] for m in threshold_capable)
+            fused_threshold = sum(thresholds[m] * (raw_weights[m] / tw_total) for m in threshold_capable)
+        else:
+            # Only reachable if every active modality is missing a
+            # threshold value entirely (shouldn't happen once both sides'
+            # /predict routes always supply their own effective threshold,
+            # personal or population) -- 0.5 kept as a last-resort fallback,
+            # not the everyday behavior.
+            fused_threshold = 0.5
     else:
         norm_weights = {m: 0.0 for m in MODALITIES}
         fused_prob = None
+        fused_threshold = None
+
+    # modality_concordance -- makes the shared-response / independent-effects
+    # tension explicit rather than letting the weighted average silently
+    # paper over it: each active, threshold-capable modality is "elevated"
+    # if ITS OWN prob is at/above ITS OWN effective threshold (not a shared
+    # cutoff). All elevated (or all not) = 'concordant' -- EEG and HRV/GSR
+    # agreeing is exactly what a genuine shared stress response predicts.
+    # A split = 'discordant' -- not an error, just the independent-pathway
+    # case surfacing (e.g. autonomic arousal up with no matching cognitive-
+    # load rise, or vice versa) -- worth a caller's attention even though
+    # fused_prob/fused_threshold above already handle it numerically via
+    # reliability weighting. 'insufficient_data' when fewer than two
+    # modalities are both active and threshold-capable this window, since
+    # concordance/discordance isn't a meaningful comparison with only one
+    # (or zero) real reading. Purely additive/observational -- does NOT
+    # feed back into fused_prob/fused_threshold above.
+    concordance_capable = [m for m in MODALITIES if raw_weights[m] > 0 and thresholds[m] is not None]
+    modality_elevated = {m: (probs[m] >= thresholds[m]) for m in concordance_capable}
+    if len(concordance_capable) >= 2:
+        modality_concordance = "concordant" if len(set(modality_elevated.values())) == 1 else "discordant"
+    else:
+        modality_concordance = "insufficient_data"
+
+    # Diagnostic only -- which modalities reported a real prob but got
+    # gated out for being implausibly extreme (distinct from simply not
+    # reporting at all, which active_modalities' absence already covers).
+    # Recomputed from probs[m] (not raw_weights[m]==0, which is also true
+    # for a modality that never reported) so this doesn't conflate the two
+    # very different reasons a modality can end up excluded.
+    implausible_modalities = [
+        m for m in MODALITIES
+        if (modalities_data.get(m) or {}).get("prob") is not None and _is_implausibly_extreme(probs[m])
+    ]
 
     return {
         "fused_stress_probability": fused_prob,
-        "fused_stress_label": None if fused_prob is None else ("HIGH_STRESS" if fused_prob >= 0.5 else "NORMAL"),
+        "fused_stress_threshold": fused_threshold,
+        "fused_stress_label": None if fused_prob is None else ("HIGH_STRESS" if fused_prob >= fused_threshold else "NORMAL"),
         "active_modalities": [m for m in MODALITIES if raw_weights[m] > 0],
         "modality_weights": norm_weights,
+        "modality_concordance": modality_concordance,
+        "modality_elevated": modality_elevated,
+        "implausible_modalities": implausible_modalities,
     }
 
 

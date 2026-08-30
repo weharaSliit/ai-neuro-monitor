@@ -156,7 +156,52 @@ def load_baseline_meta(user_id):
     return {'exists': True, 'updated_at': updated_at, 'age_days': age_days}
 
 
-# Session operations 
+# -- Personal stress-decision threshold (deliberate onboarding task) ------
+# Deliberately a SEPARATE node from baselines/{user_id} above, not a few
+# more keys mixed into it -- save_baseline() above does a full .set() on
+# that whole node every time the Ring is recalibrated, which would wipe
+# out resting_scores/personal_stress_threshold if they lived there too.
+# This node is owned exclusively by this feature, so .update() here is
+# always safe (nothing else ever .set()s over it).
+def save_resting_scores(user_id, resting_scores: list) -> None:
+    """Persists this baseline capture's per-window prob_stress scores (via
+    predictor.predict_window(), the SAME scoring path /predict actually
+    uses -- not predict_raw(), which the deployed pipeline never calls for
+    physiological, since it always baseline-normalizes first) -- read back
+    by run_task_calibration_capture() once the task phase runs, which may
+    be a separate later request/process from the one that captured these."""
+    ref = _ref(f'personal_thresholds/{user_id}')
+    ref.set({
+        'resting_scores': [float(s) for s in resting_scores],
+        'resting_scores_updated_at': datetime.now(timezone.utc).isoformat(),
+    })
+
+
+def load_resting_scores(user_id):
+    data = _ref(f'personal_thresholds/{user_id}').get()
+    if not data or 'resting_scores' not in data:
+        return None
+    return [float(s) for s in data['resting_scores']]
+
+
+def save_personal_stress_threshold(user_id, threshold: float) -> None:
+    """.update(), not .set() -- merges alongside resting_scores (written
+    moments earlier by save_resting_scores() above) without clobbering it."""
+    ref = _ref(f'personal_thresholds/{user_id}')
+    ref.update({
+        'personal_stress_threshold': float(threshold),
+        'threshold_updated_at': datetime.now(timezone.utc).isoformat(),
+    })
+
+
+def load_personal_stress_threshold(user_id):
+    data = _ref(f'personal_thresholds/{user_id}').get()
+    if not data or 'personal_stress_threshold' not in data:
+        return None
+    return float(data['personal_stress_threshold'])
+
+
+# Session operations
 def start_session(user_id):
     sessions_ref = _ref(f'sessions/{user_id}')
     new_session  = sessions_ref.push({
@@ -262,7 +307,7 @@ def _hrv_gsr_fusion_fields(user_id, session_id, window_idx,
                            confidence, signal_quality,
                            prob_normal, prob_stress,
                            label, trending_toward_stress,
-                           feat_dict=None):
+                           feat_dict=None, threshold=None):
     """Field-mapping for the HRV/GSR side of the fusion schema, used by
     save_fusion_en_rtdb() (Realtime Database) below. `prob_stress`
     (not prob_normal) maps to prob_hrv_gsr, matching fusion_engin.py's
@@ -304,6 +349,12 @@ def _hrv_gsr_fusion_fields(user_id, session_id, window_idx,
         'signal_quality_hrv_gsr':  float(signal_quality),
         'stress_label_hrv_gsr':    label,
         'trending_toward_stress_hrv_gsr': bool(trending_toward_stress),
+        # This user's own effective STRESS_DECISION_THRESHOLD -- personal if
+        # load_personal_stress_threshold() found one, else the population
+        # default (app.py's /predict passes whichever applied to THIS
+        # prediction). Consumed by fusion_engin.py's weighted-threshold
+        # combination alongside threshold_eeg.
+        'threshold_hrv_gsr':       float(threshold) if threshold is not None else None,
         'features_hrv_gsr': {
             'avnn':     float(feat_dict.get('AVNN', 0)),
             'sd1':      float(feat_dict.get('SD1', 0)),
@@ -336,7 +387,7 @@ def save_fusion_en_rtdb(user_id, session_id, window_idx,
                         confidence, signal_quality,
                         prob_normal, prob_stress,
                         label, trending_toward_stress,
-                        feat_dict=None):
+                        feat_dict=None, threshold=None):
     """Writes this session's HRV/GSR fusion fields (via the shared
     _hrv_gsr_fusion_fields() helper) to fusion_en/{user_id}/{session_id}/{key}
     -- user-scoped like every other per-session store, since a "session" is
@@ -351,7 +402,8 @@ def save_fusion_en_rtdb(user_id, session_id, window_idx,
     clobbering it -- RTDB's analogue of Firestore's set(doc, merge=True).
     """
     fields = _hrv_gsr_fusion_fields(user_id, session_id, window_idx, confidence, signal_quality,
-                                    prob_normal, prob_stress, label, trending_toward_stress, feat_dict)
+                                    prob_normal, prob_stress, label, trending_toward_stress, feat_dict,
+                                    threshold)
     key = fusion_window_key()
     try:
         _global_ref(f'{FUSION_EN_ROOT}/{user_id}/{session_id}/{key}').update(fields)
@@ -359,22 +411,56 @@ def save_fusion_en_rtdb(user_id, session_id, window_idx,
         print(f'[firebase] WARNING: fusion_en write failed for {user_id}/{session_id}/{key}: {e}')
 
 
-def label_session_ground_truth_rtdb(user_id, session_id, pss4_score):
-    """Backfills ground_truth_stress onto every already-written
-    fusion_en/{user_id}/{session_id}/* child for this session."""
-    ground_truth_stress = int(pss4_score > 6)
+def _backfill_ground_truth(ref_factory, root_label, user_id, session_id, fields):
+    """Shared backfill loop for label_session_ground_truth_rtdb() below --
+    reads every already-written child under a session path and merges
+    `fields` onto each. `ref_factory(path)` is either `_ref` (paths nested
+    under this service's own FIREBASE_NAMESPACE, e.g. predictions/) or
+    `_global_ref` (paths owned by another modality's own root, e.g.
+    psychological/ -- see those two helpers' own docstrings above) --
+    passed in rather than hardcoded so this one loop serves both."""
     try:
-        children = _global_ref(f'{FUSION_EN_ROOT}/{user_id}/{session_id}').get() or {}
+        path = f'{root_label}/{user_id}/{session_id}'
+        children = ref_factory(path).get() or {}
         for window_key in children:
-            _global_ref(f'{FUSION_EN_ROOT}/{user_id}/{session_id}/{window_key}').update({
-                'ground_truth_stress': ground_truth_stress,
-                'ground_truth_pss4_score': pss4_score,
-            })
-        print(f'[firebase] ground_truth_stress={ground_truth_stress} '
-              f'(PSS-4={pss4_score}) backfilled onto {len(children)} fusion_en row(s) '
+            ref_factory(f'{path}/{window_key}').update(fields)
+        print(f'[firebase] ground truth backfilled onto {len(children)} {root_label} row(s) '
               f'for {user_id}/{session_id}')
     except Exception as e:  # noqa: BLE001 -- one failed backfill shouldn't break /pss4
-        print(f'[firebase] WARNING: fusion_en ground-truth backfill failed for {user_id}/{session_id}: {e}')
+        print(f'[firebase] WARNING: {root_label} ground-truth backfill failed for {user_id}/{session_id}: {e}')
+
+
+def label_session_ground_truth_rtdb(user_id, session_id, pss4_score):
+    """Backfills ground_truth_stress/ground_truth_pss4_score onto every
+    already-written record for this session, evaluation-only (see this
+    function's callers -- never read back into training) -- across all
+    three places a window can live:
+      - fusion_en/{user_id}/{session_id}/*    the fused view (unchanged
+                                               behavior, was already here)
+      - predictions/{user_id}/{session_id}/*  the Ring's own raw prediction
+                                               log (save_prediction() above)
+      - psychological/{user_id}/{session_id}/*  EEG's own raw output log
+                                               (EegFirebaseSession.push(),
+                                               backend/psychological/
+                                               firebase_service.py) -- same
+                                               shared RTDB project/DB_URL,
+                                               just a different service's
+                                               root namespace, so a plain
+                                               _global_ref() write reaches
+                                               it fine from here.
+    So a PSS-4 answer tags a user's Ring-only and EEG-only prediction
+    history individually, not only the blended fusion_en mirror -- lets
+    each modality's own accuracy be checked against self-report
+    separately, not just the fused one.
+    """
+    ground_truth_stress = int(pss4_score > 6)
+    fields = {
+        'ground_truth_stress': ground_truth_stress,
+        'ground_truth_pss4_score': pss4_score,
+    }
+    _backfill_ground_truth(_global_ref, FUSION_EN_ROOT, user_id, session_id, fields)
+    _backfill_ground_truth(_ref, 'predictions', user_id, session_id, fields)
+    _backfill_ground_truth(_global_ref, 'psychological', user_id, session_id, fields)
 
 
 # Device connectivity (written by mqtt_bridge.py on every message,
@@ -412,6 +498,115 @@ def get_recent_sessions(user_id, limit=10):
     return ref.order_by_key().limit_to_last(
         limit
     ).get() or {}
+
+
+# Probability-scale deviation between original resting-state mean and
+# recent live mean considered a meaningful drift, not just noise.
+DRIFT_THRESHOLD = 0.15
+# How far back "recent" looks -- long enough that a few individually
+# stressful moments/sessions average out, short enough to still mean
+# "how this person has been lately," not their whole history.
+DRIFT_LOOKBACK_DAYS = 7
+# Below this many recent samples, a drift number would be too noisy to
+# act on -- report "not enough data yet" instead of a shaky verdict.
+DRIFT_MIN_SAMPLES = 10
+
+
+def compute_baseline_drift(user_id):
+    """Compares this user's original resting-state prob_stress (from
+    baseline calibration's resting_scores, personal_thresholds/{user_id})
+    against their recent live predictions' average prob_stress over the
+    last DRIFT_LOOKBACK_DAYS -- a sustained shift suggests their baseline
+    itself may no longer represent current resting physiology, even if
+    calibration age alone (is_stale_soft/hard, load_baseline_meta() below)
+    hasn't crossed its own threshold yet.
+
+    Deliberately a heuristic, not a certainty: recent predictions include
+    genuine real-world stress, not just resting moments, so someone going
+    through a stressful week would show apparent "drift" here even with a
+    perfectly accurate baseline -- there's no way to separate "baseline
+    went stale" from "this person has genuinely been stressed lately"
+    from prediction data alone. Surfaced as a recommendation prompt, not
+    an automatic action, for exactly that reason.
+    """
+    resting_scores = load_resting_scores(user_id)
+    if not resting_scores:
+        return {'checked': False}
+
+    original_mean = float(np.mean(resting_scores))
+
+    cutoff = datetime.now(timezone.utc).timestamp() - DRIFT_LOOKBACK_DAYS * 86400
+    recent_probs = []
+    sessions = get_recent_sessions(user_id, limit=20)
+    for sid in sessions:
+        preds = get_session_predictions(user_id, sid)
+        for p in preds.values():
+            ts = p.get('timestamp')
+            if not ts or p.get('prob_stress') is None:
+                continue
+            try:
+                t = datetime.fromisoformat(ts).timestamp()
+            except Exception:
+                continue
+            if t >= cutoff:
+                recent_probs.append(float(p['prob_stress']))
+
+    if len(recent_probs) < DRIFT_MIN_SAMPLES:
+        return {'checked': False}
+
+    recent_mean = float(np.mean(recent_probs))
+    drift = recent_mean - original_mean
+    return {
+        'checked': True,
+        'original_resting_mean': original_mean,
+        'recent_mean': recent_mean,
+        'drift': drift,
+        'drift_detected': abs(drift) > DRIFT_THRESHOLD,
+        'n_recent_samples': len(recent_probs),
+    }
+
+
+def compute_baseline_drift_history(user_id, n_weeks=8):
+    """Same comparison as compute_baseline_drift(), but bucketed into the
+    last n_weeks separately instead of one combined "recent" window --
+    feeds the Profile drift-trend chart (StressApp/modules/physiological/
+    screens/ProfileScreen.js) so a shift shows as a visible trend over
+    time, not just a single current verdict. A week with fewer than
+    DRIFT_MIN_SAMPLES predictions is included with drift=None (chart
+    skips it) rather than a misleadingly precise number from too little
+    data."""
+    resting_scores = load_resting_scores(user_id)
+    if not resting_scores:
+        return []
+    original_mean = float(np.mean(resting_scores))
+
+    now = datetime.now(timezone.utc).timestamp()
+    sessions = get_recent_sessions(user_id, limit=200)
+    all_points = []
+    for sid in sessions:
+        preds = get_session_predictions(user_id, sid)
+        for p in preds.values():
+            ts = p.get('timestamp')
+            if not ts or p.get('prob_stress') is None:
+                continue
+            try:
+                t = datetime.fromisoformat(ts).timestamp()
+            except Exception:
+                continue
+            all_points.append((t, float(p['prob_stress'])))
+
+    weeks = []
+    for i in range(n_weeks - 1, -1, -1):
+        week_end = now - i * 7 * 86400
+        week_start = week_end - 7 * 86400
+        bucket = [prob for t, prob in all_points if week_start <= t < week_end]
+        weeks.append({
+            'week_start': datetime.fromtimestamp(week_start, tz=timezone.utc).isoformat(),
+            'n_samples': len(bucket),
+            'mean_prob_stress': float(np.mean(bucket)) if len(bucket) >= DRIFT_MIN_SAMPLES else None,
+            'drift': (float(np.mean(bucket)) - original_mean) if len(bucket) >= DRIFT_MIN_SAMPLES else None,
+        })
+    return weeks
 
 
 # PSS-4 operations

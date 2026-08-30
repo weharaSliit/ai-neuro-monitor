@@ -8,7 +8,7 @@
 // µV charts or the 29-feature bipolar grid -- that detail lives in Admin.
 // ============================================================
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, ScrollView, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, Dimensions } from 'react-native';
 import { ref, onValue, off, get } from 'firebase/database';
 import { db } from '../firebase';
 import ScreenBackground from '../../shared/ScreenBackground';
@@ -16,10 +16,59 @@ import Card from '../../shared/Card';
 import StatusDot from '../../shared/StatusDot';
 import Icon, { NAMES } from '../../shared/Icon';
 import MoodBadge from '../../shared/MoodBadge';
+import LineChart from '../../shared/LineChart';
+import { useCalibrationSummary } from '../../shared/CalibrationGate';
+import { eegClient } from '../../shared/eegApiClient';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import { COLORS } from '../../physiological/config/theme';
 import { useAuth } from '../../../context/AuthContext';
-import { TASK_STATE_LABELS } from '../config/config';
+import { TASK_STATE_LABELS, EEG_TREND_LABELS } from '../config/config';
+
+// 5 relative band powers (the standard δ/θ/α/β/γ breakdown) + the 3 features
+// with the largest |coefficient| in the trained model's own logistic
+// regression (features are standardized before that step, so coefficient
+// magnitude is directly comparable across features) that AREN'T already one
+// of the 5 band powers -- ptp (amplitude), theta_beta_ratio (cross-band
+// ratio), spectral_entropy (signal complexity). Checked directly against
+// backend/psychological/models/sam40_t7t8_state_model.joblib's
+// logisticregression.coef_, not guessed.
+const FEATURE_TREND_CONFIG = [
+    { key: 'delta_rel_power', label: 'δ Delta', color: '#64748b' },
+    { key: 'theta_rel_power', label: 'θ Theta', color: '#7c3aed' },
+    { key: 'alpha_rel_power', label: 'α Alpha', color: '#2563eb' },
+    { key: 'beta_rel_power', label: 'β Beta', color: '#16a34a' },
+    { key: 'gamma_rel_power', label: 'γ Gamma', color: '#ea580c' },
+    { key: 'ptp', label: 'Peak-to-peak amplitude', color: '#db2777' },
+    { key: 'theta_beta_ratio', label: 'θ/β ratio', color: '#d97706' },
+    { key: 'spectral_entropy', label: 'Spectral entropy', color: '#0d9488' },
+];
+const TREND_CHART_WIDTH = Dimensions.get('window').width - 2 * 20 - 2 * 18 - 20;
+const TREND_CHART_HEIGHT = 70;
+
+function sortedWindows(windowsObj) {
+    if (!windowsObj) return [];
+    const keys = Object.keys(windowsObj).filter((k) => /^\d+$/.test(k));
+    keys.sort((a, b) => Number(a) - Number(b));
+    return keys.map((k) => windowsObj[k]);
+}
+
+// high_load_alert is the persistence-gated flag (compute_states(), sam40/
+// decision.py -- P >= high_load_p for >= high_load_persistence_blocks
+// CONSECUTIVE blocks), not the noisy raw per-block task_state_label
+// (single-block, threshold 0.5). Deliberately using the gated flag here:
+// "Relaxed" should be the stable default state, not something that flickers
+// with every block's raw score.
+function currentStateLabel(latest) {
+  if (!latest || latest.skipped) return null;
+  return latest.high_load_alert ? 'High Load' : 'Relaxed';
+}
+
+// live_raw is overwritten roughly every 1s while wearable02 is genuinely
+// streaming (backend/psychological/mqtt_bridge.py's _post_live_raw()) --
+// 10s gives generous margin for jitter/a slow poll cycle while still
+// flipping "connected" off promptly once the device actually drops,
+// rather than staying stuck at whatever the last successful write said.
+const LIVE_RAW_STALE_SEC = 10;
 
 function latestWindow(windowsObj) {
   if (!windowsObj) return null;
@@ -43,25 +92,65 @@ function DistBar({ label, value, total, color, muted }) {
 
 export default function EegSummaryScreen() {
   const { theme, COLORS } = useTheme();
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const userId = user?.userId;
+
+  const { eeg: eegCalibration } = useCalibrationSummary(userId, token);
 
   const [currentSessionId, setCurrentSessionId] = useState(null);
   const [hasSession, setHasSession] = useState(false);
   const [sessionWindows, setSessionWindows] = useState(null);
   const [recentSessions, setRecentSessions] = useState([]);
   const [sessionDist, setSessionDist] = useState({ normal: 0, stress: 0 });
+  const [driftWeeks, setDriftWeeks] = useState(null);
+
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    eegClient.get(`/calibration/${userId}/drift-history`, { headers })
+      .then((res) => { if (!cancelled) setDriftWeeks(res.data?.weeks || null); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [userId, token]);
 
   useEffect(() => {
     if (!userId) return;
     const pRef = ref(db, 'psychological/current_session_id');
     const h = onValue(pRef, (snap) => {
-      const sid = snap.val();
-      setCurrentSessionId(sid || null);
-      setHasSession(!!sid);
+      setCurrentSessionId(snap.val() || null);
     });
     return () => off(pRef, 'value', h);
   }, [userId]);
+
+  // hasSession reflects whether wearable02 is genuinely streaming right
+  // now. The session pointer alone isn't enough -- it's never cleared, so
+  // it stays truthy forever once any session has existed. live_raw's own
+  // existence isn't enough either -- it's overwritten in place, so once
+  // written it stays "there" even after the device goes offline for the
+  // rest of that session. Only the write's own timestamp actually tells
+  // you whether it's still live -- recomputed on an interval since a
+  // Firebase listener alone won't notice time passing with no new writes.
+  const [lastRawTs, setLastRawTs] = useState(null);
+
+  useEffect(() => {
+    if (!userId || !currentSessionId) {
+      setLastRawTs(null);
+      return;
+    }
+    const rawRef = ref(db, `psychological/${userId}/${currentSessionId}/live_raw`);
+    const h = onValue(rawRef, (snap) => setLastRawTs(snap.val()?.timestamp ?? null));
+    return () => off(rawRef, 'value', h);
+  }, [userId, currentSessionId]);
+
+  useEffect(() => {
+    const evaluate = () => {
+      setHasSession(lastRawTs != null && (Date.now() / 1000 - lastRawTs) < LIVE_RAW_STALE_SEC);
+    };
+    evaluate();
+    const t = setInterval(evaluate, 3000);
+    return () => clearInterval(t);
+  }, [lastRawTs]);
 
   useEffect(() => {
     if (!userId || !currentSessionId) {
@@ -74,6 +163,18 @@ export default function EegSummaryScreen() {
   }, [userId, currentSessionId]);
 
   const latest = latestWindow(sessionWindows);
+
+  // Per-feature time series across this session's blocks (~25s cadence,
+  // see BLOCK_SEC in realtime/pipeline.py) -- sessionWindows already holds
+  // the full session, not just the latest block, from the listener above.
+  const windowsList = sortedWindows(sessionWindows);
+  const featureSeries = FEATURE_TREND_CONFIG.map(({ key, label, color }) => {
+    const points = windowsList
+      .filter((w) => !w.skipped && w.features_eeg?.bipolar?.[key] != null)
+      .map((w) => ({ value: w.features_eeg.bipolar[key], date: new Date(w.timestamp_end * 1000) }));
+    return { key, label, color, points, last: points[points.length - 1]?.value };
+  });
+  const hasFeatureTrends = featureSeries.some((s) => s.points.length > 1);
 
   useEffect(() => {
     if (!userId) return;
@@ -107,6 +208,7 @@ export default function EegSummaryScreen() {
   const t = theme;
   const qualityScore = latest?.eeg_quality_score;
   const qualityTrusted = latest?.eeg_quality_flag;
+  const stateLabel = currentStateLabel(latest);
 
   return (
     <ScreenBackground>
@@ -130,6 +232,28 @@ export default function EegSummaryScreen() {
           </Text>
         </Card>
 
+        {/* Current State: Relaxed / High Load, gated on high_load_alert (not
+            the noisy raw per-block label) -- plus which way it's trending. */}
+        {hasSession && stateLabel && (
+          <Card accentColor={latest.high_load_alert ? COLORS.stress : COLORS.normal} elevated style={styles.card}>
+            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 8 }]}>Current State</Text>
+            <View style={styles.readingRow}>
+              <MoodBadge stressed={!!latest.high_load_alert} color={latest.high_load_alert ? COLORS.stress : COLORS.normal} size={40} />
+              <View style={{ marginLeft: 12, flex: 1 }}>
+                <Text style={[styles.stateLabel, { color: latest.high_load_alert ? COLORS.stress : COLORS.normal }]}>
+                  {stateLabel}
+                </Text>
+                {latest.task_state_score != null && (
+                  <Text style={[styles.readingSub, { color: t.textMuted }]}>
+                    {(latest.task_state_score * 100).toFixed(0)}% cognitive load
+                    {latest.task_state_trend ? ` · ${EEG_TREND_LABELS[latest.task_state_trend] || latest.task_state_trend}` : ''}
+                  </Text>
+                )}
+              </View>
+            </View>
+          </Card>
+        )}
+
         {/* Current State & Quality */}
         {hasSession && qualityScore !== undefined && qualityScore !== null && (
           <Card accentColor={qualityTrusted ? COLORS.normal : COLORS.warning} elevated style={styles.card}>
@@ -140,6 +264,71 @@ export default function EegSummaryScreen() {
                 Electrode Contact Quality: {qualityScore.toFixed(0)}% · {qualityTrusted ? 'Optimal Signal' : 'Adjust Placement'}
               </Text>
             </View>
+          </Card>
+        )}
+
+        {/* Calibration Drift -- weekly mean task_state_score vs. this
+            user's own earliest live EEG samples after calibration (see
+            compute_eeg_baseline_drift_history(), backend/psychological/
+            firebase_service.py, for why EEG's reference point differs from
+            Ring's resting-calibration mean). Weeks with too few windows to
+            be meaningful are dropped server-side, not shown as zero. */}
+        {Array.isArray(driftWeeks) && driftWeeks.some((w) => w.mean_task_state_score != null) && (
+          <Card accentColor={COLORS.brand} elevated style={styles.card}>
+            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 4 }]}>Calibration Drift</Text>
+            <Text style={[styles.cardSub, { color: t.textMuted, marginBottom: 12 }]}>
+              {eegCalibration?.drift?.checked && eegCalibration.drift.drift_detected
+                ? 'Your recent readings have shifted from your original calibration — recalibrating is recommended.'
+                : 'How your recent cognitive-load readings compare to your earliest readings after calibration, week by week.'}
+            </Text>
+            <LineChart
+              points={driftWeeks
+                .filter((w) => w.mean_task_state_score != null)
+                .map((w) => ({ value: Math.round(w.mean_task_state_score * 100), date: w.week_start }))}
+              width={TREND_CHART_WIDTH}
+              height={140}
+              color={COLORS.brand}
+              maxValue={100}
+              suffix="%"
+              baselineValue={eegCalibration?.drift?.original_resting_mean != null
+                ? Math.round(eegCalibration.drift.original_resting_mean * 100) : undefined}
+              baselineLabel="Your earliest reading"
+              baselineColor={COLORS.normal}
+            />
+          </Card>
+        )}
+
+        {/* Feature Trends: how the extracted signal features are moving
+            block-to-block (~25s cadence) across this live session. */}
+        {hasSession && hasFeatureTrends && (
+          <Card style={styles.card}>
+            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 2 }]}>Feature Trends</Text>
+            <Text style={[styles.cardSub, { color: t.textMuted, marginBottom: 10 }]}>
+              Extracted EEG features over this session, updated every block
+            </Text>
+            {featureSeries.map(({ key, label, color, points, last }, i) => (
+              <View key={key} style={[styles.trendBlock, i === featureSeries.length - 1 ? null : { marginBottom: 14 }]}>
+                <View style={styles.trendHeaderRow}>
+                  <Text style={[styles.trendLabel, { color: t.textSub }]}>{label}</Text>
+                  <Text style={[styles.trendValue, { color: t.text }]}>
+                    {last !== undefined ? last.toFixed(key.includes('rel_power') ? 3 : 2) : '—'}
+                  </Text>
+                </View>
+                {points.length > 1 ? (
+                  <LineChart
+                    points={points}
+                    color={color}
+                    width={TREND_CHART_WIDTH}
+                    height={TREND_CHART_HEIGHT}
+                    hideValues
+                  />
+                ) : (
+                  <Text style={[styles.waiting, { color: t.textMuted, paddingVertical: 4 }]}>
+                    Collecting more blocks…
+                  </Text>
+                )}
+              </View>
+            ))}
           </Card>
         )}
 
@@ -197,6 +386,11 @@ const styles = StyleSheet.create({
   readingRow: { flexDirection: 'row', alignItems: 'center', marginTop: 10 },
   qualityBox: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, borderRadius: 14, marginTop: 14 },
   qualityText: { fontSize: 12, fontWeight: '700' },
+  waiting: { fontSize: 12, textAlign: 'center' },
+  trendBlock: {},
+  trendHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 2 },
+  trendLabel: { fontSize: 12, fontWeight: '700' },
+  trendValue: { fontSize: 12, fontWeight: '800' },
   distRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 },
   distBarBg: { flex: 1, height: 8, borderRadius: 4, overflow: 'hidden' },
   distBarFill: { height: 8, borderRadius: 4 },

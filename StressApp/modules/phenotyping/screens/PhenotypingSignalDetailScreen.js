@@ -11,7 +11,8 @@ import { ref, onValue, off } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import { COLORS as STATIC_COLORS } from '../../physiological/config/theme';
-import { useAuth } from '../../../context/AuthContext';
+import Icon, { NAMES } from '../../shared/Icon';
+import { usePhenotypingDeviceId } from '../utils/deviceIdentity';
 
 // STATIC_COLORS (not useTheme()'s COLORS) since this config object lives at
 // module scope, outside any component -- was previously hardcoded to the
@@ -67,10 +68,9 @@ function statusColor(status, COLORS) {
     return COLORS.normal;
 }
 
-export default function PhenotypingSignalDetailScreen({ route }) {
+export default function PhenotypingSignalDetailScreen({ navigation, route }) {
     const { theme: t, COLORS } = useTheme();
-    const { user } = useAuth();
-    const userId = user?.userId;
+    const deviceId = usePhenotypingDeviceId();
     const signalId = route?.params?.signalId || 'keyboard';
     const config = SIGNAL_CONFIG[signalId];
 
@@ -82,13 +82,13 @@ export default function PhenotypingSignalDetailScreen({ route }) {
 
     // ── Baseline listener ────────────────────────────────────────────────────
     useEffect(() => {
-        if (!userId) return;
-        const blRef = ref(db, `phenotyping/users/${userId}/baselines`);
+        if (!deviceId) return;
+        const blRef = ref(db, `phenotyping/users/${deviceId}/baselines`);
         const handler = onValue(blRef, (snap) => {
             setBl(snap.val() || null);
         });
         return () => off(blRef, 'value', handler);
-    }, [userId]);
+    }, [deviceId]);
 
     // ── Helper: format a personal baseline mean with fallback ────────────────
     // Returns e.g. "134 ms (personal)" if calibrated, or "120 ms (pop. avg)" if not.
@@ -102,8 +102,8 @@ export default function PhenotypingSignalDetailScreen({ route }) {
     }
 
     useEffect(() => {
-        if (!userId || !config) return;
-        const metricsRef = ref(db, `phenotyping/data_logs/${userId}`);
+        if (!deviceId || !config) return;
+        const metricsRef = ref(db, `phenotyping/data_logs/${deviceId}`);
         const handler = onValue(metricsRef, (snapshot) => {
             const raw = snapshot.val();
             if (!raw) {
@@ -114,61 +114,102 @@ export default function PhenotypingSignalDetailScreen({ route }) {
             const latest = entries[entries.length - 1];
 
             if (signalId === 'keyboard') {
-                // Personal baseline from Firebase, or Kaggle population mean as fallback
-                const dwellMean  = bl?.avg_dwell?.mean  || 5.74;   // Kaggle mean in ms (stored as ms)
-                const flightMean = bl?.avg_flight?.mean || 917.46; // Kaggle mean in ms
+                const dwellMean = bl?.avg_dwell?.mean || 135;
+                const dwellStd = bl?.avg_dwell?.std || 15;
+                const flightMean = bl?.avg_flight?.mean || 215;
+                const flightStd = bl?.avg_flight?.std || 25;
+                const dwellVal = latest.avg_dwell || 0;
+                const flightVal = latest.avg_flight || 0;
+                const zDwell = Math.abs((dwellVal - dwellMean) / dwellStd);
+                const zFlight = Math.abs((flightVal - flightMean) / flightStd);
+
                 setMeasures([
-                    { ...config.measures[0],
-                      value:    `${Math.round(latest.avg_dwell || 0)} ms`,
-                      baseline: fmtBaseline('avg_dwell', 0, 'ms', '5.74 ms'),
-                      // anomalous if >30% above personal mean; elevated if >15%
-                      status:   (latest.avg_dwell || 0) > dwellMean * 1.30 ? 'anomalous'
-                              : (latest.avg_dwell || 0) > dwellMean * 1.15 ? 'elevated' : 'normal' },
-                    { ...config.measures[1],
-                      value:    `${Math.round(latest.avg_flight || 0)} ms`,
-                      baseline: fmtBaseline('avg_flight', 0, 'ms', '917 ms'),
-                      status:   (latest.avg_flight || 0) > flightMean * 1.20 ? 'elevated' : 'normal' },
+                    {
+                        ...config.measures[0],
+                        value: `${Math.round(dwellVal)} ms`,
+                        baseline: fmtBaseline('avg_dwell', 0, 'ms', '135 ms'),
+                        status: zDwell > 2.0 ? 'anomalous' : zDwell > 1.0 ? 'elevated' : 'normal',
+                    },
+                    {
+                        ...config.measures[1],
+                        value: `${Math.round(flightVal)} ms`,
+                        baseline: fmtBaseline('avg_flight', 0, 'ms', '215 ms'),
+                        status: zFlight > 2.0 ? 'anomalous' : zFlight > 1.0 ? 'elevated' : 'normal',
+                    },
                 ]);
             } else if (signalId === 'scroll') {
-                const scrollMean = bl?.scroll_velocity?.mean || 922.39;
-                setMeasures([{ ...config.measures[0],
-                    value:    `${Math.round(latest.scroll_velocity || 0)} px/s`,
-                    baseline: fmtBaseline('scroll_velocity', 0, 'px/s', '922 px/s'),
-                    status:   (latest.scroll_velocity || 0) > scrollMean * 1.30 ? 'elevated' : 'normal' }]);
+                const scrollMean = bl?.scroll_velocity?.mean || 750;
+                const scrollStd = bl?.scroll_velocity?.std || 120;
+                const scrollVal = latest.scroll_velocity || 0;
+                const zScroll = Math.abs((scrollVal - scrollMean) / scrollStd);
+                setMeasures([
+                    {
+                        ...config.measures[0],
+                        value: `${Math.round(scrollVal)} px/s`,
+                        baseline: fmtBaseline('scroll_velocity', 0, 'px/s', '750 px/s'),
+                        status: zScroll > 2.0 ? 'anomalous' : zScroll > 1.0 ? 'elevated' : 'normal',
+                    },
+                ]);
             } else if (signalId === 'tilt') {
-                const tiltMean = bl?.tilt_angle?.mean || 59.09;
-                setMeasures([{ ...config.measures[0],
-                    value:    `${Math.round(latest.tilt_angle || 0)}°`,
-                    baseline: fmtBaseline('tilt_angle', 1, '°', '59.1°'),
-                    status:   (latest.tilt_angle || 0) > tiltMean * 1.30 ? 'elevated' : 'normal' }]);
+                const tiltMean = bl?.tilt_angle?.mean || 59.0;
+                const tiltStd = bl?.tilt_angle?.std || 8.0;
+                const tiltVal = latest.tilt_angle || 0;
+                const zTilt = Math.abs((tiltVal - tiltMean) / tiltStd);
+                setMeasures([
+                    {
+                        ...config.measures[0],
+                        value: `${Math.round(tiltVal)}°`,
+                        baseline: fmtBaseline('tilt_angle', 1, '°', '59.0°'),
+                        status: zTilt > 2.0 ? 'anomalous' : zTilt > 1.0 ? 'elevated' : 'normal',
+                    },
+                ]);
             } else if (signalId === 'cpm') {
-                const cpmMean = bl?.cpm?.mean || 39.40;
-                setMeasures([{ ...config.measures[0],
-                    value:    `${Math.round(latest.cpm || 0)} cpm`,
-                    baseline: fmtBaseline('cpm', 1, 'cpm', '39.4 cpm'),
-                    // elevated if typing speed drops more than 40% below personal mean
-                    status:   (latest.cpm || 0) < cpmMean * 0.60 && (latest.avg_dwell || 0) > 0 ? 'elevated' : 'normal' }]);
+                const cpmMean = bl?.cpm?.mean || 42.0;
+                const cpmStd = bl?.cpm?.std || 6.0;
+                const cpmVal = latest.cpm || 0;
+                const zCpm = Math.abs((cpmVal - cpmMean) / cpmStd);
+                setMeasures([
+                    {
+                        ...config.measures[0],
+                        value: `${Math.round(cpmVal)} cpm`,
+                        baseline: fmtBaseline('cpm', 0, 'cpm', '42 cpm'),
+                        status: (cpmVal < cpmMean - cpmStd * 2 && cpmVal > 0) ? 'anomalous' : (cpmVal < cpmMean - cpmStd && cpmVal > 0) ? 'elevated' : 'normal',
+                    },
+                ]);
             } else if (signalId === 'app_switch') {
                 const switchMean = bl?.app_switch_rate?.mean;
                 const switchBaseline = switchMean ? `${switchMean.toFixed(1)} /min (personal)` : '2.0 /min (pop. avg)';
-                setMeasures([{ ...config.measures[0],
-                    value:    `${(latest.app_switch_rate || 0).toFixed(1)} /min`,
-                    baseline: switchBaseline,
-                    status:   'normal' }]);
+                const switchVal = latest.app_switch_rate || 0;
+                setMeasures([
+                    {
+                        ...config.measures[0],
+                        value: `${switchVal.toFixed(1)} /min`,
+                        baseline: switchBaseline,
+                        status: switchVal > 4.0 ? 'anomalous' : switchVal > 2.5 ? 'elevated' : 'normal',
+                    },
+                ]);
             } else if (signalId === 'activity') {
-                setMeasures([{ ...config.measures[0],
-                    value:  latest.data_valid === false ? 'Motion' : 'Stationary',
-                    baseline: '—',
-                    status: latest.data_valid === false ? 'elevated' : 'normal' }]);
+                setMeasures([
+                    {
+                        ...config.measures[0],
+                        value: latest.data_valid === false ? 'Motion' : 'Stationary',
+                        baseline: '—',
+                        status: latest.data_valid === false ? 'elevated' : 'normal',
+                    },
+                ]);
             } else if (signalId === 'screen') {
-                setMeasures([{ ...config.measures[0],
-                    value:    `${latest.unlocks_count || 0} unlocks`,
-                    baseline: '—',
-                    status:   (latest.unlocks_count || 0) > 30 ? 'elevated' : 'normal' }]);
+                setMeasures([
+                    {
+                        ...config.measures[0],
+                        value: `${latest.unlocks_count || 0} unlocks`,
+                        baseline: '—',
+                        status: (latest.unlocks_count || 0) > 30 ? 'elevated' : 'normal',
+                    },
+                ]);
             }
         });
         return () => off(metricsRef, 'value', handler);
-    }, [userId, signalId, bl]);   // re-run when bl changes (calibration arrives mid-session)
+    }, [deviceId, signalId, bl]);   // re-run when bl changes (calibration arrives mid-session)
 
 
     if (!config) {
@@ -181,6 +222,17 @@ export default function PhenotypingSignalDetailScreen({ route }) {
 
     return (
         <ScreenBackground edges={['left', 'right']}>
+            {/* Header row */}
+            <View style={styles.header}>
+                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} activeOpacity={0.7}>
+                    <Icon name={NAMES.back} size={22} color={COLORS.brand} />
+                </TouchableOpacity>
+                <Text style={[styles.headerTitle, { color: t.text }]}>
+                    {config?.title || 'Signal Detail'}
+                </Text>
+                <View style={{ width: 22 }} />
+            </View>
+
             <ScrollView contentContainerStyle={styles.scroll}>
                 {(measures || []).map((m, i) => (
                     <View key={i} style={[styles.card, { backgroundColor: t.surface, borderColor: t.border }]}>
@@ -216,4 +268,7 @@ const styles = StyleSheet.create({
     statusPill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
     explainBox: { borderRadius: 12, padding: 12 },
     explainText: { fontSize: 12, lineHeight: 18 },
+    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 10 },
+    backBtn: { padding: 4 },
+    headerTitle: { fontSize: 16, fontWeight: '900', letterSpacing: -0.2 },
 });

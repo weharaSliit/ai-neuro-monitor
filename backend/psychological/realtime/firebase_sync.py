@@ -50,7 +50,8 @@ def _trend_direction(history_scores: list[float], lookback: int = 3) -> str:
 
 
 def make_eeg_output_record(result: dict, window_sec: float, model_version: str,
-                            feature_set: str, history_scores: list[float]) -> dict:
+                            feature_set: str, history_scores: list[float],
+                            high_load_p: float | None = None) -> dict:
     now = time.time()
     ts_end = now
     ts_start = ts_end - window_sec
@@ -61,6 +62,14 @@ def make_eeg_output_record(result: dict, window_sec: float, model_version: str,
         'timestamp_center': (ts_start + ts_end) / 2,
         'window': result.get('window'),
         'skipped': bool(result.get('skipped', False)),
+        # This session's EFFECTIVE high_load_p at the moment of this block --
+        # personal_high_load_p if finalize_personal_threshold() succeeded for
+        # this user, else the population default (engine.thresholds.high_load_p
+        # either way -- see app.py's /predict route, the only caller that
+        # passes this). Read by make_eeg_fusion_record() below for the
+        # fusion engine's own weighted-threshold combination (see
+        # fushion engin/fusion_engin.py::compute_realtime_multimodal_fusion()).
+        'effective_high_load_p': high_load_p,
         'model_version': model_version,
         'feature_set': feature_set,
         'eeg_missing': bool(result.get('skipped', False)),
@@ -71,6 +80,12 @@ def make_eeg_output_record(result: dict, window_sec: float, model_version: str,
         'baseline_degraded': bool(result.get('baseline_degraded', False)),
         'ch2_mirrored': bool(result.get('ch2_mirrored', False)),
         'ch2_reconstructed': bool(result.get('ch2_reconstructed', False)),
+        # Downsampled PREPROCESSED (filtered, uV-scale) waveform for the
+        # live dashboard -- see pipeline.py::_downsample_wave(). Present
+        # even for a skipped/rejected block (still real signal, just not
+        # trusted enough to score) so the dashboard can show what a
+        # rejected block actually looked like, not just a pass/fail flag.
+        'wave_uv': result.get('wave_uv'),
     }
 
     if result.get('T7_total_power') is not None or result.get('bipolar_delta_power') is not None:
@@ -159,8 +174,21 @@ class FirebaseSync:
     def set(self, record: dict) -> None:
         try:
             self._ref.set(record)
-        except Exception as e:  
+        except Exception as e:
             print(f'[firebase] WARNING: set failed for session_id={self.session_id}: {e}')
+
+    def update(self, record: dict) -> None:
+        """Plain shallow update on THIS ref's own node (RTDB's standard
+        merge semantics) -- distinct from merge() above, which is
+        specifically for a window-keyed CHILD under a per-session
+        container and unconditionally requires record['window']. Use this
+        one for a ref that already points at the exact node to update
+        (e.g. a per-user profile node), where set() would wipe sibling
+        fields written by an earlier, separate call."""
+        try:
+            self._ref.update(record)
+        except Exception as e:
+            print(f'[firebase] WARNING: update failed for session_id={self.session_id}: {e}')
 
     def get(self) -> dict | None:
         try:
@@ -172,7 +200,26 @@ class FirebaseSync:
 def make_eeg_fusion_record(record: dict) -> dict:
     skipped = bool(record.get('skipped'))
     p = None if skipped else record.get('task_state_score')
-    label = record.get('task_state_label')
+    # This user's own effective high_load_p (personal if calibrated, else
+    # population default) -- see make_eeg_output_record()'s
+    # 'effective_high_load_p' field. Consumed by fusion_engin.py's
+    # weighted-threshold combination, not just its probability one.
+    threshold = record.get('effective_high_load_p')
+    # stress_label_eeg (fusion-facing) is derived from p vs. THIS
+    # modality's own effective threshold (personal-else-population), NOT
+    # task_state_label's fixed TASK_STATE_LABEL_THRESHOLD=0.5 cutoff --
+    # that field is a deliberately different, non-personalized, non-gated
+    # raw per-block indicator used elsewhere (see EegSummaryScreen.js's own
+    # docstring on why its "Current State" card avoids task_state_label in
+    # favor of the persistence-gated high_load_alert). Matches
+    # stress_label_hrv_gsr's personal-else-population rule
+    # (backend/physiological/app.py's /predict: `1 if prob_stress >
+    # personal_threshold else 0`) so both modalities' FUSION-facing labels
+    # follow the same effective-threshold rule, not two different ones.
+    stress_label_eeg = (
+        'unknown' if p is None or threshold is None
+        else ('high_task_state' if p >= threshold else 'low_task_state')
+    )
     return {
         'window': fusion_window_key(),
         'timestamp_eeg': record.get('timestamp_end'),
@@ -180,8 +227,6 @@ def make_eeg_fusion_record(record: dict) -> dict:
         'conf_eeg': None if p is None else record.get('model_confidence'),
         'model_acc_eeg': record.get('model_accuracy'),
         'signal_quality_eeg': record.get('eeg_quality_score'),
-        'stress_label_eeg': (
-            'unknown' if p is None
-            else ('high_task_state' if label == 1 else 'low_task_state')
-        ),
+        'stress_label_eeg': stress_label_eeg,
+        'threshold_eeg': threshold,
     }

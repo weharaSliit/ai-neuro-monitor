@@ -22,20 +22,23 @@
 
 import os
 import re
-import time
+import threading
+from dataclasses import replace as replace_thresholds
 from pathlib import Path
 
-import numpy as np
 from flask import jsonify, request, g
 
 from backend.common.app_factory import create_app
 from backend.common.auth import require_auth
+from backend.psychological.eeg_calibration_capture import run_eeg_calibration_capture, run_eeg_threshold_capture
 from backend.psychological.firebase_service import (
     EegFirebaseSession,
+    get_calibration_status,
     load_user_calibration_profile,
     save_user_calibration_profile,
+    compute_eeg_baseline_drift_history,
 )
-from backend.psychological.realtime.adc import bipolar_code_to_microvolts
+from backend.psychological.mqtt_bridge import N_CALIBRATION_BLOCKS, N_THRESHOLD_TASK_BLOCKS
 from backend.psychological.realtime.csv_logger import CsvLogger, RAW_FIELDS_BIPOLAR, log_raw_block_bipolar
 from backend.psychological.realtime.firebase_sync import make_eeg_output_record
 from backend.psychological.realtime.mqtt_client import BipolarRawSample
@@ -56,13 +59,15 @@ if DISABLE_QUALITY_GATE:
           "every block will be scored regardless of quality. task_state_score is "
           "NOT trustworthy while this is on.")
 
-# Raw EEG samples are logged here per session, independent of Firebase --
-# EegFirebaseSession.push_raw() no-ops without $FIREBASE_CRED_JSON/
-# $FIREBASE_CREDENTIALS (see firebase_service.py's resolve_credential()),
-# so this is the one raw-data path that's guaranteed to work
-# even with cloud sync off entirely. Same RAW_FIELDS shape as the standalone
-# phscycological/scripts/realtime_inference.py CLI's --log-raw-csv, via the
-# same CsvLogger/log_raw_block (realtime/csv_logger.py) -- not a second copy.
+# Raw EEG samples are logged HERE ONLY (local disk), never to Firebase --
+# same RAW_FIELDS shape as the standalone phscycological/scripts/
+# realtime_inference.py CLI's --log-raw-csv, via the same CsvLogger/
+# log_raw_block (realtime/csv_logger.py) -- not a second copy. What DOES
+# land in Firebase per block is the model's derived output (preprocessed
+# features + task_state_score/label, via make_eeg_output_record() in
+# /predict below) -- raw ADC code/millis get processed here (that's the
+# whole point of the bridge posting them to this API in the first place)
+# but are never themselves persisted to the shared database.
 RAW_CSV_DIR = Path(__file__).resolve().parent / "logs"
 RAW_CSV_DIR.mkdir(exist_ok=True)
 _UNSAFE_FILENAME_CHARS = re.compile(r'[^A-Za-z0-9_-]')
@@ -76,13 +81,21 @@ def _raw_csv_path(session_id: str) -> Path:
 eeg_sessions = {}  # session_id -> {'engine': RealtimeInference, 'firebase': EegFirebaseSession,
                    #                'csv_logger': CsvLogger, 'score_history': [...]}
 
-# Deliberately separate from eeg_sessions: a live raw-signal preview is
-# useful WHILE positioning electrodes too (before /calibrate has ever
-# succeeded, or even been called), so it can't depend on calibration having
-# completed. Lazily created per session_id on first /live_raw call, reused
-# thereafter -- constructing EegFirebaseSession on every call would open a
-# fresh set of Firebase refs per push instead of once per session.
-live_raw_sessions: dict[str, EegFirebaseSession] = {}
+# user_id -> {'status': ..., ...} -- on-demand /calibrate/start capture
+# progress, mirroring backend/physiological/app.py's _calibration_sessions
+# exactly (same 'settling'/'capturing'/'saving'/'done'/'error' shape --
+# see eeg_calibration_capture.py's run_eeg_calibration_capture() docstring).
+# Keyed by user_id, not session_id -- a capture doesn't have a session_id
+# to key by until run_eeg_calibration_from_blocks() finishes (it mints/uses
+# whatever session_id the caller passed to /calibrate/start).
+_calibration_sessions: dict[str, dict] = {}
+
+# user_id -> {'status': ..., ...} -- on-demand /calibrate/threshold/start
+# capture progress, separate from _calibration_sessions above so a
+# threshold-task capture in progress never overwrites/gets overwritten by
+# a concurrent baseline capture's own status polling. Mirrors
+# backend/physiological/app.py's identical split.
+_threshold_sessions: dict[str, dict] = {}
 
 
 def _samples_from_payload(data: dict) -> list[BipolarRawSample]:
@@ -105,19 +118,6 @@ def _samples_from_payload(data: dict) -> list[BipolarRawSample]:
         BipolarRawSample(millis=int(m), code=int(c))
         for m, c in zip(millis, code)
     ]
-
-
-def _raw_signal_record(window: int, samples: list[BipolarRawSample]) -> dict:
-    """One record per block: raw ADC codes + decoded uV, same RAW_FIELDS_BIPOLAR
-    shape as realtime/csv_logger.py's local CSV logging -- see
-    EegFirebaseSession.push_raw()'s docstring for why this is a sibling
-    RTDB path rather than nested into the derived-output record."""
-    return {
-        "window": window,
-        "millis": [s.millis for s in samples],
-        "code": [s.code for s in samples],
-        "uv": [round(bipolar_code_to_microvolts(s.code), 3) for s in samples],
-    }
 
 
 @app.route("/health", methods=["GET"])
@@ -173,7 +173,6 @@ def calibrate():
             samples = _samples_from_payload(block)
         except ValueError as e:
             return jsonify({"error": f"block {i}: {e}"}), 400
-        firebase.push_raw(_raw_signal_record(i, samples))
         log_raw_block_bipolar(csv_logger, samples)
         engine.calibrate_bipolar_block(samples)
 
@@ -199,6 +198,18 @@ def calibrate():
             outcome["baseline_shift"] = engine.baseline_shift
             outcome["thresholds_personalized"] = engine.thresholds_personalized
             outcome["skip_ahead_used"] = True
+            # A previously-computed personal high_load_p (see /calibrate/threshold
+            # below) also carries forward here -- same skip-ahead spirit as
+            # baseline_shift just above, so a returning user's personal
+            # threshold applies immediately without redoing the task phase
+            # every session.
+            personal_high_load_p = stored_profile.get("personal_high_load_p")
+            if personal_high_load_p is not None:
+                engine.personal_high_load_p = personal_high_load_p
+                engine.thresholds = replace_thresholds(
+                    engine.thresholds, high_load_p=personal_high_load_p, cooldown_high_p=personal_high_load_p
+                )
+                outcome["personal_high_load_p"] = personal_high_load_p
         else:
             # New user, or this user's stored profile is now too stale to
             # trust -- this session's own fresh result (already in outcome/
@@ -251,6 +262,169 @@ def calibrate():
     return jsonify({"success": True, "session_id": session_id, "firebase_enabled": firebase.enabled, **outcome})
 
 
+# -- /calibrate/start + /calibrate/status -- on-demand baseline capture ---
+#
+# Mirrors backend/physiological/app.py's /calibrate/start + /calibrate/status
+# exactly (same phase names, same polling shape) -- this is what
+# StressApp/modules/shared/CalibrateBreathingCard.js already calls for
+# EEG's side of the combined Ring+EEG calibration widget. The actual
+# capture (settle 10s, grab N_CALIBRATION_BLOCKS live blocks over its own
+# short-lived MQTT connection) is run_eeg_calibration_capture()
+# (eeg_calibration_capture.py), already written; this just runs it in a
+# background thread and exposes its progress for polling, same as the
+# synchronous /calibrate above but without the caller needing to capture
+# raw blocks itself first.
+#
+# REQUEST FORMAT: {"session_id": "live_session_1"}
+@app.route("/calibrate/start", methods=["POST"])
+@require_auth
+def calibrate_start():
+    data = request.json or {}
+    session_id = data.get("session_id", "session_001")
+    user_id = g.user_id
+
+    current = _calibration_sessions.get(user_id)
+    if current and current.get("status") in ("settling", "capturing", "saving"):
+        return jsonify({"error": "Calibration already in progress"}), 409
+
+    _calibration_sessions[user_id] = {
+        "status": "settling", "session_id": session_id,
+        "block_idx": 0, "n_blocks": N_CALIBRATION_BLOCKS,
+    }
+
+    def on_progress(status, extra):
+        if status == "capturing":
+            entry = {"status": "capturing", "session_id": session_id, "n_blocks": N_CALIBRATION_BLOCKS, **extra}
+        elif status == "error":
+            entry = {"status": "error", "session_id": session_id, "error": extra.get("message", "Unknown error")}
+        elif status == "done":
+            # extra also carries session_state (live engine/firebase/
+            # csv_logger objects, not JSON-serializable) -- registered into
+            # eeg_sessions here (same shape /calibrate already populates
+            # it with) so /predict and /calibrate/threshold/start can find
+            # this session afterward; only the JSON-safe outcome/
+            # firebase_enabled go into _calibration_sessions for polling.
+            eeg_sessions[session_id] = extra["session_state"]
+            entry = {
+                "status": "done", "session_id": session_id,
+                "outcome": extra.get("outcome"), "firebase_enabled": extra.get("firebase_enabled"),
+            }
+        else:  # 'settling' / 'saving'
+            entry = {"status": status, "session_id": session_id, "n_blocks": N_CALIBRATION_BLOCKS}
+        _calibration_sessions[user_id] = entry
+
+    def worker():
+        run_eeg_calibration_capture(user_id, session_id, on_progress=on_progress)
+
+    threading.Thread(target=worker, daemon=True).start()
+    return jsonify({"status": "started"})
+
+
+@app.route("/calibrate/status", methods=["GET"])
+@require_auth
+def calibrate_status():
+    state = _calibration_sessions.get(g.user_id, {"status": "idle"})
+    return jsonify(state)
+
+
+# -- /calibration/status -- freshness check, no capture triggered ---------
+# {exists, calibrated_at, age_days, is_stale_soft, is_stale_hard} -- same
+# shape physiological's GET /baseline/<user_id> reports, so
+# CalibrationGate.js's useCalibrationSummary can treat both modalities the
+# same way. Reuses get_calibration_status() (firebase_service.py), already
+# written for exactly this.
+@app.route("/calibration/status", methods=["GET"])
+@require_auth
+def calibration_status():
+    return jsonify(get_calibration_status(g.user_id))
+
+
+# -- /admin/calibration/<user_id> -- same data as /calibration/status, but ---
+# for ANY user_id -- no ownership check, only @require_auth (a valid token,
+# still required). Mirrors backend/physiological/app.py's /admin/baseline/
+# <user_id> (same "no admin/role concept, any logged-in account can view any
+# other account's data" reasoning documented there) -- this is what
+# StressApp/modules/admin/screens/AdminUserDetailScreen.js actually calls
+# (GET /admin/calibration/<user_id>) to show a user's EEG calibration
+# freshness/personal-threshold state; it was never wired up on this side
+# even though the frontend has called it since that screen was built.
+@app.route("/admin/calibration/<user_id>", methods=["GET"])
+@require_auth
+def admin_calibration_status(user_id):
+    return jsonify(get_calibration_status(user_id))
+
+
+# -- /calibration/<user_id>/drift-history -- weekly-bucketed drift trend, --
+# for EegSummaryScreen.js's chart. Separate from /calibration/status above
+# (which already carries the single current drift verdict for
+# CalibrationBanner) since this one does more work (scans up to 200 recent
+# sessions) and isn't needed on every poll the way the banner's check is.
+# Mirrors physiological's GET /baseline/<user_id>/drift-history exactly.
+@app.route("/calibration/<user_id>/drift-history", methods=["GET"])
+@require_auth
+def calibration_drift_history(user_id):
+    if user_id != g.user_id:
+        return jsonify({"error": "Forbidden — token does not match requested user"}), 403
+    return jsonify({"user_id": user_id, "weeks": compute_eeg_baseline_drift_history(user_id)})
+
+
+# -- /calibrate/threshold/start + /status -- on-demand personal-threshold -
+# task capture. Mirrors backend/physiological/app.py's
+# /calibrate/threshold/start + /calibrate/threshold/status exactly (same
+# phase names, same polling shape, same naming) -- opens its own
+# short-lived MQTT connection on demand, the same way /calibrate/start
+# does for baseline -- no dependency on mqtt_bridge.py running as a
+# separate process. This is the route StressApp's ThresholdCalibration
+# screen calls now (see EegThresholdTaskScreen.js). An earlier synchronous
+# /calibrate/threshold route (pre-captured blocks submitted by
+# mqtt_bridge.py's always-on flow, triggered by a task_phase_requested
+# Firebase flag the frontend set) was removed -- nothing set that flag
+# anymore once this on-demand path replaced it, leaving the route
+# unreachable.
+#
+# REQUEST FORMAT: {"session_id": "live_session_1"}
+@app.route("/calibrate/threshold/start", methods=["POST"])
+@require_auth
+def calibrate_threshold_start():
+    data = request.json or {}
+    session_id = data.get("session_id", "session_001")
+    user_id = g.user_id
+
+    if session_id not in eeg_sessions:
+        return jsonify({"error": f"Session {session_id!r} not calibrated -- call /calibrate first"}), 400
+
+    current = _threshold_sessions.get(user_id)
+    if current and current.get("status") in ("capturing", "saving"):
+        return jsonify({"error": "Threshold calibration already in progress"}), 409
+
+    session_state = eeg_sessions[session_id]
+    _threshold_sessions[user_id] = {"status": "capturing", "session_id": session_id, "n_blocks": N_THRESHOLD_TASK_BLOCKS}
+
+    def on_progress(status, extra):
+        if status == "capturing":
+            entry = {"status": "capturing", "session_id": session_id, "n_blocks": N_THRESHOLD_TASK_BLOCKS, **extra}
+        elif status == "error":
+            entry = {"status": "error", "session_id": session_id, "error": extra.get("message", "Unknown error")}
+        elif status == "done":
+            entry = {"status": "done", "session_id": session_id, **extra}
+        else:  # 'saving'
+            entry = {"status": status, "session_id": session_id}
+        _threshold_sessions[user_id] = entry
+
+    def worker():
+        run_eeg_threshold_capture(session_state, on_progress=on_progress)
+
+    threading.Thread(target=worker, daemon=True).start()
+    return jsonify({"status": "started"})
+
+
+@app.route("/calibrate/threshold/status", methods=["GET"])
+@require_auth
+def calibrate_threshold_status():
+    state = _threshold_sessions.get(g.user_id, {"status": "idle"})
+    return jsonify(state)
+
+
 # -- /predict -- one 25s block -> task_state_score --------------------
 #
 # REQUEST FORMAT:
@@ -275,7 +449,6 @@ def predict():
     state = eeg_sessions[session_id]
     result = state["engine"].infer_bipolar_block(samples)
     state["score_history"].append(result.get("calibrated_p") if not result.get("skipped") else None)
-    state["firebase"].push_raw(_raw_signal_record(result.get("window"), samples))
     log_raw_block_bipolar(state["csv_logger"], samples)
 
     record = make_eeg_output_record(
@@ -284,6 +457,12 @@ def predict():
         model_version=MODEL_VERSION,
         feature_set=MODEL_VERSION,
         history_scores=state["score_history"],
+        # engine.thresholds.high_load_p is ALREADY the effective value --
+        # personal if finalize_personal_threshold() succeeded for this
+        # user (it replaces this in-place), else whatever population
+        # default the engine was constructed with. See
+        # make_eeg_output_record()'s 'effective_high_load_p' docstring.
+        high_load_p=state["engine"].thresholds.high_load_p,
     )
     state["firebase"].push(record)
 
@@ -308,48 +487,6 @@ def predict():
     )
 
 
-# -- /live_raw -- ~1s raw preview -> Firebase, for a genuinely live -------
-# dashboard waveform. Independent of /calibrate and /predict's 25s-block/
-# quality-gate cycle -- works before calibration even starts (useful while
-# positioning electrodes), and every call OVERWRITES the same
-# {session_id}/live_raw node rather than accumulating history there.
-#
-# REQUEST FORMAT: same shape as /predict, just a much smaller batch
-#   {"session_id": "live_session_1", "millis": [...], "code": [...]}
-@app.route("/live_raw", methods=["POST"])
-@require_auth
-def live_raw():
-    data = request.json or {}
-    session_id = data.get("session_id", "session_001")
-
-    try:
-        samples = _samples_from_payload(data)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-
-    firebase = live_raw_sessions.get(session_id)
-    if firebase is None:
-        firebase = EegFirebaseSession(session_id, g.user_id)
-        live_raw_sessions[session_id] = firebase
-
-    # Deliberately NOT clamped, unlike pipeline.py's preprocess_block: this
-    # feeds the raw-signal preview chart, whose whole point is showing what
-    # wearable02 is ACTUALLY outputting right now (e.g. while positioning
-    # electrodes) -- clamping here would hide the real (possibly railed/
-    # faulty) reading behind a flat, artificial line. The model-facing clamp
-    # in preprocess_block stays; this display path shows the true value.
-    firebase.push_live_raw({
-        "timestamp": time.time(),
-        "millis": [s.millis for s in samples],
-        "uv": [round(v, 3) for v in bipolar_code_to_microvolts(np.array([s.code for s in samples]))],
-    })
-
-    return jsonify({
-        "success": True, "session_id": session_id, "n_samples": len(samples),
-        "firebase_enabled": firebase.enabled,
-    })
-
-
 @app.route("/sessions/<session_id>", methods=["DELETE"])
 @require_auth
 def end_session(session_id):
@@ -369,8 +506,13 @@ if __name__ == "__main__":
     print("Endpoints:")
     print("  GET    /health")
     print("  POST   /calibrate          <- baseline capture (Relax-period blocks)")
+    print("  POST   /calibrate/start     <- on-demand baseline capture (background)")
+    print("  GET    /calibrate/status    <- poll /calibrate/start progress")
+    print("  GET    /calibration/status  <- calibration freshness, no capture triggered")
+    print("  GET    /admin/calibration/<user_id> <- same, for any user_id (admin)")
+    print("  POST   /calibrate/threshold/start   <- on-demand personal high_load_p task capture")
+    print("  GET    /calibrate/threshold/status  <- poll /calibrate/threshold/start progress")
     print("  POST   /predict            <- one 25s block -> task_state_score")
-    print("  POST   /live_raw           <- ~1s raw preview -> live dashboard waveform")
     print("  DELETE /sessions/<id>      <- drop session state")
     print("=" * 50)
     # use_reloader=False -- werkzeug's default reloader watches every file

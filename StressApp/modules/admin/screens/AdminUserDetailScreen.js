@@ -10,7 +10,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Dimensions } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import axios from 'axios';
-import { ref, onValue, off } from 'firebase/database';
+import { ref, onValue, off, get } from 'firebase/database';
 import { db } from '../../../firebase';
 import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
@@ -70,6 +70,53 @@ function DistBar({ label, value, total, color, muted }) {
   );
 }
 
+// Every raw feature extract_features.py computes per window (FEATURE_COLS,
+// backend/physiological/extract_features.py) -- Admin is the one place all
+// 23 get charted; the user-facing Ring screen deliberately shows only
+// MeanHR/SCL_mean, the two a non-technical user recognizes.
+const RING_FEATURE_CHARTS = [
+  { key: 'AVNN', label: 'AVNN (mean RR interval)', unit: ' ms', color: COLORS.hrv },
+  { key: 'MeanHR', label: 'Mean Heart Rate', unit: ' bpm', color: COLORS.hrv },
+  { key: 'SDHR', label: 'Heart Rate Std Dev (SDHR)', unit: ' bpm', color: COLORS.hrv },
+  { key: 'pNN20', label: 'pNN20', unit: '', color: COLORS.hrv },
+  { key: 'SD1', label: 'Short-term HRV (SD1)', unit: ' ms', color: COLORS.hrv },
+  { key: 'SCL_mean', label: 'Skin Conductance Level (SCL)', unit: ' µS', color: COLORS.gsr },
+  { key: 'SCL_slope', label: 'SCL Slope', unit: '', color: COLORS.gsr },
+  { key: 'EDA_mean', label: 'EDA Mean', unit: ' µS', color: COLORS.gsr },
+  { key: 'EDA_slope', label: 'EDA Slope', unit: '', color: COLORS.gsr },
+  { key: 'EDA_std', label: 'EDA Std Dev', unit: ' µS', color: COLORS.gsr },
+  { key: 'SCR_count', label: 'SCR Count', unit: '', color: COLORS.gsr },
+  { key: 'SCR_amp_mean', label: 'SCR Amplitude (mean)', unit: ' µS', color: COLORS.gsr },
+  { key: 'SCR_width_mean', label: 'SCR Width (mean)', unit: ' s', color: COLORS.gsr },
+  { key: 'EDA_q10', label: 'EDA 10th Percentile', unit: ' µS', color: COLORS.gsr },
+  { key: 'EDA_q75', label: 'EDA 75th Percentile', unit: ' µS', color: COLORS.gsr },
+  { key: 'EDA_q90', label: 'EDA 90th Percentile', unit: ' µS', color: COLORS.gsr },
+  { key: 'EDA_range', label: 'EDA Range', unit: ' µS', color: COLORS.gsr },
+  { key: 'deriv1_std', label: '1st Derivative Std Dev', unit: '', color: COLORS.acc },
+  { key: 'deriv2_mean', label: '2nd Derivative Mean', unit: '', color: COLORS.acc },
+  { key: 'wavelet_d1_energy', label: 'Wavelet D1 Energy', unit: '', color: COLORS.acc },
+  { key: 'wavelet_d3_energy', label: 'Wavelet D3 Energy', unit: '', color: COLORS.acc },
+  { key: 'ACC_mean', label: 'Accelerometer Mean', unit: ' g', color: COLORS.acc },
+  { key: 'ACC_std', label: 'Accelerometer Std Dev', unit: ' g', color: COLORS.acc },
+];
+
+function FeatureTrendChart({ chartWindows, featureKey, label, unit, color, muted, text }) {
+  const points = [...chartWindows]
+    .reverse()
+    .filter((w) => w.timestamp && w.features?.[featureKey] !== undefined && w.features?.[featureKey] !== null)
+    .map((w) => ({ value: Number(w.features[featureKey].toFixed(3)), date: new Date(w.timestamp) }));
+
+  if (points.length < 2) return null;
+
+  return (
+    <Card>
+      <Text style={[styles.cardTitle, { color: text, marginBottom: 4 }]}>{label}</Text>
+      <Text style={{ color: muted, marginBottom: 12, fontSize: 11 }}>Per telemetry window</Text>
+      <LineChart points={points} color={color} width={TREND_CHART_WIDTH} height={110} suffix={unit} />
+    </Card>
+  );
+}
+
 // Genuinely live (Firebase push, see the subscription in the screen below)
 // -- not a poll. `field` picks which modality's contribution to show
 // (prob_hrv_gsr for Ring, prob_eeg for EEG); both live in the same merged
@@ -111,6 +158,25 @@ export default function AdminUserDetailScreen({ route, navigation }) {
   const [history, setHistory] = useState(null);
   const [emaHistory, setEmaHistory] = useState(null);
   const [eegCalib, setEegCalib] = useState(null);
+  const [phenoDeviceId, setPhenoDeviceId] = useState(null);
+
+  useEffect(() => {
+    if (!userId) return;
+    const usersRef = ref(db, 'phenotyping/users');
+    get(usersRef).then((snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.val();
+        const found = Object.entries(data).find(([devId, prof]) => {
+          return prof.name === name || prof.name === userId || devId === userId;
+        });
+        if (found) {
+          setPhenoDeviceId(found[0]);
+        }
+      }
+    }).catch((err) => {
+      console.log('Error resolving pheno deviceId:', err);
+    });
+  }, [userId, name]);
 
   // Live-now state -- there's only one physical ring and one physical EEG
   // headset, so genuinely live data can only ever exist for whichever ONE
@@ -395,6 +461,26 @@ export default function AdminUserDetailScreen({ route, navigation }) {
                 </Card>
               )}
 
+              {ringChart.length > 1 && (
+                <>
+                  <Text style={[styles.sectionLabel, { color: muted }]}>
+                    Raw Feature Trends ({RING_FEATURE_CHARTS.length})
+                  </Text>
+                  {RING_FEATURE_CHARTS.map((f) => (
+                    <FeatureTrendChart
+                      key={f.key}
+                      chartWindows={ringChart}
+                      featureKey={f.key}
+                      label={f.label}
+                      unit={f.unit}
+                      color={f.color}
+                      muted={muted}
+                      text={text}
+                    />
+                  ))}
+                </>
+              )}
+
               {(sessionDist.normal + sessionDist.stress) > 0 && (
                 <Card>
                   <Text style={[styles.cardTitle, { color: text }]}>Session Distribution</Text>
@@ -519,17 +605,12 @@ export default function AdminUserDetailScreen({ route, navigation }) {
             <Card>
               <Text style={[styles.cardTitle, { color: text }]}>Behavioral Analysis</Text>
               <Text style={{ color: muted, marginBottom: 14 }}>
-                Z-score deviations, idiographic baseline table, and weekly
-                stress pattern -- the same deep-dive that used to be a user-
-                facing "Analysis" quick action. Note: like Relaxation below,
-                this screen currently reads whichever account is logged in
-                via useAuth() (your own admin login), not {userId}'s data --
-                a real per-user "view as" mode is a follow-up, not built in
-                this pass.
+                Inspect {name || userId}'s passive digital phenotyping data.
+                View their Z-score deviations, idiographic baseline values, and weekly stress patterns.
               </Text>
               <TouchableOpacity
                 style={[styles.openBtn, { backgroundColor: COLORS.gsr }]}
-                onPress={() => navigation.navigate('PhenotypingAnalysis')}
+                onPress={() => navigation.navigate('PhenotypingAnalysis', { userId: phenoDeviceId || userId, userName: name || userId, mode: 'analysis' })}
               >
                 <Text style={{ color: '#FFFFFF', fontWeight: '800' }}>Open Analysis →</Text>
               </TouchableOpacity>
@@ -568,6 +649,7 @@ const styles = StyleSheet.create({
   tabBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 12, backgroundColor: COLORS.light.cardHover },
   tabText: { fontSize: 12, fontWeight: '700' },
   cardTitle: { fontSize: 15, fontWeight: '800', marginBottom: 10 },
+  sectionLabel: { fontSize: 12, fontWeight: '800', marginTop: 4, marginBottom: 4, marginLeft: 4, textTransform: 'uppercase', letterSpacing: 0.5 },
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   rowGap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   liveValue: { fontSize: 18, fontWeight: '900' },

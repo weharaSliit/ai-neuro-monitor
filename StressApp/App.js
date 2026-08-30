@@ -29,6 +29,7 @@ if (Platform.OS === 'web' && typeof document !== 'undefined') {
 import WelcomeScreen from './screens/WelcomeScreen';
 import LoginScreen from './screens/LoginScreen';
 import RegisterScreen from './screens/RegisterScreen';
+import AccountSetupScreen from './screens/AccountSetupScreen';
 import PhysiologicalNavigator from './modules/physiological/PhysiologicalNavigator';
 import AdminNavigator from './modules/admin/AdminNavigator';
 import CalibrationScreen from './modules/physiological/screens/CalibrationScreen';
@@ -37,11 +38,13 @@ import PSS4Screen from './modules/physiological/screens/PSS4Screen';
 import ProfileScreen from './modules/physiological/screens/ProfileScreen';
 import RingSummaryScreen from './modules/physiological/screens/RingSummaryScreen';
 import EegSummaryScreen from './modules/eeg/screens/EegSummaryScreen';
+import EegThresholdTaskScreen from './modules/eeg/screens/EegThresholdTaskScreen';
 import PhenotypingEmaScreen from './modules/phenotyping/screens/PhenotypingEmaScreen';
 import PhenotypingSignalDetailScreen from './modules/phenotyping/screens/PhenotypingSignalDetailScreen';
 import PhenotypingSignalHistoryScreen from './modules/phenotyping/screens/PhenotypingSignalHistoryScreen';
 import PhenotypingAlertDetailScreen from './modules/phenotyping/screens/PhenotypingAlertDetailScreen';
 import PhenotypingOnboardingScreen from './modules/phenotyping/screens/PhenotypingOnboardingScreen';
+import PhenotypingAnalysisScreen from './modules/phenotyping/screens/PhenotypingAnalysisScreen';
 import { AppContext } from './modules/physiological/screens/AppState';
 import { ThemeProvider, useTheme } from './modules/physiological/config/ThemeContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -55,27 +58,28 @@ const linking = {
       Welcome: 'welcome',
       Login: 'login',
       Register: 'register',
+      AccountSetup: 'account-setup',
+      ThresholdCalibration: 'threshold-calibration',
       Admin: 'admin',
       Physiological: {
         path: '',
         screens: {
-          Fusion:          'fusion-tab',
-          Phenotyping:     'phenotyping-tab',
+          Fusion: 'fusion-tab',
+          Phenotyping: 'phenotyping-tab',
           RelaxationGuide: 'relaxation-guide',
         },
       },
-      CalibrationGate:        'calibration-gate',
-      Calibration:            'calibration',
-      RingSummary:            'ring',
-      EegSummary:             'eeg',
-      EmaDetail:              'ema',
-      PSS4:                   'pss4',
-      Profile:                'profile',
-      PhenotypingEma:         'phenotyping-ema',
-      PhenotypingSignalDetail:  'phenotyping-signal',
+      Calibration: 'calibration',
+      RingSummary: 'ring',
+      EegSummary: 'eeg',
+      EmaDetail: 'ema',
+      PSS4: 'pss4',
+      Profile: 'profile',
+      PhenotypingEma: 'phenotyping-ema',
+      PhenotypingSignalDetail: 'phenotyping-signal',
       PhenotypingSignalHistory: 'phenotyping-signal-history',
-      PhenotypingAlertDetail:   'phenotyping-alert',
-      PhenotypingOnboarding:    'phenotyping-onboarding',
+      PhenotypingAlertDetail: 'phenotyping-alert',
+      PhenotypingOnboarding: 'phenotyping-onboarding',
     },
   },
 };
@@ -93,35 +97,56 @@ function RootNavigator() {
   }
 
   // Every login/session-restore lands straight in the User app now -- no
-  // mode-chooser screen. CalibrationGate is the real landing point: it
-  // intercepts if neither Ring nor EEG has a usable calibration on file,
-  // otherwise immediately forwards to Physiological (see
-  // modules/shared/CalibrationGate.js's own useEffect). Admin is reached
-  // one level down, via a link in ProfileScreen.js -- not a peer choice
-  // made at login.
-  const initialRoute = !user ? 'Welcome' : 'CalibrationGate';
+  // mode-chooser screen, and no blocking calibration gate either (that
+  // used to be a separate forced screen with its own "Calibrate Ring" /
+  // "Open EEG" buttons pointing at old standalone screens -- calibration
+  // is now inline on Fusion itself: CalibrateBreathingCard is always
+  // visible there, and CalibrationBanner nudges renewal non-blockingly.
+  // See modules/shared/CalibrationGate.js -- only its named exports
+  // (useCalibrationSummary, CalibrationBanner, useSignupAge) are still
+  // used; its old default-exported blocking screen is gone).
+  //
+  // A brand-new registration (user.isNewUser, see AuthContext.js's
+  // register()) lands on AccountSetupScreen instead -- a one-time device
+  // check + the same Calibrate card, skippable -- then
+  // completeOnboarding() flips isNewUser off so every login after that
+  // goes straight to Physiological like normal.
+  const initialRoute = !user ? 'Welcome' : (user.isNewUser ? 'AccountSetup' : 'Physiological');
+
+  // `key={phase}` is load-bearing, not decoration: React Navigation only
+  // honors initialRouteName on a Stack.Navigator's FIRST mount -- it's the
+  // SAME navigator instance across register()/completeOnboarding() (only
+  // its Stack.Screen children below swap based on `user`), so a
+  // recomputed initialRoute above would otherwise silently never take
+  // effect (a well-documented React Navigation gotcha). Keying on the
+  // auth phase forces a real unmount+remount exactly when initialRoute
+  // needs to change (auth -> onboarding -> app), so e.g. a fresh
+  // registration actually lands on AccountSetup instead of wherever the
+  // stack happened to already be.
+  const phase = !user ? 'auth' : (user.isNewUser ? 'onboarding' : 'app');
 
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }} initialRouteName={initialRoute}>
+    <Stack.Navigator key={phase} screenOptions={{ headerShown: false }} initialRouteName={initialRoute}>
       {user ? (
         <>
           {/* User path: Physiological's 2-tab bar (Overview/Phenotyping --
               see PhysiologicalNavigator.js), simplified for a real end
-              user; CalibrationGate intercepts first if neither Ring nor
-              EEG has a usable calibration on file. Admin path:
-              AdminNavigator, a separate stack with full raw/technical data
-              for any registered user, independent of who's logged into
-              this phone -- reached via ProfileScreen.js's "Clinical &
-              Admin Suite" card, with its own way back (see
-              AdminUserListScreen.js's swap-mode button, which returns to
-              CalibrationGate). Everything technical that used to live in
-              the user app (raw baseline numbers, live signal charts,
-              session history detail, Relaxation Guide, phenotyping's
-              Analysis deep-dive) now lives only under Admin. Profile is
-              reached via a persistent header icon on each user tab, not a
-              tab of its own -- see ProfileScreen.js. */}
+              user -- calibration freshness is handled inline on that
+              screen, not as a separate gate. Admin path: AdminNavigator, a
+              separate stack with full raw/technical data for any
+              registered user, independent of who's logged into this phone
+              -- reached via ProfileScreen.js's "Clinical & Admin Suite"
+              card, with its own way back (see AdminUserListScreen.js's
+              swap-mode button, which returns straight to Physiological).
+              Everything technical that used to live in the user app (raw
+              baseline numbers, live signal charts, session history detail,
+              Relaxation Guide, phenotyping's Analysis deep-dive) now lives
+              only under Admin. Profile is reached via a persistent header
+              icon on each user tab, not a tab of its own -- see
+              ProfileScreen.js. */}
           <Stack.Screen name="Admin" component={AdminNavigator} />
-          <Stack.Screen name="CalibrationGate" component={CalibrationGate} />
+          <Stack.Screen name="AccountSetup" component={AccountSetupScreen} />
+          <Stack.Screen name="ThresholdCalibration" component={EegThresholdTaskScreen} />
           <Stack.Screen name="Physiological" component={PhysiologicalNavigator} />
           <Stack.Screen
             name="Profile"
@@ -178,6 +203,11 @@ function RootNavigator() {
             component={PhenotypingOnboardingScreen}
             options={{ headerShown: true, title: 'Set Up Tracking' }}
           />
+          <Stack.Screen
+            name="PhenotypingAnalysis"
+            component={PhenotypingAnalysisScreen}
+            options={{ headerShown: false, title: 'Pattern Charts' }}
+          />
         </>
       ) : (
         <>
@@ -196,10 +226,10 @@ function ThemedStatusBar() {
 }
 
 export default function App() {
-  const [lastSessionId,   setLastSessionId]   = useState(null);
+  const [lastSessionId, setLastSessionId] = useState(null);
 
   const sharedState = {
-    lastSessionId,   setLastSessionId,
+    lastSessionId, setLastSessionId,
   };
 
   return (

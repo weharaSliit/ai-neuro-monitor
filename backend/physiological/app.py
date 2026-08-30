@@ -1,6 +1,15 @@
 import os
 import sys
 
+# Forces line buffering regardless of `python -u`/PYTHONUNBUFFERED -- same
+# fix as the bridge scripts (backend/common/mqtt_bridge.py's identical
+# comment). Without it, print()s from run_calibration_capture()'s
+# background thread (app.py's /calibrate/start) sit queued in stdout's
+# default block buffer instead of showing up live in Render's log viewer --
+# a whole calibration attempt could finish before anything appeared, or
+# some lines might never flush at all depending on buffer/thread timing.
+sys.stdout.reconfigure(line_buffering=True)
+
 from flask import jsonify, request, g
 from werkzeug.security import generate_password_hash, check_password_hash
 import re
@@ -16,6 +25,7 @@ if __package__ is None:
 from backend.common.app_factory import create_app
 from backend.common.config import (
     STRESS_COLORS,
+    STRESS_LABELS,
     N_BASELINE_WIN,
     CALIBRATION_SOFT_AGE_DAYS, CALIBRATION_HARD_AGE_DAYS
 )
@@ -25,8 +35,10 @@ from backend.physiological.firebase_service import (
     create_user, get_user, list_users,
     create_user_with_password, set_password_hash,
     load_baseline, load_baseline_meta,
+    load_personal_stress_threshold,
     save_prediction, get_session_predictions,
     get_recent_sessions,
+    compute_baseline_drift, compute_baseline_drift_history,
     save_pss4, get_pss4_history,
     _ref,
     save_prediction_quality,
@@ -36,21 +48,40 @@ from backend.physiological.firebase_service import (
 )
 from backend.physiological.predictor import (
     predict_window, predict_raw,
-    feature_cols, StressStateMachine
+    feature_cols, StressStateMachine, STRESS_DECISION_THRESHOLD
 )
 from backend.physiological.extract_features import (
     extract_features, compute_signal_quality
 )
 from backend.physiological.calibration_capture import (
-    save_calibration_windows, run_calibration_capture
+    save_calibration_windows, run_calibration_capture, run_task_calibration_capture
 )
 
 app = create_app(__name__)
 init_firebase()
 
-ring_sessions = {}  
+ring_sessions = {}
 
 _calibration_sessions = {}
+
+# user_id -> {'status': ..., ...} -- separate from _calibration_sessions
+# above (baseline capture progress) so a threshold-task capture in
+# progress never overwrites/gets overwritten by a concurrent baseline
+# capture's own status polling. Mirrors backend/psychological/app.py's
+# identical split.
+_threshold_sessions = {}
+
+# Guards the check-then-set in /calibrate/start and /calibrate/threshold/
+# start below -- app.run() is started with threaded=True (see bottom of
+# this file), so two near-simultaneous requests for the same user (a
+# double-tap, a retry racing the original) can genuinely land on separate
+# threads at the same time. Without this lock both requests can read
+# _calibration_sessions.get(user_id) before either has written its own
+# update, both pass the "already in progress" check, and both proceed --
+# the second one resets window_idx back to 0 and starts a second capture
+# thread competing with the first for the same status dict. Observed live
+# as calibration progress reading "1/2" then suddenly "0/2".
+_session_start_lock = threading.Lock()
 
 USER_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{3,30}$')
 
@@ -146,13 +177,14 @@ def calibrate():
 @require_auth
 def calibrate_start():
     user_id = g.user_id
-    current = _calibration_sessions.get(user_id)
-    if current and current.get('status') in ('settling', 'capturing', 'saving'):
-        return jsonify({'error': 'Calibration already in progress'}), 409
+    with _session_start_lock:
+        current = _calibration_sessions.get(user_id)
+        if current and current.get('status') in ('settling', 'capturing', 'saving'):
+            return jsonify({'error': 'Calibration already in progress'}), 409
 
-    _calibration_sessions[user_id] = {
-        'status': 'settling', 'window_idx': 0, 'n_windows': N_BASELINE_WIN
-    }
+        _calibration_sessions[user_id] = {
+            'status': 'settling', 'window_idx': 0, 'n_windows': N_BASELINE_WIN
+        }
 
     def on_progress(status, extra):
         entry = {'status': status, 'n_windows': N_BASELINE_WIN}
@@ -165,7 +197,13 @@ def calibrate_start():
                 user_id, {}
             ).get('window_idx', 0)
         elif status == 'error':
-            entry['error'] = extra.get('message', 'Unknown error')
+            # 'message', not 'error' -- CalibrateBreathingCard.js reads
+            # ringState.message specifically; this used to be named 'error'
+            # here, which that field never matched, so the real reason
+            # (e.g. "insufficient clean heart-rate data -- check ring
+            # contact/fit and retry") never reached the screen and it fell
+            # through to the generic "Calibration failed" every time.
+            entry['message'] = extra.get('message', 'Unknown error')
         else:
             entry.update(extra)
             entry['status'] = status
@@ -183,6 +221,56 @@ def calibrate_start():
 def calibrate_status():
     state = _calibration_sessions.get(g.user_id, {'status': 'idle'})
     return jsonify(state)
+
+
+# -- /calibrate/threshold/start + /status -- personal STRESS_DECISION_THRESHOLD
+# from a deliberate onboarding task (mirrors backend/psychological/app.py's
+# /calibrate/threshold -- same idea, physiological's own on-demand-capture
+# shape since this modality has no equivalent to EEG's already-warm,
+# always-on mqtt_bridge.py session to submit pre-captured blocks to).
+# Call only after /calibrate (or /calibrate/start) has already saved a
+# baseline for this user -- run_task_calibration_capture() (calibration_capture.py)
+# needs the resting scores that call saves.
+@app.route('/calibrate/threshold/start', methods=['POST'])
+@require_auth
+def calibrate_threshold_start():
+    user_id = g.user_id
+    with _session_start_lock:
+        current = _threshold_sessions.get(user_id)
+        if current and current.get('status') in ('capturing', 'saving'):
+            return jsonify({'error': 'Threshold calibration already in progress'}), 409
+
+        _threshold_sessions[user_id] = {'status': 'capturing'}
+
+    def on_progress(status, extra):
+        if status == 'error':
+            entry = {'status': 'error', 'error': extra.get('message', 'Unknown error')}
+        elif status == 'done':
+            # extra IS run_task_calibration_capture()'s outcome dict, which
+            # already carries its own semantic 'status' ('ok'/'not_separated')
+            # -- that must win over the generic phase-status 'done', not get
+            # overwritten by it (an earlier version of this line did
+            # entry.update(extra) THEN entry['status']=status, which clobbered
+            # 'ok'/'not_separated' back to 'done' every time, so the frontend
+            # could never actually see a successful personalization).
+            entry = {'status': status, **extra}
+        else:  # 'capturing' / 'window_skipped' / 'saving'
+            entry = {'status': status, **extra}
+        _threshold_sessions[user_id] = entry
+
+    def worker():
+        run_task_calibration_capture(user_id, on_progress=on_progress)
+
+    threading.Thread(target=worker, daemon=True).start()
+    return jsonify({'status': 'started'})
+
+
+@app.route('/calibrate/threshold/status', methods=['GET'])
+@require_auth
+def calibrate_threshold_status():
+    state = _threshold_sessions.get(g.user_id, {'status': 'idle'})
+    return jsonify(state)
+
 
 @app.route('/predict', methods=['POST'])
 @require_auth
@@ -286,6 +374,25 @@ def predict():
     except RuntimeError as e:
         return jsonify({'error': 'Model unavailable', 'details': str(e)}), 503
 
+    # ── Personal STRESS_DECISION_THRESHOLD override, if this user has one ──
+    # (see /calibrate/threshold/start + calibration_capture.py::
+    # run_task_calibration_capture()) -- re-derives prediction/label from
+    # the SAME prob_stress predict_window()/predict_raw() already computed,
+    # just against this user's own threshold instead of the fixed
+    # population one. confidence is max(prob_normal, prob_stress) either
+    # way, so it's unaffected and left as-is.
+    personal_threshold = load_personal_stress_threshold(user_id)
+    if personal_threshold is not None:
+        result = dict(result)
+        result['prediction'] = 1 if result['prob_stress'] > personal_threshold else 0
+        result['label'] = STRESS_LABELS[result['prediction']]
+    # This user's EFFECTIVE threshold either way -- passed to
+    # save_fusion_en_rtdb() below for the fusion engine's own
+    # weighted-threshold combination (see fusion_engin.py::
+    # compute_realtime_multimodal_fusion()), alongside EEG's own
+    # effective_high_load_p.
+    effective_threshold = personal_threshold if personal_threshold is not None else STRESS_DECISION_THRESHOLD
+
     # ── Save structured data only ──────────────────────────────
     save_prediction(
         user_id, session_id, window_idx,
@@ -305,7 +412,7 @@ def predict():
         result['confidence'], signal_quality,
         result['prob_normal'], result['prob_stress'],
         result['label'], result['trending_toward_stress'],
-        feat_dict
+        feat_dict, effective_threshold
     )
 
     return jsonify({
@@ -400,6 +507,17 @@ def _baseline_response(user_id):
         'age_days': age_days,
         'is_stale_soft': age_days is not None and age_days > CALIBRATION_SOFT_AGE_DAYS,
         'is_stale_hard': age_days is not None and age_days > CALIBRATION_HARD_AGE_DAYS,
+        # None until the onboarding threshold task has actually separated
+        # Rest from Task for this user (see compute_personal_stress_threshold()) --
+        # exposed here (not just written) so the Fusion dashboard can show
+        # what this user's stress threshold actually got personalized to.
+        'personal_stress_threshold': load_personal_stress_threshold(user_id),
+        # Piggybacks on this same call (not a separate endpoint/round-trip)
+        # since CalibrationBanner already fetches this response on every
+        # poll -- see compute_baseline_drift()'s docstring for what this
+        # actually measures and its real limitation (can't tell "baseline
+        # went stale" apart from "genuinely been stressed lately").
+        'drift': compute_baseline_drift(user_id),
         'baseline': {
             feature_cols[i]: {
                 'mean': float(b_mean[i]),
@@ -449,6 +567,19 @@ def get_ema_history(user_id):
     return jsonify(_ema_history_response(user_id))
 
 
+# -- /baseline/<user_id>/drift-history -- weekly-bucketed drift trend, for
+# ProfileScreen.js's chart. Separate from /baseline/<user_id> above (which
+# already carries the single current drift verdict for the calibration
+# banner) since this one does more work (scans up to 200 recent sessions)
+# and isn't needed on every poll the way the banner's check is.
+@app.route('/baseline/<user_id>/drift-history', methods=['GET'])
+@require_auth
+def get_baseline_drift_history(user_id):
+    if user_id != g.user_id:
+        return jsonify({'error': 'Forbidden — token does not match requested user'}), 403
+    return jsonify({'user_id': user_id, 'weeks': compute_baseline_drift_history(user_id)})
+
+
 # ── Admin routes ──────────────────────────────────────────────────────
 # Same data as the owner-only routes above, but for ANY user_id -- no
 # ownership check, only @require_auth (a valid token, still required).
@@ -494,6 +625,8 @@ if __name__ == '__main__':
     print(f"  POST /calibrate         ← real-ring baseline capture (auth required)")
     print(f"  POST /calibrate/start    (auth required) — live in-app capture trigger")
     print(f"  GET  /calibrate/status   (auth required) — poll capture progress")
+    print(f"  POST /calibrate/threshold/start  (auth required) — personal threshold task trigger")
+    print(f"  GET  /calibrate/threshold/status (auth required) — poll threshold task progress")
     print(f"  POST /predict           ← binary (Normal/Stress) + trend")
     print(f"  GET  /devices/<device_id>/status")
     print(f"  POST /pss4")

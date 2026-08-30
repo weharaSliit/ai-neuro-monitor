@@ -1,35 +1,35 @@
 // Port of the standalone phenotyping app's userStorage.js calibration-status
 // logic (getCalibrationStatus/markCalibrated) -- identity itself no longer
-// lives here (StressApp's AuthContext/login is now the single source of
-// truth for who's using the app, see the "Bring Phenotyping Into StressApp"
-// plan), so this only tracks the two local fields that logic actually needs:
-// when this device first started collecting for this user, and whether the
-// backend has ever confirmed a real calibration.
+// lives here. Keyed by this device's own randomly-generated Digital
+// Phenotyping tracking id (see utils/deviceIdentity.js), not the shared
+// account login id -- so this only tracks the two local fields that logic
+// actually needs: when this device first started collecting, and whether
+// the backend has ever confirmed a real calibration for it.
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const KEY_PREFIX = 'phenotyping_calib_';
 
-async function readState(userId) {
+async function readState(deviceId) {
     try {
-        const raw = await AsyncStorage.getItem(KEY_PREFIX + userId);
+        const raw = await AsyncStorage.getItem(KEY_PREFIX + deviceId);
         return raw ? JSON.parse(raw) : null;
     } catch {
         return null;
     }
 }
 
-async function writeState(userId, state) {
-    await AsyncStorage.setItem(KEY_PREFIX + userId, JSON.stringify(state));
+async function writeState(deviceId, state) {
+    await AsyncStorage.setItem(KEY_PREFIX + deviceId, JSON.stringify(state));
 }
 
-// Ensures a created_at timestamp exists for this user (first call ever
+// Ensures a created_at timestamp exists for this device (first call ever
 // creates it), then returns the day-number/phase status exactly like the
 // original getCalibrationStatus().
-export async function getCalibrationStatus(userId) {
-    let state = await readState(userId);
+export async function getCalibrationStatus(deviceId) {
+    let state = await readState(deviceId);
     if (!state) {
         state = { created_at: new Date().toISOString(), is_calibrated: false };
-        await writeState(userId, state);
+        await writeState(deviceId, state);
     }
 
     const created = new Date(state.created_at);
@@ -62,17 +62,17 @@ export async function getCalibrationStatus(userId) {
 }
 
 // Call after a successful POST /behavior/calibrate response.
-export async function markCalibrated(userId) {
-    const state = (await readState(userId)) || { created_at: new Date().toISOString() };
+export async function markCalibrated(deviceId) {
+    const state = (await readState(deviceId)) || { created_at: new Date().toISOString() };
     const updated = { ...state, is_calibrated: true, calibrated_at: new Date().toISOString() };
-    await writeState(userId, updated);
+    await writeState(deviceId, updated);
     return updated;
 }
 
 // Throttles the dashboard's auto-calibrate POST to once per calendar day
-// per user -- same behavior as the original's localStorage throttle key.
-export async function shouldAttemptCalibrateToday(userId) {
-    const throttleKey = `phenotyping_calib_attempt_${userId}`;
+// per device -- same behavior as the original's localStorage throttle key.
+export async function shouldAttemptCalibrateToday(deviceId) {
+    const throttleKey = `phenotyping_calib_attempt_${deviceId}`;
     const today = new Date().toISOString().slice(0, 10);
     const last = await AsyncStorage.getItem(throttleKey);
     if (last === today) return false;

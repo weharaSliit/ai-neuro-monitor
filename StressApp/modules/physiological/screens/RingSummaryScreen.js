@@ -5,11 +5,10 @@
 // action, a session-distribution bar, and the live trend -- a scrollable,
 // tappable, zone-colored chart (see LineChart.js's colorZones) against the
 // one shared Stress threshold line: green below it, red (dashed) at/above
-// it. Deliberately kept to just that one line -- no session-baseline
-// reference or deviation numbers here, that level of detail moved to the
-// Admin app (modules/admin/) instead, same reasoning as the raw AVNN/SCL
-// feature numbers and the manual "Stop Watching" control already living
-// there rather than here.
+// it, plus a weekly Calibration Drift chart against the original resting
+// calibration. The raw AVNN/SCL feature numbers and the manual "Stop
+// Watching" control still stay Admin-app only (modules/admin/) -- just not
+// the drift/deviation view, which the user explicitly asked to see here.
 // ============================================================
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
@@ -20,6 +19,7 @@ import StatusDot from '../../shared/StatusDot';
 import Icon, { NAMES } from '../../shared/Icon';
 import MoodBadge from '../../shared/MoodBadge';
 import LineChart from '../../shared/LineChart';
+import { useCalibrationSummary } from '../../shared/CalibrationGate';
 import { useTheme } from '../config/ThemeContext';
 import { COLORS } from '../config/theme';
 import { useAuth } from '../../../context/AuthContext';
@@ -44,8 +44,31 @@ function DistBar({ label, value, total, color, muted }) {
 
 export default function RingSummaryScreen({ navigation }) {
   const { COLORS, theme } = useTheme();
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const userId = user?.userId;
+
+  // A never-calibrated user still gets predictions from the backend --
+  // app.py:331-336 falls back to predict_raw(), the population-only
+  // model, when load_baseline() returns None -- but those aren't
+  // personalized and shouldn't be shown as if they were. Gate the
+  // prediction-dependent cards below on ring.exists; an already-
+  // calibrated user sees everything exactly as before, instantly, no
+  // added delay -- this only hides output for someone who's never
+  // calibrated at all.
+  const { loading: calibLoading, ring } = useCalibrationSummary(userId, token);
+  const neverCalibrated = !calibLoading && ring?.ok && !ring.exists;
+
+  // The chart's dashed reference line has to match whatever line app.py's
+  // /predict actually decided Normal/Stress against (app.py:383-387) --
+  // once this user has a personal_stress_threshold (from the onboarding
+  // maths-quiz task), that's what's really being used, not the fixed
+  // population STRESS_DECISION_THRESHOLD_PERCENT below. Drawing the old
+  // fixed line regardless made points that were correctly labeled Stress
+  // by their own (lower) personal threshold visually sit under a "Normal
+  // zone" reference line that no longer matched the real decision boundary.
+  const personalRingPct = ring?.personal_stress_threshold != null
+    ? Math.round(ring.personal_stress_threshold * 100) : null;
+  const effectiveThresholdPct = personalRingPct != null ? personalRingPct : STRESS_DECISION_THRESHOLD_PERCENT;
 
   const [status, setStatus] = useState('offline');
   const [fingerDetected, setFingerDetected] = useState(null);
@@ -54,7 +77,17 @@ export default function RingSummaryScreen({ navigation }) {
   const [recent, setRecent] = useState([]);
   const [sessionDist, setSessionDist] = useState({ normal: 0, stress: 0 });
   const [sessionCount, setSessionCount] = useState(0);
+  const [driftWeeks, setDriftWeeks] = useState(null);
   const intervalRef = useRef(null);
+
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    api.get(`/baseline/${userId}/drift-history`)
+      .then((res) => { if (!cancelled) setDriftWeeks(res.data?.weeks || null); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [userId]);
 
   const poll = useCallback(async () => {
     try {
@@ -136,6 +169,26 @@ export default function RingSummaryScreen({ navigation }) {
       .map((w) => ({ value: Math.round(w.prob_stress * 100), date: new Date(w.timestamp) }));
   }, [chartWindows]);
 
+  // Raw heart-rate/GSR trends -- same `features` object already fetched per
+  // window (backend/physiological/firebase_service.py::save_prediction()),
+  // just not previously read here. Kept to the two features a non-technical
+  // user actually recognizes (bpm, skin conductance) rather than the full
+  // AVNN/SDHR/pNN20/etc set Admin shows -- that fuller feature-level detail
+  // stays Admin-only, per this screen's original design (see file header).
+  const heartRateTrend = useMemo(() => {
+    return [...chartWindows]
+      .reverse()
+      .filter((w) => w.timestamp && w.features?.MeanHR)
+      .map((w) => ({ value: Math.round(w.features.MeanHR), date: new Date(w.timestamp) }));
+  }, [chartWindows]);
+
+  const gsrTrend = useMemo(() => {
+    return [...chartWindows]
+      .reverse()
+      .filter((w) => w.timestamp && w.features?.SCL_mean !== undefined && w.features?.SCL_mean !== null)
+      .map((w) => ({ value: Number(w.features.SCL_mean.toFixed(2)), date: new Date(w.timestamp) }));
+  }, [chartWindows]);
+
   const t = theme;
   const connected = status === 'online';
   const statusColor = connected ? COLORS.normal : COLORS.stress;
@@ -183,6 +236,26 @@ export default function RingSummaryScreen({ navigation }) {
           )}
         </Card>
 
+        {/* Never-calibrated -- predictions exist server-side (the raw,
+            non-personalized fallback model) but aren't shown as if they
+            were trustworthy. Everything below this point is skipped
+            entirely in that case. */}
+        {neverCalibrated ? (
+          <Card accentColor={COLORS.warning} elevated style={styles.readingCard}>
+            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 4 }]}>Calibrate to see predictions</Text>
+            <Text style={[styles.cardSub, { color: t.textMuted, marginBottom: 14 }]}>
+              Your Ring hasn't been calibrated yet. Predictions before that would use a generic model with no personal baseline, so they're hidden until you calibrate.
+            </Text>
+            <TouchableOpacity
+              onPress={() => navigation.navigate('Physiological', { screen: 'Fusion' })}
+              activeOpacity={0.85}
+              style={[styles.calibrateCta, { backgroundColor: COLORS.brandSoft, borderColor: COLORS.brand + '30' }]}
+            >
+              <Text style={{ color: COLORS.brandDark, fontWeight: '800' }}>Calibrate now →</Text>
+            </TouchableOpacity>
+          </Card>
+        ) : (
+        <>
         {/* Live Session Trend Chart */}
         {trend.length > 1 && (
           <Card accentColor={stateColor} elevated style={styles.readingCard}>
@@ -197,9 +270,74 @@ export default function RingSummaryScreen({ navigation }) {
               height={145}
               maxValue={100}
               hideValues
-              baselineValue={STRESS_DECISION_THRESHOLD_PERCENT}
-              baselineLabel="Stress threshold"
+              baselineValue={effectiveThresholdPct}
+              baselineLabel={personalRingPct != null ? 'Your stress threshold' : 'Stress threshold'}
               colorZones
+            />
+          </Card>
+        )}
+
+        {/* Calibration Drift -- weekly mean predicted-stress vs. the
+            resting baseline captured at calibration time (see
+            compute_baseline_drift_history(), backend/physiological/
+            firebase_service.py). Weeks with too few predictions to be
+            meaningful are dropped server-side (mean_prob_stress: null),
+            not shown as zero. */}
+        {Array.isArray(driftWeeks) && driftWeeks.some((w) => w.mean_prob_stress != null) && (
+          <Card accentColor={COLORS.brand} elevated style={styles.readingCard}>
+            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 4 }]}>Calibration Drift</Text>
+            <Text style={[styles.cardSub, { color: t.textMuted, marginBottom: 12 }]}>
+              {ring?.drift?.checked && ring.drift.drift_detected
+                ? 'Your recent readings have shifted from your original calibration — recalibrating is recommended.'
+                : 'How your recent readings compare to your original resting calibration, week by week.'}
+            </Text>
+            <LineChart
+              points={driftWeeks
+                .filter((w) => w.mean_prob_stress != null)
+                .map((w) => ({ value: Math.round(w.mean_prob_stress * 100), date: w.week_start }))}
+              width={TREND_CHART_WIDTH}
+              height={140}
+              color={COLORS.brand}
+              maxValue={100}
+              suffix="%"
+              baselineValue={ring?.drift?.original_resting_mean != null
+                ? Math.round(ring.drift.original_resting_mean * 100) : undefined}
+              baselineLabel="Your original calibration"
+              baselineColor={COLORS.normal}
+            />
+          </Card>
+        )}
+
+        {/* Heart Rate Trend */}
+        {heartRateTrend.length > 1 && (
+          <Card accentColor={COLORS.hrv} elevated style={styles.readingCard}>
+            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 4 }]}>Heart Rate</Text>
+            <Text style={[styles.cardSub, { color: t.textMuted, marginBottom: 12 }]}>
+              Beats per minute, per telemetry window
+            </Text>
+            <LineChart
+              points={heartRateTrend}
+              color={COLORS.hrv}
+              width={TREND_CHART_WIDTH}
+              height={120}
+              suffix=" bpm"
+            />
+          </Card>
+        )}
+
+        {/* GSR / Skin Conductance Trend */}
+        {gsrTrend.length > 1 && (
+          <Card accentColor={COLORS.gsr} elevated style={styles.readingCard}>
+            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 4 }]}>Skin Conductance (GSR)</Text>
+            <Text style={[styles.cardSub, { color: t.textMuted, marginBottom: 12 }]}>
+              Electrodermal activity level, per telemetry window
+            </Text>
+            <LineChart
+              points={gsrTrend}
+              color={COLORS.gsr}
+              width={TREND_CHART_WIDTH}
+              height={120}
+              suffix=" µS"
             />
           </Card>
         )}
@@ -238,6 +376,8 @@ export default function RingSummaryScreen({ navigation }) {
             })}
           </Card>
         )}
+        </>
+        )}
       </ScrollView>
     </ScreenBackground>
   );
@@ -259,6 +399,7 @@ const styles = StyleSheet.create({
   statusPillText: { fontSize: 11, fontWeight: '800' },
   contactBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 12, padding: 10, marginTop: 10 },
   contactBannerText: { fontSize: 12, fontWeight: '700', flex: 1 },
+  calibrateCta: { padding: 14, borderRadius: 14, alignItems: 'center', borderWidth: 1 },
   stateLabel: { fontSize: 19, fontWeight: '900', letterSpacing: -0.2 },
   readingSub: { fontSize: 12, marginTop: 2 },
   waitingBlock: { paddingVertical: 10 },

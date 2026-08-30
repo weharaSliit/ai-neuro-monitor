@@ -6,31 +6,19 @@
 // ============================================================
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { NativeModules, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ref, update } from 'firebase/database';
 import { db } from '../firebase';
 import api, { setAuthToken, setUnauthorizedHandler } from '../modules/physiological/api/client';
 import { setAuthToken as setRelaxationAuthToken } from '../modules/relaxation_guide/src/api/apiService';
 
-// Android-only native module (see android/app/.../phenotyping/
-// PhenotypingIdentityModule.java) -- bridges the logged-in userId into
-// KeystrokeCollectorService's native SharedPreferences read. Doesn't exist
-// on iOS/web (system-wide keystroke capture is an Android-only capability
-// to begin with), so every call site below guards on its presence.
-const { PhenotypingIdentity } = NativeModules;
-
-function setPhenotypingUserId(userId) {
-  if (Platform.OS === 'android' && PhenotypingIdentity) {
-    PhenotypingIdentity.setUserId(userId);
-  }
-}
-
-function clearPhenotypingUserId() {
-  if (Platform.OS === 'android' && PhenotypingIdentity) {
-    PhenotypingIdentity.clearUserId();
-  }
-}
+// NOTE: Digital Phenotyping does NOT hook into login/logout here anymore.
+// It tracks each device under its own randomly-generated id (created
+// lazily the first time someone opens Digital Phenotyping), independent
+// of which account is logged in -- see
+// modules/phenotyping/utils/deviceIdentity.js for why (the main app's
+// login intentionally uses the same credentials on every device, but
+// behavioral biometrics are inherently per-device).
 
 const TOKEN_KEY      = '@stressapp/authToken';
 const USER_KEY       = '@stressapp/authUser';
@@ -113,7 +101,6 @@ export function AuthProvider({ children }) {
     await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY, SESSION_ID_KEY]);
     setAuthToken(null);
     setRelaxationAuthToken(null);
-    clearPhenotypingUserId();
     setToken(null);
     setUser(null);
     setSessionId(null);
@@ -140,7 +127,6 @@ export function AuthProvider({ children }) {
           setRelaxationAuthToken(t);
           setToken(t);
           setUser(u);
-          setPhenotypingUserId(u.userId);
           if (sid) {
             setSessionId(sid);
           } else {
@@ -163,11 +149,11 @@ export function AuthProvider({ children }) {
     setRelaxationAuthToken(newToken);
     setToken(newToken);
     setUser(newUser);
-    setPhenotypingUserId(newUser.userId);
     await AsyncStorage.multiSet([
       [TOKEN_KEY, newToken],
       [USER_KEY, JSON.stringify(newUser)],
     ]);
+
     await startLiveSession(newUser.userId);
   };
 
@@ -193,8 +179,22 @@ export function AuthProvider({ children }) {
     }
   };
 
+  // Called once the new-user setup screen (device check + first
+  // calibration, or an explicit skip) is done -- flips isNewUser off so
+  // App.js's RootNavigator stops routing this user back to that screen on
+  // future opens. Persisted immediately (not just in-memory state), since
+  // a killed app should remember this was already shown.
+  const completeOnboarding = useCallback(async () => {
+    setUser((u) => {
+      if (!u || !u.isNewUser) return u;
+      const updated = { ...u, isNewUser: false };
+      AsyncStorage.setItem(USER_KEY, JSON.stringify(updated)).catch(() => {});
+      return updated;
+    });
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, token, sessionId, isLoading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, token, sessionId, isLoading, login, register, logout, completeOnboarding }}>
       {children}
     </AuthContext.Provider>
   );

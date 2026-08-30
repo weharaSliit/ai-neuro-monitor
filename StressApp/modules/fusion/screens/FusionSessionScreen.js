@@ -13,7 +13,6 @@ import AvatarButton from '../../shared/AvatarButton';
 import { CalibrationBanner } from '../../shared/CalibrationGate';
 import LineChart from '../../shared/LineChart';
 import FreudHeroBanner from '../../shared/FreudHeroBanner';
-import CalibrateBreathingCard from '../../shared/CalibrateBreathingCard';
 import { ref, onValue, off } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
@@ -25,6 +24,10 @@ import { FUSION_TREND_LABELS } from '../config/config';
 
 const CHART_WIDTH = Dimensions.get('window').width - 2 * 20 - 2 * 18 - 10;
 const DEVICE_POLL_MS = 8000;
+// live_raw is overwritten roughly every 1s while wearable02 is genuinely
+// streaming -- 10s gives generous margin for jitter while still flipping
+// "connected" off promptly once the device actually drops.
+const LIVE_RAW_STALE_SEC = 10;
 
 function getGreeting() {
     const h = new Date().getHours();
@@ -82,6 +85,14 @@ export default function FusionSessionScreen({ navigation }) {
     const { theme: t, COLORS } = useTheme();
     const { user, token } = useAuth();
     const userId = user?.userId;
+
+    // Calibration itself (personal thresholds display + the Ring/EEG
+    // "Calibrate -- Calm Breathing" trigger) now lives on the Profile
+    // screen, not here -- Fusion only keeps CalibrationBanner's passive
+    // staleness/drift nudge below, which links there via its own
+    // `navigation` prop. New-user onboarding still runs through
+    // AccountSetupScreen.js -> ThresholdCalibration on its own, unrelated
+    // to this screen.
     const userName = user?.name || userId;
     const [sessionId, setSessionId] = useState('');
     const [watching, setWatching] = useState(false);
@@ -134,14 +145,55 @@ export default function FusionSessionScreen({ navigation }) {
         pollRing();
         ringTimer = setInterval(pollRing, DEVICE_POLL_MS);
 
-        const eegPointerRef = ref(db, 'psychological/current_session_id');
-        const eegHandler = onValue(eegPointerRef, (snap) => setEegConnected(!!snap.val()));
-
         return () => {
             clearInterval(ringTimer);
-            off(eegPointerRef, 'value', eegHandler);
         };
     }, []);
+
+    // eegConnected reflects whether wearable02 is genuinely streaming
+    // right now. current_session_id alone isn't enough -- it's never
+    // cleared, so it stays truthy forever once any session has existed.
+    // live_raw's own existence isn't enough either -- it's overwritten in
+    // place, so once written it stays "there" even after the device goes
+    // offline for the rest of that session. Only the write's own
+    // timestamp actually tells you whether it's still live -- recomputed
+    // on an interval since a Firebase listener alone won't notice time
+    // passing with no new writes.
+    const [eegLastRawTs, setEegLastRawTs] = useState(null);
+
+    useEffect(() => {
+        if (!userId) return;
+        const eegPointerRef = ref(db, 'psychological/current_session_id');
+        let rawRef = null;
+        let rawHandler = null;
+        const eegHandler = onValue(eegPointerRef, (snap) => {
+            const eegSessionId = snap.val();
+            if (rawRef) {
+                off(rawRef, 'value', rawHandler);
+                rawRef = null;
+            }
+            if (!eegSessionId) {
+                setEegLastRawTs(null);
+                return;
+            }
+            rawRef = ref(db, `psychological/${userId}/${eegSessionId}/live_raw`);
+            rawHandler = (rawSnap) => setEegLastRawTs(rawSnap.val()?.timestamp ?? null);
+            onValue(rawRef, rawHandler);
+        });
+        return () => {
+            off(eegPointerRef, 'value', eegHandler);
+            if (rawRef) off(rawRef, 'value', rawHandler);
+        };
+    }, [userId]);
+
+    useEffect(() => {
+        const evaluate = () => {
+            setEegConnected(eegLastRawTs != null && (Date.now() / 1000 - eegLastRawTs) < LIVE_RAW_STALE_SEC);
+        };
+        evaluate();
+        const t = setInterval(evaluate, 3000);
+        return () => clearInterval(t);
+    }, [eegLastRawTs]);
 
     useEffect(() => {
         if (!userId) return;
@@ -169,6 +221,32 @@ export default function FusionSessionScreen({ navigation }) {
             .filter(({ v }) => v !== undefined && v !== null)
             .map(({ v, key }) => ({ value: Math.round(v * 100), date: new Date(Number(key) * 60000) }));
     }, [windows]);
+
+    // Cognitive load (EEG), autonomic arousal (HRV/GSR), and the fused
+    // probability -- all three already live on the SAME fusion_en/{window}
+    // record (prob_eeg/prob_hrv_gsr are written directly by each backend's
+    // own /predict route, fused_probability is fusion_live_session.py's
+    // reliability-weighted combination of them -- see backend/common/fusion.py
+    // and fushion engin/fusion_live_session.py), so one shared window-key
+    // timeline covers all three with no separate alignment needed. null
+    // where a given window has no reading for that series (e.g. only one
+    // modality reported that block) -- MultiLineChart breaks the line there
+    // instead of interpolating across missing data.
+    const multiSeriesPoints = useMemo(() => {
+        const keys = sortedWindowKeys(windows);
+        return keys.map((k) => {
+            const w = windows[k] || {};
+            return {
+                date: new Date(Number(k) * 60000),
+                values: [
+                    w.prob_eeg != null ? Math.round(w.prob_eeg * 100) : null,
+                    w.prob_hrv_gsr != null ? Math.round(w.prob_hrv_gsr * 100) : null,
+                    w.fused_probability != null ? Math.round(w.fused_probability * 100) : null,
+                ],
+            };
+        });
+    }, [windows]);
+    const hasMultiSeriesData = multiSeriesPoints.filter((p) => p.values.some((v) => v != null)).length > 1;
 
     const label = latest?.fused_label;
     const trend = latest?.stress_trend;
@@ -220,7 +298,7 @@ export default function FusionSessionScreen({ navigation }) {
                     </Card>
                 </TouchableOpacity>
 
-                <CalibrationBanner userId={userId} token={token} />
+                <CalibrationBanner userId={userId} token={token} db={db} navigation={navigation} />
 
                 {/* Calibrate -- Calm Breathing: always visible (not tucked
                     behind a hidden button) -- a plain breathe-in/breathe-out
@@ -265,6 +343,31 @@ export default function FusionSessionScreen({ navigation }) {
                             baselineValue={STRESS_DECISION_THRESHOLD_PERCENT}
                             baselineLabel="Stress threshold"
                             colorZones
+                            fallback={<Text style={[styles.waiting, { color: t.textMuted }]}>Loading chart…</Text>}
+                        />
+                    </Card>
+                )}
+
+                {/* Cognitive load (EEG) / autonomic arousal (HRV-GSR) / fused
+                    probability, all three on one shared timeline -- see
+                    multiSeriesPoints above for why no cross-series alignment
+                    is needed. */}
+                {hasMultiSeriesData && (
+                    <Card elevated style={styles.chartCard}>
+                        <Text style={[styles.chartTitle, { color: t.text }]}>Cognitive Load, Autonomic Arousal & Fused Probability</Text>
+                        <Text style={[styles.chartSub, { color: t.textMuted, marginBottom: 10 }]}>
+                            EEG cognitive-load trend, ring HRV/GSR autonomic-arousal trend, and the combined fused probability
+                        </Text>
+                        <LineChart
+                            points={multiSeriesPoints}
+                            multiLine
+                            seriesColors={[COLORS.eeg, COLORS.hrv, COLORS.brand]}
+                            seriesLabels={['Cognitive load (EEG)', 'Autonomic arousal (HRV/GSR)', 'Fused probability']}
+                            width={CHART_WIDTH}
+                            height={160}
+                            maxValue={100}
+                            baselineValue={STRESS_DECISION_THRESHOLD_PERCENT}
+                            baselineLabel="Stress threshold"
                             fallback={<Text style={[styles.waiting, { color: t.textMuted }]}>Loading chart…</Text>}
                         />
                     </Card>
@@ -372,12 +475,6 @@ const styles = StyleSheet.create({
         fontStyle: 'italic',
         textAlign: 'center',
         paddingVertical: 20,
-    },
-    calibrateCard: {
-        marginHorizontal: 20,
-        marginVertical: 10,
-        padding: 18,
-        borderRadius: 24,
     },
     pss4Card: {
         marginHorizontal: 20,

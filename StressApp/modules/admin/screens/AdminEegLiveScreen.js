@@ -1,8 +1,13 @@
 // ============================================================
 // AdminEegLiveScreen.js
-// Full raw EEG live-signal view -- restored exactly as the old (deleted)
-// EegSessionScreen.js showed it: task-state card, 3 raw µV channel charts,
-// the 29-feature bipolar grid. Only difference from the original: reads
+// Live EEG dashboard: task-state card (cognitive load probability + label),
+// a preprocessed (filtered) bipolar T7-T8 waveform chart, and the
+// 29-feature bipolar grid -- all sourced from the same per-block record
+// (psychological/{userId}/{sessionId}/{window}), updated once per
+// BLOCK_SEC=25s block. No raw ADC signal here or anywhere in Firebase --
+// see backend/psychological/app.py's /predict route and
+// pipeline.py::_downsample_wave(); the waveform is the already-filtered
+// signal the model itself scores, just decimated for charting. Reads
 // psychological/{userId}/... for an ADMIN-SELECTED userId (route param)
 // instead of useAuth()'s own logged-in user. Same hardware constraint as
 // AdminUserDetailScreen's "Live Now" card -- only shows real data while
@@ -23,6 +28,8 @@ import { ref, onValue, off, query, orderByChild, limitToLast } from 'firebase/da
 import { db } from '../../../firebase';
 import { COLORS } from '../../physiological/config/theme';
 import { STRESS_COLORS, STRESS_EMOJI, EEG_TREND_LABELS, TASK_STATE_LABELS } from '../../eeg/config/config';
+import { eegClient } from '../../shared/eegApiClient';
+import { useAuth } from '../../../context/AuthContext';
 
 const CHART_POINTS = 120;
 const RAW_CHART_WIDTH = Dimensions.get('window').width - 2 * 20 - 2 * 18 - 60;
@@ -64,31 +71,43 @@ function percentile(sorted, p) {
     return sorted[idx];
 }
 
-function chartRange(values, millis) {
+function chartRange(values) {
     if (!values || values.length === 0) return { points: [], min: 0, max: 1 };
     const sorted = [...values].sort((a, b) => a - b);
     let lo = percentile(sorted, 0.05);
     let hi = percentile(sorted, 0.95);
     if (hi <= lo) { lo -= 1; hi += 1; }
-    const { values: dsValues, indices } = downsampleWithIndices(values);
+    // 10% vertical headroom applied only to the PLOTTED points, not the
+    // min/max returned below (still true p5-p95, used for the "this block's
+    // range" text) -- no maxValue is passed to LineChart for this raw µV
+    // chart, so gifted-charts auto-scales its y-axis to exactly the range of
+    // the data it's given. Clamping points straight to [lo, hi] left the
+    // waveform's own extremes sitting flush against the chart's top/bottom
+    // edge with no breathing room, which is what made the line hard to read.
+    const pad = (hi - lo) * 0.1;
+    const clampLo = lo - pad;
+    const clampHi = hi + pad;
+    const { values: dsValues } = downsampleWithIndices(values);
     const now = Date.now();
-    const lastMillis = millis && millis.length > 0 ? millis[millis.length - 1] : null;
-    const points = dsValues.map((v, i) => {
-        const idx = indices[i];
-        const m = lastMillis !== null && millis[idx] !== undefined ? millis[idx] : null;
-        const date = m !== null ? new Date(now - (lastMillis - m)) : new Date(now - (dsValues.length - i));
-        return { value: Math.min(hi, Math.max(lo, v)), date };
-    });
+    // wave_uv (pipeline.py::_downsample_wave()) is already decimated
+    // server-side and carries no per-point timestamp -- points are spaced
+    // evenly across the block's real BLOCK_SEC duration instead of a millis
+    // alignment, which is all a shape-preview chart needs.
+    const points = dsValues.map((v, i) => ({
+        value: Math.min(clampHi, Math.max(clampLo, v)),
+        date: new Date(now - (dsValues.length - i) * 1000 * (25 / dsValues.length)),
+    }));
     return { points, min: lo, max: hi };
 }
 
-function latestWindow(windowsObj) {
-    if (!windowsObj) return null;
+function sortedWindowsList(windowsObj) {
+    if (!windowsObj) return [];
     const keys = Object.keys(windowsObj).filter((k) => /^\d+$/.test(k));
-    if (keys.length === 0) return null;
     keys.sort((a, b) => Number(a) - Number(b));
-    return windowsObj[keys[keys.length - 1]];
+    return keys.map((k) => windowsObj[k]);
 }
+
+const TREND_CHART_POINTS_LIMIT = 40; // ~40 blocks * 25s/block = ~16.7 min of live trend history
 
 function SignalChart({ title, lastValue, points, min, max, color, t, last }) {
     return (
@@ -128,14 +147,33 @@ export default function AdminEegLiveScreen({ route, navigation }) {
     const COLORS_FLAT = COLORS;
     const [sessionId, setSessionId] = useState('');
     const [watching, setWatching] = useState(false);
-    const [latest, setLatest] = useState(null);
+    const [windowsList, setWindowsList] = useState([]);
     const [hasAnyWindow, setHasAnyWindow] = useState(false);
-    const [latestRaw, setLatestRaw] = useState(null);
-    const [hasAnyRaw, setHasAnyRaw] = useState(false);
     const [calibrationResult, setCalibrationResult] = useState(null);
+    const [thresholdResult, setThresholdResult] = useState(null);
+    const [populationHighLoadP, setPopulationHighLoadP] = useState(null);
     const listenerRef = useRef(null);
-    const rawListenerRef = useRef(null);
     const calibListenerRef = useRef(null);
+    const thresholdListenerRef = useRef(null);
+    const { token } = useAuth();
+
+    // Real population default (DecisionThresholds.high_load_p), fetched from
+    // the backend's own single source of truth -- not a hardcoded/duplicated
+    // frontend constant that could drift if threshold_set_B is ever re-tuned.
+    // Used only as the chart's fallback for a user who hasn't completed the
+    // onboarding threshold task yet (personal_high_load_p missing).
+    useEffect(() => {
+        if (!userId) return;
+        let cancelled = false;
+        eegClient.get(`/admin/calibration/${userId}`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+        })
+            .then((res) => {
+                if (!cancelled) setPopulationHighLoadP(res.data?.population_high_load_p ?? null);
+            })
+            .catch(() => {});
+        return () => { cancelled = true; };
+    }, [userId, token]);
 
     const startWatching = useCallback((idOverride) => {
         if (!userId) return;
@@ -143,41 +181,43 @@ export default function AdminEegLiveScreen({ route, navigation }) {
         if (!targetId) return;
         if (targetId === sessionId && listenerRef.current) return;
         setSessionId(targetId);
-        setLatest(null);
+        setWindowsList([]);
         setHasAnyWindow(false);
-        setLatestRaw(null);
-        setHasAnyRaw(false);
         setCalibrationResult(null);
+        setThresholdResult(null);
 
+        // limitToLast(TREND_CHART_POINTS_LIMIT), not 1 -- the cognitive-load
+        // trend chart below needs real history across blocks, not just the
+        // latest reading every other card on this screen uses.
         const sessionRef = query(
-            ref(db, `psychological/${userId}/${targetId}`), orderByChild('window'), limitToLast(1)
+            ref(db, `psychological/${userId}/${targetId}`), orderByChild('window'), limitToLast(TREND_CHART_POINTS_LIMIT)
         );
         onValue(sessionRef, (snapshot) => {
             const data = snapshot.val();
             setHasAnyWindow(!!data);
-            setLatest(latestWindow(data));
+            setWindowsList(sortedWindowsList(data));
         });
         listenerRef.current = sessionRef;
-
-        const rawRef = ref(db, `psychological/${userId}/${targetId}/live_raw`);
-        onValue(rawRef, (snapshot) => {
-            const data = snapshot.val();
-            setHasAnyRaw(!!data);
-            setLatestRaw(data);
-        });
-        rawListenerRef.current = rawRef;
 
         const calibRef = ref(db, `psychological/${userId}/${targetId}/calibration_result`);
         onValue(calibRef, (snapshot) => setCalibrationResult(snapshot.val() || null));
         calibListenerRef.current = calibRef;
+
+        // personal_high_load_p lives here (finalize_personal_threshold()'s
+        // outcome, written by push_threshold_result()) -- NOT in
+        // calibration_result above, which only ever covers the resting-
+        // baseline phase, never the onboarding threshold task.
+        const thresholdRef = ref(db, `psychological/${userId}/${targetId}/threshold_result`);
+        onValue(thresholdRef, (snapshot) => setThresholdResult(snapshot.val() || null));
+        thresholdListenerRef.current = thresholdRef;
 
         setWatching(true);
     }, [sessionId, userId]);
 
     const stopWatching = useCallback(() => {
         if (listenerRef.current) { off(listenerRef.current); listenerRef.current = null; }
-        if (rawListenerRef.current) { off(rawListenerRef.current); rawListenerRef.current = null; }
         if (calibListenerRef.current) { off(calibListenerRef.current); calibListenerRef.current = null; }
+        if (thresholdListenerRef.current) { off(thresholdListenerRef.current); thresholdListenerRef.current = null; }
         setWatching(false);
     }, []);
 
@@ -198,6 +238,8 @@ export default function AdminEegLiveScreen({ route, navigation }) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [userId]);
 
+    const latest = windowsList.length > 0 ? windowsList[windowsList.length - 1] : null;
+
     const skipped = latest?.skipped;
     const label = latest?.task_state_label;
     const score = latest?.task_state_score;
@@ -210,18 +252,15 @@ export default function AdminEegLiveScreen({ route, navigation }) {
     const baselineDegraded = latest?.baseline_degraded;
     const stateColor = label !== undefined && label !== null ? STRESS_COLORS[label] : COLORS_FLAT.brand;
 
-    const ch1Uv = latestRaw?.ch1_uv;
-    const ch2Uv = latestRaw?.ch2_uv;
-    const bipolarUv = (ch1Uv && ch2Uv && ch1Uv.length === ch2Uv.length)
-        ? ch1Uv.map((v, i) => v - ch2Uv[i])
-        : null;
-    const rawMillis = latestRaw?.millis;
-    const ch1Chart = ch1Uv ? chartRange(ch1Uv, rawMillis) : { points: [], min: 0, max: 1 };
-    const ch2Chart = ch2Uv ? chartRange(ch2Uv, rawMillis) : { points: [], min: 0, max: 1 };
-    const bipolarChart = bipolarUv ? chartRange(bipolarUv, rawMillis) : { points: [], min: 0, max: 1 };
-    const lastCh1 = ch1Uv?.[ch1Uv.length - 1];
-    const lastCh2 = ch2Uv?.[ch2Uv.length - 1];
-    const lastBipolar = bipolarUv?.[bipolarUv.length - 1];
+    // Preprocessed (filtered, uV-scale) bipolar T7-T8 waveform for this
+    // block -- pipeline.py::_downsample_wave(), 200 points per BLOCK_SEC=25s
+    // block. Same `latest` record already fetched above, not a raw-signal
+    // path -- see backend/psychological/app.py's /predict route (raw ADC
+    // codes are never themselves stored in Firebase).
+    const waveUv = latest?.wave_uv;
+    const hasWave = !!(waveUv && waveUv.length > 0);
+    const waveChart = hasWave ? chartRange(waveUv) : { points: [], min: 0, max: 1 };
+    const lastWave = waveUv?.[waveUv.length - 1];
     const signedLog = (v) => Math.sign(v) * Math.log10(1 + Math.abs(v));
     const bipolarFeatures = latest?.features_eeg?.bipolar;
     const bipolarLinePoints = bipolarFeatures
@@ -230,6 +269,35 @@ export default function AdminEegLiveScreen({ route, navigation }) {
               date: new Date(i),
           }))
         : [];
+
+    // Cognitive-load-vs-threshold trend: task_state_score (0-1) per block,
+    // scaled to 0-100 to match LineChart's colorZones convention (Ring/
+    // Fusion's own stress-vs-threshold charts). personal_high_load_p (this
+    // user's own onboarding threshold task) is preferred; when it's not
+    // available yet, falls back to the REAL population default fetched from
+    // the backend (populationHighLoadP, above) -- not a hardcoded/duplicated
+    // frontend constant.
+    const scoreTrendPoints = windowsList
+        .filter((w) => !w.skipped && w.task_state_score != null)
+        .map((w) => ({ value: w.task_state_score * 100, date: new Date((w.timestamp_end ?? Date.now() / 1000) * 1000) }));
+    const personalHighLoadP = thresholdResult?.status === 'ok' ? thresholdResult.personal_high_load_p : null;
+    const isPersonalized = personalHighLoadP != null;
+    const highLoadThresholdPct = isPersonalized
+        ? personalHighLoadP * 100
+        : (populationHighLoadP != null ? populationHighLoadP * 100 : null);
+    const restingBaselinePct = calibrationResult?.status === 'ok' && calibrationResult.resting_calibrated_p != null
+        ? calibrationResult.resting_calibrated_p * 100 : null;
+
+    let trendHeadline = null;
+    if (highLoadThresholdPct != null && trend) {
+        if (trend === 'increasing') {
+            trendHeadline = { text: '📈 Cognitive load increasing — trending toward your high-load threshold', color: COLORS_FLAT.warningDark };
+        } else if (trend === 'decreasing') {
+            trendHeadline = { text: '📉 Easing — trending away from your high-load threshold', color: COLORS_FLAT.normalDark };
+        } else {
+            trendHeadline = { text: '→ Stable relative to your high-load threshold', color: t.textMuted };
+        }
+    }
 
     return (
         <ScreenBackground edges={['top', 'left', 'right']}>
@@ -327,14 +395,66 @@ export default function AdminEegLiveScreen({ route, navigation }) {
 
                 {watching && (
                     <Card>
-                        <Text style={[styles.label, { color: t.textSub, marginBottom: 12 }]}>Raw Signal (live, ~1s)</Text>
-                        {!hasAnyRaw ? (
-                            <Text style={[styles.waiting, { color: t.textMuted }]}>Waiting for first raw preview…</Text>
+                        <Text style={[styles.label, { color: t.textSub, marginBottom: 4 }]}>Bipolar EEG Waveform (T7 − T8)</Text>
+                        <Text style={[styles.hint, { color: t.textMuted, marginBottom: 12 }]}>
+                            Preprocessed (filtered) signal, not raw ADC output. Updates every 25s block.
+                        </Text>
+                        {!hasWave ? (
+                            <Text style={[styles.waiting, { color: t.textMuted }]}>Waiting for first block…</Text>
+                        ) : (
+                            <SignalChart title="Bipolar (T7 − T8)" lastValue={lastWave} points={waveChart.points} min={waveChart.min} max={waveChart.max} color={stateColor} t={t} last />
+                        )}
+                    </Card>
+                )}
+
+                {watching && (
+                    <Card accentColor={highLoadThresholdPct != null ? stateColor : undefined}>
+                        <Text style={[styles.label, { color: t.textSub, marginBottom: 4 }]}>Cognitive Load vs. Threshold</Text>
+                        <Text style={[styles.hint, { color: t.textMuted, marginBottom: 8 }]}>
+                            task_state_score across this session's blocks, against this user's own calibrated thresholds.
+                        </Text>
+
+                        {highLoadThresholdPct == null ? (
+                            <Text style={[styles.waiting, { color: t.textMuted }]}>
+                                Loading threshold…
+                            </Text>
                         ) : (
                             <>
-                                <SignalChart title="Channel 1 (T7)" lastValue={lastCh1} points={ch1Chart.points} min={ch1Chart.min} max={ch1Chart.max} color={COLORS_FLAT.hrv} t={t} />
-                                <SignalChart title="Channel 2 (T8)" lastValue={lastCh2} points={ch2Chart.points} min={ch2Chart.min} max={ch2Chart.max} color={COLORS_FLAT.gsr} t={t} />
-                                <SignalChart title="Bipolar (T7 − T8)" lastValue={lastBipolar} points={bipolarChart.points} min={bipolarChart.min} max={bipolarChart.max} color={stateColor} t={t} last />
+                                <View style={styles.thresholdInfoRow}>
+                                    <Text style={[styles.thresholdInfoText, { color: t.textSub }]}>
+                                        High-load threshold: <Text style={{ fontWeight: '800', color: t.text }}>{highLoadThresholdPct.toFixed(1)}%</Text>
+                                        {' '}
+                                        <Text style={{ fontStyle: 'italic' }}>
+                                            {isPersonalized ? '(personalized)' : '(population default — no onboarding threshold task yet)'}
+                                        </Text>
+                                    </Text>
+                                    {restingBaselinePct != null && (
+                                        <Text style={[styles.thresholdInfoText, { color: t.textSub }]}>
+                                            Resting baseline: <Text style={{ fontWeight: '800', color: t.text }}>{restingBaselinePct.toFixed(1)}%</Text>
+                                        </Text>
+                                    )}
+                                </View>
+
+                                {trendHeadline && (
+                                    <Text style={[styles.trendHeadline, { color: trendHeadline.color }]}>{trendHeadline.text}</Text>
+                                )}
+
+                                {scoreTrendPoints.length > 1 ? (
+                                    <LineChart
+                                        points={scoreTrendPoints}
+                                        color={stateColor}
+                                        width={RAW_CHART_WIDTH}
+                                        height={160}
+                                        maxValue={100}
+                                        baselineValue={highLoadThresholdPct}
+                                        baselineLabel="High-load threshold"
+                                        baseline2Value={restingBaselinePct ?? undefined}
+                                        baseline2Label="Resting baseline"
+                                        colorZones
+                                    />
+                                ) : (
+                                    <Text style={[styles.waiting, { color: t.textMuted }]}>Collecting more blocks…</Text>
+                                )}
                             </>
                         )}
                     </Card>
@@ -399,6 +519,9 @@ const styles = StyleSheet.create({
     metaLabel:    { fontSize: 13, fontWeight: '600' },
     metaValue:    { fontSize: 13, fontWeight: '700' },
     warningText:  { fontSize: 13, fontWeight: '700', marginTop: 10 },
+    thresholdInfoRow:  { flexDirection: 'row', gap: 18, marginBottom: 8 },
+    thresholdInfoText: { fontSize: 12, fontWeight: '600' },
+    trendHeadline:     { fontSize: 13, fontWeight: '700', marginBottom: 10 },
     signalBlock:      {},
     signalHeaderRow:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
     signalTitle:      { fontSize: 12, fontWeight: '700' },
