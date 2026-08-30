@@ -50,6 +50,7 @@ import time
 
 import paho.mqtt.client as mqtt
 
+from backend.psychological.firebase_service import EegFirebaseSession
 from backend.psychological.calibration_service import (
     CalibrationFailedError, run_eeg_calibration_from_blocks, run_eeg_threshold_from_blocks,
 )
@@ -190,7 +191,31 @@ def run_eeg_calibration_capture(user_id, session_id, on_progress=None):
     Blocks until done/error -- callers that need this non-blocking (the
     in-app trigger) run it in a background thread.
     """
+    # Constructed here, not just inside run_eeg_calibration_from_blocks()
+    # further down -- this covers the real ~10s settle + up to ~75s of
+    # per-block capture BELOW, the actual span useDeviceStatus()
+    # (CalibrationGate.js) had no liveness signal for at all before: it only
+    # ever saw the device as "online" once a scored /predict block existed,
+    # so every EEG-related screen showed "Offline" for this entire capture,
+    # even though the headband was live and streaming the whole time.
+    firebase = EegFirebaseSession(session_id, user_id)
+
     def _notify(status, **extra):
+        # 'done' is skipped here -- run_eeg_calibration_from_blocks() (via
+        # run_eeg_calibration_capture()'s call below) already wrote the
+        # real, authoritative final outcome to this same Firebase node
+        # BEFORE this notification ever fires, and 'done's own extra
+        # (outcome/firebase_enabled/session_state -- session_state holds
+        # live engine/firebase/csv_logger objects) isn't JSON-serializable
+        # anyway. Everything else (settling/capturing/saving/error) only
+        # ever carries small primitives (block_idx, n_blocks, message), so
+        # writing extra as-is is safe for those. Best-effort -- a Firebase
+        # hiccup here shouldn't abort a capture that's otherwise working.
+        if status != 'done':
+            try:
+                firebase.push_calibration_result({'status': status, 'updated_at': time.time(), **extra})
+            except Exception:
+                pass
         if on_progress:
             on_progress(status, extra)
 
