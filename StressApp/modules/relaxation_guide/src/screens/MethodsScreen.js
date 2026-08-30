@@ -28,33 +28,33 @@ export const MethodsScreen = () => {
   const categories = [
     {
       id: "guided_meditation",
-      title: "Guided Breathwork & Vagal Pacing",
+      title: "Guided Breathwork & Meditation",
       icon: "🧘‍♀️",
       sub_options: [
-        { id: "water_lily_pond", title: "Lily Pond Diaphragmatic Exhale", description: "Rapid HRV recovery with 4-6 diaphragmatic exhalations (WESAD Rank #1)" },
-        { id: "vagus_humming", title: "Vagal Humming Exhale", description: "Vagal nerve stimulation through resonant acoustic vibration (WESAD Rank #2)" },
-        { id: "diaphragmatic_pace", title: "Deep Abdominal Pacing", description: "Slow phrenic nerve breathing for rapid pulse reduction (WESAD Rank #5)" },
-        { id: "box_meditation", title: "Box Breathing (4-4-4-4)", description: "Structured 4-4-4-4 square respiration for ANS equilibrium (WESAD Rank #6)" }
+        { id: "water_lily_pond", title: "Lily Pond Breathing", description: "Relaxing water lily blooms synced to deep exhalations." },
+        { id: "vagus_humming", title: "Humming Exhale", description: "Soothing humming exhalations to quickly lower stress." },
+        { id: "diaphragmatic_pace", title: "Deep Belly Breathing", description: "Slow, deep abdominal breathing for fast pulse reduction." },
+        { id: "box_meditation", title: "Box Breathing", description: "4-4-4-4 rhythm for calm and balance." }
       ]
     },
     {
       id: "breathing_garden",
-      title: "Breathing Garden Resonant Pacing",
+      title: "Breathing Garden",
       icon: "🌸",
       sub_options: [
-        { id: "cosmic_nebula", title: "Cosmic Nebula (6 bpm)", description: "0.1 Hz baroreflex starlight pacing for heart coherence (WESAD Rank #3)" },
-        { id: "flower_meadow", title: "Flower Meadow (4-7-8)", description: "4-7-8 parasympathetic extended exhalation bloom (WESAD Rank #4)" }
+        { id: "cosmic_nebula", title: "Cosmic Nebula", description: "Starlight pulses for calm, steady breathing." },
+        { id: "flower_meadow", title: "Flower Meadow", description: "Blooming flowers matched to 4-7-8 breathing cycles." }
       ]
     },
     {
       id: "cognitive_destress",
-      title: "Cognitive & Somatic De-Stress Protocol",
+      title: "Cognitive De-Stress",
       icon: "🌿",
       sub_options: [
-        { id: "soft_fascination", title: "Nature Restoration Viewing", description: "Attention Restoration (ART) viewing for directed attention recovery (WESAD Rank #7)" },
-        { id: "progressive_muscle", title: "Progressive Muscle Release", description: "Step-by-step somatic muscle tension release (WESAD Rank #8)" },
-        { id: "guided_imagery", title: "Guided Forest Walk", description: "Multisensory forest imagery walk for limbic system calming (WESAD Rank #9)" },
-        { id: "pattern_alignment", title: "Visuospatial Memory Alignment", description: "Attentional refocusing memory alignment to disrupt rumination loops (WESAD Rank #10)" }
+        { id: "soft_fascination", title: "Nature Scenery", description: "Calming nature visuals for instant mental rest." },
+        { id: "progressive_muscle", title: "Muscle Release", description: "Step-by-step muscle tension release." },
+        { id: "guided_imagery", title: "Forest Walk", description: "Peaceful forest imagery walk for quick stress relief." },
+        { id: "pattern_alignment", title: "Memory Match", description: "Fun pattern matching to clear active stress loops." }
       ]
     }
   ];

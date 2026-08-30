@@ -4,117 +4,107 @@ import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
 import { Header } from '../components/Header';
 
-// Physiological sub-option metadata (WESAD Rank #1 to #10 Priority Order with scientific metrics)
+// Sub-option metadata
 const SUB_OPTION_META = {
-  // Rank #1 Priority
   water_lily_pond: {
     icon: '🪷',
-    tag: 'Fastest HRV Recovery (89s)',
-    vagal: '+42% Vagal Tone Boost',
-    mechanism: '4-6 Diaphragmatic Exhalation',
+    tag: 'Fast HRV Recovery',
+    vagal: 'Vagal Boost',
+    mechanism: '4-6 Deep Exhalations',
     accent: '#10B981',
     bg: 'rgba(16, 185, 129, 0.14)',
     glow: '#059669',
-    badge: '🏆 WESAD RANK #1 TOP PICK'
+    badge: '🏆 TOP PICK'
   },
-  // Rank #2 Priority
   vagus_humming: {
     icon: '🧘‍♀️',
-    tag: 'Vagal Nerve Stimulation',
-    vagal: '+38% ANS Calming',
-    mechanism: 'Resonant Acoustic Vibration',
+    tag: 'Humming Relief',
+    vagal: 'ANS Calming',
+    mechanism: 'Resonant Sound Vibration',
     accent: '#8B5CF6',
     bg: 'rgba(139, 92, 246, 0.14)',
     glow: '#7C3AED',
-    badge: '⚡ WESAD RANK #2'
+    badge: '⚡ POPULAR'
   },
-  // Rank #3 Priority
   cosmic_nebula: {
     icon: '🌌',
-    tag: 'Starlight Resonant Pacing (6 bpm)',
-    vagal: '0.1 Hz Resonant Coherence',
-    mechanism: 'Baroreflex Heart Synchronization',
+    tag: 'Starlight Pacing (6 bpm)',
+    vagal: 'Heart Coherence',
+    mechanism: 'Rhythmic Starlight',
     accent: '#A78BFA',
     bg: 'rgba(167, 139, 250, 0.14)',
     glow: '#8B5CF6',
-    badge: '✨ WESAD RANK #3'
+    badge: '✨ RECOMMENDED'
   },
-  // Rank #4 Priority
   flower_meadow: {
     icon: '🌸',
-    tag: 'Parasympathetic 4-7-8 Bloom',
+    tag: '4-7-8 Breathing Bloom',
     vagal: 'Heart Deceleration',
-    mechanism: 'Extended Exhale Protocol',
+    mechanism: 'Extended Exhales',
     accent: '#EC4899',
     bg: 'rgba(236, 72, 153, 0.14)',
     glow: '#DB2777',
-    badge: 'RECOMMENDED #4'
+    badge: '🌸 POPULAR'
   },
-  // Rank #5 Priority
   diaphragmatic_pace: {
     icon: '🫁',
-    tag: 'Deep Abdominal Pulmonary Pacing',
-    vagal: 'Instant Pulse Reduction',
-    mechanism: 'Phrenic Nerve Stimulation',
+    tag: 'Deep Belly Pacing',
+    vagal: 'Pulse Reduction',
+    mechanism: 'Deep Abdominal Respiration',
     accent: '#3B82F6',
     bg: 'rgba(59, 130, 246, 0.14)',
     glow: '#2563EB',
-    badge: 'RECOMMENDED #5'
+    badge: '🌿 DEEP CALM'
   },
-  // Rank #6 Priority (Crystalline cube pacing icon instead of shipping cardboard box 📦)
   box_meditation: {
     icon: '🧊',
-    tag: '4-4-4-4 Square Box Breathing',
-    vagal: 'ANS Equilibrium',
-    mechanism: 'Equal Phase Respiration',
+    tag: '4-4-4-4 Box Breathing',
+    vagal: 'Equilibrium',
+    mechanism: 'Equal Rhythm Breathing',
     accent: '#0EA5E9',
     bg: 'rgba(14, 165, 233, 0.14)',
     glow: '#0284C7',
-    badge: 'RECOMMENDED #6'
+    badge: '🧊 BALANCED'
   },
-  // Rank #7 Priority
   soft_fascination: {
     icon: '🌿',
-    tag: 'Nature Restoration Viewing',
-    vagal: 'Mental Fatigue Reset',
-    mechanism: 'Attention Restoration (ART)',
+    tag: 'Nature Viewing',
+    vagal: 'Mental Reset',
+    mechanism: 'Restorative Nature Scenes',
     accent: '#059669',
     bg: 'rgba(5, 150, 105, 0.14)',
     glow: '#047857',
-    badge: 'OPTION #7'
+    badge: '🍃 RESTORATIVE'
   },
-  // Rank #8 Priority
   progressive_muscle: {
     icon: '💪',
-    tag: 'Progressive Muscle Tension Release',
-    vagal: 'Somatic Stress Release',
-    mechanism: 'Neuromuscular Relaxation',
+    tag: 'Muscle Tension Release',
+    vagal: 'Somatic Release',
+    mechanism: 'Tense & Release Cycling',
     accent: '#D97706',
     bg: 'rgba(217, 119, 6, 0.14)',
     glow: '#B45309',
-    badge: 'OPTION #8'
+    badge: '💪 RELIEF'
   },
-  // Rank #9 Priority
   guided_imagery: {
     icon: '🌲',
-    tag: 'Guided Somatic Forest Walk',
-    vagal: 'Limbic System Calming',
-    mechanism: 'Multisensory Nature Imagery',
+    tag: 'Forest Walk Imagery',
+    vagal: 'Mind Calming',
+    mechanism: 'Nature Imagery Walk',
     accent: '#047857',
     bg: 'rgba(4, 120, 87, 0.14)',
     glow: '#065F46',
-    badge: 'OPTION #9'
+    badge: '🌲 PEACEFUL'
   },
-  // Rank #10 Priority
   pattern_alignment: {
     icon: '🧠',
-    tag: 'Visuospatial Memory Alignment',
-    vagal: 'Cognitive Loop Reset',
-    mechanism: 'Attentional Refocusing Protocol',
+    tag: 'Memory Focus Match',
+    vagal: 'Focus Reset',
+    mechanism: 'Visual Pattern Matching',
     accent: '#7E57C2',
     bg: 'rgba(126, 87, 194, 0.14)',
     glow: '#5E35B1',
-    badge: 'OPTION #10'
+    badge: '🎯 FOCUS'
   },
 };
 
