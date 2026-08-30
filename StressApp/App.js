@@ -45,6 +45,7 @@ import PhenotypingSignalHistoryScreen from './modules/phenotyping/screens/Phenot
 import PhenotypingAlertDetailScreen from './modules/phenotyping/screens/PhenotypingAlertDetailScreen';
 import PhenotypingOnboardingScreen from './modules/phenotyping/screens/PhenotypingOnboardingScreen';
 import PhenotypingAnalysisScreen from './modules/phenotyping/screens/PhenotypingAnalysisScreen';
+import RelaxationGuideModule from './modules/relaxation_guide';
 import { AppContext } from './modules/physiological/screens/AppState';
 import { ThemeProvider, useTheme } from './modules/physiological/config/ThemeContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -66,9 +67,9 @@ const linking = {
         screens: {
           Fusion: 'fusion-tab',
           Phenotyping: 'phenotyping-tab',
-          RelaxationGuide: 'relaxation-guide',
         },
       },
+      RelaxationGuide: 'relaxation-guide',
       Calibration: 'calibration',
       RingSummary: 'ring',
       EegSummary: 'eeg',
@@ -151,6 +152,11 @@ function RootNavigator() {
           <Stack.Screen
             name="Profile"
             component={ProfileScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="RelaxationGuide"
+            component={RelaxationGuideModule}
             options={{ headerShown: false }}
           />
           <Stack.Screen
