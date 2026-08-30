@@ -187,7 +187,26 @@ class FirebaseSync:
 def make_eeg_fusion_record(record: dict) -> dict:
     skipped = bool(record.get('skipped'))
     p = None if skipped else record.get('task_state_score')
-    label = record.get('task_state_label')
+    # This user's own effective high_load_p (personal if calibrated, else
+    # population default) -- see make_eeg_output_record()'s
+    # 'effective_high_load_p' field. Consumed by fusion_engin.py's
+    # weighted-threshold combination, not just its probability one.
+    threshold = record.get('effective_high_load_p')
+    # stress_label_eeg (fusion-facing) is derived from p vs. THIS
+    # modality's own effective threshold (personal-else-population), NOT
+    # task_state_label's fixed TASK_STATE_LABEL_THRESHOLD=0.5 cutoff --
+    # that field is a deliberately different, non-personalized, non-gated
+    # raw per-block indicator used elsewhere (see EegSummaryScreen.js's own
+    # docstring on why its "Current State" card avoids task_state_label in
+    # favor of the persistence-gated high_load_alert). Matches
+    # stress_label_hrv_gsr's personal-else-population rule
+    # (backend/physiological/app.py's /predict: `1 if prob_stress >
+    # personal_threshold else 0`) so both modalities' FUSION-facing labels
+    # follow the same effective-threshold rule, not two different ones.
+    stress_label_eeg = (
+        'unknown' if p is None or threshold is None
+        else ('high_task_state' if p >= threshold else 'low_task_state')
+    )
     return {
         'window': fusion_window_key(),
         'timestamp_eeg': record.get('timestamp_end'),
@@ -195,13 +214,6 @@ def make_eeg_fusion_record(record: dict) -> dict:
         'conf_eeg': None if p is None else record.get('model_confidence'),
         'model_acc_eeg': record.get('model_accuracy'),
         'signal_quality_eeg': record.get('eeg_quality_score'),
-        'stress_label_eeg': (
-            'unknown' if p is None
-            else ('high_task_state' if label == 1 else 'low_task_state')
-        ),
-        # This user's own effective high_load_p (personal if calibrated,
-        # else population default) -- see make_eeg_output_record()'s
-        # 'effective_high_load_p' field. Consumed by fusion_engin.py's
-        # weighted-threshold combination, not just its probability one.
-        'threshold_eeg': record.get('effective_high_load_p'),
+        'stress_label_eeg': stress_label_eeg,
+        'threshold_eeg': threshold,
     }
