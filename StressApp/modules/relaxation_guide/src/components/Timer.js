@@ -1,10 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 
-export const Timer = ({ initialSeconds = 60, onComplete }) => {
+export const Timer = ({ initialSeconds = 60, isRunning = true, onComplete }) => {
   const [seconds, setSeconds] = useState(initialSeconds);
 
   useEffect(() => {
+    setSeconds(initialSeconds);
+  }, [initialSeconds]);
+
+  useEffect(() => {
+    if (!isRunning) return;
     if (seconds <= 0) {
       if (onComplete) onComplete();
       return;
@@ -13,7 +18,7 @@ export const Timer = ({ initialSeconds = 60, onComplete }) => {
       setSeconds((prev) => prev - 1);
     }, 1000);
     return () => clearInterval(timer);
-  }, [seconds, onComplete]);
+  }, [seconds, isRunning, onComplete]);
 
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;

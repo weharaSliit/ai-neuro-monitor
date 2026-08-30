@@ -282,6 +282,22 @@ export default function ProfileScreen({ navigation }) {
           </TouchableOpacity>
         </Card>
 
+        {/* Relaxation Guide Card */}
+        <Card onPress={() => navigation.navigate('RelaxationGuide')} style={styles.navCard}>
+          <View style={styles.cardHeaderRow}>
+            <View style={styles.rowGap}>
+              <View style={[styles.actionIconCircle, { backgroundColor: '#10B98120' }]}>
+                <Text style={{ fontSize: 18 }}>🧠</Text>
+              </View>
+              <Text style={[styles.cardTitle, { color: text }]}>Relaxation Guide</Text>
+            </View>
+            <Icon name={NAMES.chevronRight} size={18} color={muted} />
+          </View>
+          <Text style={[styles.cardSub, { color: muted }]}>
+            Personalized AI relaxation techniques, games & guided breathing exercises.
+          </Text>
+        </Card>
+
         {/* Switch to Admin App without logging out */}
         <Card onPress={() => navigation.navigate('Admin')} style={styles.navCard}>
           <View style={styles.cardHeaderRow}>

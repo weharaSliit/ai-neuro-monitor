@@ -4,899 +4,1091 @@ import {
   Text,
   StyleSheet,
   TouchableWithoutFeedback,
+  TouchableOpacity,
   Animated,
   Dimensions,
-  Easing
+  Easing,
+  Vibration,
+  Platform,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { ThemeContext } from '../context/ThemeContext';
 
 const { width, height } = Dimensions.get('window');
 
-export const LilyPondGame = () => {
-  const [lilies, setLilies] = useState([]);
-  const [score, setScore] = useState(0);
-  const [combo, setCombo] = useState(0);
-  const [maxCombo, setMaxCombo] = useState(0);
-  const [totalBlooms, setTotalBlooms] = useState(0);
-  const [gameState, setGameState] = useState('playing');
-  const [pondRipples, setPondRipples] = useState([]);
-  const [particles, setParticles] = useState([]);
-  const [floatingTexts, setFloatingTexts] = useState([]);
-  const [frogs, setFrogs] = useState([]);
-  const [dragonflies, setDragonflies] = useState([]);
-  const [waterLilies, setWaterLilies] = useState([]);
+const PETAL_COUNT_OUTER = 6;
+const PETAL_COUNT_INNER = 6;
+const DURATION_OPTIONS_MIN = [1, 2, 3];
+const BPM_OPTIONS = [4.5, 5, 5.5, 6, 6.5, 7];
+const AMBIENT_TICK_MS = 40;
 
-  const waterAnim = useRef(new Animated.Value(0)).current;
-  const glowAnim = useRef(new Animated.Value(0)).current;
-  const shakeAnim = useRef(new Animated.Value(0)).current;
+const PATTERNS = {
+  extended: {
+    id: 'extended',
+    label: 'Extended Exhale (Vagal Reset)',
+    inhaleRatio: 0.40,
+    exhaleRatio: 0.60,
+    defaultBpm: 5.5,
+    citation: 'Zaccaro et al., 2018, Frontiers in Human Neuroscience',
+    blurb: 'Longer exhalations trigger vagal nerve activation to lower heart rate and calm autonomic stress.',
+  },
+  coherent: {
+    id: 'coherent',
+    label: 'Coherent Breathing (6 BPM Resonance)',
+    inhaleRatio: 0.50,
+    exhaleRatio: 0.50,
+    defaultBpm: 6.0,
+    citation: 'Lehrer & Gevirtz, 2014, Frontiers in Psychology',
+    blurb: 'Equal 5s inhale and 5s exhale near cardiovascular resonance frequency for peak HRV oscillation.',
+  },
+};
 
-  const spawnTimer = useRef(null);
-  const gameLoop = useRef(null);
+const COLORS = {
+  background: '#041D17',
+  waterDark: '#07281F',
+  waterLight: '#0E4434',
+  padDark: '#0D402B',
+  padBorder: '#1F6B4C',
+  petalOuter: '#F472B6',
+  petalInner: '#FB7185',
+  petalGlow: 'rgba(244, 114, 182, 0.4)',
+  stamen: '#F59E0B',
+  centerCore: '#FDE047',
+  accent: '#10B981',
+  accentLight: '#6EE7B7',
+  text: '#E7FBF1',
+  textDim: 'rgba(231, 251, 241, 0.6)',
+  rippleIn: '#34D399',
+  rippleOut: '#38BDF8',
+  rippleTouch: '#F472B6',
+};
 
-  // Lily types with different properties
-  const LILY_TYPES = [
-    { emoji: '🪷', color: '#F472B6', points: 15, growthRate: 0.8, maxSize: 90 },
-    { emoji: '🌸', color: '#EC4899', points: 20, growthRate: 1, maxSize: 80 },
-    { emoji: '🌺', color: '#F43F5E', points: 25, growthRate: 1.2, maxSize: 70 },
-    { emoji: '🌷', color: '#EF4444', points: 30, growthRate: 0.7, maxSize: 85 },
-    { emoji: '🌻', color: '#F59E0B', points: 35, growthRate: 1.1, maxSize: 75 },
-  ];
+const LilyBreathingGame = ({
+  onStartSession,
+  onDurationChange,
+  initialScreen = 'session',
+  initialDurationMin = 1,
+  initialBpm = 5.5,
+}) => {
+  const themeContext = React.useContext(ThemeContext);
+  const theme = themeContext?.theme || {};
+  const isDarkMode = themeContext?.isDarkMode ?? true;
 
-  // Create initial lilies
-  useEffect(() => {
-    const initialLilies = [];
-    for (let i = 0; i < 5; i++) {
-      initialLilies.push(createLily(true));
-    }
-    setLilies(initialLilies);
-  }, []);
+  const [screen, setScreen] = useState(initialScreen);
+  const [patternId, setPatternId] = useState('extended');
+  const [bpm, setBpm] = useState(initialBpm || PATTERNS.extended.defaultBpm);
+  const [durationMin, setDurationMin] = useState(initialDurationMin || 1);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [breathCount, setBreathCount] = useState(0);
+  const [phase, setPhase] = useState('idle'); // 'idle' | 'inhale' | 'exhale'
+  const [isPaused, setIsPaused] = useState(false);
+  const [isHolding, setIsHolding] = useState(false);
+  const [ripples, setRipples] = useState([]);
 
-  // Create water lilies (background decoration)
-  useEffect(() => {
-    const waterLilyInterval = setInterval(() => {
-      if (waterLilies.length < 15) {
-        const newLily = {
-          id: Date.now() + Math.random(),
-          x: Math.random() * width,
-          y: Math.random() * height * 0.8,
-          size: 15 + Math.random() * 20,
-          opacity: 0.1 + Math.random() * 0.2,
-          rotation: Math.random() * 360,
-          emoji: ['🪷', '🌿', '🍃', '☘️'][Math.floor(Math.random() * 4)],
-        };
-        setWaterLilies(prev => [...prev, newLily]);
-      }
-    }, 5000);
-    return () => clearInterval(waterLilyInterval);
-  }, [waterLilies.length]);
+  // Interactive fireflies/sparks in water
+  const [fireflies, setFireflies] = useState(() =>
+    Array.from({ length: 6 }, (_, i) => ({
+      id: i,
+      x: Math.random() * width,
+      y: height * 0.15 + Math.random() * height * 0.5,
+      size: 4 + Math.random() * 6,
+      opacity: 0.3 + Math.random() * 0.5,
+      speed: 0.4 + Math.random() * 0.6,
+      angle: Math.random() * Math.PI * 2,
+    }))
+  );
 
-  // Create frogs
-  useEffect(() => {
-    const frogInterval = setInterval(() => {
-      if (frogs.length < 3) {
-        const newFrog = {
-          id: Date.now() + Math.random(),
-          x: Math.random() * width,
-          y: Math.random() * height * 0.7,
-          targetX: Math.random() * width,
-          targetY: Math.random() * height * 0.7,
-          size: 25 + Math.random() * 10,
-          rotation: 0,
-          jumpProgress: 0,
-          color: `hsl(${120 + Math.random() * 40}, ${60 + Math.random() * 30}%, ${30 + Math.random() * 30}%)`,
-          phase: Math.random() * Math.PI * 2,
-        };
-        setFrogs(prev => [...prev, newFrog]);
-      }
-    }, 4000);
-    return () => clearInterval(frogInterval);
-  }, [frogs.length]);
+  // Animated values
+  const bloom = useRef(new Animated.Value(0)).current; // 0 closed -> 1 open
+  const phaseProgress = useRef(new Animated.Value(0)).current; // 0 -> 1
+  const phaseTextOpacity = useRef(new Animated.Value(1)).current;
+  const pulseRingScale = useRef(new Animated.Value(1)).current;
+  const screenFade = useRef(new Animated.Value(1)).current;
+  const touchGlow = useRef(new Animated.Value(0)).current;
 
-  // Create dragonflies
-  useEffect(() => {
-    const dragonflyInterval = setInterval(() => {
-      if (dragonflies.length < 5) {
-        const newDragonfly = {
-          id: Date.now() + Math.random(),
-          x: Math.random() * width,
-          y: 50 + Math.random() * (height * 0.5),
-          targetX: Math.random() * width,
-          targetY: 50 + Math.random() * (height * 0.5),
-          size: 12 + Math.random() * 8,
-          wingAngle: 0,
-          color: `hsl(${200 + Math.random() * 40}, 80%, 60%)`,
-          speed: 1 + Math.random() * 2,
-        };
-        setDragonflies(prev => [...prev, newDragonfly]);
-      }
-    }, 3000);
-    return () => clearInterval(dragonflyInterval);
-  }, [dragonflies.length]);
+  const tickRef = useRef(null);
+  const ambientRef = useRef(null);
+  const isPressedRef = useRef(false);
+  const pausedRef = useRef(false);
+  const patternRef = useRef(patternId);
+  const bpmRef = useRef(bpm);
+  const currentPhaseDurationRef = useRef(0);
 
-  // Create a new lily
-  const createLily = (isInitial = false) => {
-    const type = LILY_TYPES[Math.floor(Math.random() * LILY_TYPES.length)];
-    const size = 30 + Math.random() * 20;
-    const x = 30 + Math.random() * (width - 60 - size);
-    const y = isInitial ? 50 + Math.random() * (height * 0.7 - 100) : -30 - Math.random() * 50;
+  const pattern = PATTERNS[patternId];
+  const totalSeconds = durationMin * 60;
 
+  useEffect(() => { patternRef.current = patternId; }, [patternId]);
+  useEffect(() => { bpmRef.current = bpm; }, [bpm]);
+  useEffect(() => { pausedRef.current = isPaused; }, [isPaused]);
+
+  const computeDurations = () => {
+    const pat = PATTERNS[patternRef.current];
+    const periodMs = (60 / bpmRef.current) * 1000;
     return {
-      id: Date.now() + Math.random(),
-      type,
-      x,
-      y,
-      size,
-      targetSize: type.maxSize,
-      growthProgress: 0,
-      rotation: Math.random() * 360,
-      opacity: 0.7 + Math.random() * 0.3,
-      isGrowing: false,
-      isFull: false,
-      phase: Math.random() * Math.PI * 2,
+      inhaleMs: periodMs * pat.inhaleRatio,
+      exhaleMs: periodMs * pat.exhaleRatio,
     };
   };
 
-  // Create water ripples
-  const createRipple = (x, y) => {
-    setPondRipples(prev => [...prev, {
-      id: Date.now() + Math.random(),
-      x,
-      y,
-      radius: 10,
-      opacity: 1,
-      maxRadius: 50 + Math.random() * 50,
-    }]);
-  };
+  // Idle pulse animation for touch guide
+  useEffect(() => {
+    if (phase === 'idle' && !isPaused) {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseRingScale, {
+            toValue: 1.25,
+            duration: 1400,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseRingScale, {
+            toValue: 1.0,
+            duration: 1400,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ])
+      ).start();
+    } else {
+      pulseRingScale.stopAnimation();
+      pulseRingScale.setValue(1);
+    }
+  }, [phase, isPaused]);
 
-  // Create particle effect
-  const createParticles = (x, y, color, count = 30) => {
-    const newParticles = [];
-    for (let i = 0; i < count; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const velocity = 1 + Math.random() * 4;
-      newParticles.push({
-        id: Date.now() + Math.random(),
-        x,
-        y,
-        vx: Math.cos(angle) * velocity,
-        vy: Math.sin(angle) * velocity - 2,
-        life: 1,
-        size: 2 + Math.random() * 6,
-        color: color || `hsl(${320 + Math.random() * 40}, 80%, 70%)`,
-        gravity: 0.05,
+  // Overall session timer
+  useEffect(() => {
+    if (screen !== 'session') return;
+    tickRef.current = setInterval(() => {
+      if (pausedRef.current) return;
+      setElapsedSeconds(prev => {
+        const next = prev + 1;
+        if (next >= totalSeconds) {
+          clearInterval(tickRef.current);
+          setScreen('complete');
+        }
+        return next;
       });
-    }
-    setParticles(prev => [...prev, ...newParticles]);
-  };
+    }, 1000);
+    return () => clearInterval(tickRef.current);
+  }, [screen, totalSeconds]);
 
-  // Create floating text
-  const createFloatingText = (x, y, text, color = '#F472B6') => {
-    setFloatingTexts(prev => [...prev, {
-      id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}_${Math.random()}`,
-      x,
-      y,
-      text,
-      color,
-      opacity: 1,
-      vy: -2 - Math.random() * 1,
-      scale: 1,
-    }]);
-  };
-
-  // Grow lily on tap
-  const growLily = (lily) => {
-    if (lily.isFull || gameState === 'paused') return;
-
-    // Update lily
-    setLilies(prev => prev.map(l => {
-      if (l.id === lily.id) {
-        const newSize = l.size + l.type.growthRate * 5;
-        const isFull = newSize >= l.type.maxSize;
-        return {
-          ...l,
-          size: Math.min(newSize, l.type.maxSize),
-          isFull,
-          growthProgress: Math.min(newSize / l.type.maxSize, 1),
-        };
-      }
-      return l;
-    }));
-
-    // Create ripple effect
-    createRipple(lily.x + lily.size / 2, lily.y + lily.size / 2);
-
-    // Calculate score
-    const comboBonus = Math.floor(combo / 3) + 1;
-    const points = lily.type.points * comboBonus;
-    setScore(prev => prev + points);
-    setCombo(prev => prev + 1);
-    setTotalBlooms(prev => prev + 1);
-
-    if (combo + 1 > maxCombo) {
-      setMaxCombo(combo + 1);
-    }
-
-    // Floating text
-    let text = `+${points}`;
-    if (combo > 0) {
-      text += ` x${comboBonus}`;
-    }
-    createFloatingText(
-      lily.x + lily.size / 2 - 30,
-      lily.y - 10,
-      text,
-      lily.type.color
-    );
-
-    // Combo milestones
-    if (combo > 0 && combo % 5 === 0) {
-      createFloatingText(
-        lily.x + lily.size / 2 - 50,
-        lily.y - 50,
-        `🌸 ${combo + 1}x BLOOM!`,
-        '#FCD34D'
+  // Ambient pond animation loop: fireflies movement & ripple decay
+  useEffect(() => {
+    ambientRef.current = setInterval(() => {
+      setFireflies(prev =>
+        prev.map(f => {
+          const newAngle = f.angle + (Math.random() - 0.5) * 0.2;
+          let nx = f.x + Math.cos(newAngle) * f.speed;
+          let ny = f.y + Math.sin(newAngle) * f.speed;
+          if (nx < 10) nx = width - 20;
+          if (nx > width - 10) nx = 20;
+          if (ny < height * 0.1) ny = height * 0.65;
+          if (ny > height * 0.7) ny = height * 0.15;
+          return { ...f, x: nx, y: ny, angle: newAngle };
+        })
       );
 
-      // Spawn bonus lilies
-      for (let i = 0; i < 3; i++) {
-        setTimeout(() => {
-          const bonusLily = createLily();
-          bonusLily.x = lily.x + (Math.random() - 0.5) * 150;
-          bonusLily.y = lily.y + (Math.random() - 0.5) * 150;
-          setLilies(prev => [...prev, bonusLily]);
-        }, i * 300);
-      }
-    }
+      setRipples(prev =>
+        prev
+          .map(r => ({
+            ...r,
+            radius: r.radius + (r.speed || 1.4),
+            opacity: r.opacity - (r.fadeRate || 0.012),
+          }))
+          .filter(r => r.opacity > 0)
+      );
+    }, AMBIENT_TICK_MS);
 
-    // Screen shake
-    if (combo > 5) {
-      Animated.sequence([
-        Animated.timing(shakeAnim, {
-          toValue: 3,
-          duration: 50,
-          useNativeDriver: true,
-        }),
-        Animated.timing(shakeAnim, {
-          toValue: -3,
-          duration: 50,
-          useNativeDriver: true,
-        }),
-        Animated.timing(shakeAnim, {
-          toValue: 0,
-          duration: 50,
-          useNativeDriver: true,
-        }),
-      ]).start();
-    }
-
-    // Glow pulse
-    Animated.sequence([
-      Animated.timing(glowAnim, {
-        toValue: 1,
-        duration: 100,
-        useNativeDriver: true,
-      }),
-      Animated.timing(glowAnim, {
-        toValue: 0,
-        duration: 400,
-        useNativeDriver: true,
-      }),
-    ]).start();
-
-    // Check if lily is full - spawn new one
-    const updatedLily = lilies.find(l => l.id === lily.id);
-    if (updatedLily && updatedLily.isFull) {
-      // Remove after celebration
-      setTimeout(() => {
-        setLilies(prev => prev.filter(l => l.id !== lily.id));
-
-        // Spawn new lily
-        setTimeout(() => {
-          const newLily = createLily();
-          setLilies(prev => [...prev, newLily]);
-        }, 500);
-      }, 1000);
-    }
-  };
-
-  // Handle touch
-  const handleTouch = (evt) => {
-    const { locationX, locationY } = evt.nativeEvent;
-
-    // Check if touching a lily
-    const hitLily = lilies.find(l =>
-      locationX > l.x && locationX < l.x + l.size &&
-      locationY > l.y && locationY < l.y + l.size
-    );
-
-    if (hitLily) {
-      growLily(hitLily);
-    } else {
-      // Miss - create ripple on water
-      createRipple(locationX, locationY);
-      createFloatingText(locationX - 20, locationY - 20, '💧', '#60A5FA');
-      setCombo(0);
-    }
-  };
-
-  // Game loop
-  useEffect(() => {
-    gameLoop.current = setInterval(() => {
-      // Update water animation
-      waterAnim.setValue(Math.sin(Date.now() * 0.001) * 2);
-
-      // Update lilies - gentle floating
-      setLilies(prev => prev.map(l => ({
-        ...l,
-        y: l.y + Math.sin(Date.now() * 0.001 + l.phase) * 0.1,
-        rotation: l.rotation + 0.1,
-      })));
-
-      // Update ripples
-      setPondRipples(prev => prev.map(r => ({
-        ...r,
-        radius: r.radius + 0.5,
-        opacity: r.opacity - 0.01,
-      })).filter(r => r.opacity > 0));
-
-      // Update particles
-      setParticles(prev => {
-        const updated = prev.map(p => ({
-          ...p,
-          x: p.x + p.vx,
-          y: p.y + p.vy,
-          vy: p.vy + p.gravity,
-          life: p.life - 0.015,
-          size: p.size * 0.995,
-        }));
-        return updated.filter(p => p.life > 0);
-      });
-
-      // Update floating texts
-      setFloatingTexts(prev => {
-        const updated = prev.map(t => ({
-          ...t,
-          y: t.y + t.vy,
-          opacity: t.opacity - 0.015,
-          scale: t.scale + 0.01,
-        }));
-        return updated.filter(t => t.opacity > 0);
-      });
-
-      // Update frogs - jump animation
-      setFrogs(prev => prev.map(f => {
-        const dx = f.targetX - f.x;
-        const dy = f.targetY - f.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-
-        if (dist < 10) {
-          return {
-            ...f,
-            targetX: Math.random() * width,
-            targetY: 50 + Math.random() * (height * 0.7),
-            jumpProgress: 0,
-          };
-        }
-
-        return {
-          ...f,
-          x: f.x + (dx / dist) * 0.5,
-          y: f.y + (dy / dist) * 0.5,
-          rotation: Math.atan2(dy, dx),
-          jumpProgress: (f.jumpProgress + 0.02) % (Math.PI * 2),
-        };
-      }));
-
-      // Update dragonflies
-      setDragonflies(prev => prev.map(d => {
-        const dx = d.targetX - d.x;
-        const dy = d.targetY - d.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-
-        if (dist < 5) {
-          return {
-            ...d,
-            targetX: Math.random() * width,
-            targetY: 50 + Math.random() * (height * 0.5),
-          };
-        }
-
-        return {
-          ...d,
-          x: d.x + (dx / dist) * d.speed * 0.3,
-          y: d.y + (dy / dist) * d.speed * 0.3,
-          wingAngle: (d.wingAngle + 0.3) % (Math.PI * 2),
-        };
-      }));
-
-    }, 16);
-
-    return () => clearInterval(gameLoop.current);
+    return () => clearInterval(ambientRef.current);
   }, []);
 
-  // Spawn new lilies
-  useEffect(() => {
-    spawnTimer.current = setInterval(() => {
-      if (lilies.length < 7 + Math.floor(totalBlooms / 20)) {
-        const newLily = createLily();
-        setLilies(prev => [...prev, newLily]);
-      }
-    }, 5000);
+  const triggerHaptic = (type = 'light') => {
+    if (Platform.OS !== 'web') {
+      try {
+        if (type === 'heavy') Vibration.vibrate(15);
+        else Vibration.vibrate(8);
+      } catch (e) {}
+    }
+  };
 
-    return () => clearInterval(spawnTimer.current);
-  }, [totalBlooms]);
+  const addRipple = (x, y, color = COLORS.rippleTouch, initialRadius = 15, speed = 1.6, fadeRate = 0.015) => {
+    setRipples(prev => [
+      ...prev.slice(-12),
+      { id: Math.random(), x, y, radius: initialRadius, opacity: 0.7, color, speed, fadeRate },
+    ]);
+  };
+
+  const crossfadePhaseText = () => {
+    Animated.sequence([
+      Animated.timing(phaseTextOpacity, { toValue: 0, duration: 100, useNativeDriver: true }),
+      Animated.timing(phaseTextOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+    ]).start();
+  };
+
+  const startExhale = () => {
+    setPhase('exhale');
+    crossfadePhaseText();
+    const { exhaleMs } = computeDurations();
+    currentPhaseDurationRef.current = exhaleMs;
+
+    addRipple(width / 2, height * 0.42, COLORS.rippleOut, 20, 2.0, 0.01);
+
+    phaseProgress.setValue(0);
+    Animated.timing(phaseProgress, {
+      toValue: 1,
+      duration: exhaleMs,
+      easing: Easing.linear,
+      useNativeDriver: false,
+    }).start();
+
+    Animated.timing(bloom, {
+      toValue: 0,
+      duration: exhaleMs,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (!finished) return;
+      setBreathCount(c => c + 1);
+      triggerHaptic('heavy');
+      setPhase('idle');
+      if (isPressedRef.current && !pausedRef.current) {
+        startInhale();
+      }
+    });
+  };
+
+  const startInhale = () => {
+    setPhase('inhale');
+    crossfadePhaseText();
+    const { inhaleMs } = computeDurations();
+    currentPhaseDurationRef.current = inhaleMs;
+    triggerHaptic('light');
+
+    addRipple(width / 2, height * 0.42, COLORS.rippleIn, 25, 2.4, 0.012);
+
+    phaseProgress.setValue(0);
+    Animated.timing(phaseProgress, {
+      toValue: 1,
+      duration: inhaleMs,
+      easing: Easing.linear,
+      useNativeDriver: false,
+    }).start();
+
+    Animated.timing(bloom, {
+      toValue: 1,
+      duration: inhaleMs,
+      easing: Easing.inOut(Easing.ease),
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (finished) {
+        startExhale();
+      }
+    });
+  };
+
+  const handlePressIn = (evt) => {
+    isPressedRef.current = true;
+    setIsHolding(true);
+
+    if (evt && evt.nativeEvent) {
+      addRipple(evt.nativeEvent.pageX, evt.nativeEvent.pageY, COLORS.petalOuter, 10, 2.2);
+    }
+
+    Animated.timing(touchGlow, { toValue: 1, duration: 300, useNativeDriver: true }).start();
+
+    if (pausedRef.current) return;
+    if (phase === 'idle') {
+      startInhale();
+    }
+  };
+
+  const handlePressOut = () => {
+    isPressedRef.current = false;
+    setIsHolding(false);
+    Animated.timing(touchGlow, { toValue: 0, duration: 400, useNativeDriver: true }).start();
+
+    if (phase === 'inhale') {
+      bloom.stopAnimation(() => startExhale());
+    }
+  };
+
+  const handlePondTap = (evt) => {
+    if (evt && evt.nativeEvent) {
+      const { pageX, pageY } = evt.nativeEvent;
+      addRipple(pageX, pageY, COLORS.rippleTouch, 12, 1.8, 0.02);
+      triggerHaptic('light');
+    }
+  };
+
+  const togglePause = () => {
+    const goingToPause = !isPaused;
+    if (goingToPause) {
+      bloom.stopAnimation();
+      phaseProgress.stopAnimation();
+    } else if (phase !== 'idle') {
+      if (phase === 'inhale') startInhale();
+      else if (phase === 'exhale') startExhale();
+    }
+    pausedRef.current = goingToPause;
+    setIsPaused(goingToPause);
+  };
+
+  const fadeTo = (next) => {
+    Animated.timing(screenFade, { toValue: 0, duration: 150, useNativeDriver: true }).start(() => {
+      setScreen(next);
+      Animated.timing(screenFade, { toValue: 1, duration: 250, useNativeDriver: true }).start();
+    });
+  };
+
+  const startSession = () => {
+    setElapsedSeconds(0);
+    setBreathCount(0);
+    setPhase('idle');
+    setIsPaused(false);
+    pausedRef.current = false;
+    isPressedRef.current = false;
+    bloom.setValue(0);
+    phaseProgress.setValue(0);
+    fadeTo('session');
+  };
+
+  const endSessionEarly = () => {
+    clearInterval(tickRef.current);
+    fadeTo('complete');
+  };
+
+  const selectPattern = (id) => {
+    setPatternId(id);
+    setBpm(PATTERNS[id].defaultBpm);
+  };
+
+  // Interpolated values for lotus blooming
+  const petalColorOuter = bloom.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: ['#3E8261', '#F472B6', '#EC4899'],
+  });
+  const petalColorInner = bloom.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: ['#2F664C', '#FB7185', '#F43F5E'],
+  });
+  const lotusScale = bloom.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.85, 1.25],
+  });
+  const lotusGlowRadius = bloom.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 35],
+  });
+
+  const phaseInstruction =
+    phase === 'inhale'
+      ? '🫁 Breathing in… (Lotus Blooming)'
+      : phase === 'exhale'
+      ? '💨 Breathing out… (Lotus Settling)'
+      : '✨ Touch & Hold the Lily to Breathe In';
+
+  // Dynamic Theme Colors for LilyPond
+  const pondBg = isDarkMode ? COLORS.waterDark : '#E6F4F0';
+  const padBg = isDarkMode ? COLORS.padDark : '#A7F3D0';
+  const padBorderColor = isDarkMode ? COLORS.padBorder : '#34D399';
+  const hudBgColor = isDarkMode ? 'rgba(4, 29, 23, 0.92)' : 'rgba(255, 255, 255, 0.95)';
+  const hudBorderColor = isDarkMode ? 'rgba(255, 255, 255, 0.08)' : 'rgba(6, 78, 59, 0.15)';
+  const mainTxtColor = isDarkMode ? COLORS.text : '#064E3B';
+  const dimTxtColor = isDarkMode ? COLORS.textDim : '#047857';
+
+  // =========================================================================
+  // SETUP SCREEN
+  // =========================================================================
+  if (screen === 'setup') {
+    return (
+      <Animated.View style={[styles.container, { backgroundColor: theme.bgPrimary || COLORS.background, opacity: screenFade }]}>
+        <View style={styles.setupWrap}>
+          <Text style={[styles.setupTitle, { color: theme.textPrimary || COLORS.text }]}>🪷 Lily Pond Breathing</Text>
+          <Text style={[styles.setupSubtitle, { color: theme.textSecondary || COLORS.textDim }]}>
+            Touch and hold the glowing lotus flower to inhale as it blooms open. Release to exhale as it gently settles closed.
+          </Text>
+
+          <Text style={[styles.sectionLabel, { color: theme.accent || COLORS.accentLight }]}>Select Breathing Pattern</Text>
+          {Object.values(PATTERNS).map(p => (
+            <TouchableOpacity
+              key={p.id}
+              onPress={() => selectPattern(p.id)}
+              style={[
+                styles.patternCard,
+                { backgroundColor: theme.bgSecondary || 'rgba(255, 255, 255, 0.04)', borderColor: theme.border || 'rgba(255, 255, 255, 0.1)' },
+                patternId === p.id && styles.patternCardActive
+              ]}
+              activeOpacity={0.8}
+            >
+              <View style={styles.patternCardRow}>
+                <Text style={[styles.patternName, { color: theme.textPrimary || COLORS.text }]}>{p.label}</Text>
+                {patternId === p.id && <Ionicons name="checkmark-circle" size={18} color={theme.accent || COLORS.accentLight} />}
+              </View>
+              <Text style={[styles.patternBlurb, { color: theme.textSecondary || COLORS.textDim }]}>{p.blurb}</Text>
+              <Text style={styles.patternCitation}>{p.citation}</Text>
+            </TouchableOpacity>
+          ))}
+
+          <Text style={[styles.sectionLabel, { marginTop: 16, color: theme.accent || COLORS.accentLight }]}>Breathing Pace (BPM)</Text>
+          <View style={styles.chipRow}>
+            {BPM_OPTIONS.map(b => (
+              <TouchableOpacity
+                key={b}
+                onPress={() => setBpm(b)}
+                style={[styles.chip, { backgroundColor: theme.bgSecondary, borderColor: theme.border }, bpm === b && styles.chipActive]}
+              >
+                <Text style={[styles.chipText, { color: theme.textPrimary }, bpm === b && styles.chipTextActive]}>{b} bpm</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <Text style={[styles.sectionLabel, { marginTop: 16, color: theme.accent || COLORS.accentLight }]}>Session Duration</Text>
+          <View style={styles.chipRow}>
+            {DURATION_OPTIONS_MIN.map(min => (
+              <TouchableOpacity
+                key={min}
+                onPress={() => {
+                  setDurationMin(min);
+                  if (onDurationChange) onDurationChange(min * 60);
+                }}
+                style={[styles.chip, { backgroundColor: theme.bgSecondary, borderColor: theme.border }, durationMin === min && styles.chipActive]}
+              >
+                <Text style={[styles.chipText, { color: theme.textPrimary }, durationMin === min && styles.chipTextActive]}>{min} min</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <TouchableOpacity
+            style={[styles.startButton, { backgroundColor: theme.accent || COLORS.accent }]}
+            onPress={() => {
+              if (onStartSession) onStartSession(durationMin * 60);
+              startSession();
+            }}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.startButtonText}>Begin Session</Text>
+          </TouchableOpacity>
+        </View>
+      </Animated.View>
+    );
+  }
+
+  // =========================================================================
+  // SESSION SCREEN
+  // =========================================================================
+  const progressPercent = Math.min(100, Math.round((elapsedSeconds / totalSeconds) * 100));
 
   return (
-    <TouchableWithoutFeedback onPress={handleTouch}>
-      <Animated.View style={[
-        styles.container,
-        { transform: [{ translateX: shakeAnim }] }
-      ]}>
-        {/* Water background animation */}
-        <Animated.View style={[
-          styles.waterBackground,
-          {
-            transform: [
-              { translateY: waterAnim },
-            ]
-          }
-        ]} />
+    <View style={[styles.sessionContainer, { backgroundColor: pondBg }]}>
+      {/* Interactive Water Pond Surface */}
+      <TouchableWithoutFeedback onPress={handlePondTap}>
+        <View style={styles.pondCanvas}>
+          {/* Ambient Floating Fireflies */}
+          {fireflies.map(f => (
+            <View
+              key={f.id}
+              pointerEvents="none"
+              style={[
+                styles.firefly,
+                {
+                  left: f.x,
+                  top: f.y,
+                  width: f.size,
+                  height: f.size,
+                  borderRadius: f.size / 2,
+                  opacity: f.opacity,
+                },
+              ]}
+            />
+          ))}
 
-        {/* Water lilies (decorative background) */}
-        {waterLilies.map(l => (
-          <View
-            key={l.id}
-            style={[
-              styles.waterLilyDeco,
-              {
-                left: l.x,
-                top: l.y,
-                width: l.size,
-                height: l.size,
-                opacity: l.opacity,
-                transform: [{ rotate: `${l.rotation}deg` }],
-              }
-            ]}
-          >
-            <Text style={{ fontSize: l.size }}>{l.emoji}</Text>
-          </View>
-        ))}
-
-        {/* Dragonflies */}
-        {dragonflies.map(d => (
-          <View
-            key={d.id}
-            style={[
-              styles.dragonfly,
-              {
-                left: d.x - d.size / 2,
-                top: d.y - d.size / 2,
-                width: d.size * 1.5,
-                height: d.size,
-              }
-            ]}
-          >
-            <View style={[
-              styles.dragonflyWing,
-              {
-                backgroundColor: d.color,
-                transform: [{ scaleX: Math.sin(d.wingAngle) }],
-              }
-            ]} />
-            <View style={[
-              styles.dragonflyWing,
-              {
-                backgroundColor: d.color,
-                transform: [{ scaleX: Math.cos(d.wingAngle) }],
-              }
-            ]} />
-            <View style={[styles.dragonflyBody, { backgroundColor: d.color }]} />
-          </View>
-        ))}
-
-        {/* Frogs */}
-        {frogs.map(f => (
-          <View
-            key={f.id}
-            style={[
-              styles.frog,
-              {
-                left: f.x - f.size / 2,
-                top: f.y - f.size / 2 - Math.sin(f.jumpProgress) * 20,
-                width: f.size,
-                height: f.size,
-                transform: [{ rotate: `${f.rotation}rad` }],
-              }
-            ]}
-          >
-            <View style={[styles.frogBody, { backgroundColor: f.color }]}>
-              <View style={styles.frogEyes}>
-                <View style={styles.frogEye} />
-                <View style={styles.frogEye} />
-              </View>
-            </View>
-          </View>
-        ))}
-
-        {/* Pond ripples */}
-        {pondRipples.map(r => (
-          <Animated.View
-            key={r.id}
-            style={[
-              styles.ripple,
-              {
-                left: r.x - r.radius / 2,
-                top: r.y - r.radius / 2,
+          {/* Dynamic Water Ripples */}
+          {ripples.map(r => (
+            <View
+              key={r.id}
+              pointerEvents="none"
+              style={{
+                position: 'absolute',
+                left: (r.x || width / 2) - r.radius,
+                top: (r.y || height * 0.4) - r.radius,
                 width: r.radius * 2,
                 height: r.radius * 2,
                 borderRadius: r.radius,
-                opacity: r.opacity * 0.5,
-                borderWidth: 2,
-                borderColor: `rgba(255, 255, 255, ${r.opacity * 0.5})`,
-              }
-            ]}
-          />
-        ))}
+                borderWidth: 1.5,
+                borderColor: r.color,
+                opacity: r.opacity,
+              }}
+            />
+          ))}
 
-        {/* Particles */}
-        {particles.map(p => (
-          <Animated.View
-            key={p.id}
-            style={[
-              styles.particle,
-              {
-                left: p.x - p.size / 2,
-                top: p.y - p.size / 2,
-                width: p.size,
-                height: p.size,
-                backgroundColor: p.color,
-                opacity: p.life,
-                borderRadius: p.size / 2,
-                shadowColor: p.color,
-                shadowOpacity: 0.5,
-                shadowRadius: p.size,
-              }
-            ]}
-          />
-        ))}
+          {/* Floating Organic Lily Pad */}
+          <View style={styles.lilyPad}>
+            <View style={styles.lilyPadNotch} />
+            <View style={styles.lilyPadVein1} />
+            <View style={styles.lilyPadVein2} />
+          </View>
 
-        {/* Floating Texts */}
-        {floatingTexts.map(t => (
-          <Animated.Text
-            key={t.id}
-            style={[
-              styles.floatingText,
-              {
-                left: t.x,
-                top: t.y,
-                opacity: t.opacity,
-                color: t.color,
-                transform: [{ scale: t.scale }],
-              }
-            ]}
-          >
-            {t.text}
-          </Animated.Text>
-        ))}
-
-        {/* Lilies */}
-        {lilies.map(l => (
-          <Animated.View
-            key={l.id}
-            style={[
-              styles.lilyContainer,
-              {
-                left: l.x,
-                top: l.y - (l.size * 0.1),
-                width: l.size,
-                height: l.size,
-                transform: [
-                  { rotate: `${l.rotation}deg` },
-                  { scale: l.isFull ? 1.1 : 1 },
-                ],
-              }
-            ]}
-          >
-            <View style={[
-              styles.lilyPad,
-              {
-                width: l.size,
-                height: l.size * 0.5,
-                borderRadius: l.size * 0.25,
-                backgroundColor: l.isFull ? l.type.color : 'rgba(25, 135, 84, 0.4)',
-                borderColor: l.isFull ? l.type.color : '#20C997',
-                opacity: l.opacity,
-              }
-            ]}>
-              <Text style={[
-                styles.lilyEmoji,
+          {/* Idle Pulse Guidance Ring around Lotus */}
+          {phase === 'idle' && (
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.pulseGuideRing,
                 {
-                  fontSize: l.size * 0.5,
-                  transform: [{ scale: l.isFull ? 1.2 : 1 }],
-                }
-              ]}>
-                {l.type.emoji}
-              </Text>
+                  transform: [{ scale: pulseRingScale }],
+                },
+              ]}
+            />
+          )}
 
-              {/* Growth indicator */}
-              {!l.isFull && (
-                <View style={styles.growthIndicator}>
-                  <View style={[
-                    styles.growthFill,
-                    {
-                      width: `${l.growthProgress * 100}%`,
-                      backgroundColor: l.type.color,
-                    }
-                  ]} />
-                </View>
-              )}
-            </View>
-          </Animated.View>
-        ))}
+          {/* Interactive Touch Target & Glowing Lotus Centerpiece */}
+          <TouchableWithoutFeedback onPressIn={handlePressIn} onPressOut={handlePressOut}>
+            <Animated.View
+              style={[
+                styles.lotusContainer,
+                {
+                  transform: [{ scale: lotusScale }],
+                  shadowRadius: lotusGlowRadius,
+                },
+              ]}
+            >
+              {/* Touch Aura Glow */}
+              <Animated.View
+                style={[
+                  styles.lotusGlowAura,
+                  {
+                    opacity: touchGlow,
+                    backgroundColor: COLORS.petalOuter,
+                  },
+                ]}
+              />
 
-        {/* HUD */}
-        <View style={styles.hud}>
-          <View style={styles.hudItem}>
-            <Text style={styles.hudLabel}>🪷 BLOOMS</Text>
-            <Text style={styles.hudValue}>{totalBlooms}</Text>
+              {/* Outer Blooming Petals (6 Petals) */}
+              {Array.from({ length: PETAL_COUNT_OUTER }).map((_, i) => {
+                const angle = (360 / PETAL_COUNT_OUTER) * i;
+                return (
+                  <Animated.View
+                    key={`outer-${i}`}
+                    style={[
+                      styles.petalOuter,
+                      {
+                        backgroundColor: petalColorOuter,
+                        transform: [
+                          { rotate: `${angle}deg` },
+                          {
+                            translateY: bloom.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [-12, -42],
+                            }),
+                          },
+                          {
+                            scale: bloom.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [0.6, 1.2],
+                            }),
+                          },
+                        ],
+                      },
+                    ]}
+                  />
+                );
+              })}
+
+              {/* Inner Blooming Petals (6 Petals offset) */}
+              {Array.from({ length: PETAL_COUNT_INNER }).map((_, i) => {
+                const angle = (360 / PETAL_COUNT_INNER) * i + 30;
+                return (
+                  <Animated.View
+                    key={`inner-${i}`}
+                    style={[
+                      styles.petalInner,
+                      {
+                        backgroundColor: petalColorInner,
+                        transform: [
+                          { rotate: `${angle}deg` },
+                          {
+                            translateY: bloom.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [-8, -30],
+                            }),
+                          },
+                          {
+                            scale: bloom.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [0.5, 1.0],
+                            }),
+                          },
+                        ],
+                      },
+                    ]}
+                  />
+                );
+              })}
+
+              {/* Glowing Golden Lotus Center Core */}
+              <View style={styles.lotusCore}>
+                <View style={styles.lotusCoreInner} />
+                {/* Glowing Stamens */}
+                {[0, 60, 120, 180, 240, 300].map(deg => (
+                  <View
+                    key={deg}
+                    style={[
+                      styles.stamenDot,
+                      {
+                        transform: [
+                          { rotate: `${deg}deg` },
+                          { translateY: -10 },
+                        ],
+                      },
+                    ]}
+                  />
+                ))}
+              </View>
+            </Animated.View>
+          </TouchableWithoutFeedback>
+        </View>
+      </TouchableWithoutFeedback>
+
+      {/* Real-time Interactive Breathing Control Banner */}
+      <View style={[styles.hudContainer, { backgroundColor: isDarkMode ? 'rgba(4, 29, 23, 0.88)' : (theme.bgSecondary || '#FFFFFF'), borderColor: theme.border }]}>
+        {/* Phase Instruction Card */}
+        <Animated.View style={[styles.instructionCard, { opacity: phaseTextOpacity }]}>
+          <Text style={[styles.instructionText, { color: isDarkMode ? COLORS.text : (theme.textPrimary || '#0F172A') }]}>{phaseInstruction}</Text>
+        </Animated.View>
+
+        {/* Phase Rhythm Progress Bar */}
+        <View style={styles.phaseBarTrack}>
+          <Animated.View
+            style={[
+              styles.phaseBarFill,
+              {
+                width: phaseProgress.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: ['0%', '100%'],
+                }),
+                backgroundColor: phase === 'inhale' ? COLORS.accentLight : COLORS.rippleOut,
+              },
+            ]}
+          />
+        </View>
+
+        {/* Breath Count & Realtime Stats */}
+        <View style={styles.statsBadgeRow}>
+          <View style={[styles.badgePill, { backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.06)' : (theme.bgPrimary || '#F8FAFC'), borderColor: theme.border }]}>
+            <Ionicons name="sparkles" size={14} color={COLORS.accentLight} style={{ marginRight: 5 }} />
+            <Text style={[styles.badgePillTxt, { color: isDarkMode ? COLORS.text : (theme.textPrimary || '#0F172A') }]}>{breathCount} Breaths Completed</Text>
           </View>
-          <View style={styles.hudItem}>
-            <Text style={styles.hudLabel}>⭐ SCORE</Text>
-            <Text style={styles.hudValue}>{score}</Text>
-          </View>
-          <View style={styles.hudItem}>
-            <Text style={styles.hudLabel}>⚡ COMBO</Text>
-            <Text style={[
-              styles.hudValue,
-              combo > 5 && styles.comboHigh,
-              combo > 10 && styles.comboSuper,
-            ]}>
-              {combo}x
-            </Text>
-          </View>
-          <View style={styles.hudItem}>
-            <Text style={styles.hudLabel}>🏆 MAX</Text>
-            <Text style={styles.hudValue}>{maxCombo}</Text>
+          <View style={[styles.badgePill, { backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.06)' : (theme.bgPrimary || '#F8FAFC'), borderColor: theme.border }]}>
+            <Ionicons name="speedometer-outline" size={14} color={isDarkMode ? COLORS.textDim : theme.textSecondary} style={{ marginRight: 5 }} />
+            <Text style={[styles.badgePillTxt, { color: isDarkMode ? COLORS.text : (theme.textPrimary || '#0F172A') }]}>{bpm} BPM</Text>
           </View>
         </View>
 
-        {/* Pond status */}
-        <View style={styles.pondStatus}>
-          <Text style={styles.pondStatusText}>
-            {lilies.length < 3 ? '🌱 Pond awakening...' :
-              lilies.length < 5 ? '🌸 Lilies blooming' :
-                lilies.length < 8 ? '🪷 Peaceful pond' :
-                  '🌺 Magical garden'}
-          </Text>
+        {/* Interactive BPM Pace Stepper */}
+        <View style={[styles.stepperContainer, { backgroundColor: isDarkMode ? 'rgba(0, 0, 0, 0.25)' : (theme.bgPrimary || '#F8FAFC'), borderColor: theme.border }]}>
+          <TouchableOpacity
+            onPress={() => {
+              setBpm(b => Math.max(4.5, Math.round((b - 0.5) * 10) / 10));
+              triggerHaptic('light');
+            }}
+            style={styles.stepperBtn}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="remove" size={18} color={isDarkMode ? COLORS.text : theme.textPrimary} />
+          </TouchableOpacity>
+
+          <Text style={[styles.stepperReadout, { color: isDarkMode ? COLORS.textDim : (theme.textSecondary || '#334155') }]}>{bpm.toFixed(1)} bpm pace</Text>
+
+          <TouchableOpacity
+            onPress={() => {
+              setBpm(b => Math.min(7.0, Math.round((b + 0.5) * 10) / 10));
+              triggerHaptic('light');
+            }}
+            style={styles.stepperBtn}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="add" size={18} color={isDarkMode ? COLORS.text : theme.textPrimary} />
+          </TouchableOpacity>
         </View>
 
-        {/* Controls */}
-        <View style={styles.controls}>
-          <View style={styles.controlGroup}>
-            <Text style={styles.controlText}>
-              👆 Tap lily pads to help them grow
-            </Text>
-            <Text style={styles.controlSubtext}>
-              Each tap makes them bloom • Build combos for bonuses
-            </Text>
-          </View>
-        </View>
+        {/* Bottom Quick Controls */}
+        <View style={styles.quickActionRow}>
+          <TouchableOpacity onPress={togglePause} style={[styles.actionBtn, { backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.05)' : (theme.bgPrimary || '#F8FAFC') }]} activeOpacity={0.8}>
+            <Ionicons name={isPaused ? 'play-circle-outline' : 'pause-circle-outline'} size={20} color={isDarkMode ? COLORS.text : theme.textPrimary} />
+            <Text style={[styles.actionBtnTxt, { color: isDarkMode ? COLORS.text : (theme.textPrimary || '#0F172A') }]}>{isPaused ? 'Resume' : 'Pause'}</Text>
+          </TouchableOpacity>
 
-        {/* Glow overlay */}
-        <Animated.View style={[
-          styles.glowOverlay,
-          {
-            opacity: glowAnim.interpolate({
-              inputRange: [0, 1],
-              outputRange: [0, 0.2],
-            })
-          }
-        ]} />
-      </Animated.View>
-    </TouchableWithoutFeedback>
+          <TouchableOpacity onPress={endSessionEarly} style={styles.actionBtn} activeOpacity={0.8}>
+            <Ionicons name="stop-circle-outline" size={20} color="#F87171" />
+            <Text style={[styles.actionBtnTxt, { color: '#F87171' }]}>End Session</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </View>
   );
 };
+
+export const LilyPondGame = LilyBreathingGame;
+export default LilyBreathingGame;
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0F5132',
-    overflow: 'hidden',
-  },
-  waterBackground: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'radial-gradient(circle at center, #0D6E3E 0%, #0F5132 50%, #064E3B 100%)',
-  },
-  waterLilyDeco: {
-    position: 'absolute',
-    justifyContent: 'center',
     alignItems: 'center',
-  },
-  dragonfly: {
-    position: 'absolute',
     justifyContent: 'center',
-    alignItems: 'center',
-  },
-  dragonflyWing: {
-    position: 'absolute',
-    width: '60%',
-    height: '40%',
-    borderRadius: 10,
-    opacity: 0.6,
-  },
-  dragonflyBody: {
-    position: 'absolute',
-    width: '20%',
-    height: '60%',
-    borderRadius: 4,
-  },
-  frog: {
-    position: 'absolute',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  frogBody: {
     width: '100%',
-    height: '100%',
-    borderRadius: 50,
+  },
+  setupWrap: {
+    flex: 1,
     justifyContent: 'center',
-    alignItems: 'center',
+    paddingHorizontal: 24,
+    width: '100%',
+    maxWidth: 480,
+    paddingVertical: 20,
   },
-  frogEyes: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    width: '60%',
-    marginTop: -10,
+  setupTitle: {
+    color: COLORS.text,
+    fontSize: 24,
+    fontWeight: '800',
+    marginBottom: 8,
+    textAlign: 'center',
   },
-  frogEye: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#FFFFFF',
+  setupSubtitle: {
+    color: COLORS.textDim,
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: 'center',
+    marginBottom: 20,
   },
-  ripple: {
-    position: 'absolute',
-    borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
+  sectionLabel: {
+    color: COLORS.accentLight,
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: 10,
+    textAlign: 'center',
   },
-  particle: {
-    position: 'absolute',
+  patternCard: {
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
   },
-  floatingText: {
-    position: 'absolute',
-    fontSize: 20,
-    fontWeight: 'bold',
-    textShadowColor: 'rgba(0,0,0,0.8)',
-    textShadowOffset: { width: 2, height: 2 },
-    textShadowRadius: 4,
+  patternCardActive: {
+    borderColor: COLORS.accent,
+    backgroundColor: 'rgba(16, 185, 129, 0.12)',
   },
-  lilyContainer: {
-    position: 'absolute',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  lilyPad: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    shadowColor: '#20C997',
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    elevation: 5,
-  },
-  lilyEmoji: {
-    textShadowColor: 'rgba(0,0,0,0.3)',
-    textShadowOffset: { width: 1, height: 1 },
-    textShadowRadius: 3,
-  },
-  growthIndicator: {
-    position: 'absolute',
-    bottom: -8,
-    width: '80%',
-    height: 4,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  growthFill: {
-    height: '100%',
-    borderRadius: 2,
-  },
-  hud: {
-    position: 'absolute',
-    top: 30,
-    left: 20,
-    right: 20,
+  patternCardRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    flexWrap: 'wrap',
+    alignItems: 'center',
+    marginBottom: 4,
   },
-  hudItem: {
-    backgroundColor: 'rgba(15, 81, 50, 0.8)',
+  patternName: {
+    color: COLORS.text,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  patternBlurb: {
+    color: COLORS.textDim,
+    fontSize: 12,
+    lineHeight: 16,
+    marginBottom: 6,
+  },
+  patternCitation: {
+    color: 'rgba(231, 251, 241, 0.35)',
+    fontSize: 10,
+    fontStyle: 'italic',
+  },
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  chip: {
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+    borderRadius: 20,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+  },
+  chipActive: {
+    backgroundColor: COLORS.accent,
+    borderColor: COLORS.accent,
+  },
+  chipText: {
+    color: COLORS.text,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  chipTextActive: {
+    color: '#041D17',
+    fontWeight: '800',
+  },
+  startButton: {
+    backgroundColor: COLORS.accent,
+    borderRadius: 24,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 18,
+    elevation: 4,
+    shadowColor: COLORS.accent,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+  },
+  startButtonText: {
+    color: '#041D17',
+    fontSize: 16,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+
+  // SESSION STYLES
+  sessionContainer: {
+    flex: 1,
+    width: '100%',
+    backgroundColor: COLORS.waterDark,
+  },
+  pondCanvas: {
+    flex: 1,
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  firefly: {
+    position: 'absolute',
+    backgroundColor: '#6EE7B7',
+    shadowColor: '#6EE7B7',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 6,
+  },
+  lilyPad: {
+    position: 'absolute',
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    backgroundColor: COLORS.padDark,
+    borderWidth: 2,
+    borderColor: COLORS.padBorder,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.4,
+    shadowRadius: 16,
+  },
+  lilyPadNotch: {
+    position: 'absolute',
+    top: 0,
+    right: 90,
+    width: 0,
+    height: 0,
+    borderLeftWidth: 20,
+    borderRightWidth: 20,
+    borderTopWidth: 100,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderTopColor: COLORS.waterDark,
+  },
+  lilyPadVein1: {
+    position: 'absolute',
+    top: 110,
+    left: 20,
+    right: 20,
+    height: 1,
+    backgroundColor: 'rgba(31, 107, 76, 0.4)',
+  },
+  lilyPadVein2: {
+    position: 'absolute',
+    left: 110,
+    top: 20,
+    bottom: 20,
+    width: 1,
+    backgroundColor: 'rgba(31, 107, 76, 0.4)',
+  },
+
+  pulseGuideRing: {
+    position: 'absolute',
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    borderWidth: 2,
+    borderColor: 'rgba(244, 114, 182, 0.4)',
+    borderStyle: 'dashed',
+  },
+  lotusContainer: {
+    width: 140,
+    height: 140,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    shadowColor: COLORS.petalOuter,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+  },
+  lotusGlowAura: {
+    position: 'absolute',
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+  },
+  petalOuter: {
+    position: 'absolute',
+    width: 24,
+    height: 60,
+    borderRadius: 12,
+    shadowColor: COLORS.petalOuter,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 6,
+  },
+  petalInner: {
+    position: 'absolute',
+    width: 18,
+    height: 48,
+    borderRadius: 9,
+  },
+  lotusCore: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: COLORS.stamen,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: COLORS.centerCore,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 10,
+    zIndex: 10,
+  },
+  lotusCoreInner: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: COLORS.centerCore,
+  },
+  stamenDot: {
+    position: 'absolute',
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: COLORS.centerCore,
+  },
+
+  // HUD OVERLAY STYLES
+  hudContainer: {
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+    alignItems: 'center',
+    width: '100%',
+    maxWidth: 480,
+    backgroundColor: 'rgba(4, 29, 23, 0.88)',
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  instructionCard: {
+    marginTop: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.3)',
+    marginBottom: 6,
+  },
+  instructionText: {
+    color: COLORS.text,
+    fontSize: 13,
+    fontWeight: '800',
+    textAlign: 'center',
+    letterSpacing: 0.3,
+  },
+  phaseBarTrack: {
+    width: '90%',
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  phaseBarFill: {
+    height: '100%',
+    borderRadius: 2,
+  },
+  statsBadgeRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 8,
+  },
+  badgePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
     paddingVertical: 4,
     paddingHorizontal: 10,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  badgePillTxt: {
+    color: COLORS.text,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  stepperContainer: {
+    flexDirection: 'row',
     alignItems: 'center',
-    minWidth: 60,
-  },
-  hudLabel: {
-    color: '#6EE7B7',
-    fontSize: 8,
-    fontWeight: '600',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
-  hudValue: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  comboHigh: {
-    color: '#F59E0B',
-  },
-  comboSuper: {
-    color: '#FCD34D',
-    textShadowColor: '#FCD34D',
-    textShadowRadius: 10,
-  },
-  pondStatus: {
-    position: 'absolute',
-    top: 100,
-    left: 20,
-    right: 20,
-    alignItems: 'center',
-    backgroundColor: 'rgba(15, 81, 50, 0.6)',
+    gap: 12,
+    backgroundColor: 'rgba(0, 0, 0, 0.25)',
     paddingVertical: 4,
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    marginBottom: 8,
   },
-  pondStatusText: {
-    color: '#A7F3D0',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  controls: {
-    position: 'absolute',
-    bottom: 30,
-    left: 0,
-    right: 0,
+  stepperBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  controlGroup: {
-    backgroundColor: 'rgba(15, 81, 50, 0.8)',
-    paddingVertical: 8,
-    paddingHorizontal: 20,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
-    alignItems: 'center',
-  },
-  controlText: {
-    color: '#A7F3D0',
+  stepperReadout: {
+    color: COLORS.textDim,
     fontSize: 12,
-    fontWeight: '500',
+    fontWeight: '700',
+    minWidth: 90,
+    textAlign: 'center',
   },
-  controlSubtext: {
-    color: '#6EE7B7',
-    fontSize: 10,
-    marginTop: 2,
+  quickActionRow: {
+    flexDirection: 'row',
+    gap: 24,
+    marginTop: 4,
   },
-  glowOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: '#F472B6',
-    pointerEvents: 'none',
+  actionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  actionBtnTxt: {
+    color: COLORS.text,
+    fontSize: 12,
+    fontWeight: '700',
   },
 });
-
-export default LilyPondGame;
