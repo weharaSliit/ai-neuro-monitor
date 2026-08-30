@@ -40,7 +40,7 @@ class MissingValueHandler:
 
         user_baseline = getattr(telemetry, "user_baseline", None)
         if user_baseline is None:
-            user_baseline = firebase_service.get_baseline(user_id) or 0.35
+            user_baseline = firebase_service.get_baseline(user_id)
 
         if not is_calibrated:
             if "high" in effective_label or effective_label == "stress" or stress_prob >= 0.50:

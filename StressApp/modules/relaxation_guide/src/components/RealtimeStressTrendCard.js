@@ -52,14 +52,14 @@ export const RealtimeStressTrendCard = () => {
   const isReducing = diffPct <= 0;
 
   const hasBaseline = typeof userBaseline === 'number' && userBaseline > 0;
-  const baselinePct = hasBaseline ? (userBaseline * 100).toFixed(0) : '25';
+  const baselineDisplay = hasBaseline ? `${(userBaseline * 100).toFixed(0)}%` : 'Waiting for baseline...';
 
   // SVG Line Chart Dimensions
   const chartWidth = 110;
   const chartHeight = 32;
 
   const buildChart = () => {
-    if (!history || history.length === 0) return null;
+    if (!history || history.length === 0 || !hasLivePacket) return null;
     const points = history.map((val, idx) => {
       const x = (idx / Math.max(1, history.length - 1)) * chartWidth;
       const normalizedVal = Math.max(0.05, Math.min(1.0, val));
@@ -153,7 +153,7 @@ export const RealtimeStressTrendCard = () => {
                   {hasLivePacket ? `${currentPct}%` : '--'}
                 </Text>
                 <Text style={[styles.baseVal, { color: theme.textMuted }]}>
-                  {` Baseline: ${baselinePct}%`}
+                  {hasBaseline ? ` Baseline: ${baselineDisplay}` : ' Baseline: Waiting for baseline...'}
                 </Text>
               </View>
             </View>
@@ -180,9 +180,9 @@ export const RealtimeStressTrendCard = () => {
             </View>
 
             <View style={styles.rightWrap}>
-              <View style={[styles.deltaBadge, { backgroundColor: isReducing ? `${theme.success}20` : `${theme.danger}20` }]}>
-                <Text style={[styles.deltaTxt, { color: isReducing ? theme.success : theme.danger }]}>
-                  {isReducing ? `📉 ${diffPct}%` : `📈 +${diffPct}%`}
+              <View style={[styles.deltaBadge, { backgroundColor: hasLivePacket ? (isReducing ? `${theme.success}20` : `${theme.danger}20`) : `${theme.border}20` }]}>
+                <Text style={[styles.deltaTxt, { color: hasLivePacket ? (isReducing ? theme.success : theme.danger) : theme.textMuted }]}>
+                  {hasLivePacket ? (isReducing ? `📉 ${diffPct}%` : `📈 +${diffPct}%`) : '--'}
                 </Text>
               </View>
               <Text style={[styles.chevron, { color: theme.textMuted }]}>{isExpanded ? '▲' : '▼'}</Text>
@@ -195,8 +195,8 @@ export const RealtimeStressTrendCard = () => {
                 {!hasLivePacket
                   ? '🔴 Device Offline: Waiting for live telemetry stream from Smart Ring + Earbud hardware sensors...'
                   : !isCalibrated
-                  ? '🟡 Calibrating: Calibrating biometric baseline stress profile...'
-                  : `🟢 Live 2s Stream (fusion_en_sessions): Biometric P(Stress) is ${currentPct}%. Baseline target is ${baselinePct}%.`}
+                  ? '🟡 Calibrating: Waiting for baseline calibration...'
+                  : `🟢 Live 2s Stream (fusion_en_sessions): Biometric P(Stress) is ${currentPct}%. Baseline target is ${baselineDisplay}.`}
               </Text>
             </View>
           )}
@@ -220,10 +220,10 @@ export const RealtimeStressTrendCard = () => {
 
               <View style={styles.metricRow}>
                 <Text style={[styles.probVal, { color: statusColor }]}>
-                  {hasLivePacket ? '24%' : '--'}
+                  {hasLivePacket ? `${currentPct}%` : '--'}
                 </Text>
                 <Text style={[styles.baseVal, { color: theme.textMuted }]}>
-                  {` Baseline: 20%`}
+                  {hasBaseline ? ` Baseline: ${baselineDisplay}` : ' Baseline: Waiting for baseline...'}
                 </Text>
               </View>
             </View>
@@ -247,9 +247,9 @@ export const RealtimeStressTrendCard = () => {
             </View>
 
             <View style={styles.rightWrap}>
-              <View style={[styles.deltaBadge, { backgroundColor: `${theme.success}20` }]}>
-                <Text style={[styles.deltaTxt, { color: theme.success }]}>
-                  📉 -4%
+              <View style={[styles.deltaBadge, { backgroundColor: hasLivePacket ? `${theme.success}20` : `${theme.border}20` }]}>
+                <Text style={[styles.deltaTxt, { color: hasLivePacket ? theme.success : theme.textMuted }]}>
+                  {hasLivePacket ? (isReducing ? `📉 ${diffPct}%` : `📈 +${diffPct}%`) : '--'}
                 </Text>
               </View>
               <Text style={[styles.chevron, { color: theme.textMuted }]}>{isExpanded ? '▲' : '▼'}</Text>

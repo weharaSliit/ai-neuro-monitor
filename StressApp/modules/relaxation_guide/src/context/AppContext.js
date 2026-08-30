@@ -17,7 +17,7 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
   const [isGuest, setIsGuest] = useState(!initialUserId);
 
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
-  const [isCalibrated, setIsCalibrated] = useState(true);
+  const [isCalibrated, setIsCalibrated] = useState(false);
   const [identityChecked, setIdentityChecked] = useState(true);
 
   // Live Multi-Member Telemetry & Stress State (2 inputs: fused_stress_label & stress_probability)
@@ -28,7 +28,7 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
   const [isSafetyOverride, setIsSafetyOverride] = useState(false);
   const [isAlertTriggered, setIsAlertTriggered] = useState(false);
   const [telemetryMessage, setTelemetryMessage] = useState('');
-  const [hasLivePacket, setHasLivePacket] = useState(true);
+  const [hasLivePacket, setHasLivePacket] = useState(false);
 
   // Active Intervention State
   const [currentRecommendation, setCurrentRecommendation] = useState(null);
@@ -42,7 +42,7 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
   const [suitabilityData, setSuitabilityData] = useState(null);
 
   // Real-time Trend Line History & User Baseline (2s Polling)
-  const [stressTrendHistory, setStressTrendHistory] = useState([0.88, 0.85, 0.78, 0.65, 0.50, 0.38]);
+  const [stressTrendHistory, setStressTrendHistory] = useState([]);
   const [userBaseline, setUserBaseline] = useState(null);
   const [baselineAchievedModal, setBaselineAchievedModal] = useState({ visible: false, prob: '0.0', baseline: '0.0' });
   const [baselineNotReachedModal, setBaselineNotReachedModal] = useState({ visible: false, alternativeRecommendation: null, prob_stress: 0.5 });
@@ -68,6 +68,9 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
         setTelemetryMessage(telemetry.message);
         if (typeof telemetry.has_live_packet === 'boolean') {
           setHasLivePacket(telemetry.has_live_packet);
+        }
+        if (typeof telemetry.is_calibrated === 'boolean') {
+          setIsCalibrated(telemetry.is_calibrated);
         }
         const activeBaseline = (typeof telemetry.user_baseline === 'number' && telemetry.user_baseline > 0)
           ? telemetry.user_baseline

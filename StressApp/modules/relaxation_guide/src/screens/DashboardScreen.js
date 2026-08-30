@@ -497,17 +497,17 @@ export const DashboardScreen = () => {
             {/* Phenotyping Metrics Bar */}
             <View style={[s.metricsRow, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
               <View style={s.metricCol}>
-                <Text style={[s.metricValue, { color: theme.textPrimary }]}>{(isCalibrated && hasLivePacket) ? '24%' : '--'}</Text>
+                <Text style={[s.metricValue, { color: theme.textPrimary }]}>{(isCalibrated && hasLivePacket) ? `${(stressProbability * 100).toFixed(0)}%` : '--'}</Text>
                 <Text style={[s.metricLabel, { color: theme.textMuted }]}>Typing Agitation</Text>
               </View>
               <View style={[s.metricDivider, { backgroundColor: theme.border }]} />
               <View style={s.metricCol}>
-                <Text style={[s.metricValue, { color: sc.color }]}>{(isCalibrated && hasLivePacket) ? 'NORMAL' : (isCalibrated ? 'AWAITING...' : 'CALIBRATING')}</Text>
+                <Text style={[s.metricValue, { color: sc.color }]}>{(isCalibrated && hasLivePacket) ? sc.label : (isCalibrated ? 'AWAITING...' : 'CALIBRATING')}</Text>
                 <Text style={[s.metricLabel, { color: theme.textMuted }]}>Cognitive State</Text>
               </View>
               <View style={[s.metricDivider, { backgroundColor: theme.border }]} />
               <View style={s.metricCol}>
-                <Text style={[s.metricValue, { color: theme.accent }]}>{(isCalibrated && hasLivePacket) ? '88%' : 'WAITING...'}</Text>
+                <Text style={[s.metricValue, { color: theme.accent }]}>{(isCalibrated && hasLivePacket) ? (typeof sc.pct === 'number' ? `${sc.pct}%` : sc.pct) : 'WAITING...'}</Text>
                 <Text style={[s.metricLabel, { color: theme.textMuted }]}>Pheno Confidence</Text>
               </View>
             </View>
@@ -520,7 +520,7 @@ export const DashboardScreen = () => {
                 <Text style={[s.progressLbl, { color: theme.textMuted }]}>Agitation ⚡</Text>
               </View>
               <View style={[s.progressBg, { backgroundColor: theme.border }]}>
-                <View style={[s.progressFill, { backgroundColor: sc.color, width: (isCalibrated && hasLivePacket) ? '24%' : '18%' }]} />
+                <View style={[s.progressFill, { backgroundColor: sc.color, width: (isCalibrated && hasLivePacket) ? (sc.label === 'NORMAL' ? '100%' : '18%') : '0%' }]} />
               </View>
             </View>
           </View>

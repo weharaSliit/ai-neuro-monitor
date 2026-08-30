@@ -116,17 +116,22 @@ def read_and_process_fusion_output():
     if user_baseline is not None:
         user_baseline = float(user_baseline)
 
+    has_live_pk = bool(fusion_data.get("has_live_packet", False))
+    is_calib = bool(fusion_data.get("is_calibrated", False))
+
     telemetry_payload = telemetry_aggregator.parse_fusion_payload(
         user_id=user_id,
         fused_stress_label=fused_lbl,
         stress_probability=stress_prob,
-        seconds_since_last_packet=0.0,
-        has_live_packet=bool(fusion_data.get("has_live_packet", True)),
+        seconds_since_last_packet=0.0 if has_live_pk else 999.0,
+        has_live_packet=has_live_pk,
         user_baseline=user_baseline
     )
     processed = missing_value_handler.process_telemetry(telemetry_payload)
     res_dict = processed.model_dump() if hasattr(processed, "model_dump") else processed.dict()
     res_dict["user_baseline"] = user_baseline
+    res_dict["has_live_packet"] = has_live_pk
+    res_dict["is_calibrated"] = is_calib
     return jsonify(res_dict), 200
 
 
