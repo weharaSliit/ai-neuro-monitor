@@ -23,6 +23,7 @@
 import os
 import re
 import threading
+import time
 from dataclasses import replace as replace_thresholds
 from pathlib import Path
 
@@ -166,6 +167,19 @@ def calibrate():
     firebase = EegFirebaseSession(session_id, g.user_id)
     csv_logger = CsvLogger(str(_raw_csv_path(session_id)), RAW_FIELDS_BIPOLAR)
 
+    # Immediate "device is alive, calibrating" signal -- written BEFORE block
+    # processing below, not after. useDeviceStatus() (CalibrationGate.js)
+    # used to only ever see the device as "online" once the first scored
+    # /predict block landed, so a user actively calibrating (mqtt_bridge.py
+    # already streaming this session's raw blocks for up to ~75s before this
+    # bundled POST even arrives) saw every EEG-related screen -- the
+    # Calibrate card, the EEG dashboard, Fusion's Hardware & Sensor Stream
+    # row -- show "Offline"/"Not connected" the entire time. This gets
+    # overwritten by the real outcome (below) once calibration actually
+    # finishes; see push_calibration_result()'s .set() semantics (a full
+    # overwrite, not a merge) for why that's safe.
+    firebase.push_calibration_result({"status": "capturing", "updated_at": time.time()})
+
     engine = RealtimeInference(MODEL_DIR, disable_quality_gate=DISABLE_QUALITY_GATE)
     for i, block in enumerate(blocks):
         try:
@@ -222,6 +236,12 @@ def calibrate():
                 save_user_calibration_profile(
                     g.user_id, engine.baseline_shift, engine.thresholds_personalized
                 )
+
+    # updated_at so useDeviceStatus() can treat a fresh calibration outcome
+    # (not just a fresh /predict window) as evidence the device is alive --
+    # same field name as the "capturing" stub above, so the frontend doesn't
+    # need to special-case which phase wrote it.
+    outcome["updated_at"] = time.time()
 
     # Written regardless of status (including "failed") -- BaselineCalibrationScreen.js
     # and EegSessionScreen.js have no other path to this outcome, since

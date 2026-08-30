@@ -20,6 +20,7 @@ import LineChart from '../../shared/LineChart';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import { COLORS } from '../../physiological/config/theme';
 import { useAuth } from '../../../context/AuthContext';
+import { useDeviceStatus } from '../../shared/CalibrationGate';
 import { TASK_STATE_LABELS, EEG_TREND_LABELS } from '../config/config';
 
 // 5 relative band powers (the standard δ/θ/α/β/γ breakdown) + the 3 features
@@ -61,19 +62,43 @@ function currentStateLabel(latest) {
   return latest.high_load_alert ? 'High Load' : 'Relaxed';
 }
 
-// live_raw is overwritten roughly every 1s while wearable02 is genuinely
-// streaming (backend/psychological/mqtt_bridge.py's _post_live_raw()) --
-// 10s gives generous margin for jitter/a slow poll cycle while still
-// flipping "connected" off promptly once the device actually drops,
-// rather than staying stuck at whatever the last successful write said.
-const LIVE_RAW_STALE_SEC = 10;
-
 function latestWindow(windowsObj) {
   if (!windowsObj) return null;
   const keys = Object.keys(windowsObj).filter((k) => /^\d+$/.test(k));
   if (keys.length === 0) return null;
   keys.sort((a, b) => Number(a) - Number(b));
   return windowsObj[keys[keys.length - 1]];
+}
+
+function percentile(sorted, p) {
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor(p * (sorted.length - 1))));
+  return sorted[idx];
+}
+
+// Clamps a feature-trend series to its own p5-p95 range (+10% padding) before
+// charting -- same fix as AdminEegLiveScreen.js's waveform chart, applied
+// here too. Without it, gifted-charts auto-scales the y-axis to the raw
+// data's own min/max with no protection against outliers -- one anomalous
+// block (e.g. a motion/drift artifact -- see pipeline.py's
+// DELTA_POWER_IMPLAUSIBLE_SD investigation this session, which found
+// affected features can run 2-3 orders of magnitude off) dominates the
+// whole axis and flattens every other, genuinely-informative block into an
+// indistinguishable line along the bottom.
+function clampOutliers(points) {
+  if (!points || points.length < 2) return points;
+  const values = points.map((p) => p.value);
+  const sorted = [...values].sort((a, b) => a - b);
+  let lo = percentile(sorted, 0.05);
+  let hi = percentile(sorted, 0.95);
+  if (hi <= lo) {
+    const pad = Math.abs(lo) * 0.1 || 1;
+    lo -= pad;
+    hi += pad;
+  }
+  const pad = (hi - lo) * 0.1;
+  const clampLo = lo - pad;
+  const clampHi = hi + pad;
+  return points.map((p) => ({ ...p, value: Math.min(clampHi, Math.max(clampLo, p.value)) }));
 }
 
 function DistBar({ label, value, total, color, muted }) {
@@ -93,49 +118,20 @@ export default function EegSummaryScreen() {
   const { user } = useAuth();
   const userId = user?.userId;
 
-  const [currentSessionId, setCurrentSessionId] = useState(null);
-  const [hasSession, setHasSession] = useState(false);
+  // eegOnline/eegSessionId: shared with AccountSetupScreen.js/
+  // CalibrateBreathingCard.js/FusionSessionScreen.js's device-status row --
+  // was previously a SEPARATE, dead local implementation here keyed off the
+  // old live_raw field, which the backend stopped writing entirely once EEG
+  // liveness moved to the latest per-block record's own timestamp (see
+  // useDeviceStatus()'s own docstring). That field never updating meant
+  // hasSession here was permanently stuck false, silently hiding every card
+  // on this screen (Current State/Quality/Feature Trends all gate on it)
+  // regardless of whether real data existed. useDeviceStatus() also already
+  // covers the calibration-in-progress liveness signal this session added.
+  const { eegOnline: hasSession, eegSessionId: currentSessionId } = useDeviceStatus(userId, db);
   const [sessionWindows, setSessionWindows] = useState(null);
   const [recentSessions, setRecentSessions] = useState([]);
   const [sessionDist, setSessionDist] = useState({ normal: 0, stress: 0 });
-
-  useEffect(() => {
-    if (!userId) return;
-    const pRef = ref(db, 'psychological/current_session_id');
-    const h = onValue(pRef, (snap) => {
-      setCurrentSessionId(snap.val() || null);
-    });
-    return () => off(pRef, 'value', h);
-  }, [userId]);
-
-  // hasSession reflects whether wearable02 is genuinely streaming right
-  // now. The session pointer alone isn't enough -- it's never cleared, so
-  // it stays truthy forever once any session has existed. live_raw's own
-  // existence isn't enough either -- it's overwritten in place, so once
-  // written it stays "there" even after the device goes offline for the
-  // rest of that session. Only the write's own timestamp actually tells
-  // you whether it's still live -- recomputed on an interval since a
-  // Firebase listener alone won't notice time passing with no new writes.
-  const [lastRawTs, setLastRawTs] = useState(null);
-
-  useEffect(() => {
-    if (!userId || !currentSessionId) {
-      setLastRawTs(null);
-      return;
-    }
-    const rawRef = ref(db, `psychological/${userId}/${currentSessionId}/live_raw`);
-    const h = onValue(rawRef, (snap) => setLastRawTs(snap.val()?.timestamp ?? null));
-    return () => off(rawRef, 'value', h);
-  }, [userId, currentSessionId]);
-
-  useEffect(() => {
-    const evaluate = () => {
-      setHasSession(lastRawTs != null && (Date.now() / 1000 - lastRawTs) < LIVE_RAW_STALE_SEC);
-    };
-    evaluate();
-    const t = setInterval(evaluate, 3000);
-    return () => clearInterval(t);
-  }, [lastRawTs]);
 
   useEffect(() => {
     if (!userId || !currentSessionId) {
@@ -157,7 +153,9 @@ export default function EegSummaryScreen() {
     const points = windowsList
       .filter((w) => !w.skipped && w.features_eeg?.bipolar?.[key] != null)
       .map((w) => ({ value: w.features_eeg.bipolar[key], date: new Date(w.timestamp_end * 1000) }));
-    return { key, label, color, points, last: points[points.length - 1]?.value };
+    // last (the numeric readout above each chart) stays the TRUE value --
+    // only the plotted line itself gets outlier-clamped.
+    return { key, label, color, points: clampOutliers(points), last: points[points.length - 1]?.value };
   });
   const hasFeatureTrends = featureSeries.some((s) => s.points.length > 1);
 
