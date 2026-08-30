@@ -276,28 +276,6 @@ export default function FusionSessionScreen({ navigation }) {
                     color={stateColor}
                 />
 
-                {/* Prominent Relaxation Guide Hero Button */}
-                <TouchableOpacity onPress={() => navigation.navigate('RelaxationGuide')} activeOpacity={0.85}>
-                    <Card style={styles.relaxationGuideCard} accentColor="#10B981">
-                        <View style={styles.relaxationHeroRow}>
-                            <View style={styles.relaxationIconCircle}>
-                                <Text style={{ fontSize: 24 }}>🧠</Text>
-                            </View>
-                            <View style={{ flex: 1, marginLeft: 14 }}>
-                                <Text style={[styles.cardTitle, { color: t.text, fontSize: 16, fontWeight: '900' }]}>
-                                    Relaxation Guide
-                                </Text>
-                                <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 2 }]} numberOfLines={1}>
-                                    Personalized AI relaxation techniques & breathing
-                                </Text>
-                            </View>
-                            <View style={styles.openPill}>
-                                <Text style={styles.openPillText}>Open →</Text>
-                            </View>
-                        </View>
-                    </Card>
-                </TouchableOpacity>
-
                 <CalibrationBanner userId={userId} token={token} db={db} navigation={navigation} />
 
                 {/* Session Progression Line Chart */}
@@ -530,37 +508,6 @@ const styles = StyleSheet.create({
     sectionSummary: {
         fontSize: 12,
         marginTop: 3,
-    },
-    relaxationGuideCard: {
-        marginHorizontal: 20,
-        marginVertical: 10,
-        padding: 16,
-        borderRadius: 22,
-        backgroundColor: '#FFFFFF',
-    },
-    relaxationHeroRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    relaxationIconCircle: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
-        backgroundColor: 'rgba(16,185,129,0.12)',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    openPill: {
-        backgroundColor: '#8B87C4',
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        borderRadius: 14,
-        marginLeft: 8,
-    },
-    openPillText: {
-        color: '#FFFFFF',
-        fontWeight: '800',
-        fontSize: 12,
     },
 });
 
