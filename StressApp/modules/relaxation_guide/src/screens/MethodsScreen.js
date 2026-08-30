@@ -28,13 +28,13 @@ export const MethodsScreen = () => {
   const categories = [
     {
       id: "guided_meditation",
-      title: "Guided Breathwork & Meditation",
+      title: "Breathwork & Meditation",
       icon: "🧘‍♀️",
       sub_options: [
-        { id: "water_lily_pond", title: "Lily Pond Breathing", description: "Relaxing water lily blooms synced to deep exhalations." },
-        { id: "vagus_humming", title: "Humming Exhale", description: "Soothing humming exhalations to quickly lower stress." },
-        { id: "diaphragmatic_pace", title: "Deep Belly Breathing", description: "Slow, deep abdominal breathing for fast pulse reduction." },
-        { id: "box_meditation", title: "Box Breathing", description: "4-4-4-4 rhythm for calm and balance." }
+        { id: "water_lily_pond", title: "Lily Pond Breathing", description: "Deep breathing with water lilies." },
+        { id: "vagus_humming", title: "Humming Exhale", description: "Humming to lower stress quickly." },
+        { id: "diaphragmatic_pace", title: "Deep Belly Breathing", description: "Deep belly breathing for quick calm." },
+        { id: "box_meditation", title: "Box Breathing", description: "4-4-4-4 rhythm for balance." }
       ]
     },
     {
@@ -42,19 +42,19 @@ export const MethodsScreen = () => {
       title: "Breathing Garden",
       icon: "🌸",
       sub_options: [
-        { id: "cosmic_nebula", title: "Cosmic Nebula", description: "Starlight pulses for calm, steady breathing." },
-        { id: "flower_meadow", title: "Flower Meadow", description: "Blooming flowers matched to 4-7-8 breathing cycles." }
+        { id: "cosmic_nebula", title: "Cosmic Nebula", description: "Starlight breathing rhythm." },
+        { id: "flower_meadow", title: "Flower Meadow", description: "4-7-8 breathing with flowers." }
       ]
     },
     {
       id: "cognitive_destress",
-      title: "Cognitive De-Stress",
+      title: "Quick Relief",
       icon: "🌿",
       sub_options: [
-        { id: "soft_fascination", title: "Nature Scenery", description: "Calming nature visuals for instant mental rest." },
-        { id: "progressive_muscle", title: "Muscle Release", description: "Step-by-step muscle tension release." },
-        { id: "guided_imagery", title: "Forest Walk", description: "Peaceful forest imagery walk for quick stress relief." },
-        { id: "pattern_alignment", title: "Memory Match", description: "Fun pattern matching to clear active stress loops." }
+        { id: "soft_fascination", title: "Nature Scenery", description: "Calming nature scenery." },
+        { id: "progressive_muscle", title: "Muscle Release", description: "Release body muscle tension." },
+        { id: "guided_imagery", title: "Forest Walk", description: "Peaceful forest walk imagery." },
+        { id: "pattern_alignment", title: "Memory Match", description: "Fun pattern match for focus." }
       ]
     }
   ];
@@ -85,7 +85,7 @@ export const MethodsScreen = () => {
     setCurrentRecommendation({
       technique_id: cat.id,
       title: cat.title,
-      description: `Selected ${subOpt.title} from Biofeedback Catalog`,
+      description: `Selected ${subOpt.title} from Catalog`,
       selected_sub_option: subOpt,
       available_sub_options: cat.sub_options,
       context_cluster_id: 1,
@@ -106,7 +106,7 @@ export const MethodsScreen = () => {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
-      <Header title="Relaxation Methods Catalog" showBack onBack={() => setCurrentScreen('Dashboard')} />
+      <Header title="Relaxation Catalog" showBack onBack={() => setCurrentScreen('Dashboard')} />
 
       <SuitabilityModal
         visible={modalVisible}
@@ -123,9 +123,9 @@ export const MethodsScreen = () => {
       />
 
       <ScrollView contentContainerStyle={styles.content}>
-        <Text style={[styles.heading, { color: theme.textPrimary }]}>WESAD-Validated Biofeedback Catalog</Text>
+        <Text style={[styles.heading, { color: theme.textPrimary }]}>Relaxation Catalog</Text>
         <Text style={[styles.sub, { color: theme.textSecondary }]}>
-          Explore all 10 physiological stress relief protocols. Calm AI verifies your live autonomic signals before launching to maximize vagal tone recovery.
+          Choose an exercise to start relaxing.
         </Text>
 
         {categories.map((cat) => (
