@@ -93,6 +93,37 @@ function getLogValue(log, measureId) {
     return typeof val === 'number' ? val : null;
 }
 
+// ── Dynamic Status Badge (NORMAL / PRE-STRESS / STRESS / pending)
+function StatusBadge({ status, COLORS, styles }) {
+    let bg, fg, label;
+    switch (status) {
+        case 'stress':
+            bg = COLORS.stressSoft || (COLORS.stress + '20');
+            fg = COLORS.stressDark || COLORS.stress;
+            label = 'STRESS';
+            break;
+        case 'pre-stress':
+            bg = COLORS.warningSoft || (COLORS.warning + '20');
+            fg = COLORS.warningDark || COLORS.warning;
+            label = 'PRE-STRESS';
+            break;
+        case 'normal':
+            bg = COLORS.normalSoft || (COLORS.normal + '20');
+            fg = COLORS.normalDark || COLORS.normal;
+            label = 'NORMAL';
+            break;
+        default:
+            bg = 'transparent';
+            fg = '#9CA3AF';
+            label = 'PENDING';
+    }
+    return (
+        <View style={[styles.statusBadge, { backgroundColor: bg }]}>
+            <Text style={[styles.statusBadgeText, { color: fg }]}>{label}</Text>
+        </View>
+    );
+}
+
 function getDayStatus(signalId, avgValue, bl, config) {
     if (avgValue === null) return 'pending';
     const primaryMeasure = config.measures[0];
@@ -126,7 +157,7 @@ function SparkChart({ data = [], color, height = 30, maxLimit, selectedIndex, on
         <View style={[styles.chartContainer, { height }]}>
             {data.map((val, idx) => {
                 const isSelected = idx === selectedIndex;
-                
+
                 // Determine bar color dynamically based on its value/status
                 let barColor = color || '#6E68B2';
                 if (typeof val === 'number') {
@@ -142,11 +173,11 @@ function SparkChart({ data = [], color, height = 30, maxLimit, selectedIndex, on
                         barColor = val < 25 ? COLORS.stress : val < 32 ? COLORS.warning : COLORS.normal;
                     }
                 }
-                
+
                 if (isSelected) {
                     barColor = '#6E68B2';
                 }
-                
+
                 let barHeightPct = '0%';
                 if (typeof val === 'number' && maxVal > 0) {
                     barHeightPct = `${Math.max(15, Math.min(Math.round((val / maxVal) * 100), 100))}%`;
@@ -164,22 +195,6 @@ function SparkChart({ data = [], color, height = 30, maxLimit, selectedIndex, on
                                 <View style={[styles.chartColFill, { height: barHeightPct, backgroundColor: barColor }]} />
                             )}
                         </View>
-                        
-                        {/* Selected Chevron indicator */}
-                        {isSelected && typeof val === 'number' && (
-                            <View style={styles.selectorOverlay}>
-                                <Text style={[styles.selectorChevron, { color: '#6E68B2' }]}>◀</Text>
-                                <View style={[styles.selectorCircle, { borderColor: '#FFF', backgroundColor: '#6E68B2' }]} />
-                                <Text style={[styles.selectorChevron, { color: '#6E68B2' }]}>▶</Text>
-                            </View>
-                        )}
-
-                        {/* Interactive Tooltip Bubble */}
-                        {isSelected && typeof val === 'number' && (
-                            <View style={styles.tooltipBubble}>
-                                <Text style={styles.tooltipText}>{val} {signalType === 'weekly' ? 'avg' : ''}</Text>
-                            </View>
-                        )}
                     </TouchableOpacity>
                 );
             })}
@@ -495,9 +510,7 @@ export default function PhenotypingSignalHistoryScreen({ navigation, route }) {
                                 <Text style={[styles.baselineText, { color: t.textMuted }]}>
                                     Baseline: {formattedBaseline(measure.baselineKey, measure.unit, measure.fallbackBaseline)}
                                 </Text>
-                                <View style={[styles.statusBadge, { backgroundColor: COLORS.normalSoft }]}>
-                                    <Text style={[styles.statusBadgeText, { color: COLORS.normalDark }]}>NORMAL</Text>
-                                </View>
+                                <StatusBadge status={activeDay.status} COLORS={COLORS} styles={styles} />
                             </View>
                             <View style={styles.measureChartWrap}>
                                 <SparkChart
@@ -530,9 +543,7 @@ export default function PhenotypingSignalHistoryScreen({ navigation, route }) {
                         <Text style={[styles.todayTitle, { color: t.text }]}>
                             {selectedWeeklyIdx === 6 ? "Today • Live" : `${activeDay.label} • Overview`}
                         </Text>
-                        <View style={[styles.statusBadge, { backgroundColor: COLORS.normalSoft }]}>
-                            <Text style={[styles.statusBadgeText, { color: COLORS.normalDark }]}>NORMAL</Text>
-                        </View>
+                        <StatusBadge status={activeDay.status} COLORS={COLORS} styles={styles} />
                     </View>
                     <View style={styles.todayChartWrap}>
                         <SparkChart
@@ -599,9 +610,7 @@ export default function PhenotypingSignalHistoryScreen({ navigation, route }) {
                                 <View key={idx} style={[styles.dayCard, { backgroundColor: t.surface, borderColor: t.border }]}>
                                     <View style={styles.rowBetween}>
                                         <Text style={[styles.dayDateLabel, { color: t.text }]}>{day.label}</Text>
-                                        <View style={[styles.statusBadge, { backgroundColor: COLORS.normalSoft }]}>
-                                            <Text style={[styles.statusBadgeText, { color: COLORS.normalDark }]}>NORMAL</Text>
-                                        </View>
+                                        <StatusBadge status={day.status} COLORS={COLORS} styles={styles} />
                                     </View>
                                     <View style={styles.dayChartWrap}>
                                         <SparkChart
@@ -695,52 +704,7 @@ const styles = StyleSheet.create({
 
     // SparkChart styles
     chartContainer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', width: '100%' },
-    chartCol: { flex: 1, height: '100%', alignItems: 'center', marginHorizontal: 2, position: 'relative' },
+    chartCol: { flex: 1, height: '100%', alignItems: 'center', marginHorizontal: 2 },
     chartColTrack: { width: '100%', height: '100%', borderRadius: 4, overflow: 'hidden', justifyContent: 'flex-end' },
     chartColFill: { width: '100%', borderRadius: 4 },
-
-    // Interactive selector overlay
-    selectorOverlay: {
-        position: 'absolute',
-        top: -16,
-        left: -12,
-        right: -12,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 2,
-    },
-    selectorChevron: {
-        fontSize: 8,
-        fontWeight: '900',
-    },
-    selectorCircle: {
-        width: 8,
-        height: 8,
-        borderRadius: 4,
-        borderWidth: 1.5,
-    },
-
-    // Interactive Tooltip Bubble styles
-    tooltipBubble: {
-        position: 'absolute',
-        top: -24,
-        backgroundColor: '#6E68B2',
-        paddingHorizontal: 6,
-        paddingVertical: 2,
-        borderRadius: 6,
-        alignItems: 'center',
-        justifyContent: 'center',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.15,
-        shadowRadius: 1,
-        elevation: 2,
-        zIndex: 10,
-    },
-    tooltipText: {
-        color: '#FFF',
-        fontSize: 8,
-        fontWeight: '800',
-    },
 });

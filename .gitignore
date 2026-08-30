@@ -42,6 +42,9 @@ __pycache__/
 Thumbs.db
 desktop.ini
 
+# Android build binary files
+*.bin
+
 # IDE files
 .vscode/settings.json
 .idea/
