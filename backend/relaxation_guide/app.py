@@ -14,10 +14,9 @@ from flask import jsonify, request, g
 from flask_cors import CORS
 
 # --- MODULE PATH FIX ---
-if __package__ is None:
-    repo_root = Path(__file__).resolve().parents[2]
-    if str(repo_root) not in sys.path:
-        sys.path.insert(0, str(repo_root))
+repo_root = Path(__file__).resolve().parents[2]
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
 
 from backend.common.app_factory import create_app
 from backend.common.config import STRESS_COLORS
