@@ -174,8 +174,21 @@ class FirebaseSync:
     def set(self, record: dict) -> None:
         try:
             self._ref.set(record)
-        except Exception as e:  
+        except Exception as e:
             print(f'[firebase] WARNING: set failed for session_id={self.session_id}: {e}')
+
+    def update(self, record: dict) -> None:
+        """Plain shallow update on THIS ref's own node (RTDB's standard
+        merge semantics) -- distinct from merge() above, which is
+        specifically for a window-keyed CHILD under a per-session
+        container and unconditionally requires record['window']. Use this
+        one for a ref that already points at the exact node to update
+        (e.g. a per-user profile node), where set() would wipe sibling
+        fields written by an earlier, separate call."""
+        try:
+            self._ref.update(record)
+        except Exception as e:
+            print(f'[firebase] WARNING: update failed for session_id={self.session_id}: {e}')
 
     def get(self) -> dict | None:
         try:

@@ -65,7 +65,15 @@ export default function EegThresholdTaskScreen({ navigation }) {
 
   const finish = useCallback(() => {
     completeOnboarding();
-    navigation.replace('Physiological');
+    // { screen: 'Fusion' } explicit, not just 'Physiological' -- Fusion is
+    // PhysiologicalNavigator's initialRouteName, but that only applies on
+    // that nested navigator's FIRST mount (same gotcha App.js's own
+    // Stack.Navigator key={phase} comment documents), not reliably when
+    // returning to an already-mounted one. This is the last step of
+    // baseline -> personal-threshold calibration (both Ring + EEG), so
+    // landing on Fusion specifically -- not wherever that inner stack
+    // last was -- is the point.
+    navigation.replace('Physiological', { screen: 'Fusion' });
   }, [completeOnboarding, navigation]);
 
   useEffect(() => {
