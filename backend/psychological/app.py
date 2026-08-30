@@ -37,6 +37,7 @@ from backend.psychological.firebase_service import (
     get_calibration_status,
     load_user_calibration_profile,
     save_user_calibration_profile,
+    compute_eeg_baseline_drift_history,
 )
 from backend.psychological.mqtt_bridge import N_CALIBRATION_BLOCKS, N_THRESHOLD_TASK_BLOCKS
 from backend.psychological.realtime.csv_logger import CsvLogger, RAW_FIELDS_BIPOLAR, log_raw_block_bipolar
@@ -371,6 +372,20 @@ def calibration_status():
 @require_auth
 def admin_calibration_status(user_id):
     return jsonify(get_calibration_status(user_id))
+
+
+# -- /calibration/<user_id>/drift-history -- weekly-bucketed drift trend, --
+# for EegSummaryScreen.js's chart. Separate from /calibration/status above
+# (which already carries the single current drift verdict for
+# CalibrationBanner) since this one does more work (scans up to 200 recent
+# sessions) and isn't needed on every poll the way the banner's check is.
+# Mirrors physiological's GET /baseline/<user_id>/drift-history exactly.
+@app.route("/calibration/<user_id>/drift-history", methods=["GET"])
+@require_auth
+def calibration_drift_history(user_id):
+    if user_id != g.user_id:
+        return jsonify({"error": "Forbidden — token does not match requested user"}), 403
+    return jsonify({"user_id": user_id, "weeks": compute_eeg_baseline_drift_history(user_id)})
 
 
 # -- /calibrate/threshold/start + /status -- on-demand personal-threshold -

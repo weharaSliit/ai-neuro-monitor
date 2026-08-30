@@ -38,6 +38,7 @@ from backend.physiological.firebase_service import (
     load_personal_stress_threshold,
     save_prediction, get_session_predictions,
     get_recent_sessions,
+    compute_baseline_drift, compute_baseline_drift_history,
     save_pss4, get_pss4_history,
     _ref,
     save_prediction_quality,
@@ -511,6 +512,12 @@ def _baseline_response(user_id):
         # exposed here (not just written) so the Fusion dashboard can show
         # what this user's stress threshold actually got personalized to.
         'personal_stress_threshold': load_personal_stress_threshold(user_id),
+        # Piggybacks on this same call (not a separate endpoint/round-trip)
+        # since CalibrationBanner already fetches this response on every
+        # poll -- see compute_baseline_drift()'s docstring for what this
+        # actually measures and its real limitation (can't tell "baseline
+        # went stale" apart from "genuinely been stressed lately").
+        'drift': compute_baseline_drift(user_id),
         'baseline': {
             feature_cols[i]: {
                 'mean': float(b_mean[i]),
@@ -558,6 +565,19 @@ def get_ema_history(user_id):
     if user_id != g.user_id:
         return jsonify({'error': 'Forbidden — token does not match requested user'}), 403
     return jsonify(_ema_history_response(user_id))
+
+
+# -- /baseline/<user_id>/drift-history -- weekly-bucketed drift trend, for
+# ProfileScreen.js's chart. Separate from /baseline/<user_id> above (which
+# already carries the single current drift verdict for the calibration
+# banner) since this one does more work (scans up to 200 recent sessions)
+# and isn't needed on every poll the way the banner's check is.
+@app.route('/baseline/<user_id>/drift-history', methods=['GET'])
+@require_auth
+def get_baseline_drift_history(user_id):
+    if user_id != g.user_id:
+        return jsonify({'error': 'Forbidden — token does not match requested user'}), 403
+    return jsonify({'user_id': user_id, 'weeks': compute_baseline_drift_history(user_id)})
 
 
 # ── Admin routes ──────────────────────────────────────────────────────

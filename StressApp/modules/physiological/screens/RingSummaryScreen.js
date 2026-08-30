@@ -5,11 +5,10 @@
 // action, a session-distribution bar, and the live trend -- a scrollable,
 // tappable, zone-colored chart (see LineChart.js's colorZones) against the
 // one shared Stress threshold line: green below it, red (dashed) at/above
-// it. Deliberately kept to just that one line -- no session-baseline
-// reference or deviation numbers here, that level of detail moved to the
-// Admin app (modules/admin/) instead, same reasoning as the raw AVNN/SCL
-// feature numbers and the manual "Stop Watching" control already living
-// there rather than here.
+// it, plus a weekly Calibration Drift chart against the original resting
+// calibration. The raw AVNN/SCL feature numbers and the manual "Stop
+// Watching" control still stay Admin-app only (modules/admin/) -- just not
+// the drift/deviation view, which the user explicitly asked to see here.
 // ============================================================
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
@@ -59,6 +58,18 @@ export default function RingSummaryScreen({ navigation }) {
   const { loading: calibLoading, ring } = useCalibrationSummary(userId, token);
   const neverCalibrated = !calibLoading && ring?.ok && !ring.exists;
 
+  // The chart's dashed reference line has to match whatever line app.py's
+  // /predict actually decided Normal/Stress against (app.py:383-387) --
+  // once this user has a personal_stress_threshold (from the onboarding
+  // maths-quiz task), that's what's really being used, not the fixed
+  // population STRESS_DECISION_THRESHOLD_PERCENT below. Drawing the old
+  // fixed line regardless made points that were correctly labeled Stress
+  // by their own (lower) personal threshold visually sit under a "Normal
+  // zone" reference line that no longer matched the real decision boundary.
+  const personalRingPct = ring?.personal_stress_threshold != null
+    ? Math.round(ring.personal_stress_threshold * 100) : null;
+  const effectiveThresholdPct = personalRingPct != null ? personalRingPct : STRESS_DECISION_THRESHOLD_PERCENT;
+
   const [status, setStatus] = useState('offline');
   const [fingerDetected, setFingerDetected] = useState(null);
   const [latest, setLatest] = useState(null);
@@ -66,7 +77,17 @@ export default function RingSummaryScreen({ navigation }) {
   const [recent, setRecent] = useState([]);
   const [sessionDist, setSessionDist] = useState({ normal: 0, stress: 0 });
   const [sessionCount, setSessionCount] = useState(0);
+  const [driftWeeks, setDriftWeeks] = useState(null);
   const intervalRef = useRef(null);
+
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    api.get(`/baseline/${userId}/drift-history`)
+      .then((res) => { if (!cancelled) setDriftWeeks(res.data?.weeks || null); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [userId]);
 
   const poll = useCallback(async () => {
     try {
@@ -249,9 +270,40 @@ export default function RingSummaryScreen({ navigation }) {
               height={145}
               maxValue={100}
               hideValues
-              baselineValue={STRESS_DECISION_THRESHOLD_PERCENT}
-              baselineLabel="Stress threshold"
+              baselineValue={effectiveThresholdPct}
+              baselineLabel={personalRingPct != null ? 'Your stress threshold' : 'Stress threshold'}
               colorZones
+            />
+          </Card>
+        )}
+
+        {/* Calibration Drift -- weekly mean predicted-stress vs. the
+            resting baseline captured at calibration time (see
+            compute_baseline_drift_history(), backend/physiological/
+            firebase_service.py). Weeks with too few predictions to be
+            meaningful are dropped server-side (mean_prob_stress: null),
+            not shown as zero. */}
+        {Array.isArray(driftWeeks) && driftWeeks.some((w) => w.mean_prob_stress != null) && (
+          <Card accentColor={COLORS.brand} elevated style={styles.readingCard}>
+            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 4 }]}>Calibration Drift</Text>
+            <Text style={[styles.cardSub, { color: t.textMuted, marginBottom: 12 }]}>
+              {ring?.drift?.checked && ring.drift.drift_detected
+                ? 'Your recent readings have shifted from your original calibration — recalibrating is recommended.'
+                : 'How your recent readings compare to your original resting calibration, week by week.'}
+            </Text>
+            <LineChart
+              points={driftWeeks
+                .filter((w) => w.mean_prob_stress != null)
+                .map((w) => ({ value: Math.round(w.mean_prob_stress * 100), date: w.week_start }))}
+              width={TREND_CHART_WIDTH}
+              height={140}
+              color={COLORS.brand}
+              maxValue={100}
+              suffix="%"
+              baselineValue={ring?.drift?.original_resting_mean != null
+                ? Math.round(ring.drift.original_resting_mean * 100) : undefined}
+              baselineLabel="Your original calibration"
+              baselineColor={COLORS.normal}
             />
           </Card>
         )}

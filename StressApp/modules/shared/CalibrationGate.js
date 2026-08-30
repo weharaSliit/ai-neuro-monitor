@@ -171,7 +171,7 @@ function describeStale(name, side) {
   return `${name} calibration is ${age} day${age === 1 ? '' : 's'} old — `
     + `renew within the next ${remaining} day${remaining === 1 ? '' : 's'} for best accuracy.`;
 }
-export function CalibrationBanner({ userId, token, db }) {
+export function CalibrationBanner({ userId, token, db, navigation }) {
   const { theme, COLORS } = useTheme();
   const { loading, ring, eeg, softStaleRing, softStaleEeg } = useCalibrationSummary(userId, token);
   const signupAgeDays = useSignupAge(userId, db);
@@ -179,8 +179,19 @@ export function CalibrationBanner({ userId, token, db }) {
 
   const neverCalibrated = !loading && ring?.ok && !ring.exists && eeg?.ok && !eeg.exists;
   const newUserOverdue = neverCalibrated && signupAgeDays != null && signupAgeDays >= 7;
+  // Separate from age-based staleness (softStaleRing/Hard above) -- this
+  // fires even on a fresh-by-age baseline if recent live predictions have
+  // drifted meaningfully from the original resting-state mean (see
+  // compute_baseline_drift()'s docstring, backend/physiological/
+  // firebase_service.py, for exactly what this does and doesn't prove).
+  const ringDriftDetected = !loading && ring?.ok && ring.exists && ring.drift?.checked && ring.drift?.drift_detected;
+  // Same idea, EEG side -- see compute_eeg_baseline_drift()'s docstring
+  // (backend/psychological/firebase_service.py) for why EEG's reference
+  // point is its own earliest live samples rather than a stored resting
+  // mean the way Ring's is.
+  const eegDriftDetected = !loading && eeg?.ok && eeg.exists && eeg.drift?.checked && eeg.drift?.drift_detected;
 
-  if (dismissed || (!softStaleRing && !softStaleEeg && !newUserOverdue)) return null;
+  if (dismissed || (!softStaleRing && !softStaleEeg && !newUserOverdue && !ringDriftDetected && !eegDriftDetected)) return null;
 
   return (
     <View style={[bannerStyles.wrap, { backgroundColor: COLORS.warning + '1a', borderColor: COLORS.warning + '55' }]}>
@@ -199,12 +210,29 @@ export function CalibrationBanner({ userId, token, db }) {
                 {describeStale('EEG', eeg)}
               </Text>
             )}
+            {ringDriftDetected && (
+              <Text style={[bannerStyles.text, { color: theme.text, marginTop: (softStaleRing || softStaleEeg) ? 4 : 0 }]}>
+                Your recent Ring readings look different from your original calibration — new calibration recommended.
+              </Text>
+            )}
+            {eegDriftDetected && (
+              <Text style={[bannerStyles.text, { color: theme.text, marginTop: (softStaleRing || softStaleEeg || ringDriftDetected) ? 4 : 0 }]}>
+                Your recent EEG readings look different from your original calibration — new calibration recommended.
+              </Text>
+            )}
           </>
         )}
       </View>
-      <TouchableOpacity onPress={() => setDismissed(true)} hitSlop={10}>
-        <Text style={[bannerStyles.dismiss, { color: COLORS.warning }]}>Dismiss</Text>
-      </TouchableOpacity>
+      <View style={{ alignItems: 'flex-end', gap: 8 }}>
+        {navigation && (
+          <TouchableOpacity onPress={() => navigation.navigate('Profile')} hitSlop={10}>
+            <Text style={[bannerStyles.dismiss, { color: COLORS.warning }]}>Calibrate →</Text>
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity onPress={() => setDismissed(true)} hitSlop={10}>
+          <Text style={[bannerStyles.dismiss, { color: COLORS.warning }]}>Dismiss</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
