@@ -12,6 +12,7 @@ import AvatarButton from '../../shared/AvatarButton';
 import { CalibrationBanner, useCalibrationSummary, useDeviceStatus } from '../../shared/CalibrationGate';
 import LineChart from '../../shared/LineChart';
 import FreudHeroBanner from '../../shared/FreudHeroBanner';
+import CalibrateBreathingCard from '../../shared/CalibrateBreathingCard';
 import { ref, onValue, off } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
@@ -80,13 +81,26 @@ export default function FusionSessionScreen({ navigation }) {
     const { user, token } = useAuth();
     const userId = user?.userId;
 
-    // Calibration itself (personal thresholds display + the Ring/EEG
-    // "Calibrate -- Calm Breathing" trigger) now lives on the Profile
-    // screen, not here -- Fusion only keeps CalibrationBanner's passive
-    // staleness/drift nudge below, which links there via its own
-    // `navigation` prop. New-user onboarding still runs through
-    // AccountSetupScreen.js -> ThresholdCalibration on its own, unrelated
-    // to this screen.
+    // The "Calibrate -- Calm Breathing" trigger itself now lives on the
+    // Profile screen, not here. This screen keeps a read-only summary of
+    // the personalized thresholds it produces (below) plus
+    // CalibrationBanner's passive staleness/drift nudge. Reused, not
+    // re-fetched, from the same GET /baseline/{userId} + GET
+    // /calibration/status CalibrationBanner already calls.
+    const { ring: ringCalibration, eeg: eegCalibration } = useCalibrationSummary(userId, token);
+    const personalEegPct = eegCalibration?.personal_high_load_p != null
+        ? Math.round(eegCalibration.personal_high_load_p * 100) : null;
+    const personalRingPct = ringCalibration?.personal_stress_threshold != null
+        ? Math.round(ringCalibration.personal_stress_threshold * 100) : null;
+    // Gated to a brand-new user's FIRST calibration only (user.isNewUser)
+    // -- a returning user recalibrating on this always-visible card just
+    // refreshes the freshness bars as it already does, not forced into a
+    // quiz screen every time they recalibrate.
+    const goToThresholdCalibration = useCallback(() => {
+        if (user?.isNewUser) {
+            navigation.navigate('ThresholdCalibration');
+        }
+    }, [user?.isNewUser, navigation]);
     const userName = user?.name || userId;
     const [sessionId, setSessionId] = useState('');
     const [watching, setWatching] = useState(false);
@@ -245,7 +259,7 @@ export default function FusionSessionScreen({ navigation }) {
                     </View>
                 )}
 
-                <CalibrationBanner userId={userId} token={token} db={db} />
+                <CalibrationBanner userId={userId} token={token} db={db} navigation={navigation} />
 
                 {/* Personalized thresholds: only rendered once at least one
                     side has actually separated Rest from Task (see
@@ -284,7 +298,6 @@ export default function FusionSessionScreen({ navigation }) {
                         onComplete={goToThresholdCalibration}
                     />
                 </Card>
-                <CalibrationBanner userId={userId} token={token} db={db} navigation={navigation} />
 
                 {/* Session Progression Line Chart */}
                 {fusedHistory.length > 1 && (
