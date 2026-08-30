@@ -35,7 +35,7 @@ const bStyles = StyleSheet.create({
 /* Staggered session card */
 const SessionCard = ({ item, idx, theme }) => {
   const cardOpacity = useRef(new Animated.Value(0)).current;
-  const cardSlide   = useRef(new Animated.Value(20)).current;
+  const cardSlide = useRef(new Animated.Value(20)).current;
 
   useEffect(() => {
     setTimeout(() => {
@@ -96,7 +96,7 @@ export const HistoryScreen = () => {
 
   // Header entrance
   const headerOpacity = useRef(new Animated.Value(0)).current;
-  const headerSlide   = useRef(new Animated.Value(-15)).current;
+  const headerSlide = useRef(new Animated.Value(-15)).current;
 
   useEffect(() => {
     Animated.parallel([
@@ -117,8 +117,8 @@ export const HistoryScreen = () => {
         } else {
           setHistory([
             { technique_id: 'guided_meditation', pre_label: 'stress', post_label: 'normal', recovery_pct: 100.0, reward: 1.0, cluster_id: 1, timestamp: Date.now() / 1000 - 3600 },
-            { technique_id: 'adaptive_environment', pre_label: 'stress', post_label: 'pre-stress', recovery_pct: 70.0, reward: 0.7, cluster_id: 3, timestamp: Date.now() / 1000 - 86400 },
-            { technique_id: 'breathing_garden', pre_label: 'pre-stress', post_label: 'normal', recovery_pct: 90.0, reward: 0.6, cluster_id: 2, timestamp: Date.now() / 1000 - 172800 },
+            { technique_id: 'cognitive_destress', pre_label: 'stress', post_label: 'normal', recovery_pct: 100.0, reward: 1.0, cluster_id: 3, timestamp: Date.now() / 1000 - 86400 },
+            { technique_id: 'breathing_garden', pre_label: 'stress', post_label: 'normal', recovery_pct: 100.0, reward: 1.0, cluster_id: 2, timestamp: Date.now() / 1000 - 172800 },
           ]);
           setStreak(3);
         }

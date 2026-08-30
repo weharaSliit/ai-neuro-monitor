@@ -84,6 +84,38 @@ def validate_intervention_outcome(req: ValidationRequest):
         timestamp=time.time()
     )
 
+    # Closed-loop check: If baseline/normal state was NOT reached, compute alternative recommendation
+    is_target_reached = (req.post_stress_label.lower() == "normal")
+    alternative_rec = None
+
+    if not is_target_reached:
+        from app.config import TECHNIQUES
+        from app.services.thompson_bandit import thompson_bandit
+        usage_7d = fallback_handler.get_all_7day_usage_counts(req.user_id)
+        alt_tech_id, alt_blended, alt_physio, alt_pref, alt_ms, _ = thompson_bandit.select_technique(
+            req.user_id, cluster_id, usage_7d, exclude_technique_ids=[req.technique_id]
+        )
+        alt_catalog = TECHNIQUES.get(alt_tech_id, TECHNIQUES["breathing_garden"])
+        alt_pref_sub = preference_learner.get_preferred_sub_option(req.user_id, alt_tech_id)
+        alt_sub_opts = alt_catalog["sub_options"]
+        alt_sel_sub = alt_sub_opts[0]
+        if alt_pref_sub:
+            for so in alt_sub_opts:
+                if so["id"] == alt_pref_sub:
+                    alt_sel_sub = so
+                    break
+
+        alternative_rec = {
+            "technique_id": alt_tech_id,
+            "title": alt_catalog["title"],
+            "description": alt_catalog["description"],
+            "selected_sub_option": alt_sel_sub,
+            "available_sub_options": alt_sub_opts,
+            "context_cluster_id": cluster_id,
+            "blended_score": round(alt_blended, 4),
+            "reason": f"Baseline not reached yet. Smart AI selected {alt_catalog['title']} for further recovery."
+        }
+
     return ValidationResponse(
         reward=reward,
         recovery_percentage=recovery_pct,
@@ -93,8 +125,10 @@ def validate_intervention_outcome(req: ValidationRequest):
         message=f"Closed-loop reward signal {reward:+.2f} updated. Earned +{xp_earned} XP!",
         xp_earned=xp_earned,
         total_xp=total_xp,
-        is_normal_reached=is_normal,
-        unlocked_badges=badge_items
+        is_normal_reached=is_target_reached,
+        unlocked_badges=badge_items,
+        closed_loop_status=closed_loop_tracker._user_loops.get(req.user_id, {}),
+        alternative_recommendation=alternative_rec
     )
 
 @router.post("/rating", response_model=RatingResponse)

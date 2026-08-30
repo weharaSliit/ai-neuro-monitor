@@ -42,10 +42,10 @@ class SuitabilityChecker:
             )
         elif current == "pre-stress" and technique_id == "cognitive_destress":
             is_suitable = False
-            recommended_technique_id = "focus_arcade"
+            recommended_technique_id = "breathing_garden"
             warning_title = "⚠️ Mild Stress Caution"
             warning_message = (
-                f"Your probability signals show pre-stress tension. 'Focus & Flow Arcade' is recommended "
+                f"Your probability signals show pre-stress tension. 'Breathing Garden' is recommended "
                 f"to channel your attention and guide your nervous system back to 100% Normal baseline."
             )
 
