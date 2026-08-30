@@ -268,6 +268,25 @@ def normalize_to_unit(val, max_val: float = 1.0) -> float:
     return max(0.0, min(1.0, val / max_val))
 
 
+# A probability this close to 0 or 1 is not plausible confidence from
+# either deployed model (EEG LOSO AUC 0.706, HRV/GSR LOSO accuracy 0.851 --
+# see MODEL_ACCURACY_AUC/MODEL_ACC_HRV_GSR): reaching it requires the
+# underlying decision function to sit dozens of log-odds from center, which
+# real captured hardware sessions have shown happens only when live
+# features fall far outside the model's training distribution (EEG
+# raw_score collapsing to ~1e-37..1e-67 on real, quality-gate-PASSED
+# blocks during this project's own validation -- a domain-shift artifact,
+# not genuine certainty). 1e-6 sits comfortably below every plausible real
+# score this project has observed (0.01-0.13) and comfortably above every
+# observed underflow artifact, so it cleanly separates the two without
+# touching either model's own calibration.
+EXTREME_PROB_EPS = 1e-6
+
+
+def _is_implausibly_extreme(prob: float) -> bool:
+    return prob < EXTREME_PROB_EPS or prob > (1.0 - EXTREME_PROB_EPS)
+
+
 def compute_realtime_multimodal_fusion(modalities_data: dict) -> dict:
     """
     Reliability-weighted fusion of one already-bucketed fusion_en window
@@ -278,7 +297,12 @@ def compute_realtime_multimodal_fusion(modalities_data: dict) -> dict:
     ..., "model_acc": ..., "threshold": ...}} for m in MODALITIES -- a
     modality dict missing or with prob=None is treated as not reporting
     this window (weight 0), same effect as handle_missing_values() has on
-    the batch path above.
+    the batch path above. A modality reporting an IMPLAUSIBLY EXTREME prob
+    (see EXTREME_PROB_EPS/_is_implausibly_extreme()) gets the same
+    treatment -- weight 0, excluded from active_modalities -- since an
+    out-of-distribution artifact dominating the fused result under a false
+    appearance of certainty is worse than that modality simply not having
+    reported this window at all.
 
     "threshold" is that modality's own EFFECTIVE decision boundary at the
     moment this reading was made -- personal_high_load_p if this user has
@@ -344,6 +368,14 @@ def compute_realtime_multimodal_fusion(modalities_data: dict) -> dict:
         probs[m] = normalize_to_unit(prob, 1.0)
         thresholds[m] = mod_info.get("threshold")
 
+        # Plausibility gate -- see EXTREME_PROB_EPS's docstring. Zeroing the
+        # WEIGHT (not probs[m] itself, which stays as reported for anyone
+        # inspecting the raw record) means this modality contributes
+        # nothing to fused_prob/fused_threshold and is excluded from
+        # active_modalities/concordance below, identical to a missing prob.
+        if _is_implausibly_extreme(probs[m]):
+            raw_weights[m] = 0.0
+
     total_weight = sum(raw_weights.values())
     if total_weight > 1e-9:
         norm_weights = {m: w / total_weight for m, w in raw_weights.items()}
@@ -387,6 +419,17 @@ def compute_realtime_multimodal_fusion(modalities_data: dict) -> dict:
     else:
         modality_concordance = "insufficient_data"
 
+    # Diagnostic only -- which modalities reported a real prob but got
+    # gated out for being implausibly extreme (distinct from simply not
+    # reporting at all, which active_modalities' absence already covers).
+    # Recomputed from probs[m] (not raw_weights[m]==0, which is also true
+    # for a modality that never reported) so this doesn't conflate the two
+    # very different reasons a modality can end up excluded.
+    implausible_modalities = [
+        m for m in MODALITIES
+        if (modalities_data.get(m) or {}).get("prob") is not None and _is_implausibly_extreme(probs[m])
+    ]
+
     return {
         "fused_stress_probability": fused_prob,
         "fused_stress_threshold": fused_threshold,
@@ -395,6 +438,7 @@ def compute_realtime_multimodal_fusion(modalities_data: dict) -> dict:
         "modality_weights": norm_weights,
         "modality_concordance": modality_concordance,
         "modality_elevated": modality_elevated,
+        "implausible_modalities": implausible_modalities,
     }
 
 
