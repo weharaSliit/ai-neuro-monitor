@@ -10,7 +10,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Dimensions } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import axios from 'axios';
-import { ref, onValue, off } from 'firebase/database';
+import { ref, onValue, off, get } from 'firebase/database';
 import { db } from '../../../firebase';
 import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
@@ -158,6 +158,25 @@ export default function AdminUserDetailScreen({ route, navigation }) {
   const [history, setHistory] = useState(null);
   const [emaHistory, setEmaHistory] = useState(null);
   const [eegCalib, setEegCalib] = useState(null);
+  const [phenoDeviceId, setPhenoDeviceId] = useState(null);
+
+  useEffect(() => {
+    if (!userId) return;
+    const usersRef = ref(db, 'phenotyping/users');
+    get(usersRef).then((snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.val();
+        const found = Object.entries(data).find(([devId, prof]) => {
+          return prof.name === name || prof.name === userId || devId === userId;
+        });
+        if (found) {
+          setPhenoDeviceId(found[0]);
+        }
+      }
+    }).catch((err) => {
+      console.log('Error resolving pheno deviceId:', err);
+    });
+  }, [userId, name]);
 
   // Live-now state -- there's only one physical ring and one physical EEG
   // headset, so genuinely live data can only ever exist for whichever ONE
@@ -586,17 +605,12 @@ export default function AdminUserDetailScreen({ route, navigation }) {
             <Card>
               <Text style={[styles.cardTitle, { color: text }]}>Behavioral Analysis</Text>
               <Text style={{ color: muted, marginBottom: 14 }}>
-                Z-score deviations, idiographic baseline table, and weekly
-                stress pattern -- the same deep-dive that used to be a user-
-                facing "Analysis" quick action. Note: like Relaxation below,
-                this screen currently reads whichever account is logged in
-                via useAuth() (your own admin login), not {userId}'s data --
-                a real per-user "view as" mode is a follow-up, not built in
-                this pass.
+                Inspect {name || userId}'s passive digital phenotyping data.
+                View their Z-score deviations, idiographic baseline values, and weekly stress patterns.
               </Text>
               <TouchableOpacity
                 style={[styles.openBtn, { backgroundColor: COLORS.gsr }]}
-                onPress={() => navigation.navigate('PhenotypingAnalysis')}
+                onPress={() => navigation.navigate('PhenotypingAnalysis', { userId: phenoDeviceId || userId, userName: name || userId, mode: 'analysis' })}
               >
                 <Text style={{ color: '#FFFFFF', fontWeight: '800' }}>Open Analysis →</Text>
               </TouchableOpacity>
