@@ -2,29 +2,43 @@ import axios from 'axios';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
-// Dynamically resolve backend server IP address for Physical Mobile Devices & Emulators
+// Render-hosted Cloud Backend URL for Relaxation Guide
+// Matches the same pattern as other modules:
+//   - Physiological: https://mindpulse-physiological.onrender.com
+//   - Relaxation Guide: https://mindpulse-relaxation.onrender.com
+// Fixed URL avoids the recurring "can't reach backend" issue every time
+// the dev machine's network/IP changes (WiFi vs Ethernet, hotspot, etc.)
+export const API_BASE = process.env.EXPO_PUBLIC_RELAXATION_API_URL || 'https://mindpulse-relaxation.onrender.com';
+
+// Resolve backend URL — cloud Render by default.
+// Set EXPO_PUBLIC_USE_LOCAL_BACKEND=true in .env to use local dev server instead.
 const getApiBaseUrl = () => {
-  try {
-    const hostUri = Constants.expoConfig?.hostUri || Constants.manifest2?.extra?.expoGo?.debuggerHost || Constants.manifest?.debuggerHost;
-    if (hostUri) {
-      const ip = hostUri.split(':')[0];
-      if (ip && ip !== 'localhost' && ip !== '127.0.0.1' && !ip.includes('.exp.direct')) {
-        return `http://${ip}:8000`;
+  if (process.env.EXPO_PUBLIC_USE_LOCAL_BACKEND === 'true') {
+    try {
+      const hostUri = Constants.expoConfig?.hostUri || Constants.manifest2?.extra?.expoGo?.debuggerHost || Constants.manifest?.debuggerHost;
+      if (hostUri) {
+        const ip = hostUri.split(':')[0];
+        if (ip && ip !== 'localhost' && ip !== '127.0.0.1' && !ip.includes('.exp.direct')) {
+          return `http://${ip}:8000`;
+        }
       }
+    } catch (e) {
+      // Ignore error
     }
-  } catch (e) {
-    // Ignore error
+
+    if (Platform.OS === 'android') {
+      return 'http://10.0.2.2:8000';
+    }
+
+    return 'http://localhost:8000';
   }
 
-  if (Platform.OS === 'android') {
-    return 'http://10.0.2.2:8000';
-  }
-
-  return 'http://localhost:8000';
+  return API_BASE;
 };
 
 const API_BASE_URL = getApiBaseUrl();
-console.log('[apiService] Dynamic API Base URL:', API_BASE_URL);
+console.log('[apiService] API Base URL:', API_BASE_URL);
+
 
 const client = axios.create({
   baseURL: API_BASE_URL,
