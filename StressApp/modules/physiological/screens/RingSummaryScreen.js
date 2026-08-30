@@ -59,6 +59,18 @@ export default function RingSummaryScreen({ navigation }) {
   const { loading: calibLoading, ring } = useCalibrationSummary(userId, token);
   const neverCalibrated = !calibLoading && ring?.ok && !ring.exists;
 
+  // The chart's dashed reference line has to match whatever line app.py's
+  // /predict actually decided Normal/Stress against (app.py:383-387) --
+  // once this user has a personal_stress_threshold (from the onboarding
+  // maths-quiz task), that's what's really being used, not the fixed
+  // population STRESS_DECISION_THRESHOLD_PERCENT below. Drawing the old
+  // fixed line regardless made points that were correctly labeled Stress
+  // by their own (lower) personal threshold visually sit under a "Normal
+  // zone" reference line that no longer matched the real decision boundary.
+  const personalRingPct = ring?.personal_stress_threshold != null
+    ? Math.round(ring.personal_stress_threshold * 100) : null;
+  const effectiveThresholdPct = personalRingPct != null ? personalRingPct : STRESS_DECISION_THRESHOLD_PERCENT;
+
   const [status, setStatus] = useState('offline');
   const [fingerDetected, setFingerDetected] = useState(null);
   const [latest, setLatest] = useState(null);
@@ -249,8 +261,8 @@ export default function RingSummaryScreen({ navigation }) {
               height={145}
               maxValue={100}
               hideValues
-              baselineValue={STRESS_DECISION_THRESHOLD_PERCENT}
-              baselineLabel="Stress threshold"
+              baselineValue={effectiveThresholdPct}
+              baselineLabel={personalRingPct != null ? 'Your stress threshold' : 'Stress threshold'}
               colorZones
             />
           </Card>
