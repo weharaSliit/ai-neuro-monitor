@@ -167,10 +167,12 @@ def send_window():
         # predict_raw() fallback (used when load_baseline() returns None)
         # is a real, working prediction, just not personalized, and
         # showing/storing it as if it were a normal reading is misleading
-        # for a brand-new user. This is the actual gate; the frontend's
-        # own ring.exists check (RingSummaryScreen.js) only hides output
-        # that would otherwise already exist in Firebase -- this stops it
-        # from being generated at all.
+        # for a brand-new user. Re-enabled 2026-08-30 after confirming
+        # (with this gate briefly disabled) that the live MQTT->/predict->
+        # Firebase pipeline itself is healthy -- the earlier diagnostic
+        # gap was calibration_capture.py's connection handling, since
+        # fixed (fresh-per-call MQTT connection, no more shared/cached
+        # client).
         print(f"[Window {window_idx}] skipped — {USER_ID} has no baseline yet "
               f"(calibrate first; predict_raw() fallback not used here)")
     elif len(ibi_buf) < 10 or len(gsr_buf) < 20 or len(acc_buf) < 10:
