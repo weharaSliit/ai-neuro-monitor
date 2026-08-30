@@ -76,16 +76,16 @@ function DayBars({ label, status, signupAgeDays }) {
   );
 }
 
-// One row per device -- Ring and Headband are triggered independently
-// (separate buttons, separate progress), not by one combined "Start
-// Calibration" action. `expected` (device currently online) decides
-// whether this device blocks overall completion at all; a device that's
-// simply not connected is skipped entirely, same as before.
-function DeviceCalibrateRow({ label, expected, state, onStart, durationHint }) {
-  if (!expected) return null;
-
+// One row per device -- both Ring and Headband are started together by
+// the single Calibrate button below, but each shows its own independent
+// progress here (not a combined bar), since one can finish, fail, or get
+// skipped for insufficient data well before the other does. A device
+// that's simply not connected shows "Not connected" and is left alone --
+// never attempted, never counted as failed, same as before.
+function DeviceCalibrateRow({ label, expected, state, durationHint }) {
   const statusLabel = () => {
-    if (!state.triggered) return null;
+    if (!expected) return 'Not connected';
+    if (!state.triggered) return 'Waiting to start…';
     if (state.status === 'error') return state.message || 'Failed';
     if (state.status === 'settling') return 'Settling…';
     if (state.status === 'saving') return 'Saving…';
@@ -97,27 +97,25 @@ function DeviceCalibrateRow({ label, expected, state, onStart, durationHint }) {
     return 'Done ✓';
   };
 
-  const label_ = statusLabel();
-
   return (
     <View style={styles.deviceCalibRow}>
-      <Text style={styles.deviceCalibLabel}>{label}</Text>
-      {!state.triggered ? (
-        <Text style={styles.miniStartLink} onPress={onStart}>Calibrate →</Text>
-      ) : (
-        <View style={{ alignItems: 'flex-end' }}>
-          <Text style={[
-            styles.miniStatusText,
-            state.status === 'error' && { color: COLORS.stress },
-            !IN_PROGRESS_STATUSES.includes(state.status) && state.status !== 'error' && { color: COLORS.normalDark },
-          ]}>
-            {label_}
-          </Text>
-          {IN_PROGRESS_STATUSES.includes(state.status) && durationHint ? (
-            <Text style={styles.miniStatusSub}>~{durationHint}</Text>
-          ) : null}
-        </View>
-      )}
+      <View style={styles.deviceCalibLabelRow}>
+        <StatusDot color={expected ? COLORS.normal : COLORS.light.border} active={expected} size={7} />
+        <Text style={styles.deviceCalibLabel}>{label}</Text>
+      </View>
+      <View style={{ alignItems: 'flex-end' }}>
+        <Text style={[
+          styles.miniStatusText,
+          !expected && { color: COLORS.light.textMuted },
+          expected && state.status === 'error' && { color: COLORS.stress },
+          expected && state.triggered && !IN_PROGRESS_STATUSES.includes(state.status) && state.status !== 'error' && { color: COLORS.normalDark },
+        ]}>
+          {statusLabel()}
+        </Text>
+        {expected && state.triggered && IN_PROGRESS_STATUSES.includes(state.status) && durationHint ? (
+          <Text style={styles.miniStatusSub}>~{durationHint}</Text>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -134,28 +132,37 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
   const runRing = useCaptureRunner((data) => setRingState((r) => ({ ...r, ...data })));
   const runEeg = useCaptureRunner((data) => setEegState((e) => ({ ...e, ...data })));
 
-  const startRing = useCallback(() => {
-    if (!ringOnline || ringState.triggered) return;
-    setErrorMsg(null);
-    setStage('running');
-    setRingState((r) => ({ ...r, triggered: true }));
-    runRing(
-      () => physiologicalApi.post('/calibrate/start', {}),
-      () => physiologicalApi.get('/calibrate/status'),
-    );
-  }, [ringOnline, ringState.triggered, runRing]);
+  // Single combined trigger -- one "Calibrate" action starts both Ring
+  // and EEG together (whichever are actually online), same as the
+  // original design; DeviceCalibrateRow below still shows each device's
+  // own independent progress rather than one merged bar, since they
+  // settle, fail, or get skipped on their own separate timelines.
+  const start = useCallback(() => {
+    if (!ringOnline && !eegOnline) {
+      setErrorMsg('No device detected — connect your Ring or EEG headband first.');
+      setStage('error');
+      return;
+    }
 
-  const startEeg = useCallback(() => {
-    if (!eegOnline || !eegSessionId || eegState.triggered) return;
     setErrorMsg(null);
     setStage('running');
-    setEegState((e) => ({ ...e, triggered: true }));
-    const headers = token ? { Authorization: `Bearer ${token}` } : {};
-    runEeg(
-      () => eegClient.post('/calibrate/start', { session_id: eegSessionId }, { headers }),
-      () => eegClient.get('/calibrate/status', { headers }),
-    );
-  }, [eegOnline, eegSessionId, eegState.triggered, token, runEeg]);
+
+    if (ringOnline) {
+      setRingState((r) => ({ ...r, triggered: true }));
+      runRing(
+        () => physiologicalApi.post('/calibrate/start', {}),
+        () => physiologicalApi.get('/calibrate/status'),
+      );
+    }
+    if (eegOnline && eegSessionId) {
+      setEegState((e) => ({ ...e, triggered: true }));
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      runEeg(
+        () => eegClient.post('/calibrate/start', { session_id: eegSessionId }, { headers }),
+        () => eegClient.get('/calibrate/status', { headers }),
+      );
+    }
+  }, [ringOnline, eegOnline, eegSessionId, token, runRing, runEeg]);
 
   // "Expected" (not just "triggered") is what actually gates completion --
   // a device that's online is expected to eventually be calibrated, even
@@ -283,15 +290,19 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
       <DayBars label="Ring" status={ring} signupAgeDays={signupAgeDays} />
       <DayBars label="EEG" status={eeg} signupAgeDays={signupAgeDays} />
 
-      {/* Real, live connectivity -- same useDeviceStatus() values each
-          Calibrate button below actually gates on, so a row can never
-          offer to start a device that isn't really there. */}
-      {!ringOnline && !eegOnline && (
-        <Text style={styles.noDeviceText}>No device detected — connect your Ring or EEG headband first.</Text>
+      {/* Idle: a single combined Calibrate action, same real connectivity
+          the trigger itself gates on. Once running, each device's own
+          progress drops down below instead. */}
+      {stage === 'idle' && (
+        <Text style={styles.startLink} onPress={start}>Calibrate →</Text>
       )}
 
-      <DeviceCalibrateRow label="Ring" expected={ringExpected} state={ringState} onStart={startRing} durationHint="3.5 minutes" />
-      <DeviceCalibrateRow label="Headband" expected={eegExpected} state={eegState} onStart={startEeg} durationHint="85 seconds" />
+      {stage === 'running' && (
+        <>
+          <DeviceCalibrateRow label="Ring" expected={ringExpected} state={ringState} durationHint="3.5 minutes" />
+          <DeviceCalibrateRow label="Headband" expected={eegExpected} state={eegState} durationHint="85 seconds" />
+        </>
+      )}
 
       <View style={styles.visualArea}>
         <Animated.View style={[styles.outerHalo, { opacity: haloOpacity, transform: [{ scale: displayScale }] }]}>
@@ -379,6 +390,11 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.light.border,
+  },
+  deviceCalibLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   deviceCalibLabel: {
     fontSize: 13,
