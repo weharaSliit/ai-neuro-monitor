@@ -226,6 +226,39 @@ class SessionQualityMonitor:
 
 RATING_ORDER = {'POOR': 0, 'QUESTIONABLE': 1, 'GOOD': 2}
 
+# Rejects the specific real-hardware failure mode traced on this project's
+# own captured sessions: bipolar_delta_power landing far above the SAM40
+# training distribution (mean~6.14, std~3.42 uV^2) single-handedly drove
+# 93-98% of the model's decision-function magnitude, collapsing
+# predict_proba to numerical underflow (~1e-37..1e-67) on blocks the
+# quality gate itself rated GOOD -- excess delta-band power at that
+# magnitude is a residual motion/drift/poor-contact artifact, not real
+# neural activity, not something the amplitude/SNR/Itakura checks in
+# quality_gate.py were built to catch (they weren't designed around any
+# single extracted feature).
+#
+# 30 standard deviations, not a tighter bound: chosen against real
+# evidence on both sides with a wide, deliberate safety margin, not a
+# value that rides close to either. Every genuinely-good block captured on
+# real hardware so far (13 blocks, 2 sessions) measured z~=-1.79 --
+# collapsed near the same value because live delta power sits far BELOW
+# even the SAM40 mean under calm conditions on this hardware, not just
+# near it. Every block from the one session whose model output actually
+# collapsed (5 blocks) measured z=157-299. 30 SD sits ~9x beyond SAM40's
+# OWN population mean+std (a proxy for how far real biological delta-power
+# variation plausibly extends, since that population is real EEG, not
+# artifact) while staying >=5x below the lowest confirmed failure --
+# deliberately biased toward the safe/good side of the gap rather than the
+# arithmetic midpoint, since there is no real captured data yet on
+# moderately-elevated-but-legitimate delta power (e.g. blinking, motion)
+# to rule out a live artifact reaching higher than this project's own
+# small "very calm" sample ever did. A judgment call given how sparse real
+# hardware data still is here -- same honest framing as
+# backend/physiological/predictor.py's PERSONAL_THRESHOLD_MIN_SEPARATION
+# -- revisit once more real sessions (ideally spanning genuinely varied
+# real states) are collected.
+DELTA_POWER_IMPLAUSIBLE_SD = 30.0
+
 
 class RealtimeInference:
     def __init__(self, model_dir: Path, thresholds: DecisionThresholds = DecisionThresholds(),
@@ -247,6 +280,22 @@ class RealtimeInference:
         self.model = artifact['model']
         self.feature_columns = artifact['feature_columns']
         self.thresholds = thresholds
+        # Derived from the model's OWN fitted training statistics (not a
+        # hardcoded raw uV^2 number) so this stays correct if the model is
+        # ever retrained -- see DELTA_POWER_IMPLAUSIBLE_SD's docstring.
+        # None (check skipped) if this model doesn't expose a StandardScaler
+        # the same way, or doesn't have this feature at all, rather than
+        # guessing at a bound that wouldn't mean anything for a different
+        # model shape.
+        self._delta_power_reject_threshold: float | None = None
+        try:
+            scaler = self.model.named_steps['standardscaler']
+            idx = self.feature_columns.index('bipolar_delta_power')
+            self._delta_power_reject_threshold = float(
+                scaler.mean_[idx] + DELTA_POWER_IMPLAUSIBLE_SD * scaler.scale_[idx]
+            )
+        except (AttributeError, KeyError, ValueError, IndexError):
+            pass
         self.baseline = UserBaseline()
         self._history: list[dict] = []  # for persistence-aware decision states across blocks
         self.quality_validator = TrustedIoTEEGValidator(fs_raw=SOURCE_FS, fs_filtered=TARGET_FS, max_amplitude=7000.0)
@@ -630,14 +679,30 @@ class RealtimeInference:
                                   f"SETTLING_TIME_SEC ({SETTLING_TIME_SEC:.0f}s) -- "
                                   f"electrode/contact settling window, not scored")
 
+        # Computed here (not after the trust decision below) so this block's
+        # own delta_power can feed the plausibility check next -- neither the
+        # amplitude/SNR/Itakura checks above nor gate_rating='GOOD' catch
+        # this; see DELTA_POWER_IMPLAUSIBLE_SD's docstring for why a
+        # dedicated feature-level check is needed.
+        raw_feats_unprefixed = channel_features(filtered, fs=TARGET_FS)
+        raw_feats = {f'bipolar_{k}': v for k, v in raw_feats_unprefixed.items()}
+
+        if (self._delta_power_reject_threshold is not None
+                and raw_feats_unprefixed['delta_power'] > self._delta_power_reject_threshold):
+            quality['is_trusted'] = False
+            quality['gate_rating'] = 'POOR'
+            quality['reason'] = (
+                f"bipolar_delta_power={raw_feats_unprefixed['delta_power']:.1f}uV^2 exceeds "
+                f"{self._delta_power_reject_threshold:.1f}uV^2 ({DELTA_POWER_IMPLAUSIBLE_SD:.0f} SD "
+                f"above this model's own training mean) -- residual motion/drift/poor-contact "
+                f"artifact, not scored"
+            )
+
         if self.disable_quality_gate:
             quality['is_trusted'] = True
         if not quality['is_trusted']:
             print(f"[quality_gate] rejected: {quality}")
         health = self.session_quality.update(quality['is_trusted'])
-
-        raw_feats_unprefixed = channel_features(filtered, fs=TARGET_FS)
-        raw_feats = {f'bipolar_{k}': v for k, v in raw_feats_unprefixed.items()}
 
         if not quality['is_trusted']:
             return {
