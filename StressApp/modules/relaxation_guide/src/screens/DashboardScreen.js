@@ -437,11 +437,6 @@ export const DashboardScreen = () => {
             {/* Metrics bar */}
             <View style={[s.metricsRow, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
               <View style={s.metricCol}>
-                <Text style={[s.metricValue, { color: theme.textPrimary }]}>{(isCalibrated && hasLivePacket) ? `${(stressProbability * 100).toFixed(0)}%` : '--'}</Text>
-                <Text style={[s.metricLabel, { color: theme.textMuted }]}>Stress Level</Text>
-              </View>
-              <View style={[s.metricDivider, { backgroundColor: theme.border }]} />
-              <View style={s.metricCol}>
                 <Text style={[s.metricValue, { color: sc.color }]}>{(isCalibrated && hasLivePacket) ? sc.label : (isCalibrated ? 'AWAITING...' : 'CALIBRATING')}</Text>
                 <Text style={[s.metricLabel, { color: theme.textMuted }]}>Current State</Text>
               </View>
@@ -496,11 +491,6 @@ export const DashboardScreen = () => {
 
             {/* Phenotyping Metrics Bar */}
             <View style={[s.metricsRow, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
-              <View style={s.metricCol}>
-                <Text style={[s.metricValue, { color: theme.textPrimary }]}>{(isCalibrated && hasLivePacket) ? `${(stressProbability * 100).toFixed(0)}%` : '--'}</Text>
-                <Text style={[s.metricLabel, { color: theme.textMuted }]}>Typing Agitation</Text>
-              </View>
-              <View style={[s.metricDivider, { backgroundColor: theme.border }]} />
               <View style={s.metricCol}>
                 <Text style={[s.metricValue, { color: sc.color }]}>{(isCalibrated && hasLivePacket) ? sc.label : (isCalibrated ? 'AWAITING...' : 'CALIBRATING')}</Text>
                 <Text style={[s.metricLabel, { color: theme.textMuted }]}>Cognitive State</Text>
