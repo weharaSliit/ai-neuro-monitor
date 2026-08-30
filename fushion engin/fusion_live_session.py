@@ -66,6 +66,7 @@ def _modality_input(window: dict, m: str) -> dict:
         "confidence": window.get(f"conf_{m}"),
         "signal_quality": window.get(f"signal_quality_{m}"),
         "model_acc": window.get(f"model_acc_{m}"),
+        "threshold": window.get(f"threshold_{m}"),
     }
 
 
@@ -77,7 +78,6 @@ def poll_once(session_ref, session_meta_ref) -> dict:
     fusable_keys = [
         k for k, v in windows.items()
         if v.get("prob_eeg") is not None or v.get("prob_hrv_gsr") is not None
-        or v.get("prob_behav") is not None
     ]
     fusable_keys.sort(key=lambda k: int(k))
     fused_by_key = {}
@@ -91,12 +91,16 @@ def poll_once(session_ref, session_meta_ref) -> dict:
         fused = fusion_engin.compute_realtime_multimodal_fusion({
             "eeg": _modality_input(w, "eeg"),
             "hrv_gsr": _modality_input(w, "hrv_gsr"),
-            "behav": _modality_input(w, "behav"),
         })
         fused_by_key[k] = fused
         if fused["fused_stress_probability"] is not None:
             windows[k]["fused_probability"] = fused["fused_stress_probability"]
-            windows[k]["fused_label"] = int(fused["fused_stress_probability"] >= 0.5)
+            windows[k]["fused_threshold"] = fused["fused_stress_threshold"]
+            # Weighted combination of each modality's OWN threshold (see
+            # compute_realtime_multimodal_fusion()'s docstring) -- was a
+            # flat >= 0.5, unrelated to either modality's real decision
+            # boundary.
+            windows[k]["fused_label"] = int(fused["fused_stress_probability"] >= fused["fused_stress_threshold"])
 
     ordered_keys = sorted(windows.keys(), key=lambda k: int(k))
     fused_history = [windows[k].get("fused_probability") for k in ordered_keys]
@@ -123,19 +127,32 @@ def poll_once(session_ref, session_meta_ref) -> dict:
         # corrected weighting, not a new schema here.
         write = {
             "fused_probability": windows[k]["fused_probability"],
+            "fused_threshold": windows[k]["fused_threshold"],
             "fused_label": windows[k]["fused_label"],
             "stress_trend": trend,
             "eeg_weight": weights.get("eeg"),
             "hrv_gsr_weight": weights.get("hrv_gsr"),
-            "behav_weight": weights.get("behav"),
+            # 'concordant'/'discordant'/'insufficient_data' -- see
+            # compute_realtime_multimodal_fusion()'s own docstring
+            # (fusion_engin.py) for the shared-response-vs-independent-
+            # effects rationale. Purely observational -- doesn't feed back
+            # into fused_probability/fused_threshold above.
+            "modality_concordance": fused["modality_concordance"],
+            "modality_elevated": fused["modality_elevated"],
+            # Which modalities reported a real prob this window but got
+            # excluded by compute_realtime_multimodal_fusion()'s
+            # plausibility gate (EXTREME_PROB_EPS) -- distinct from simply
+            # not reporting, which active_modalities' absence already
+            # covers. Empty list is the normal case; a non-empty one flags
+            # a domain-shift-style artifact worth investigating, not a
+            # silent exclusion.
+            "implausible_modalities": fused["implausible_modalities"],
         }
 
         if "eeg" in fused["active_modalities"]:
             write["prob_eeg"] = windows[k].get("prob_eeg")
         if "hrv_gsr" in fused["active_modalities"]:
             write["prob_hrv_gsr"] = windows[k].get("prob_hrv_gsr")
-        if "behav" in fused["active_modalities"]:
-            write["prob_behav"] = windows[k].get("prob_behav")
 
         write["stress_deviation"] = (
             windows[k]["fused_probability"] - baseline_mean
@@ -160,9 +177,9 @@ def poll_once(session_ref, session_meta_ref) -> dict:
             "probability_vector": {
                 "eeg": windows[k].get("prob_eeg"),
                 "hrv_gsr": windows[k].get("prob_hrv_gsr"),
-                "behav": windows[k].get("prob_behav"),
                 "fused": windows[k]["fused_probability"],
             },
+            "modality_concordance": fused["modality_concordance"],
         })
         updated.append(k)
 

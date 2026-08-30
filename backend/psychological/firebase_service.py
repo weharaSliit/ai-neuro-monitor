@@ -8,6 +8,13 @@ from backend.psychological.realtime.firebase_sync import (
     FirebaseSync,
     make_eeg_fusion_record,
 )
+from backend.psychological.sam40.decision import DecisionThresholds
+
+# The real population default, read once from its single source of truth
+# (DecisionThresholds) -- exposed via get_calibration_status() below so
+# frontend fallbacks use this actual value instead of a hardcoded/duplicated
+# constant that could drift out of sync if threshold_set_B is ever re-tuned.
+POPULATION_HIGH_LOAD_P = DecisionThresholds().high_load_p
 
 RTDB_NAMESPACE = RTDB_NAMESPACES["psychological"]  # "psychological"
 
@@ -140,13 +147,14 @@ class EegFirebaseSession:
         (status, personal_high_load_p, resting_mean, task_mean,
         n_task_blocks) -- {RTDB_NAMESPACE}/{user_id}/{session_id}/threshold_result,
         same latest-snapshot pattern as push_calibration_result() (.set(),
-        overwritten on any re-run, no history kept). Lets the onboarding
-        threshold-calibration screen watch for the /calibrate/threshold
-        outcome without polling the HTTP endpoint itself -- the actual
-        POST to /calibrate/threshold is made by mqtt_bridge.py once it
-        sees this session's task_phase_requested flag (set by that
-        screen), not by the screen directly, since raw EEG samples are
-        only ever available to the bridge's live MQTT connection.
+        overwritten on any re-run, no history kept). Written by
+        run_eeg_threshold_from_blocks() (calibration_service.py) once
+        POST /calibrate/threshold/start's on-demand capture
+        (eeg_calibration_capture.py::run_eeg_threshold_capture()) finishes
+        -- the onboarding threshold screen also gets this same outcome
+        directly in that route's own HTTP response, so this Firebase copy
+        mainly serves other viewers (e.g. an admin screen) watching the
+        same session.
         """
         if not self.enabled:
             return
@@ -170,17 +178,23 @@ class EegFirebaseSession:
 
 
 def _calibration_profile_ref(user_id: str) -> FirebaseSync | None:
-    """{RTDB_NAMESPACE}/{user_id}/calibration_profile -- keyed by user_id
-    directly (NOT nested under a session_id like EegFirebaseSession's four
-    stores), so this is the one thing about a user's calibration that
-    actually survives across sessions/logins. Returns None (caller treats
-    this the same as 'nothing stored yet') if Firebase isn't configured,
-    same fallback EegFirebaseSession uses."""
+    """user_profiles/{user_id}/eeg -- keyed by user_id directly (NOT nested
+    under a session_id like EegFirebaseSession's four stores, and NOT
+    nested under the psychological/ service namespace either), so this is
+    the one thing about a user's calibration that actually survives across
+    sessions/logins. Lives under the same top-level user_profiles/ root
+    Ring's own personal calibration data uses (baselines/{user_id},
+    personal_thresholds/{user_id} -- backend/physiological/
+    firebase_service.py), so both modalities' personal calibration data
+    is reachable the same way instead of EEG's living one level deeper
+    inside a service-specific namespace. Returns None (caller treats this
+    the same as 'nothing stored yet') if Firebase isn't configured, same
+    fallback EegFirebaseSession uses."""
     cred = resolve_credential()
     if cred is None:
         return None
-    return FirebaseSync(cred, FIREBASE_DB_URL, session_id=user_id, root_path=RTDB_NAMESPACE,
-                         extra_path="calibration_profile")
+    return FirebaseSync(cred, FIREBASE_DB_URL, session_id=user_id, root_path="user_profiles",
+                         extra_path="eeg")
 
 
 def save_user_calibration_profile(user_id: str, baseline_shift: float, thresholds_personalized: bool) -> None:
@@ -204,15 +218,19 @@ def save_user_personal_threshold(user_id: str, personal_high_load_p: float) -> N
     """Merges a personal high_load_p (from
     sam40.decision.compute_personal_threshold(), derived from a deliberate
     onboarding Rest-vs-Task calibration task) into this user's existing
-    calibration_profile node. .merge(), not .set() -- this is written by a
+    calibration_profile node. .update(), not .set() -- this is written by a
     SEPARATE, later call than save_user_calibration_profile() (baseline
     calibration finishes first, then the task phase), so .set() here would
     silently wipe the baseline_shift/thresholds_personalized fields that
-    call already wrote."""
+    call already wrote. (Previously called the window-keyed .merge() here,
+    which unconditionally requires record['window'] and doesn't apply to
+    this per-user profile node at all -- every call raised ValueError,
+    silently crashing the background thread this runs in and preventing
+    personal_high_load_p from ever actually being persisted. Fixed.)"""
     ref = _calibration_profile_ref(user_id)
     if ref is None:
         return
-    ref.merge({
+    ref.update({
         'personal_high_load_p': personal_high_load_p,
         'personal_threshold_calibrated_at': time.time(),
     })
@@ -267,11 +285,13 @@ def get_calibration_status(user_id: str) -> dict:
     ref = _calibration_profile_ref(user_id)
     if ref is None:
         return {'exists': False, 'calibrated_at': None, 'age_days': None,
-                'is_stale_soft': False, 'is_stale_hard': False, 'personal_high_load_p': None}
+                'is_stale_soft': False, 'is_stale_hard': False, 'personal_high_load_p': None,
+                'population_high_load_p': POPULATION_HIGH_LOAD_P}
     profile = ref.get()
     if not profile or 'calibrated_at' not in profile:
         return {'exists': False, 'calibrated_at': None, 'age_days': None,
-                'is_stale_soft': False, 'is_stale_hard': False, 'personal_high_load_p': None}
+                'is_stale_soft': False, 'is_stale_hard': False, 'personal_high_load_p': None,
+                'population_high_load_p': POPULATION_HIGH_LOAD_P}
     age_days = (time.time() - profile['calibrated_at']) / 86400.0
     return {
         'exists': True,
@@ -280,4 +300,5 @@ def get_calibration_status(user_id: str) -> dict:
         'is_stale_soft': age_days > CALIBRATION_SOFT_AGE_DAYS,
         'is_stale_hard': age_days > CALIBRATION_HARD_AGE_DAYS,
         'personal_high_load_p': profile.get('personal_high_load_p'),
+        'population_high_load_p': POPULATION_HIGH_LOAD_P,
     }

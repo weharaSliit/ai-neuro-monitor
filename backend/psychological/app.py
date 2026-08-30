@@ -36,7 +36,6 @@ from backend.psychological.firebase_service import (
     get_calibration_status,
     load_user_calibration_profile,
     save_user_calibration_profile,
-    save_user_personal_threshold,
 )
 from backend.psychological.mqtt_bridge import N_CALIBRATION_BLOCKS, N_THRESHOLD_TASK_BLOCKS
 from backend.psychological.realtime.csv_logger import CsvLogger, RAW_FIELDS_BIPOLAR, log_raw_block_bipolar
@@ -301,9 +300,9 @@ def calibrate_start():
             # extra also carries session_state (live engine/firebase/
             # csv_logger objects, not JSON-serializable) -- registered into
             # eeg_sessions here (same shape /calibrate already populates
-            # it with) so /predict and /calibrate/threshold can find this
-            # session afterward; only the JSON-safe outcome/firebase_enabled
-            # go into _calibration_sessions for polling.
+            # it with) so /predict and /calibrate/threshold/start can find
+            # this session afterward; only the JSON-safe outcome/
+            # firebase_enabled go into _calibration_sessions for polling.
             eeg_sessions[session_id] = extra["session_state"]
             entry = {
                 "status": "done", "session_id": session_id,
@@ -354,70 +353,19 @@ def admin_calibration_status(user_id):
     return jsonify(get_calibration_status(user_id))
 
 
-# -- /calibrate/threshold -- personal high_load_p from a deliberate task --
-#
-# Call AFTER /calibrate has succeeded for this session_id. Submits blocks
-# captured during a short, deliberate high-load task (e.g. a timed mental-
-# arithmetic quiz) run right after the resting baseline -- see
-# sam40/decision.py::compute_personal_threshold()'s docstring for the
-# method. Personalizes high_load_p/cooldown_high_p on the SAME engine this
-# session_id's /predict calls already use -- takes effect immediately, no
-# re-/calibrate needed. If the task scores aren't separated enough from
-# resting to be trustworthy, this no-ops (status: "not_separated") and the
-# session keeps using whatever population/skip-ahead threshold it already had.
-#
-# REQUEST FORMAT:
-#   {
-#     "session_id": "live_session_1",
-#     "blocks": [
-#       {"millis": [...], "code": [...]},
-#       ...
-#     ]
-#   }
-@app.route("/calibrate/threshold", methods=["POST"])
-@require_auth
-def calibrate_threshold():
-    data = request.json or {}
-    session_id = data.get("session_id", "session_001")
-    blocks = data.get("blocks", [])
-
-    if session_id not in eeg_sessions:
-        return jsonify({"error": f"Session {session_id!r} not calibrated -- call /calibrate first"}), 400
-    if not blocks:
-        return jsonify({"error": "No task blocks provided"}), 400
-
-    state = eeg_sessions[session_id]
-    engine = state["engine"]
-    for i, block in enumerate(blocks):
-        try:
-            samples = _samples_from_payload(block)
-        except ValueError as e:
-            return jsonify({"error": f"block {i}: {e}"}), 400
-        engine.score_threshold_task_block(samples)
-
-    outcome = engine.finalize_personal_threshold()
-    if outcome["status"] == "ok":
-        save_user_personal_threshold(g.user_id, outcome["personal_high_load_p"])
-
-    # Written regardless of status (including "not_separated") -- the
-    # onboarding threshold screen has no other path to this outcome, since
-    # the actual capture+POST is driven by mqtt_bridge.py, not the screen
-    # itself. See push_threshold_result()'s docstring.
-    state["firebase"].push_threshold_result(outcome)
-
-    return jsonify({"success": True, "session_id": session_id, **outcome})
-
-
 # -- /calibrate/threshold/start + /status -- on-demand personal-threshold -
 # task capture. Mirrors backend/physiological/app.py's
 # /calibrate/threshold/start + /calibrate/threshold/status exactly (same
-# phase names, same polling shape, same naming) -- unlike the synchronous
-# /calibrate/threshold above (which mqtt_bridge.py's always-on flow still
-# uses, submitting pre-captured blocks), this opens its own short-lived
-# MQTT connection on demand, the same way /calibrate/start does for
-# baseline -- no dependency on mqtt_bridge.py running as a separate
-# process. This is the route StressApp's ThresholdCalibration screen
-# calls now (see EegThresholdTaskScreen.js).
+# phase names, same polling shape, same naming) -- opens its own
+# short-lived MQTT connection on demand, the same way /calibrate/start
+# does for baseline -- no dependency on mqtt_bridge.py running as a
+# separate process. This is the route StressApp's ThresholdCalibration
+# screen calls now (see EegThresholdTaskScreen.js). An earlier synchronous
+# /calibrate/threshold route (pre-captured blocks submitted by
+# mqtt_bridge.py's always-on flow, triggered by a task_phase_requested
+# Firebase flag the frontend set) was removed -- nothing set that flag
+# anymore once this on-demand path replaced it, leaving the route
+# unreachable.
 #
 # REQUEST FORMAT: {"session_id": "live_session_1"}
 @app.route("/calibrate/threshold/start", methods=["POST"])
@@ -494,6 +442,12 @@ def predict():
         model_version=MODEL_VERSION,
         feature_set=MODEL_VERSION,
         history_scores=state["score_history"],
+        # engine.thresholds.high_load_p is ALREADY the effective value --
+        # personal if finalize_personal_threshold() succeeded for this
+        # user (it replaces this in-place), else whatever population
+        # default the engine was constructed with. See
+        # make_eeg_output_record()'s 'effective_high_load_p' docstring.
+        high_load_p=state["engine"].thresholds.high_load_p,
     )
     state["firebase"].push(record)
 
@@ -541,7 +495,8 @@ if __name__ == "__main__":
     print("  GET    /calibrate/status    <- poll /calibrate/start progress")
     print("  GET    /calibration/status  <- calibration freshness, no capture triggered")
     print("  GET    /admin/calibration/<user_id> <- same, for any user_id (admin)")
-    print("  POST   /calibrate/threshold <- personal high_load_p from a deliberate task")
+    print("  POST   /calibrate/threshold/start   <- on-demand personal high_load_p task capture")
+    print("  GET    /calibrate/threshold/status  <- poll /calibrate/threshold/start progress")
     print("  POST   /predict            <- one 25s block -> task_state_score")
     print("  DELETE /sessions/<id>      <- drop session state")
     print("=" * 50)

@@ -76,11 +76,55 @@ function DayBars({ label, status, signupAgeDays }) {
   );
 }
 
+// One row per device -- both Ring and Headband are started together by
+// the single Calibrate button below, but each shows its own independent
+// progress here (not a combined bar), since one can finish, fail, or get
+// skipped for insufficient data well before the other does. A device
+// that's simply not connected shows "Not connected" and is left alone --
+// never attempted, never counted as failed, same as before.
+function DeviceCalibrateRow({ label, expected, state, durationHint }) {
+  const statusLabel = () => {
+    if (!expected) return 'Not connected';
+    if (!state.triggered) return 'Waiting to start…';
+    if (state.status === 'error') return state.message || 'Failed';
+    if (state.status === 'settling') return 'Settling…';
+    if (state.status === 'saving') return 'Saving…';
+    if (state.status === 'capturing') {
+      return state.window_idx != null && state.n_windows != null
+        ? `Capturing (${state.window_idx}/${state.n_windows})`
+        : 'Capturing…';
+    }
+    return 'Done ✓';
+  };
+
+  return (
+    <View style={styles.deviceCalibRow}>
+      <View style={styles.deviceCalibLabelRow}>
+        <StatusDot color={expected ? COLORS.normal : COLORS.light.border} active={expected} size={7} />
+        <Text style={styles.deviceCalibLabel}>{label}</Text>
+      </View>
+      <View style={{ alignItems: 'flex-end' }}>
+        <Text style={[
+          styles.miniStatusText,
+          !expected && { color: COLORS.light.textMuted },
+          expected && state.status === 'error' && { color: COLORS.stress },
+          expected && state.triggered && !IN_PROGRESS_STATUSES.includes(state.status) && state.status !== 'error' && { color: COLORS.normalDark },
+        ]}>
+          {statusLabel()}
+        </Text>
+        {expected && state.triggered && IN_PROGRESS_STATUSES.includes(state.status) && durationHint ? (
+          <Text style={styles.miniStatusSub}>~{durationHint}</Text>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 export default function CalibrateBreathingCard({ userId, token, eegDb, onComplete }) {
   const { ring, eeg, refresh } = useCalibrationSummary(userId, token);
   const signupAgeDays = useSignupAge(userId, eegDb);
   const { ringOnline, eegOnline, eegSessionId } = useDeviceStatus(userId, eegDb);
-  const [stage, setStage] = useState('idle');
+  const [stage, setStage] = useState('idle'); // idle | running | complete | error
   const [ringState, setRingState] = useState({ triggered: false, status: 'idle' });
   const [eegState, setEegState] = useState({ triggered: false, status: 'idle' });
   const [errorMsg, setErrorMsg] = useState(null);
@@ -88,16 +132,21 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
   const runRing = useCaptureRunner((data) => setRingState((r) => ({ ...r, ...data })));
   const runEeg = useCaptureRunner((data) => setEegState((e) => ({ ...e, ...data })));
 
+  // Single combined trigger -- one "Calibrate" action starts both Ring
+  // and EEG together (whichever are actually online), same as the
+  // original design; DeviceCalibrateRow below still shows each device's
+  // own independent progress rather than one merged bar, since they
+  // settle, fail, or get skipped on their own separate timelines.
   const start = useCallback(() => {
-    setErrorMsg(null);
-
     if (!ringOnline && !eegOnline) {
       setErrorMsg('No device detected — connect your Ring or EEG headband first.');
       setStage('error');
       return;
     }
 
+    setErrorMsg(null);
     setStage('running');
+
     if (ringOnline) {
       setRingState((r) => ({ ...r, triggered: true }));
       runRing(
@@ -115,11 +164,25 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
     }
   }, [ringOnline, eegOnline, eegSessionId, token, runRing, runEeg]);
 
+  // "Expected" (not just "triggered") is what actually gates completion --
+  // a device that's online is expected to eventually be calibrated, even
+  // before its button has been pressed, so completion correctly waits for
+  // BOTH online devices to be individually started and finished, instead
+  // of firing the moment just one of them settles because the other
+  // "wasn't triggered yet" (which used to look identical to "not
+  // available at all" when both devices shared one combined Start
+  // button). A device that's genuinely offline is skipped entirely, same
+  // as before.
+  const ringExpected = ringOnline;
+  const eegExpected = eegOnline && !!eegSessionId;
+
   useEffect(() => {
     if (stage !== 'running') return;
-    const ringSettled = !ringState.triggered || !IN_PROGRESS_STATUSES.includes(ringState.status);
-    const eegSettled = !eegState.triggered || !IN_PROGRESS_STATUSES.includes(eegState.status);
-    if (!ringSettled || !eegSettled) return;
+    if (!ringState.triggered && !eegState.triggered) return;
+
+    const ringDone = !ringExpected || (ringState.triggered && !IN_PROGRESS_STATUSES.includes(ringState.status));
+    const eegDone = !eegExpected || (eegState.triggered && !IN_PROGRESS_STATUSES.includes(eegState.status));
+    if (!ringDone || !eegDone) return;
 
     const anyFailed = (ringState.triggered && ringState.status === 'error')
       || (eegState.triggered && eegState.status === 'error');
@@ -132,15 +195,22 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
       setStage('complete');
     }
     refresh();
-  }, [stage, ringState, eegState, refresh]);
+  }, [stage, ringState, eegState, ringExpected, eegExpected, refresh]);
 
   useEffect(() => {
     if (stage === 'complete' && onComplete) onComplete();
   }, [stage]);
 
+  const retry = () => {
+    setStage('idle');
+    setErrorMsg(null);
+    setRingState({ triggered: false, status: 'idle' });
+    setEegState({ triggered: false, status: 'idle' });
+  };
+
   const [ringFingerDetected, setRingFingerDetected] = useState(null);
   useEffect(() => {
-    if (!(ringState.triggered && stage === 'running')) {
+    if (!(ringState.triggered && IN_PROGRESS_STATUSES.includes(ringState.status))) {
       setRingFingerDetected(null);
       return;
     }
@@ -158,7 +228,7 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
     poll();
     const id = setInterval(poll, RING_CONTACT_POLL_MS);
     return () => { cancelled = true; clearInterval(id); };
-  }, [ringState.triggered, stage]);
+  }, [ringState.triggered, ringState.status]);
 
   const [breathPhase, setBreathPhase] = useState('inhale');
   const scaleAnim = useRef(new Animated.Value(1)).current;
@@ -215,43 +285,23 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
     : breathPhase === 'hold' ? 'Hold'
       : breathPhase === 'exhale' ? 'Breathe Out' : 'Rest';
 
-  const durationHint = ringState.triggered ? '~3.5 minutes' : eegState.triggered ? '~85 seconds' : '';
-
-  const statusText = () => {
-    if (stage === 'error') return errorMsg || 'Calibration failed';
-    if (stage === 'complete') return 'Calibration complete — your baseline has been saved.';
-    const anySettling = (ringState.triggered && ringState.status === 'settling') || (eegState.triggered && eegState.status === 'settling');
-    const anySaving = (ringState.triggered && ringState.status === 'saving') || (eegState.triggered && eegState.status === 'saving');
-    if (anySettling) return 'Settling — first few seconds discarded';
-    if (anySaving) return 'Saving your personal baseline…';
-    return 'Capturing — sit still and breathe calmly';
-  };
-
   return (
     <View style={styles.container}>
       <DayBars label="Ring" status={ring} signupAgeDays={signupAgeDays} />
       <DayBars label="EEG" status={eeg} signupAgeDays={signupAgeDays} />
 
-      {/* Real, live connectivity -- same useDeviceStatus() values start()
-          actually gates on below, so this can never show "connected"
-          while the capture it's about to trigger silently skips that
-          device (or vice versa). Only shown before/after a run -- during
-          'running' the breathing visual + statusText() below take over. */}
-      {stage !== 'running' && (
-        <View style={styles.deviceStatusRow}>
-          <View style={styles.deviceStatusItem}>
-            <StatusDot color={ringOnline ? COLORS.normal : COLORS.light.border} active={ringOnline} size={7} />
-            <Text style={[styles.deviceStatusItemText, { color: ringOnline ? COLORS.normalDark : COLORS.light.textMuted }]}>
-              Ring {ringOnline ? 'connected' : 'not connected'}
-            </Text>
-          </View>
-          <View style={styles.deviceStatusItem}>
-            <StatusDot color={eegOnline ? COLORS.normal : COLORS.light.border} active={eegOnline} size={7} />
-            <Text style={[styles.deviceStatusItemText, { color: eegOnline ? COLORS.normalDark : COLORS.light.textMuted }]}>
-              EEG {eegOnline ? 'connected' : 'not connected'}
-            </Text>
-          </View>
-        </View>
+      {/* Idle: a single combined Calibrate action, same real connectivity
+          the trigger itself gates on. Once running, each device's own
+          progress drops down below instead. */}
+      {stage === 'idle' && (
+        <Text style={styles.startLink} onPress={start}>Calibrate →</Text>
+      )}
+
+      {stage === 'running' && (
+        <>
+          <DeviceCalibrateRow label="Ring" expected={ringExpected} state={ringState} durationHint="3.5 minutes" />
+          <DeviceCalibrateRow label="Headband" expected={eegExpected} state={eegState} durationHint="85 seconds" />
+        </>
       )}
 
       <View style={styles.visualArea}>
@@ -272,25 +322,17 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
         </Animated.View>
       </View>
 
-      {stage === 'idle' ? (
-        <Text
-          style={styles.startLink}
-          onPress={start}
-        >
-          Start Calibration →
-        </Text>
-      ) : (
+      {stage === 'running' && ringState.triggered && ringFingerDetected === false && (
+        <Text style={styles.contactWarning}>⚠ No finger detected on the ring — adjust it for a clean reading</Text>
+      )}
+
+      {stage === 'complete' && (
+        <Text style={styles.statusText}>Calibration complete — your baseline has been saved.</Text>
+      )}
+      {stage === 'error' && (
         <>
-          <Text style={styles.statusText}>{statusText()}</Text>
-          {calibrating && durationHint ? <Text style={styles.statusSub}>Expected duration: {durationHint}</Text> : null}
-          {calibrating && ringFingerDetected === false && (
-            <Text style={styles.contactWarning}>⚠ No finger detected on the ring — adjust it for a clean reading</Text>
-          )}
-          {stage !== 'running' && (
-            <Text style={styles.startLink} onPress={() => { setStage('idle'); setRingState({ triggered: false, status: 'idle' }); setEegState({ triggered: false, status: 'idle' }); }}>
-              {stage === 'complete' ? 'Done' : 'Try Again'}
-            </Text>
-          )}
+          <Text style={styles.statusText}>{errorMsg || 'Calibration failed'}</Text>
+          <Text style={styles.startLink} onPress={retry}>Try Again</Text>
         </>
       )}
     </View>
@@ -333,20 +375,46 @@ const styles = StyleSheet.create({
     color: COLORS.warningDark,
     marginTop: 4,
   },
-  deviceStatusRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 16,
-    marginBottom: 8,
+  noDeviceText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: COLORS.light.textMuted,
+    textAlign: 'center',
+    marginBottom: 10,
   },
-  deviceStatusItem: {
+  deviceCalibRow: {
+    width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.light.border,
   },
-  deviceStatusItemText: {
-    fontSize: 11,
+  deviceCalibLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  deviceCalibLabel: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: COLORS.light.text,
+  },
+  miniStartLink: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: COLORS.brand,
+  },
+  miniStatusText: {
+    fontSize: 12,
     fontWeight: '700',
+    color: COLORS.light.textMuted,
+  },
+  miniStatusSub: {
+    fontSize: 10,
+    color: COLORS.light.textMuted,
+    marginTop: 1,
   },
   visualArea: {
     alignItems: 'center',

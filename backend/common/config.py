@@ -70,7 +70,15 @@ AUTH_TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 30  # 30 days
 
 
 #  App settings
-N_BASELINE_WIN    = 3    # windows for personal baseline
+N_BASELINE_WIN    = 3    # windows for personal baseline -- SETTLE_SEC(30s) +
+                          # 3*WINDOW_SEC(60s) = 210s (3.5min). Was briefly
+                          # dropped to 2 (2.5min) this session, then reverted
+                          # -- the real lever for tolerating skipped/rejected
+                          # windows turned out to be EXTRA_RETRY_WINDOWS
+                          # (calibration_capture.py), not this count; a lower
+                          # N_BASELINE_WIN doesn't meaningfully help with
+                          # rejected-window failures and does cost baseline
+                          # stability (fewer independent samples).
 EMA_ALPHA         = 0.2  # EMA learning rate
 
 # Ring / MQTT — single source of truth. Previously duplicated as literals

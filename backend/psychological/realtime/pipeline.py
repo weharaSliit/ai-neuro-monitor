@@ -24,7 +24,18 @@ from .resample import SOURCE_FS, TARGET_FS, resample_to_target  # noqa: E402
 CHANNELS = ['T7', 'T8']
 BLOCK_SEC = 25.0
 BLOCK_SAMPLES_RAW = int(BLOCK_SEC * SOURCE_FS)  # samples to drain from the buffer per block
-SETTLING_TIME_SEC = 30.0
+# Was 30.0 -- with N_CALIBRATION_BLOCKS=3 blocks at BLOCK_SEC=25s each
+# (elapsed_sec 0/25/50, see calibrate_bipolar_block()'s in_settling_window
+# check below), a 30s window meant blocks 1 AND 2 (elapsed 0s and 25s) were
+# BOTH always rejected regardless of actual signal quality -- 25s missed
+# the block-2 cutoff by a mere 5s, wasting 50 of every 75s calibration
+# attempt on data that could never count, and leaving only ONE real block
+# (elapsed=50s) to determine pass/fail for the whole attempt. Aligning
+# this to exactly BLOCK_SEC lets block 2 (elapsed=25s, no longer < 25s)
+# clear settling too -- 2 of 3 captured blocks now actually count instead
+# of 1, for the SAME total 75s capture time (not slower), and a noisy
+# single block no longer fails an otherwise-good attempt outright.
+SETTLING_TIME_SEC = 25.0
 DERIVED_SUFFIXES = ['delta_rel_power', 'theta_rel_power', 'alpha_rel_power', 'beta_rel_power',
                      'gamma_rel_power', 'theta_alpha_ratio', 'beta_alpha_ratio', 'sample_entropy',
                      'hjorth_complexity']
@@ -166,6 +177,25 @@ def _raw_bipolar_codes(samples: list[BipolarRawSample]) -> np.ndarray:
     return np.array([s.code for s in samples], dtype=float)
 
 
+# Points per block for the live dashboard's waveform preview -- NOT raw ADC
+# samples (those never leave this process, let alone reach Firebase -- see
+# firebase_service.py's module docstring), this decimates the already-
+# PREPROCESSED (filtered, uV-scale) signal infer_bipolar_block() computes
+# for scoring anyway. 200 points over one BLOCK_SEC=25s block is plenty to
+# see the waveform's real shape/character on a small chart without pushing
+# a 3200-sample (TARGET_FS=128Hz * 25s) array to Firebase every block.
+WAVE_PREVIEW_POINTS = 200
+
+
+def _downsample_wave(filtered: np.ndarray, target_points: int = WAVE_PREVIEW_POINTS) -> list[float]:
+    n = len(filtered)
+    if n <= target_points:
+        return [round(float(v), 2) for v in filtered]
+    step = n / target_points
+    idx = (np.arange(target_points) * step).astype(int)
+    return [round(float(v), 2) for v in filtered[idx]]
+
+
 class SessionQualityMonitor:
     def __init__(self, window_blocks: int = 8):
         self.window_blocks = window_blocks
@@ -196,15 +226,76 @@ class SessionQualityMonitor:
 
 RATING_ORDER = {'POOR': 0, 'QUESTIONABLE': 1, 'GOOD': 2}
 
+# Rejects the specific real-hardware failure mode traced on this project's
+# own captured sessions: bipolar_delta_power landing far above the SAM40
+# training distribution (mean~6.14, std~3.42 uV^2) single-handedly drove
+# 93-98% of the model's decision-function magnitude, collapsing
+# predict_proba to numerical underflow (~1e-37..1e-67) on blocks the
+# quality gate itself rated GOOD -- excess delta-band power at that
+# magnitude is a residual motion/drift/poor-contact artifact, not real
+# neural activity, not something the amplitude/SNR/Itakura checks in
+# quality_gate.py were built to catch (they weren't designed around any
+# single extracted feature).
+#
+# 30 standard deviations, not a tighter bound: chosen against real
+# evidence on both sides with a wide, deliberate safety margin, not a
+# value that rides close to either. Every genuinely-good block captured on
+# real hardware so far (13 blocks, 2 sessions) measured z~=-1.79 --
+# collapsed near the same value because live delta power sits far BELOW
+# even the SAM40 mean under calm conditions on this hardware, not just
+# near it. Every block from the one session whose model output actually
+# collapsed (5 blocks) measured z=157-299. 30 SD sits ~9x beyond SAM40's
+# OWN population mean+std (a proxy for how far real biological delta-power
+# variation plausibly extends, since that population is real EEG, not
+# artifact) while staying >=5x below the lowest confirmed failure --
+# deliberately biased toward the safe/good side of the gap rather than the
+# arithmetic midpoint, since there is no real captured data yet on
+# moderately-elevated-but-legitimate delta power (e.g. blinking, motion)
+# to rule out a live artifact reaching higher than this project's own
+# small "very calm" sample ever did. A judgment call given how sparse real
+# hardware data still is here -- same honest framing as
+# backend/physiological/predictor.py's PERSONAL_THRESHOLD_MIN_SEPARATION
+# -- revisit once more real sessions (ideally spanning genuinely varied
+# real states) are collected.
+DELTA_POWER_IMPLAUSIBLE_SD = 30.0
+
 
 class RealtimeInference:
     def __init__(self, model_dir: Path, thresholds: DecisionThresholds = DecisionThresholds(),
-                 quality_window_blocks: int = 8, calibration_min_rating: str = 'GOOD',
+                 quality_window_blocks: int = 8, calibration_min_rating: str = 'QUESTIONABLE',
                  disable_quality_gate: bool = False):
+        # calibration_min_rating was 'GOOD' (score>=80) -- stricter than what
+        # LIVE prediction itself ever requires. infer_bipolar_block() (via
+        # quality_gate.py::validate_epoch_single()) only requires
+        # gate_rating != 'POOR' (i.e. QUESTIONABLE or better) as its first
+        # filter, then applies its own separate SNR/Itakura/time-domain
+        # checks -- it never re-checks the 0-100 score against GOOD.
+        # Calibration was holding blocks to a HIGHER bar than the inference
+        # it exists to support, backwards for bipolar-differential wearable02
+        # signal (naturally lower amplitude than a referential montage,
+        # already accounted for in assess_epoch_single()'s own scoring, not
+        # in this bar). Lowered to QUESTIONABLE -- consistent with, not
+        # stricter than, live inference for the same signal.
         artifact = joblib.load(Path(model_dir) / 'sam40_t7t8_state_model.joblib')
         self.model = artifact['model']
         self.feature_columns = artifact['feature_columns']
         self.thresholds = thresholds
+        # Derived from the model's OWN fitted training statistics (not a
+        # hardcoded raw uV^2 number) so this stays correct if the model is
+        # ever retrained -- see DELTA_POWER_IMPLAUSIBLE_SD's docstring.
+        # None (check skipped) if this model doesn't expose a StandardScaler
+        # the same way, or doesn't have this feature at all, rather than
+        # guessing at a bound that wouldn't mean anything for a different
+        # model shape.
+        self._delta_power_reject_threshold: float | None = None
+        try:
+            scaler = self.model.named_steps['standardscaler']
+            idx = self.feature_columns.index('bipolar_delta_power')
+            self._delta_power_reject_threshold = float(
+                scaler.mean_[idx] + DELTA_POWER_IMPLAUSIBLE_SD * scaler.scale_[idx]
+            )
+        except (AttributeError, KeyError, ValueError, IndexError):
+            pass
         self.baseline = UserBaseline()
         self._history: list[dict] = []  # for persistence-aware decision states across blocks
         self.quality_validator = TrustedIoTEEGValidator(fs_raw=SOURCE_FS, fs_filtered=TARGET_FS, max_amplitude=7000.0)
@@ -322,8 +413,27 @@ class RealtimeInference:
         )
         quality['is_trusted'] = meets_bar
         if not meets_bar:
-            if quality['gate_rating'] != 'POOR':
-                self._calibration_attempts_bipolar.append((quality['quality_score'], feats, filtered))
+            # Every non-passing block is a legitimate degraded-fallback
+            # candidate, ranked by its real quality_score -- including a
+            # settling-window rejection, whose gate_rating is forced to
+            # POOR just above regardless of how good the underlying signal
+            # actually was. The two truly-unusable cases (raw-magnitude /
+            # timing hardware faults) already returned before reaching this
+            # line, so everything that gets here has real feats/filtered
+            # data worth keeping as a last resort.
+            #
+            # This used to be gated on `quality['gate_rating'] != 'POOR'`,
+            # which made sense back when calibration_min_rating was 'GOOD'
+            # (a QUESTIONABLE-but-not-GOOD block legitimately had
+            # gate_rating != 'POOR' and would qualify). Once the bar was
+            # lowered to 'QUESTIONABLE' -- the lowest rating above POOR --
+            # "not meets_bar" became synonymous with gate_rating=='POOR' in
+            # every case (forced or genuine), so that guard silently made
+            # this append permanently unreachable: finalize_calibration_
+            # bipolar()'s allow_degraded path had nothing to fall back to,
+            # and a fully-rejected calibration hard-failed instead of
+            # degrading gracefully like it was designed to.
+            self._calibration_attempts_bipolar.append((quality['quality_score'], feats, filtered))
             return quality
         self.baseline.add({f'bipolar_{k}': v for k, v in feats.items()})
         if self._itakura_baseline_filtered_bipolar is None:
@@ -401,9 +511,21 @@ class RealtimeInference:
         meets_bar = self.disable_quality_gate or (
             RATING_ORDER.get(quality['gate_rating'], -1) >= RATING_ORDER[self.calibration_min_rating])
         quality['is_trusted'] = meets_bar
-        if not meets_bar:
-            return quality
 
+        # Deliberately scored regardless of meets_bar (unlike
+        # calibrate_bipolar_block()'s trusted/degraded split) -- with only
+        # N_THRESHOLD_TASK_BLOCKS=2 blocks total, dropping one to a quality
+        # gate would frequently leave finalize_personal_threshold() with
+        # too little data to ever compute a personal threshold at all. The
+        # real safety net here is compute_personal_threshold()'s own
+        # separation gate: a noisy/rejected block mostly adds variance to
+        # task_mean, and if that variance means resting and task scores
+        # aren't meaningfully separated, that gate already returns
+        # 'not_separated' and the population default is kept -- exactly the
+        # outcome that matters, without needing a second gate here too. The
+        # two truly-unusable cases (raw-magnitude / timing hardware faults)
+        # already returned above, before any score could be computed at
+        # all, so this can't be fooled by an outright garbage reading.
         score = self._score_calibration_bipolar_block(feats)
         if score is not None:
             self._task_scores.append(score)
@@ -544,6 +666,11 @@ class RealtimeInference:
         baseline_filtered = (self._itakura_baseline_filtered_bipolar
                               if self._itakura_baseline_filtered_bipolar is not None else filtered)
         quality = self.quality_validator.validate_epoch_single(raw_code, filtered, baseline_filtered)
+        # Computed regardless of what quality decides below -- seeing what a
+        # REJECTED block's waveform actually looked like is exactly the
+        # diagnostic visibility a "why does this keep failing" investigation
+        # needs, not just a pass/fail verdict with no signal to look at.
+        wave_uv = _downsample_wave(filtered)
 
         if elapsed_sec < SETTLING_TIME_SEC:
             quality['is_trusted'] = False
@@ -552,14 +679,30 @@ class RealtimeInference:
                                   f"SETTLING_TIME_SEC ({SETTLING_TIME_SEC:.0f}s) -- "
                                   f"electrode/contact settling window, not scored")
 
+        # Computed here (not after the trust decision below) so this block's
+        # own delta_power can feed the plausibility check next -- neither the
+        # amplitude/SNR/Itakura checks above nor gate_rating='GOOD' catch
+        # this; see DELTA_POWER_IMPLAUSIBLE_SD's docstring for why a
+        # dedicated feature-level check is needed.
+        raw_feats_unprefixed = channel_features(filtered, fs=TARGET_FS)
+        raw_feats = {f'bipolar_{k}': v for k, v in raw_feats_unprefixed.items()}
+
+        if (self._delta_power_reject_threshold is not None
+                and raw_feats_unprefixed['delta_power'] > self._delta_power_reject_threshold):
+            quality['is_trusted'] = False
+            quality['gate_rating'] = 'POOR'
+            quality['reason'] = (
+                f"bipolar_delta_power={raw_feats_unprefixed['delta_power']:.1f}uV^2 exceeds "
+                f"{self._delta_power_reject_threshold:.1f}uV^2 ({DELTA_POWER_IMPLAUSIBLE_SD:.0f} SD "
+                f"above this model's own training mean) -- residual motion/drift/poor-contact "
+                f"artifact, not scored"
+            )
+
         if self.disable_quality_gate:
             quality['is_trusted'] = True
         if not quality['is_trusted']:
             print(f"[quality_gate] rejected: {quality}")
         health = self.session_quality.update(quality['is_trusted'])
-
-        raw_feats_unprefixed = channel_features(filtered, fs=TARGET_FS)
-        raw_feats = {f'bipolar_{k}': v for k, v in raw_feats_unprefixed.items()}
 
         if not quality['is_trusted']:
             return {
@@ -567,6 +710,7 @@ class RealtimeInference:
                 'high_load_alert': False, 'micro_break_recommended': False,
                 'fatigue_warning': False, 'cooldown_logged': False,
                 'baseline_degraded': self.baseline_degraded,
+                'wave_uv': wave_uv,
                 **raw_feats,
                 **{f'quality_{k}': v for k, v in quality.items()},
                 **{f'session_{k}': v for k, v in health.items()},
@@ -596,6 +740,7 @@ class RealtimeInference:
         result['baseline_degraded'] = self.baseline_degraded
         result['baseline_drift'] = self.adaptive_baseline.drift()
         result['baseline_drift_n_calm_blocks'] = self.adaptive_baseline.n_calm_updates
+        result['wave_uv'] = wave_uv
         result.update({f'quality_{k}': v for k, v in quality.items()})
         result.update({f'session_{k}': v for k, v in health.items()})
         return result

@@ -230,7 +230,12 @@ def run_eeg_calibration_capture(user_id, session_id, on_progress=None):
 
     _notify('saving')
     try:
-        result = run_eeg_calibration_from_blocks(user_id, session_id, blocks_samples)
+        # allow_degraded=True -- same backstop as mqtt_bridge.py's always-on
+        # flow: falls back to the single best-scoring block if none clear
+        # the QUESTIONABLE bar, flagged baseline_degraded=True throughout,
+        # rather than failing outright and leaving onboarding stuck retrying
+        # forever with no baseline at all.
+        result = run_eeg_calibration_from_blocks(user_id, session_id, blocks_samples, allow_degraded=True)
     except CalibrationFailedError as e:
         _notify('error', message=str(e))
         return None
