@@ -69,6 +69,14 @@ export function useDeviceStatus(userId, db) {
   const [ringOnline, setRingOnline] = useState(false);
   const [sessionId, setSessionId] = useState(null);
   const [eegLastSeen, setEegLastSeen] = useState(null); // epoch seconds, from the latest block record's timestamp_end
+  // epoch seconds, from calibration_result's updated_at -- written the
+  // moment calibration starts (settling/capturing/saving, both the
+  // mqtt_bridge.py-driven /calibrate route and the on-demand
+  // CalibrateBreathingCard path via eeg_calibration_capture.py), not just
+  // once the first scored /predict block exists. Without this, every
+  // EEG-related screen showed "Offline" for the device's entire ~10-85s
+  // calibration span even though it was live and streaming the whole time.
+  const [calibrationLastSeen, setCalibrationLastSeen] = useState(null);
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -114,11 +122,26 @@ export function useDeviceStatus(userId, db) {
   }, [userId, sessionId, db]);
 
   useEffect(() => {
+    if (!userId || !sessionId || !db) {
+      setCalibrationLastSeen(null);
+      return undefined;
+    }
+    const calibRef = ref(db, `psychological/${userId}/${sessionId}/calibration_result`);
+    const handler = onValue(calibRef, (snap) => {
+      setCalibrationLastSeen(snap.val()?.updated_at ?? null);
+    });
+    return () => off(calibRef, 'value', handler);
+  }, [userId, sessionId, db]);
+
+  useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), DEVICE_POLL_MS);
     return () => clearInterval(id);
   }, []);
 
-  const eegOnline = eegLastSeen != null && (now / 1000 - eegLastSeen) <= EEG_LATEST_WINDOW_FRESH_SEC;
+  const eegWindowFresh = eegLastSeen != null && (now / 1000 - eegLastSeen) <= EEG_LATEST_WINDOW_FRESH_SEC;
+  const eegCalibratingFresh = calibrationLastSeen != null
+    && (now / 1000 - calibrationLastSeen) <= EEG_LATEST_WINDOW_FRESH_SEC;
+  const eegOnline = eegWindowFresh || eegCalibratingFresh;
 
   return { ringOnline, eegOnline, eegSessionId: sessionId };
 }

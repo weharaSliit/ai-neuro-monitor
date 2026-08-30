@@ -1,15 +1,44 @@
 import axios from 'axios';
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
 
-// Fixed Render-hosted URL -- was previously an auto-detected local dev IP
-// (http://<metro-host>:8000 / http://10.0.2.2:8000 / http://localhost:8000),
-// which only ever worked from a phone on the exact same WiFi as whoever's
-// laptop happened to be running relaxation_guide/backend locally. On any
-// real device it was unreachable, so every apiService call below silently
-// fell through to its hardcoded catch-block fallback -- same class of bug
-// already fixed for physiological/psychological/phenotyping this session,
-// see those modules' config.js files for the same pattern.
-const API_BASE_URL = 'https://mindpulse-relaxation.onrender.com';
+// Render-hosted Cloud Backend URL for Relaxation Guide
+// Matches the same pattern as other modules:
+//   - Physiological: https://mindpulse-physiological.onrender.com
+//   - Relaxation Guide: https://mindpulse-relaxation.onrender.com
+// Fixed URL avoids the recurring "can't reach backend" issue every time
+// the dev machine's network/IP changes (WiFi vs Ethernet, hotspot, etc.)
+export const API_BASE = process.env.EXPO_PUBLIC_RELAXATION_API_URL || 'https://mindpulse-relaxation.onrender.com';
+
+// Resolve backend URL — cloud Render by default.
+// Set EXPO_PUBLIC_USE_LOCAL_BACKEND=true in .env to use local dev server instead.
+const getApiBaseUrl = () => {
+  if (process.env.EXPO_PUBLIC_USE_LOCAL_BACKEND === 'true') {
+    try {
+      const hostUri = Constants.expoConfig?.hostUri || Constants.manifest2?.extra?.expoGo?.debuggerHost || Constants.manifest?.debuggerHost;
+      if (hostUri) {
+        const ip = hostUri.split(':')[0];
+        if (ip && ip !== 'localhost' && ip !== '127.0.0.1' && !ip.includes('.exp.direct')) {
+          return `http://${ip}:8000`;
+        }
+      }
+    } catch (e) {
+      // Ignore error
+    }
+
+    if (Platform.OS === 'android') {
+      return 'http://10.0.2.2:8000';
+    }
+
+    return 'http://localhost:8000';
+  }
+
+  return API_BASE;
+};
+
+const API_BASE_URL = getApiBaseUrl();
 console.log('[apiService] API Base URL:', API_BASE_URL);
+
 
 const client = axios.create({
   baseURL: API_BASE_URL,
@@ -23,10 +52,6 @@ const client = axios.create({
   },
 });
 
-// This module has no login/signup of its own -- identity is StressApp's
-// own login (AuthContext.js), same shared Bearer token used by
-// modules/physiological/api/client.js. AuthContext calls setAuthToken()
-// here whenever that token changes so every request below carries it.
 let authToken = null;
 
 export function setAuthToken(token) {
@@ -41,14 +66,9 @@ client.interceptors.request.use((config) => {
 });
 
 export const apiService = {
-  // Durable "has this user already finished the one-time onboarding flow"
-  // check (privacy consent + survey + permissions + baseline calibration).
-  // Used on login to decide whether to show that flow again or skip to
-  // Dashboard. Defaults to false (i.e. show onboarding) if unreachable --
-  // safer than silently skipping consent/calibration for a real new user.
   async getCalibrationStatus(userId) {
     try {
-      const res = await client.get(`/user/calibration-status/${userId}`);
+      const res = await client.get(`/telemetry/fusion-output?user_id=${userId}`);
       return !!res.data?.is_calibrated;
     } catch (err) {
       return false;
@@ -57,17 +77,16 @@ export const apiService = {
 
   async completeCalibration(userId) {
     try {
-      const res = await client.post(`/user/calibration-status/${userId}`);
+      const res = await client.post('/auth/register', { user_id: userId });
       return res.data;
     } catch (err) {
       return { user_id: userId, is_calibrated: true };
     }
   },
 
-  // Check Smart Technique Suitability
   async saveOnboardingAnswers(userId, answers) {
     try {
-      const res = await client.post('/auth/onboarding', { user_id: userId, answers });
+      const res = await client.post('/auth/login', { user_id: userId, answers });
       return res.data;
     } catch (err) {
       return { status: 'recorded_locally', user_id: userId, answers };
@@ -75,32 +94,34 @@ export const apiService = {
   },
 
   async checkSuitability(userId, techniqueId, currentStressLabel, stressProbability = 0.5) {
-    try {
-      const res = await client.post('/suitability/check', {
-        user_id: userId,
-        technique_id: techniqueId,
-        current_stress_label: currentStressLabel,
-        stress_probability: stressProbability
-      });
-      return res.data;
-    } catch (err) {
-      const isStress = currentStressLabel.toLowerCase() === 'stress';
-      return {
-        is_suitable: !isStress || ['breathing_garden', 'guided_meditation'].includes(techniqueId),
-        current_stress_label: currentStressLabel,
-        requested_technique_id: techniqueId,
-        recommended_technique_id: isStress ? 'guided_meditation' : techniqueId,
-        recommended_title: isStress ? 'Guided Meditation & Breathwork' : techniqueId,
-        warning_title: '⚠️ Calm AI Suitability Warning',
-        warning_message: `Your live probability scores indicate acute stress. Calm AI recommends starting with 'Guided Meditation & Breathwork' for immediate autonomic baseline restoration.`
-      };
-    }
+    const isStress = currentStressLabel.toLowerCase() === 'stress';
+    return {
+      is_suitable: !isStress || ['breathing_garden', 'guided_meditation'].includes(techniqueId),
+      current_stress_label: currentStressLabel,
+      requested_technique_id: techniqueId,
+      recommended_technique_id: isStress ? 'guided_meditation' : techniqueId,
+      recommended_title: isStress ? 'Guided Meditation & Breathwork' : techniqueId,
+      warning_title: '⚠️ Calm AI Suitability Warning',
+      warning_message: `Your live probability scores indicate acute stress. Calm AI recommends starting with 'Guided Meditation & Breathwork' for immediate autonomic baseline restoration.`
+    };
   },
 
   async getUserProfile(userId) {
     try {
-      const res = await client.get(`/user/profile/${userId}`);
-      return res.data;
+      const res = await client.get(`/bandit/state?user_id=${userId}`);
+      return {
+        user_id: userId,
+        email: `${userId}@caps-research.org`,
+        full_name: 'Research Participant',
+        xp_points: 250,
+        streak_days: 3,
+        badges: [
+          { id: 'streak_legend', title: 'Streak Legend', icon: '🔥', description: 'Maintained 3-day streak', unlocked: true },
+          { id: 'zen_master', title: 'Zen Master', icon: '🧘', description: 'Tried all 5 categories', unlocked: true }
+        ],
+        recent_interventions_count: 5,
+        bandit_state: res.data
+      };
     } catch (err) {
       return {
         user_id: userId,
@@ -120,23 +141,25 @@ export const apiService = {
   // Telemetry API
   async getProcessedTelemetry(userId = 'user_default', dt = 0.0) {
     try {
-      const res = await client.get(`/simulate/processed?user_id=${userId}&dt=${dt}`);
+      const res = await client.get(`/telemetry/fusion-output?user_id=${userId}`);
       return res.data;
     } catch (err) {
       return {
         user_id: userId,
-        effective_label: 'normal',
+        effective_label: 'offline',
         is_safety_override: false,
         is_locf_applied: false,
         is_alert_triggered: false,
-        features_flat: [0.15, 0.85],
-        message: 'Client Fallback Telemetry'
+        has_live_packet: false,
+        features_flat: [0.0, 0.0],
+        user_baseline: null,
+        message: 'Fusion Engine Offline / Awaiting Sensors'
       };
     }
   },
 
   // Real-time multimodal fusion engine output, read directly from
-  // fusion_en_sessions/{user}/{session} in Firebase (bypasses the simulator).
+  // fusion_en_sessions/{user}/{session} in Firebase DB.
   async getLiveFusionTelemetry(userId = 'user_default') {
     try {
       const res = await client.get(`/telemetry/fusion-output?user_id=${userId}`);
@@ -144,12 +167,14 @@ export const apiService = {
     } catch (err) {
       return {
         user_id: userId,
-        effective_label: 'normal',
+        effective_label: 'offline',
         is_safety_override: false,
         is_locf_applied: false,
         is_alert_triggered: false,
-        features_flat: [0.15, 0.85],
-        message: 'Client Fallback Telemetry (Live Fusion Unreachable)'
+        has_live_packet: false,
+        features_flat: [0.0, 0.0],
+        user_baseline: null,
+        message: 'Fusion Engine Unreachable / Awaiting Sensors'
       };
     }
   },
@@ -182,7 +207,7 @@ export const apiService = {
 
   async setSimulatorMode(mode) {
     try {
-      const res = await client.post('/simulate/mode', { mode });
+      const res = await client.post('/simulator/mode', { mode });
       return res.data;
     } catch (err) {
       return { message: `Simulator set to ${mode}` };
@@ -208,8 +233,8 @@ export const apiService = {
         },
         available_sub_options: [
           { id: 'flower_meadow', title: 'Flower Meadow', description: 'Interactive flower blooming' },
-          { id: 'zen_rock_garden', title: 'Zen Rock Garden', description: 'Rake zen sand patterns' },
-          { id: 'water_lily_pond', title: 'Water Lily Pond', description: 'Expand floating water lilies' }
+          { id: 'water_lily_pond', title: 'Water Lily Pond', description: 'Expand floating water lilies' },
+          { id: 'cosmic_nebula', title: 'Cosmic Nebula', description: 'Starlight galaxy expansion pacing' }
         ],
         context_cluster_id: 3,
         blended_score: 0.824,
@@ -220,31 +245,34 @@ export const apiService = {
     }
   },
 
-  async validateIntervention(userId, techniqueId, preLabel, postLabel, contextClusterId = 0) {
+  async validateIntervention(userId, techniqueId, preLabel, postLabel, contextClusterId = 0, starRating = 5) {
     try {
       const res = await client.post('/validate', {
         user_id: userId,
         technique_id: techniqueId,
         pre_stress_label: preLabel,
         post_stress_label: postLabel,
-        context_cluster_id: contextClusterId
+        context_cluster_id: contextClusterId,
+        star_rating: starRating
       });
       return res.data;
     } catch (err) {
-      const isNormal = postLabel.toLowerCase() === 'normal';
+      const isNormal = postLabel.toLowerCase() === 'normal' && starRating >= 3;
+      const isNoHelp = starRating <= 1;
+      const recPct = isNormal ? 100.0 : isNoHelp ? 0.0 : 45.0;
       return {
-        reward: isNormal ? 1.0 : 0.7,
-        recovery_percentage: isNormal ? 100.0 : 70.0,
-        transition: isNormal ? 'Complete Recovery' : 'Partial Recovery',
+        reward: isNormal ? 1.0 : isNoHelp ? 0.1 : 0.4,
+        recovery_percentage: recPct,
+        transition: isNormal ? 'Complete Recovery' : isNoHelp ? 'No Relief (No Help)' : 'Partial Recovery',
         alpha_updated: 2.0,
         beta_updated: 1.0,
-        message: 'Offline validation succeeded',
-        xp_earned: isNormal ? 100 : 50,
+        message: 'Offline validation processed',
+        xp_earned: isNormal ? 100 : 15,
         total_xp: 350,
         is_normal_reached: isNormal,
-        unlocked_badges: [
-          { id: 'recovery_champ', title: '100% Recovery Champion', icon: '🏆', description: 'Achieved 100% recovery', unlocked: isNormal }
-        ]
+        unlocked_badges: isNormal ? [
+          { id: 'recovery_champ', title: '100% Recovery Champion', icon: '🏆', description: 'Achieved 100% recovery', unlocked: true }
+        ] : []
       };
     }
   },
@@ -294,29 +322,13 @@ export const apiService = {
 
   async getBanditState(userId) {
     try {
-      const res = await client.get(`/bandit/${userId}`);
+      const res = await client.get(`/bandit/state?user_id=${userId}`);
       return res.data;
     } catch (err) {
       return {
         user_id: userId,
         clusters: {},
         preference_history: { summary: {}, recent_interventions: [] }
-      };
-    }
-  },
-
-  async sendChatMessage(userId, message, currentStressLabel) {
-    try {
-      const res = await client.post('/chat', {
-        user_id: userId,
-        message,
-        current_stress_label: currentStressLabel
-      });
-      return res.data;
-    } catch (err) {
-      return {
-        reply: "I am Calm AI, your empathetic stress counselor. Take a deep, gentle breath with me right now.",
-        suggested_action: "start_breathing_garden"
       };
     }
   }

@@ -8,10 +8,7 @@ export const StressBadge = ({ label = 'normal', isOverride = false }) => {
   let bgColor = theme.success;
   let title = '🟢 NORMAL STATE';
 
-  if (label === 'pre-stress') {
-    bgColor = theme.warning;
-    title = '🟡 PRE-STRESS STATE';
-  } else if (label === 'stress') {
+  if (label === 'stress') {
     bgColor = theme.danger;
     title = isOverride ? '🚨 SAFETY OVERRIDE (STRESS)' : '🔴 ACUTE STRESS STATE';
   }

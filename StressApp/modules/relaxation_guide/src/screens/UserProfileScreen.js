@@ -8,7 +8,7 @@ import { apiService } from '../api/apiService';
 
 export const UserProfileScreen = () => {
   const { userId, username, hostExit, setCurrentScreen } = useContext(AppContext);
-  const { theme } = useContext(ThemeContext);
+  const { theme, isDarkMode, toggleTheme } = useContext(ThemeContext);
   // Relaxation Guide's own screens are all reached via setCurrentScreen
   // (in-module switch, see AppContext). The Physiological module is a
   // separate top-level stack screen (App.js), so reaching its Dashboard
@@ -32,6 +32,11 @@ export const UserProfileScreen = () => {
     };
     fetchProfile();
   }, [userId]);
+
+  const formatAnswer = (val) => {
+    if (!val) return 'Default (Not Set)';
+    return val.replace(/_/g, ' ').toUpperCase();
+  };
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
@@ -90,35 +95,8 @@ export const UserProfileScreen = () => {
             ))}
           </View>
 
-          {/* Onboarding steps, revisitable instead of forced on every login */}
+          {/* Setup & Preferences */}
           <Text style={[styles.secTitle, { color: theme.textPrimary }]}>Setup & Preferences</Text>
-          <TouchableOpacity
-            style={[styles.settingCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}
-            onPress={() => setCurrentScreen('PrivacyPolicy')}
-          >
-            <View style={styles.settingText}>
-              <Text style={[styles.settingTitle, { color: theme.textPrimary }]}>🔒 Privacy & Data Ethics</Text>
-              <Text style={[styles.settingSub, { color: theme.textMuted }]}>Review the research data consent policy.</Text>
-            </View>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.settingCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}
-            onPress={() => setCurrentScreen('OnboardingQuestions')}
-          >
-            <View style={styles.settingText}>
-              <Text style={[styles.settingTitle, { color: theme.textPrimary }]}>📋 Personalization Survey</Text>
-              <Text style={[styles.settingSub, { color: theme.textMuted }]}>Retake the relaxation-style questionnaire.</Text>
-            </View>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.settingCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}
-            onPress={() => setCurrentScreen('BaselineCalibration')}
-          >
-            <View style={styles.settingText}>
-              <Text style={[styles.settingTitle, { color: theme.textPrimary }]}>🎯 Baseline Calibration</Text>
-              <Text style={[styles.settingSub, { color: theme.textMuted }]}>Recalibrate your HRV / GSR / EEG baseline.</Text>
-            </View>
-          </TouchableOpacity>
           <TouchableOpacity
             style={[styles.settingCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}
             onPress={() => navigation.navigate('Physiological')}
@@ -268,5 +246,45 @@ const styles = StyleSheet.create({
   logoutTxt: {
     fontWeight: '800',
     fontSize: 14
+  },
+  summaryCard: {
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    marginBottom: 20
+  },
+  summaryItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 6
+  },
+  summaryIcon: {
+    fontSize: 22
+  },
+  summaryLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5
+  },
+  summaryVal: {
+    fontSize: 13,
+    fontWeight: '800',
+    marginTop: 2
+  },
+  summaryDivider: {
+    height: 1,
+    marginVertical: 8
+  },
+  retakeBtn: {
+    marginTop: 10,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center'
+  },
+  retakeBtnTxt: {
+    fontSize: 12,
+    fontWeight: '800'
   }
 });
