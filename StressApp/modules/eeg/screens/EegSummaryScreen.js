@@ -133,8 +133,6 @@ export default function EegSummaryScreen() {
   const { eegOnline: hasSession, eegSessionId: currentSessionId } = useDeviceStatus(userId, db);
   const { eeg: eegCalibration } = useCalibrationSummary(userId, token);
 
-  const [currentSessionId, setCurrentSessionId] = useState(null);
-  const [hasSession, setHasSession] = useState(false);
   const [sessionWindows, setSessionWindows] = useState(null);
   const [recentSessions, setRecentSessions] = useState([]);
   const [sessionDist, setSessionDist] = useState({ normal: 0, stress: 0 });
