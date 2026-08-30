@@ -22,6 +22,16 @@ plugins {
   id("expo-autolinking-settings")
 }
 
+// Force-delete the autolinking cache on non-Windows builders so it always
+// regenerates with correct paths. Prevents a Windows-path autolinking cache
+// (restored by EAS's own build cache, independent of .easignore) from
+// reaching the Linux builder and leaving native module projectDirs pointing
+// at nonexistent paths (which silently produces zero Android variants).
+def autolinkingCacheDir = new File(rootDir, "build/generated/autolinking")
+if (!System.getProperty("os.name").toLowerCase().contains("windows")) {
+    autolinkingCacheDir.deleteDir()
+}
+
 extensions.configure(com.facebook.react.ReactSettingsExtension) { ex ->
   if (System.getenv('EXPO_USE_COMMUNITY_AUTOLINKING') == '1') {
     ex.autolinkLibrariesFromCommand()

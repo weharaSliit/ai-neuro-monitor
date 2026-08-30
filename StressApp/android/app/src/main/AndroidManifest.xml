@@ -1,4 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
   <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
   <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
@@ -6,17 +6,13 @@
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
   <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
   <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+  <uses-permission android:name="android.permission.RECORD_AUDIO"/>
   <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
   <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
   <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
   <uses-permission android:name="android.permission.VIBRATE"/>
   <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
   <uses-permission android:name="com.google.android.gms.permission.ACTIVITY_RECOGNITION"/>
-  <!-- Required for KeystrokeCollectorService.startForeground() on Android 14+ (API 34+):
-       without a declared foregroundServiceType, startForeground() throws
-       MissingForegroundServiceTypeException, which crashes the service before
-       it ever logs anything, looking identical to "the service never started". -->
-  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
   <queries>
     <intent>
       <action android:name="android.intent.action.VIEW"/>
@@ -34,33 +30,5 @@
         <category android:name="android.intent.category.LAUNCHER"/>
       </intent-filter>
     </activity>
-
-    <!-- Phenotyping: ported from the standalone app, see
-         android/app/src/main/java/com/mindpulse/stressapp/phenotyping/
-         KeystrokeCollectorService.java's header comment. -->
-    <service
-        android:name="com.mindpulse.stressapp.phenotyping.KeystrokeCollectorService"
-        android:label="PhenoCare Sensor"
-        android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-        android:exported="true"
-        android:foregroundServiceType="specialUse">
-      <intent-filter>
-        <action android:name="android.accessibilityservice.AccessibilityService"/>
-      </intent-filter>
-      <meta-data
-          android:name="android.accessibilityservice"
-          android:resource="@xml/accessibility_service_config"/>
-      <property
-          android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-          android:value="Passive behavioral stress-monitoring research sensor -- keystroke timing, scroll velocity and app-switch rate only, no text content is ever read."/>
-    </service>
-
-    <receiver android:name="com.mindpulse.stressapp.phenotyping.BootReceiver" android:exported="true">
-      <intent-filter>
-        <action android:name="android.intent.action.BOOT_COMPLETED"/>
-      </intent-filter>
-    </receiver>
-
-    <receiver android:name="com.mindpulse.stressapp.phenotyping.EmaNotificationReceiver" android:exported="false"/>
   </application>
 </manifest>
