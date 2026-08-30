@@ -44,7 +44,8 @@ class ThompsonBandit:
         self,
         user_id: str,
         cluster_id: int,
-        usage_history_7d: Optional[Dict[str, int]] = None
+        usage_history_7d: Optional[Dict[str, int]] = None,
+        exclude_technique_ids: Optional[List[str]] = None
     ) -> Tuple[str, float, float, float, float, Dict[str, float]]:
         """
         Performs User-Wise Contextual Thompson Sampling selection:
@@ -57,6 +58,7 @@ class ThompsonBandit:
         start_time = time.time()
         cluster_dists = self._get_user_cluster_dists(user_id, cluster_id)
         usage_history = usage_history_7d or {}
+        excluded = set(exclude_technique_ids or [])
 
         best_tech = None
         best_blended_score = -1.0
@@ -68,6 +70,8 @@ class ThompsonBandit:
         history_boosts = firebase_service.get_fastest_recovery_technique_history(user_id)
 
         for tech_id, params in cluster_dists.items():
+            if tech_id in excluded:
+                continue
             alpha = params["alpha"] + history_boosts.get(tech_id, 0.0)
             beta = params["beta"]
 

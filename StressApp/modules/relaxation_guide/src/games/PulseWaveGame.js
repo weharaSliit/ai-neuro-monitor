@@ -3,814 +3,469 @@ import {
   View,
   Text,
   StyleSheet,
-  TouchableWithoutFeedback,
+  TouchableOpacity,
   Animated,
   Dimensions,
-  Easing
+  Easing,
+  Vibration,
+  Platform,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { ThemeContext } from '../context/ThemeContext';
 
 const { width, height } = Dimensions.get('window');
+const WAVE_BAR_COUNT = 24;
+const AMBIENT_TICK_MS = 50;
 
-export const PulseWaveGame = () => {
-  const [pulsePhase, setPulsePhase] = useState('inhale');
-  const [heartRate, setHeartRate] = useState(72);
-  const [score, setScore] = useState(0);
-  const [combo, setCombo] = useState(0);
-  const [maxCombo, setMaxCombo] = useState(0);
-  const [cycles, setCycles] = useState(0);
-  const [perfectPulses, setPerfectPulses] = useState(0);
-  const [gameState, setGameState] = useState('playing');
-  const [particles, setParticles] = useState([]);
-  const [floatingTexts, setFloatingTexts] = useState([]);
-  const [waveRings, setWaveRings] = useState([]);
-  const [energyOrbs, setEnergyOrbs] = useState([]);
-  const [rhythmAccuracy, setRhythmAccuracy] = useState(0);
+// ---------------------------------------------------------------------------
+// Resonance-frequency breathing, the technique behind real HRV biofeedback
+// software (HeartMath, Elite HRV, etc). Breathing smoothly at a rate close
+// to ~6 breaths/minute maximizes the amplitude of heart-rate oscillations
+// via the baroreflex — no hold phases, just a smooth in/out pace.
+//
+// This screen paces your breathing. It does NOT measure your heart rate —
+// doing that for real needs a sensor (camera PPG or wearable), and showing
+// a made-up number pretending to be your HRV would be misleading, so unlike
+// the original file, no heart-rate figure is displayed anywhere.
+//
+// Lehrer, P. M., & Gevirtz, R. (2014). Heart rate variability biofeedback:
+// How and why does it work? Frontiers in Psychology, 5, 756.
+// Goessl, V. C., Curtiss, J. E., & Hofmann, S. G. (2017). The effect of
+// heart rate variability biofeedback training on stress and anxiety: A
+// meta-analysis. Psychological Medicine, 47(15), 2578–2586.
+// ---------------------------------------------------------------------------
+const PACE_OPTIONS = [4.5, 5, 5.5, 6, 6.5, 7]; // breaths per minute
+const DURATION_OPTIONS_MIN = [1, 2, 3];
 
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-  const glowAnim = useRef(new Animated.Value(0)).current;
-  const rotateAnim = useRef(new Animated.Value(0)).current;
-  const shakeAnim = useRef(new Animated.Value(0)).current;
-  const beatAnim = useRef(new Animated.Value(1)).current;
+const COLORS = {
+  background: '#1A1040',
+  backgroundDeep: '#120A2E',
+  accent: '#B388FF',
+  accentSoft: 'rgba(179,136,255,0.25)',
+  text: '#E9E4FF',
+};
 
-  const pulseTimer = useRef(null);
-  const gameLoop = useRef(null);
-  const lastTapTime = useRef(Date.now());
-  const rhythmHistory = useRef([]);
+const ResonancePulseBreathing = ({ onStartSession, onDurationChange, initialScreen = 'session' }) => {
+  const themeContext = React.useContext(ThemeContext);
+  const theme = themeContext?.theme || {};
+  const isDarkMode = themeContext?.isDarkMode ?? true;
 
-  // Create initial energy orbs
+  const primaryTextColor = isDarkMode ? '#E9E4FF' : (theme.textPrimary || '#0F172A');
+  const secondaryTextColor = isDarkMode ? 'rgba(233,228,255,0.75)' : (theme.textSecondary || '#334155');
+  const mutedTextColor = isDarkMode ? 'rgba(233,228,255,0.45)' : (theme.textMuted || '#64748B');
+  const containerBg = isDarkMode ? COLORS.backgroundDeep : (theme.bgPrimary || '#F8FAFC');
+
+  const [screen, setScreen] = useState(initialScreen); // 'setup' | 'session' | 'complete'
+  const [paceBpm, setPaceBpm] = useState(6.0);
+  const [durationMin, setDurationMin] = useState(1);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [breathCount, setBreathCount] = useState(0);
+  const [breathDirection, setBreathDirection] = useState('in'); // 'in' | 'out'
+  const [isPaused, setIsPaused] = useState(false);
+  const [waveBars, setWaveBars] = useState(Array(WAVE_BAR_COUNT).fill(0.3));
+  const [orbs] = useState(() =>
+    Array.from({ length: 6 }, (_, i) => ({
+      id: i,
+      angle: (i / 6) * Math.PI * 2,
+      radius: 110 + Math.random() * 25,
+      size: 5 + Math.random() * 6,
+      phase: Math.random() * Math.PI * 2,
+    }))
+  );
+
+  const orbAnim = useRef(new Animated.Value(0)).current; // 0 = exhaled, 1 = inhaled
+  const screenFade = useRef(new Animated.Value(1)).current;
+  const tickRef = useRef(null);
+  const ambientRef = useRef(null);
+  const cyclingRef = useRef(false);
+  const pausedRef = useRef(false);
+  const paceRef = useRef(paceBpm);
+
+  const totalSeconds = durationMin * 60;
+
+  useEffect(() => { paceRef.current = paceBpm; }, [paceBpm]);
+  useEffect(() => { pausedRef.current = isPaused; }, [isPaused]);
+
+  // Overall session clock.
   useEffect(() => {
-    const orbs = [];
-    for (let i = 0; i < 8; i++) {
-      const angle = (i / 8) * Math.PI * 2;
-      const radius = 120 + Math.random() * 30;
-      orbs.push({
-        id: i,
-        angle,
-        radius,
-        size: 6 + Math.random() * 10,
-        color: `hsl(${260 + Math.random() * 40}, 80%, ${60 + Math.random() * 30}%)`,
-        speed: 0.5 + Math.random() * 0.5,
-        phase: Math.random() * Math.PI * 2,
-      });
-    }
-    setEnergyOrbs(orbs);
-  }, []);
-
-  // Create wave ring
-  const createWaveRing = (x, y) => {
-    setWaveRings(prev => [...prev, {
-      id: Date.now() + Math.random(),
-      x,
-      y,
-      radius: 20,
-      maxRadius: 150 + Math.random() * 50,
-      opacity: 1,
-      color: `hsl(${260 + Math.random() * 40}, 80%, ${60 + Math.random() * 30}%)`,
-      speed: 2 + Math.random() * 1,
-    }]);
-  };
-
-  // Create particles
-  const createParticles = (x, y, color, count = 30) => {
-    const newParticles = [];
-    for (let i = 0; i < count; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const velocity = 2 + Math.random() * 6;
-      newParticles.push({
-        id: Date.now() + Math.random(),
-        x,
-        y,
-        vx: Math.cos(angle) * velocity,
-        vy: Math.sin(angle) * velocity - 2,
-        life: 1,
-        size: 2 + Math.random() * 6,
-        color: color || `hsl(${280 + Math.random() * 40}, 80%, 70%)`,
-        gravity: 0.05 + Math.random() * 0.05,
-      });
-    }
-    setParticles(prev => [...prev, ...newParticles]);
-  };
-
-  // Create floating text
-  const createFloatingText = (x, y, text, color = '#B388FF') => {
-    setFloatingTexts(prev => [...prev, {
-      id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}_${Math.random()}`,
-      x,
-      y,
-      text,
-      color,
-      opacity: 1,
-      vy: -2 - Math.random() * 1.5,
-      scale: 1,
-    }]);
-  };
-
-  // Handle tap - simulate heartbeat
-  const handleTap = (evt) => {
-    const { locationX, locationY } = evt.nativeEvent;
-    const now = Date.now();
-    const timeDiff = now - lastTapTime.current;
-    lastTapTime.current = now;
-
-    // Create visual effects
-    createWaveRing(locationX, locationY);
-    createParticles(locationX, locationY, '#B388FF', 25);
-
-    // Calculate rhythm accuracy
-    const expectedInterval = 1000 / (heartRate / 60);
-    const accuracy = Math.max(0, 100 - Math.abs(timeDiff - expectedInterval) / expectedInterval * 100);
-    setRhythmAccuracy(prev => prev * 0.7 + accuracy * 0.3);
-
-    rhythmHistory.current.push(accuracy);
-    if (rhythmHistory.current.length > 10) {
-      rhythmHistory.current.shift();
-    }
-
-    // Score based on timing
-    if (accuracy > 80) {
-      const comboBonus = Math.floor(combo / 3) + 1;
-      const points = Math.floor(accuracy / 10) * comboBonus;
-      setScore(prev => prev + points);
-      setCombo(prev => prev + 1);
-      setPerfectPulses(prev => prev + 1);
-
-      if (combo + 1 > maxCombo) {
-        setMaxCombo(combo + 1);
-      }
-
-      // Floating text
-      let text = `💓 +${points}`;
-      if (combo > 0) {
-        text += ` x${comboBonus}`;
-      }
-      if (accuracy > 95) {
-        text += ' PERFECT!';
-      }
-      createFloatingText(locationX - 30, locationY - 30, text, accuracy > 95 ? '#FCD34D' : '#B388FF');
-
-      // Combo milestones
-      if (combo > 0 && combo % 5 === 0) {
-        createFloatingText(
-          locationX - 50,
-          locationY - 70,
-          `⚡ ${combo + 1}x RHYTHM!`,
-          '#F59E0B'
-        );
-        // Bonus particles
-        for (let i = 0; i < 3; i++) {
-          setTimeout(() => {
-            createParticles(
-              locationX + (Math.random() - 0.5) * 100,
-              locationY + (Math.random() - 0.5) * 100,
-              '#F59E0B',
-              15
-            );
-          }, i * 100);
+    if (screen !== 'session') return;
+    tickRef.current = setInterval(() => {
+      if (pausedRef.current) return;
+      setElapsedSeconds(prev => {
+        const next = prev + 1;
+        if (next >= totalSeconds) {
+          clearInterval(tickRef.current);
+          cyclingRef.current = false;
+          setScreen('complete');
         }
+        return next;
+      });
+    }, 1000);
+    return () => clearInterval(tickRef.current);
+  }, [screen, totalSeconds]);
+
+  // Smooth continuous inhale/exhale cycle, no hold — matches resonance
+  // breathing protocols, which use a smooth sinusoidal pace rather than
+  // tense/hold segments.
+  const runHalfCycle = (direction) => {
+    if (screen !== 'session' && !cyclingRef.current) return;
+    setBreathDirection(direction);
+    const halfPeriodMs = (60 / paceRef.current / 2) * 1000;
+
+    Animated.timing(orbAnim, {
+      toValue: direction === 'in' ? 1 : 0,
+      duration: halfPeriodMs,
+      easing: Easing.inOut(Easing.sin),
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (!finished || !cyclingRef.current) return;
+      if (direction === 'out') {
+        setBreathCount(c => c + 1);
+        if (Platform.OS !== 'web') Vibration.vibrate(6);
       }
-
-      // Screen shake on high combo
-      if (combo > 5) {
-        Animated.sequence([
-          Animated.timing(shakeAnim, {
-            toValue: 3,
-            duration: 50,
-            useNativeDriver: true,
-          }),
-          Animated.timing(shakeAnim, {
-            toValue: -3,
-            duration: 50,
-            useNativeDriver: true,
-          }),
-          Animated.timing(shakeAnim, {
-            toValue: 0,
-            duration: 50,
-            useNativeDriver: true,
-          }),
-        ]).start();
-      }
-
-      // Beat animation
-      Animated.sequence([
-        Animated.timing(beatAnim, {
-          toValue: 1.3,
-          duration: 100,
-          useNativeDriver: true,
-        }),
-        Animated.timing(beatAnim, {
-          toValue: 1,
-          duration: 200,
-          useNativeDriver: true,
-        }),
-      ]).start();
-
-    } else {
-      // Missed beat
-      createFloatingText(locationX - 20, locationY - 20, '⏳ Miss', '#EF4444');
-      setCombo(0);
-    }
-
-    // Update heart rate
-    setHeartRate(prev => {
-      const newRate = prev + (Math.random() - 0.5) * 2;
-      return Math.max(60, Math.min(100, newRate));
+      if (pausedRef.current) return; // hold here until resumed
+      runHalfCycle(direction === 'in' ? 'out' : 'in');
     });
-
-    // Check for cycle completion
-    if (combo > 0 && combo % 10 === 0) {
-      setCycles(prev => prev + 1);
-      createFloatingText(width / 2 - 60, height / 2 - 100, '🔄 Cycle Complete!', '#34D399');
-    }
   };
 
-  // Pulse wave animation
   useEffect(() => {
-    pulseTimer.current = setInterval(() => {
-      setPulsePhase(prev => {
-        if (prev === 'inhale') {
-          Animated.parallel([
-            Animated.timing(pulseAnim, {
-              toValue: 1.6,
-              duration: 2500,
-              easing: Easing.inOut(Easing.ease),
-              useNativeDriver: true,
-            }),
-            Animated.timing(glowAnim, {
-              toValue: 1,
-              duration: 2500,
-              easing: Easing.inOut(Easing.ease),
-              useNativeDriver: true,
-            }),
-          ]).start();
-          return 'hold';
-        } else if (prev === 'hold') {
-          Animated.timing(glowAnim, {
-            toValue: 1.2,
-            duration: 1500,
-            easing: Easing.inOut(Easing.ease),
-            useNativeDriver: true,
-          }).start();
-          return 'exhale';
-        } else {
-          Animated.parallel([
-            Animated.timing(pulseAnim, {
-              toValue: 1,
-              duration: 3000,
-              easing: Easing.inOut(Easing.ease),
-              useNativeDriver: true,
-            }),
-            Animated.timing(glowAnim, {
-              toValue: 0.3,
-              duration: 3000,
-              easing: Easing.inOut(Easing.ease),
-              useNativeDriver: true,
-            }),
-          ]).start();
-          return 'inhale';
-        }
-      });
-    }, 3000);
-
-    return () => clearInterval(pulseTimer.current);
-  }, []);
-
-  // Game loop
-  useEffect(() => {
-    gameLoop.current = setInterval(() => {
-      // Update energy orbs
-      setEnergyOrbs(prev => prev.map(orb => ({
-        ...orb,
-        angle: orb.angle + orb.speed * 0.01,
-        radius: orb.radius + Math.sin(Date.now() * 0.001 + orb.phase) * 5,
-        size: orb.size * (0.995 + Math.sin(Date.now() * 0.002 + orb.phase) * 0.005),
-      })));
-
-      // Update wave rings
-      setWaveRings(prev => prev.map(ring => ({
-        ...ring,
-        radius: ring.radius + ring.speed,
-        opacity: ring.opacity - 0.02,
-      })).filter(ring => ring.opacity > 0 && ring.radius < ring.maxRadius));
-
-      // Update particles
-      setParticles(prev => {
-        const updated = prev.map(p => ({
-          ...p,
-          x: p.x + p.vx,
-          y: p.y + p.vy,
-          vy: p.vy + p.gravity,
-          life: p.life - 0.015,
-          size: p.size * 0.995,
-        }));
-        return updated.filter(p => p.life > 0);
-      });
-
-      // Update floating texts
-      setFloatingTexts(prev => {
-        const updated = prev.map(t => ({
-          ...t,
-          y: t.y + t.vy,
-          opacity: t.opacity - 0.015,
-          scale: t.scale + 0.01,
-        }));
-        return updated.filter(t => t.opacity > 0);
-      });
-
-      // Update rotation
-      rotateAnim.setValue((rotateAnim._value + 0.2) % 360);
-
-    }, 16);
-
-    return () => clearInterval(gameLoop.current);
-  }, []);
-
-  // Get phase info
-  const getPhaseInfo = () => {
-    switch (pulsePhase) {
-      case 'inhale': return {
-        icon: '🌬️',
-        text: 'Inhale',
-        sub: 'Expand with the wave',
-        color: '#818CF8',
-      };
-      case 'hold': return {
-        icon: '🕊️',
-        text: 'Hold',
-        sub: 'Feel the resonance',
-        color: '#A78BFA',
-      };
-      case 'exhale': return {
-        icon: '💓',
-        text: 'Exhale',
-        sub: 'Release and flow',
-        color: '#F472B6',
-      };
-      default: return {
-        icon: '✨',
-        text: 'Ready',
-        sub: 'Follow the rhythm',
-        color: '#B388FF',
-      };
+    if (screen === 'session' && !isPaused && !cyclingRef.current) {
+      cyclingRef.current = true;
+      runHalfCycle('in');
     }
+    if (screen === 'session' && !isPaused) {
+      // Resuming from a pause where the animation loop had stopped
+      cyclingRef.current = true;
+    }
+  }, [screen, isPaused]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (screen !== 'session') cyclingRef.current = false;
+  }, [screen]);
+
+  // Ambient scrolling wave — a pacing visual, explicitly not a biometric.
+  useEffect(() => {
+    if (screen !== 'session') return;
+    ambientRef.current = setInterval(() => {
+      const periodSec = 60 / paceRef.current;
+      const omega = (2 * Math.PI) / periodSec;
+      const t = Date.now() / 1000;
+      setWaveBars(
+        Array.from({ length: WAVE_BAR_COUNT }, (_, i) => {
+          const v = Math.sin(omega * t - i * 0.35);
+          return 0.5 + v * 0.4;
+        })
+      );
+    }, AMBIENT_TICK_MS);
+    return () => clearInterval(ambientRef.current);
+  }, [screen]);
+
+  const restartPacing = () => {
+    orbAnim.stopAnimation(() => {
+      cyclingRef.current = true;
+      runHalfCycle('in');
+    });
   };
 
-  const phaseInfo = getPhaseInfo();
-
-  // Get heart rate status
-  const getHeartRateStatus = () => {
-    if (heartRate < 65) return '😌 Calm';
-    if (heartRate < 75) return '🧘 Focused';
-    if (heartRate < 85) return '💪 Active';
-    return '⚡ Energized';
+  const adjustPace = (delta) => {
+    setPaceBpm(prev => {
+      const next = Math.min(7, Math.max(4.5, Math.round((prev + delta) * 10) / 10));
+      return next;
+    });
+    if (screen === 'session') setTimeout(restartPacing, 0);
   };
 
-  // Calculate average accuracy
-  const avgAccuracy = rhythmHistory.current.length > 0
-    ? rhythmHistory.current.reduce((a, b) => a + b, 0) / rhythmHistory.current.length
-    : 0;
+  const fadeTo = (next) => {
+    Animated.timing(screenFade, { toValue: 0, duration: 180, useNativeDriver: true }).start(() => {
+      setScreen(next);
+      Animated.timing(screenFade, { toValue: 1, duration: 260, useNativeDriver: true }).start();
+    });
+  };
 
-  return (
-    <TouchableWithoutFeedback onPress={handleTap}>
-      <Animated.View style={[
-        styles.container,
-        { transform: [{ translateX: shakeAnim }] }
-      ]}>
-        {/* Background gradient */}
-        <View style={styles.bgGradient} />
+  const startSession = () => {
+    setElapsedSeconds(0);
+    setBreathCount(0);
+    setIsPaused(false);
+    orbAnim.setValue(0);
+    cyclingRef.current = false;
+    fadeTo('session');
+  };
 
-        {/* Energy Orbs */}
-        {energyOrbs.map(orb => {
-          const x = width / 2 + Math.cos(orb.angle) * orb.radius;
-          const y = height / 2 + Math.sin(orb.angle) * orb.radius;
-          return (
-            <Animated.View
-              key={orb.id}
-              style={[
-                styles.energyOrb,
-                {
-                  left: x - orb.size / 2,
-                  top: y - orb.size / 2,
-                  width: orb.size,
-                  height: orb.size,
-                  borderRadius: orb.size / 2,
-                  backgroundColor: orb.color,
-                  opacity: 0.3 + Math.sin(Date.now() * 0.002 + orb.phase) * 0.2,
-                }
-              ]}
-            />
-          );
-        })}
+  const endSessionEarly = () => {
+    clearInterval(tickRef.current);
+    cyclingRef.current = false;
+    fadeTo('complete');
+  };
 
-        {/* Wave Rings */}
-        {waveRings.map(ring => (
-          <Animated.View
-            key={ring.id}
-            style={[
-              styles.waveRing,
-              {
-                left: ring.x - ring.radius,
-                top: ring.y - ring.radius,
-                width: ring.radius * 2,
-                height: ring.radius * 2,
-                borderRadius: ring.radius,
-                borderColor: ring.color,
-                opacity: ring.opacity * 0.5,
-              }
-            ]}
-          />
-        ))}
+  const togglePause = () => {
+    setIsPaused(p => {
+      const next = !p;
+      if (!next) setTimeout(restartPacing, 0); // resuming
+      else cyclingRef.current = false;
+      return next;
+    });
+  };
 
-        {/* Particles */}
-        {particles.map(p => (
-          <Animated.View
-            key={p.id}
-            style={[
-              styles.particle,
-              {
-                left: p.x - p.size / 2,
-                top: p.y - p.size / 2,
-                width: p.size,
-                height: p.size,
-                backgroundColor: p.color,
-                opacity: p.life,
-                borderRadius: p.size / 2,
-                shadowColor: p.color,
-                shadowOpacity: 0.3,
-                shadowRadius: p.size,
-              }
-            ]}
-          />
-        ))}
+  const orbScale = orbAnim.interpolate({ inputRange: [0, 1], outputRange: [0.82, 1.35] });
+  const orbGlow = orbAnim.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.9] });
 
-        {/* Floating Texts */}
-        {floatingTexts.map(t => (
-          <Animated.Text
-            key={t.id}
-            style={[
-              styles.floatingText,
-              {
-                left: t.x,
-                top: t.y,
-                opacity: t.opacity,
-                color: t.color,
-                transform: [{ scale: t.scale }],
-              }
-            ]}
-          >
-            {t.text}
-          </Animated.Text>
-        ))}
-
-        {/* Main Pulse Wave */}
-        <Animated.View style={[
-          styles.pulseContainer,
-          {
-            transform: [
-              { scale: pulseAnim },
-              {
-                rotate: rotateAnim.interpolate({
-                  inputRange: [0, 360],
-                  outputRange: ['0deg', '360deg'],
-                })
-              },
-            ],
-          }
-        ]}>
-          <Animated.View style={[
-            styles.pulseWave,
-            {
-              opacity: glowAnim.interpolate({
-                inputRange: [0, 1],
-                outputRange: [0.3, 1],
-              }),
-              shadowOpacity: glowAnim.interpolate({
-                inputRange: [0, 1],
-                outputRange: [0.3, 0.9],
-              }),
-            }
-          ]}>
-            <Animated.View style={[
-              styles.pulseCore,
-              {
-                transform: [{ scale: beatAnim }],
-              }
-            ]}>
-              <View style={styles.pulseInner}>
-                <Text style={styles.heartIcon}>💓</Text>
-                <Text style={styles.bpmText}>{Math.round(heartRate)} BPM</Text>
-              </View>
-            </Animated.View>
-
-            {/* Pulse rings */}
-            <View style={styles.pulseRing} />
-            <View style={[styles.pulseRing, { width: 160, height: 160, borderRadius: 80 }]} />
-            <View style={[styles.pulseRing, { width: 200, height: 200, borderRadius: 100 }]} />
-          </Animated.View>
-        </Animated.View>
-
-        {/* Phase Indicator */}
-        <View style={[styles.phaseContainer, { borderColor: phaseInfo.color }]}>
-          <Text style={[styles.phaseIcon, { color: phaseInfo.color }]}>
-            {phaseInfo.icon}
+  // =========================================================================
+  // SETUP
+  // =========================================================================
+  if (screen === 'setup') {
+    return (
+      <Animated.View style={[styles.container, { backgroundColor: COLORS.background, opacity: screenFade }]}>
+        <View style={styles.setupWrap}>
+          <Text style={styles.setupTitle}>Resonance Pulse Breathing</Text>
+          <Text style={styles.setupSubtitle}>
+            Follow the pulse as it slowly grows and settles. Breathing smoothly at a slow, steady
+            pace like this is the basis of clinical heart-rate-variability biofeedback training.
           </Text>
-          <Text style={[styles.phaseText, { color: phaseInfo.color }]}>
-            {phaseInfo.text}
+
+          <Text style={styles.sectionLabel}>Breathing pace</Text>
+          <View style={styles.paceRow}>
+            {PACE_OPTIONS.map(bpm => (
+              <TouchableOpacity
+                key={bpm}
+                onPress={() => setPaceBpm(bpm)}
+                style={[styles.paceChip, paceBpm === bpm && styles.paceChipActive]}
+              >
+                <Text style={[styles.paceChipText, paceBpm === bpm && styles.paceChipTextActive]}>
+                  {bpm}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <Text style={styles.paceHint}>breaths per minute — 6 is a common starting point</Text>
+
+          <Text style={[styles.sectionLabel, { marginTop: 22 }]}>Session length</Text>
+          <View style={styles.paceRow}>
+            {DURATION_OPTIONS_MIN.map(min => (
+              <TouchableOpacity
+                key={min}
+                onPress={() => {
+                  setDurationMin(min);
+                  if (onDurationChange) onDurationChange(min * 60);
+                }}
+                style={[styles.durationChip, durationMin === min && styles.paceChipActive]}
+              >
+                <Text style={[styles.paceChipText, durationMin === min && styles.paceChipTextActive]}>
+                  {min} min
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <TouchableOpacity style={styles.startButton} onPress={() => {
+            if (onStartSession) onStartSession(durationMin * 60);
+            startSession();
+          }}>
+            <Text style={styles.startButtonText}>Begin</Text>
+          </TouchableOpacity>
+
+          <Text style={styles.citation}>
+            Lehrer &amp; Gevirtz, 2014, Frontiers in Psychology; Goessl et al., 2017, Psychological
+            Medicine (meta-analysis).
           </Text>
-          <Text style={styles.phaseSubtext}>{phaseInfo.sub}</Text>
-        </View>
-
-        {/* HUD */}
-        <View style={styles.hud}>
-          <View style={styles.hudItem}>
-            <Text style={styles.hudLabel}>💓 HRV</Text>
-            <Text style={styles.hudValue}>{getHeartRateStatus()}</Text>
-          </View>
-          <View style={styles.hudItem}>
-            <Text style={styles.hudLabel}>⭐ SCORE</Text>
-            <Text style={styles.hudValue}>{score}</Text>
-          </View>
-          <View style={styles.hudItem}>
-            <Text style={styles.hudLabel}>⚡ COMBO</Text>
-            <Text style={[
-              styles.hudValue,
-              combo > 5 && styles.comboHigh,
-              combo > 10 && styles.comboSuper,
-            ]}>
-              {combo}x
-            </Text>
-          </View>
-          <View style={styles.hudItem}>
-            <Text style={styles.hudLabel}>🎯 ACCURACY</Text>
-            <Text style={styles.hudValue}>{Math.round(avgAccuracy)}%</Text>
-          </View>
-        </View>
-
-        {/* Rhythm accuracy meter */}
-        <View style={styles.accuracyContainer}>
-          <View style={styles.accuracyBar}>
-            <View style={[styles.accuracyFill, {
-              width: `${Math.min(100, avgAccuracy)}%`,
-              backgroundColor: avgAccuracy > 80 ? '#34D399' : avgAccuracy > 60 ? '#F59E0B' : '#EF4444',
-            }]} />
-          </View>
-          <Text style={styles.accuracyLabel}>Rhythm Synchronization</Text>
-        </View>
-
-        {/* Status */}
-        <View style={styles.statusContainer}>
-          <Text style={styles.statusText}>
-            {cycles > 0 ? `🔄 ${cycles} cycles complete` : '🌱 Starting rhythm...'}
-            {perfectPulses > 0 && ` • 💓 ${perfectPulses} perfect beats`}
+          <Text style={styles.disclaimer}>
+            This paces your breathing — it does not measure your heart rate. Not a substitute for
+            medical or mental health care.
           </Text>
         </View>
-
-        {/* Controls */}
-        <View style={styles.controls}>
-          <View style={styles.controlGroup}>
-            <Text style={styles.controlText}>
-              👆 Tap in rhythm with your heartbeat
-            </Text>
-            <Text style={styles.controlSubtext}>
-              Follow the pulse wave for perfect synchronization
-            </Text>
-          </View>
-        </View>
-
-        {/* Glow overlay */}
-        <Animated.View style={[
-          styles.glowOverlay,
-          {
-            opacity: glowAnim.interpolate({
-              inputRange: [0, 1],
-              outputRange: [0, 0.1],
-            })
-          }
-        ]} />
       </Animated.View>
-    </TouchableWithoutFeedback>
+    );
+  }
+
+  // =========================================================================
+  // SESSION
+  // =========================================================================
+  if (screen === 'session') {
+    const progress = Math.min(1, elapsedSeconds / totalSeconds);
+    return (
+      <View style={[styles.container, { backgroundColor: containerBg }]}>
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+        </View>
+        <Text style={[styles.sessionTime, { color: mutedTextColor }]}>
+          {Math.floor(elapsedSeconds / 60)}:{String(elapsedSeconds % 60).padStart(2, '0')}
+          {'  /  '}
+          {durationMin}:00
+        </Text>
+
+        <View style={styles.waveRow}>
+          {waveBars.map((h, i) => (
+            <View key={i} style={[styles.waveBar, { height: 6 + h * 30 }]} />
+          ))}
+        </View>
+
+        <View style={styles.pulseArea}>
+          {orbs.map(o => {
+            const t = Date.now() * 0.0006;
+            const x = width / 2 + Math.cos(o.angle + t) * o.radius;
+            const y = height * 0.42 + Math.sin(o.angle + t) * o.radius * 0.6;
+            return (
+              <View
+                key={o.id}
+                style={{
+                  position: 'absolute', left: x - o.size / 2, top: y - o.size / 2,
+                  width: o.size, height: o.size, borderRadius: o.size / 2,
+                  backgroundColor: COLORS.accent, opacity: 0.35,
+                }}
+              />
+            );
+          })}
+
+          <Animated.View style={[styles.orbGlow, { opacity: orbGlow, transform: [{ scale: orbScale }] }]} />
+          <Animated.View style={[styles.orb, { transform: [{ scale: orbScale }] }]}>
+            <View style={styles.orbRing} />
+          </Animated.View>
+        </View>
+
+        <Text style={[styles.phaseText, { color: primaryTextColor }]}>{breathDirection === 'in' ? 'Breathe in…' : 'Breathe out…'}</Text>
+        <Text style={[styles.breathCount, { color: secondaryTextColor }]}>{breathCount} breaths</Text>
+
+        <View style={styles.paceAdjustRow}>
+          <TouchableOpacity onPress={() => adjustPace(-0.5)} style={[styles.stepperButton, { borderColor: isDarkMode ? 'rgba(255,255,255,0.2)' : theme.border }]}>
+            <Text style={[styles.stepperText, { color: primaryTextColor }]}>–</Text>
+          </TouchableOpacity>
+          <Text style={[styles.paceReadout, { color: secondaryTextColor }]}>{paceBpm.toFixed(1)} breaths/min</Text>
+          <TouchableOpacity onPress={() => adjustPace(0.5)} style={[styles.stepperButton, { borderColor: isDarkMode ? 'rgba(255,255,255,0.2)' : theme.border }]}>
+            <Text style={[styles.stepperText, { color: primaryTextColor }]}>+</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.footerButtons}>
+          <TouchableOpacity onPress={togglePause}>
+            <Text style={[styles.endLink, { color: mutedTextColor }]}>{isPaused ? 'Resume' : 'Pause'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={endSessionEarly}>
+            <Text style={[styles.endLink, { color: mutedTextColor }]}>End session</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  // =========================================================================
+  // COMPLETE
+  // =========================================================================
+  const minutesDone = (elapsedSeconds / 60).toFixed(1);
+  return (
+    <Animated.View style={[styles.container, { backgroundColor: COLORS.background, opacity: screenFade }]}>
+      <Text style={styles.completeTitle}>Session complete</Text>
+      <View style={styles.completeStatsRow}>
+        <View style={styles.completeStat}>
+          <Text style={styles.completeStatValue}>{breathCount}</Text>
+          <Text style={styles.completeStatLabel}>breaths</Text>
+        </View>
+        <View style={styles.completeStat}>
+          <Text style={styles.completeStatValue}>{minutesDone}</Text>
+          <Text style={styles.completeStatLabel}>minutes</Text>
+        </View>
+      </View>
+      <Text style={styles.completeNote}>
+        You paced your breathing at {paceBpm.toFixed(1)} breaths per minute — close to the
+        resonance frequency range used in clinical HRV biofeedback training.
+      </Text>
+
+      <TouchableOpacity style={styles.startButton} onPress={startSession}>
+        <Text style={styles.startButtonText}>Breathe again</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.secondaryButton} onPress={() => fadeTo('setup')}>
+        <Text style={styles.secondaryButtonText}>Change pace or duration</Text>
+      </TouchableOpacity>
+    </Animated.View>
   );
 };
 
+// Backward-compatible aliases for existing imports.
+export const PulseWaveGame = ResonancePulseBreathing;
+export default ResonancePulseBreathing;
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#1A1040',
-    overflow: 'hidden',
+  container: { flex: 1, alignItems: 'center', overflow: 'hidden' },
+
+  setupWrap: { flex: 1, justifyContent: 'center', paddingHorizontal: 28, width: '100%' },
+  setupTitle: { color: COLORS.text, fontSize: 25, fontWeight: '300', marginBottom: 12, textAlign: 'center' },
+  setupSubtitle: {
+    color: 'rgba(233,228,255,0.6)', fontSize: 13, lineHeight: 19,
+    textAlign: 'center', marginBottom: 26,
   },
-  bgGradient: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'radial-gradient(circle at center, #2D1B69 0%, #1A1040 100%)',
+  sectionLabel: {
+    color: 'rgba(233,228,255,0.4)', fontSize: 11, textTransform: 'uppercase',
+    letterSpacing: 1, marginBottom: 10, textAlign: 'center',
   },
-  energyOrb: {
-    position: 'absolute',
+  paceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center' },
+  paceChip: {
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)', borderRadius: 18,
+    paddingVertical: 7, paddingHorizontal: 14,
   },
-  waveRing: {
-    position: 'absolute',
-    borderWidth: 2,
+  durationChip: {
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)', borderRadius: 18,
+    paddingVertical: 7, paddingHorizontal: 16,
   },
-  particle: {
-    position: 'absolute',
+  paceChipActive: { backgroundColor: COLORS.accent, borderColor: COLORS.accent },
+  paceChipText: { color: COLORS.text, fontSize: 13 },
+  paceChipTextActive: { color: COLORS.background, fontWeight: '600' },
+  paceHint: { color: 'rgba(233,228,255,0.3)', fontSize: 10, textAlign: 'center', marginTop: 8 },
+
+  startButton: {
+    backgroundColor: COLORS.accent, borderRadius: 26, paddingVertical: 15,
+    alignItems: 'center', marginTop: 28, marginBottom: 14,
   },
-  floatingText: {
-    position: 'absolute',
-    fontSize: 20,
-    fontWeight: 'bold',
-    textShadowColor: 'rgba(0,0,0,0.8)',
-    textShadowOffset: { width: 2, height: 2 },
-    textShadowRadius: 4,
+  startButtonText: { color: COLORS.background, fontSize: 16, fontWeight: '600' },
+  secondaryButton: { paddingVertical: 10, alignItems: 'center' },
+  secondaryButtonText: { color: 'rgba(233,228,255,0.5)', fontSize: 13 },
+  citation: { color: 'rgba(233,228,255,0.32)', fontSize: 10, textAlign: 'center', lineHeight: 15 },
+  disclaimer: { color: 'rgba(233,228,255,0.25)', fontSize: 10, textAlign: 'center', marginTop: 10, lineHeight: 15 },
+
+  progressTrack: { position: 'absolute', top: 0, left: 0, right: 0, height: 3, backgroundColor: 'rgba(255,255,255,0.06)' },
+  progressFill: { height: '100%', backgroundColor: COLORS.accent },
+  sessionTime: { color: 'rgba(233,228,255,0.4)', fontSize: 12, marginTop: 12 },
+
+  waveRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    height: 32, marginTop: 8,
   },
-  pulseContainer: {
-    justifyContent: 'center',
-    alignItems: 'center',
+  waveBar: { width: 3, borderRadius: 2, backgroundColor: 'rgba(179,136,255,0.5)' },
+
+  pulseArea: { flex: 1, alignItems: 'center', justifyContent: 'center', width: '100%', minHeight: 140 },
+  orbGlow: {
+    position: 'absolute', width: 170, height: 170, borderRadius: 85,
+    backgroundColor: COLORS.accentSoft,
   },
-  pulseWave: {
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    backgroundColor: 'rgba(179, 136, 255, 0.15)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#B388FF',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.6,
-    shadowRadius: 50,
-    elevation: 20,
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.1)',
+  orb: {
+    width: 96, height: 96, borderRadius: 48,
+    backgroundColor: 'rgba(179,136,255,0.25)',
+    borderWidth: 2, borderColor: COLORS.accent,
+    alignItems: 'center', justifyContent: 'center',
   },
-  pulseCore: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: 'rgba(179, 136, 255, 0.3)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#B388FF',
+  orbRing: {
+    width: 50, height: 50, borderRadius: 25,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)',
   },
-  pulseInner: {
-    alignItems: 'center',
+
+  phaseText: { color: COLORS.text, fontSize: 15, fontWeight: '400', marginBottom: 2 },
+  breathCount: { color: 'rgba(233,228,255,0.5)', fontSize: 12, marginBottom: 10 },
+
+  paceAdjustRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 10 },
+  stepperButton: {
+    width: 30, height: 30, borderRadius: 15, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center', justifyContent: 'center',
   },
-  heartIcon: {
-    fontSize: 32,
-  },
-  bpmText: {
-    color: '#D1C4E9',
-    fontSize: 14,
-    fontWeight: 'bold',
-    marginTop: 2,
-  },
-  pulseRing: {
-    position: 'absolute',
-    borderWidth: 1,
-    borderColor: 'rgba(179, 136, 255, 0.2)',
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-  },
-  phaseContainer: {
-    position: 'absolute',
-    bottom: 120,
-    backgroundColor: 'rgba(26, 16, 64, 0.8)',
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 20,
-    borderWidth: 2,
-    alignItems: 'center',
-    minWidth: 180,
-  },
-  phaseIcon: {
-    fontSize: 28,
-  },
-  phaseText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginTop: 2,
-  },
-  phaseSubtext: {
-    color: '#94A3B8',
-    fontSize: 11,
-    marginTop: 2,
-  },
-  hud: {
-    position: 'absolute',
-    top: 30,
-    left: 20,
-    right: 20,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    flexWrap: 'wrap',
-  },
-  hudItem: {
-    backgroundColor: 'rgba(26, 16, 64, 0.8)',
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
-    alignItems: 'center',
-    minWidth: 60,
-  },
-  hudLabel: {
-    color: '#94A3B8',
-    fontSize: 8,
-    fontWeight: '600',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
-  hudValue: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
-  comboHigh: {
-    color: '#F59E0B',
-  },
-  comboSuper: {
-    color: '#FCD34D',
-    textShadowColor: '#FCD34D',
-    textShadowRadius: 10,
-  },
-  accuracyContainer: {
-    position: 'absolute',
-    top: 100,
-    left: 20,
-    right: 20,
-    alignItems: 'center',
-    backgroundColor: 'rgba(26, 16, 64, 0.6)',
-    paddingVertical: 6,
-    paddingHorizontal: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
-  },
-  accuracyBar: {
-    width: '100%',
-    height: 4,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 2,
-    overflow: 'hidden',
-    marginBottom: 4,
-  },
-  accuracyFill: {
-    height: '100%',
-    borderRadius: 2,
-  },
-  accuracyLabel: {
-    color: '#94A3B8',
-    fontSize: 10,
-  },
-  statusContainer: {
-    position: 'absolute',
-    top: 130,
-    left: 20,
-    right: 20,
-    alignItems: 'center',
-  },
-  statusText: {
-    color: '#D1C4E9',
-    fontSize: 11,
-    fontWeight: '500',
-  },
-  controls: {
-    position: 'absolute',
-    bottom: 30,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-  },
-  controlGroup: {
-    backgroundColor: 'rgba(26, 16, 64, 0.8)',
-    paddingVertical: 8,
-    paddingHorizontal: 20,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
-    alignItems: 'center',
-  },
-  controlText: {
-    color: '#D1C4E9',
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  controlSubtext: {
-    color: '#94A3B8',
-    fontSize: 10,
-    marginTop: 2,
-  },
-  glowOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: '#B388FF',
-    pointerEvents: 'none',
+  stepperText: { color: COLORS.text, fontSize: 16, lineHeight: 18 },
+  paceReadout: { color: 'rgba(233,228,255,0.55)', fontSize: 12, minWidth: 90, textAlign: 'center' },
+
+  footerButtons: { flexDirection: 'row', gap: 20, marginBottom: 12 },
+  endLink: { color: 'rgba(233,228,255,0.4)', fontSize: 12, textDecorationLine: 'underline' },
+
+  completeTitle: { color: COLORS.text, fontSize: 24, fontWeight: '300', marginTop: 120, marginBottom: 30 },
+  completeStatsRow: { flexDirection: 'row', gap: 50, marginBottom: 30 },
+  completeStat: { alignItems: 'center' },
+  completeStatValue: { fontSize: 36, fontWeight: '200', color: COLORS.accent },
+  completeStatLabel: { color: 'rgba(233,228,255,0.4)', fontSize: 12, marginTop: 4 },
+  completeNote: {
+    color: 'rgba(233,228,255,0.55)', fontSize: 13, lineHeight: 19,
+    textAlign: 'center', paddingHorizontal: 36, marginBottom: 40,
   },
 });
-
-export default PulseWaveGame;

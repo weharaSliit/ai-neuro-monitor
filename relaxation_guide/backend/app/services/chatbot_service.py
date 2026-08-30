@@ -56,15 +56,15 @@ class RelaxationChatbot:
         elif "work" in text or "tired" in text or "focus" in text:
             reply = (
                 "Work strain can build up quickly. A 60-second micro-break can reset your HRV variability. "
-                "Try sitting back, dropping your shoulders away from your ears, and gazing at a distant wall."
+                "Try sitting back, dropping your shoulders away from your ears, and starting a quick Breathing Garden session."
             )
-            suggested_action = "start_adaptive_environment"
+            suggested_action = "start_breathing_garden"
         elif "music" in text or "sound" in text or "rain" in text or "ocean" in text:
             reply = (
                 "Sensory soundscapes help lower GSR skin conductance levels quickly. "
-                "I recommend launching our Rain Scene or Ocean Tides interactive soundscape!"
+                "I recommend launching our Chakra Harmonizer or Guided Meditation!"
             )
-            suggested_action = "start_soundscape"
+            suggested_action = "start_guided_meditation"
         elif "game" in text or "how" in text or "help" in text:
             reply = (
                 "CAPS uses real-time bio-feedback from your smart ring, earbud, and phone to select the exact "

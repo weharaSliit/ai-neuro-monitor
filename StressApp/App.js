@@ -1,8 +1,30 @@
 import React, { useState } from 'react';
-import { View } from 'react-native';
+import { View, Platform, ActivityIndicator } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import CalibrationGate from './modules/shared/CalibrationGate';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
+
+if (Platform.OS === 'web' && typeof document !== 'undefined') {
+  const styleId = 'expo-web-root-fix';
+  if (!document.getElementById(styleId)) {
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = `
+      html, body, #root, #root > div {
+        height: 100%;
+        width: 100%;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+}
 
 import WelcomeScreen from './screens/WelcomeScreen';
 import LoginScreen from './screens/LoginScreen';
@@ -23,6 +45,7 @@ import PhenotypingSignalHistoryScreen from './modules/phenotyping/screens/Phenot
 import PhenotypingAlertDetailScreen from './modules/phenotyping/screens/PhenotypingAlertDetailScreen';
 import PhenotypingOnboardingScreen from './modules/phenotyping/screens/PhenotypingOnboardingScreen';
 import PhenotypingAnalysisScreen from './modules/phenotyping/screens/PhenotypingAnalysisScreen';
+import RelaxationGuideModule from './modules/relaxation_guide';
 import { AppContext } from './modules/physiological/screens/AppState';
 import { ThemeProvider, useTheme } from './modules/physiological/config/ThemeContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -46,6 +69,7 @@ const linking = {
           Phenotyping: 'phenotyping-tab',
         },
       },
+      RelaxationGuide: 'relaxation-guide',
       Calibration: 'calibration',
       RingSummary: 'ring',
       EegSummary: 'eeg',
@@ -66,7 +90,11 @@ function RootNavigator() {
   const { theme } = useTheme();
 
   if (isLoading) {
-    return <View style={{ flex: 1, backgroundColor: theme.bg }} />;
+    return (
+      <View style={{ flex: 1, backgroundColor: theme?.bg || '#F8F6F0', alignItems: 'center', justifyContent: 'center' }}>
+        <ActivityIndicator size="large" color="#6E68B2" />
+      </View>
+    );
   }
 
   // Every login/session-restore lands straight in the User app now -- no
@@ -124,6 +152,11 @@ function RootNavigator() {
           <Stack.Screen
             name="Profile"
             component={ProfileScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="RelaxationGuide"
+            component={RelaxationGuideModule}
             options={{ headerShown: false }}
           />
           <Stack.Screen
@@ -206,15 +239,17 @@ export default function App() {
   };
 
   return (
-    <ThemeProvider>
-      <AuthProvider>
-        <AppContext.Provider value={sharedState}>
-          <NavigationContainer linking={linking}>
-            <ThemedStatusBar />
-            <RootNavigator />
-          </NavigationContainer>
-        </AppContext.Provider>
-      </AuthProvider>
-    </ThemeProvider>
+    <SafeAreaProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <AppContext.Provider value={sharedState}>
+            <NavigationContainer linking={linking}>
+              <ThemedStatusBar />
+              <RootNavigator />
+            </NavigationContainer>
+          </AppContext.Provider>
+        </AuthProvider>
+      </ThemeProvider>
+    </SafeAreaProvider>
   );
 }
