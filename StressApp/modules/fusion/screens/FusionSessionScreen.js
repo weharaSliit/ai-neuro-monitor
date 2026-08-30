@@ -300,20 +300,6 @@ export default function FusionSessionScreen({ navigation }) {
 
                 <CalibrationBanner userId={userId} token={token} db={db} navigation={navigation} />
 
-                {/* Calibrate -- Calm Breathing: always visible (not tucked
-                    behind a hidden button) -- a plain breathe-in/breathe-out
-                    visual while real Ring+EEG calibration runs in the
-                    background, right here on the Fusion page. */}
-                <Card style={styles.calibrateCard} accentColor={COLORS.brand}>
-                    <Text style={[styles.cardTitle, { color: t.text }]}>Calibrate — Calm Breathing</Text>
-                    <CalibrateBreathingCard
-                        userId={userId}
-                        token={token}
-                        ringOnline={ringConnected}
-                        eegDb={db}
-                    />
-                </Card>
-
                 {/* Session Progression Line Chart */}
                 {fusedHistory.length > 1 && (
                     <Card elevated style={styles.chartCard}>
@@ -410,7 +396,7 @@ export default function FusionSessionScreen({ navigation }) {
                     onPress={() => navigation.navigate('Phenotyping')} t={t}
                 />
 
-                <View style={{ height: 20 }} />
+                <View style={{ height: 24 }} />
             </ScrollView>
         </ScreenBackground>
     );
