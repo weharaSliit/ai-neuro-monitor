@@ -17,6 +17,8 @@ import StatusDot from '../../shared/StatusDot';
 import Icon, { NAMES } from '../../shared/Icon';
 import MoodBadge from '../../shared/MoodBadge';
 import LineChart from '../../shared/LineChart';
+import { useCalibrationSummary } from '../../shared/CalibrationGate';
+import { eegClient } from '../../shared/eegApiClient';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import { COLORS } from '../../physiological/config/theme';
 import { useAuth } from '../../../context/AuthContext';
@@ -90,14 +92,27 @@ function DistBar({ label, value, total, color, muted }) {
 
 export default function EegSummaryScreen() {
   const { theme, COLORS } = useTheme();
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const userId = user?.userId;
+
+  const { eeg: eegCalibration } = useCalibrationSummary(userId, token);
 
   const [currentSessionId, setCurrentSessionId] = useState(null);
   const [hasSession, setHasSession] = useState(false);
   const [sessionWindows, setSessionWindows] = useState(null);
   const [recentSessions, setRecentSessions] = useState([]);
   const [sessionDist, setSessionDist] = useState({ normal: 0, stress: 0 });
+  const [driftWeeks, setDriftWeeks] = useState(null);
+
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    eegClient.get(`/calibration/${userId}/drift-history`, { headers })
+      .then((res) => { if (!cancelled) setDriftWeeks(res.data?.weeks || null); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [userId, token]);
 
   useEffect(() => {
     if (!userId) return;
@@ -249,6 +264,37 @@ export default function EegSummaryScreen() {
                 Electrode Contact Quality: {qualityScore.toFixed(0)}% · {qualityTrusted ? 'Optimal Signal' : 'Adjust Placement'}
               </Text>
             </View>
+          </Card>
+        )}
+
+        {/* Calibration Drift -- weekly mean task_state_score vs. this
+            user's own earliest live EEG samples after calibration (see
+            compute_eeg_baseline_drift_history(), backend/psychological/
+            firebase_service.py, for why EEG's reference point differs from
+            Ring's resting-calibration mean). Weeks with too few windows to
+            be meaningful are dropped server-side, not shown as zero. */}
+        {Array.isArray(driftWeeks) && driftWeeks.some((w) => w.mean_task_state_score != null) && (
+          <Card accentColor={COLORS.brand} elevated style={styles.card}>
+            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 4 }]}>Calibration Drift</Text>
+            <Text style={[styles.cardSub, { color: t.textMuted, marginBottom: 12 }]}>
+              {eegCalibration?.drift?.checked && eegCalibration.drift.drift_detected
+                ? 'Your recent readings have shifted from your original calibration — recalibrating is recommended.'
+                : 'How your recent cognitive-load readings compare to your earliest readings after calibration, week by week.'}
+            </Text>
+            <LineChart
+              points={driftWeeks
+                .filter((w) => w.mean_task_state_score != null)
+                .map((w) => ({ value: Math.round(w.mean_task_state_score * 100), date: w.week_start }))}
+              width={TREND_CHART_WIDTH}
+              height={140}
+              color={COLORS.brand}
+              maxValue={100}
+              suffix="%"
+              baselineValue={eegCalibration?.drift?.original_resting_mean != null
+                ? Math.round(eegCalibration.drift.original_resting_mean * 100) : undefined}
+              baselineLabel="Your earliest reading"
+              baselineColor={COLORS.normal}
+            />
           </Card>
         )}
 

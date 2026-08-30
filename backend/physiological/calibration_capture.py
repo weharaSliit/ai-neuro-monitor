@@ -60,10 +60,13 @@ from backend.physiological.firebase_service import (
 # Task-calibration capture size: 1 window (WINDOW_SEC=60) is what this
 # scoring path needs regardless of how long the onboarding quiz UI runs
 # for -- StressApp/modules/eeg/screens/EegThresholdTaskScreen.js's own
-# TASK_DURATION_SEC (75s, deliberately longer than this 60s + EEG's own
-# ~53s worst case, so the quiz's countdown absorbs the capture time
-# instead of the user seeing a post-quiz wait) is independent of this
-# constant -- no extra constant needed here beyond WINDOW_SEC itself.
+# MATH_DURATION_SEC + STROOP_DURATION_SEC (40+40=80s total, deliberately
+# longer than this 60s + EEG's own ~53s worst case, so the maths+Stroop
+# countdown absorbs the capture time instead of the user seeing a
+# post-quiz wait) is independent of this constant -- both activities run
+# back-to-back under the SAME single capture trigger fired at the start of
+# the maths phase, so this stays 1 window regardless of there now being
+# two activities -- no extra constant needed here beyond WINDOW_SEC itself.
 N_TASK_WIN = 1
 
 # Hard wall-clock ceiling on both capture loops below. Both are entirely
