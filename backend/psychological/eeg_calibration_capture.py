@@ -55,7 +55,7 @@ from backend.psychological.calibration_service import (
     CalibrationFailedError, run_eeg_calibration_from_blocks, run_eeg_threshold_from_blocks,
 )
 from backend.psychological.mqtt_bridge import (
-    BLOCK_SAMPLES, EEG_MQTT_BROKER, EEG_MQTT_CA_CERT, EEG_MQTT_PASSWORD,
+    BLOCK_SAMPLES, BLOCK_SEC, EEG_MQTT_BROKER, EEG_MQTT_CA_CERT, EEG_MQTT_PASSWORD,
     EEG_MQTT_PORT, EEG_MQTT_TOPIC, EEG_MQTT_USER, N_CALIBRATION_BLOCKS, N_THRESHOLD_TASK_BLOCKS,
 )
 from backend.psychological.realtime.mqtt_client import parse_bipolar_payload
@@ -82,6 +82,15 @@ EEG_SETTLE_SEC = 10
 # one capture attempt aborts, so a retry reuses the live connection
 # immediately instead of registering yet another one with EMQX.
 CAPTURE_TIMEOUT_SEC = 120
+
+# run_eeg_threshold_capture() below needs its own, much larger ceiling now
+# that N_THRESHOLD_TASK_BLOCKS is 14 (~350s of real data needed) instead
+# of 2 -- reusing CAPTURE_TIMEOUT_SEC=120 (sized for N_CALIBRATION_BLOCKS=3,
+# ~75s) would fail every threshold capture partway through by design.
+# EXTRA_RETRY_BLOCKS gives the same kind of rejected-block tolerance
+# margin physiological's EXTRA_RETRY_WINDOWS does.
+EXTRA_RETRY_BLOCKS = 4
+THRESHOLD_CAPTURE_TIMEOUT_SEC = (N_THRESHOLD_TASK_BLOCKS + EXTRA_RETRY_BLOCKS) * BLOCK_SEC
 
 # Fail-fast companion to CAPTURE_TIMEOUT_SEC above: rather than always
 # waiting out the full ceiling, abort as soon as no new MQTT sample has
@@ -303,11 +312,11 @@ def run_eeg_threshold_capture(session_state: dict, on_progress=None):
     _shared_clear()
 
     blocks_samples = []
-    capture_deadline = time.time() + CAPTURE_TIMEOUT_SEC
+    capture_deadline = time.time() + THRESHOLD_CAPTURE_TIMEOUT_SEC
     while len(blocks_samples) < N_THRESHOLD_TASK_BLOCKS:
         if time.time() > capture_deadline:
             _notify('error', message=(
-                f'No EEG data received within {CAPTURE_TIMEOUT_SEC:.0f}s -- '
+                f'No EEG data received within {THRESHOLD_CAPTURE_TIMEOUT_SEC:.0f}s -- '
                 f'check the headband is powered on, worn, and in range, then try again.'
             ))
             return None
