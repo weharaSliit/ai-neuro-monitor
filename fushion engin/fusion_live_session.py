@@ -139,6 +139,14 @@ def poll_once(session_ref, session_meta_ref) -> dict:
             # into fused_probability/fused_threshold above.
             "modality_concordance": fused["modality_concordance"],
             "modality_elevated": fused["modality_elevated"],
+            # Which modalities reported a real prob this window but got
+            # excluded by compute_realtime_multimodal_fusion()'s
+            # plausibility gate (EXTREME_PROB_EPS) -- distinct from simply
+            # not reporting, which active_modalities' absence already
+            # covers. Empty list is the normal case; a non-empty one flags
+            # a domain-shift-style artifact worth investigating, not a
+            # silent exclusion.
+            "implausible_modalities": fused["implausible_modalities"],
         }
 
         if "eeg" in fused["active_modalities"]:
