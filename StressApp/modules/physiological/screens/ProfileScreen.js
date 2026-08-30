@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, Animated, Alert, ActivityIndicator
+  View, Text, StyleSheet, TouchableOpacity, Animated, Alert, ActivityIndicator, Dimensions
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
@@ -9,6 +9,9 @@ import { db } from '../../../firebase';
 import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
 import Icon, { NAMES } from '../../shared/Icon';
+import LineChart from '../../shared/LineChart';
+import { useCalibrationSummary } from '../../shared/CalibrationGate';
+import CalibrateBreathingCard from '../../shared/CalibrateBreathingCard';
 import { useTheme } from '../config/ThemeContext';
 import { COLORS } from '../config/theme';
 import { useAuth } from '../../../context/AuthContext';
@@ -22,6 +25,11 @@ import api from '../api/client';
 // so a small (resized + compressed) image as a data URI avoids depending
 // on an unverified external service for a feature this central.
 const AVATAR_SIZE = 96;
+// navCard (styles below) has no outer marginHorizontal -- its Card renders
+// edge-to-edge, only its own `padding: 18` insets the content -- so the
+// chart just needs to subtract that padding from either side, not a
+// screen margin too.
+const DRIFT_CHART_WIDTH = Dimensions.get('window').width - 2 * 18;
 
 // Deliberately lean -- this used to also fold in a full History section
 // (raw baseline numbers, session distribution, PSS-4 score list, recent
@@ -51,13 +59,26 @@ function AvatarPicker({ userId, avatarUri, uploading, onPick, accentColor }) {
 
 export default function ProfileScreen({ navigation }) {
   const { theme, COLORS } = useTheme();
-  const { user, logout } = useAuth();
+  const { user, token, logout } = useAuth();
   const userId = user?.userId;
+
+  // Calibration itself (personal thresholds + the Ring/EEG "Calibrate --
+  // Calm Breathing" trigger) used to live inline on the Fusion page --
+  // moved here since Profile is where account/device setup actually
+  // belongs, and Fusion's own copy was pure duplication once this one
+  // existed. Reused, not re-fetched, from the same GET /baseline/{userId}
+  // + GET /calibration/status CalibrationBanner already calls elsewhere.
+  const { ring: ringCalibration, eeg: eegCalibration } = useCalibrationSummary(userId, token);
+  const personalEegPct = eegCalibration?.personal_high_load_p != null
+    ? Math.round(eegCalibration.personal_high_load_p * 100) : null;
+  const personalRingPct = ringCalibration?.personal_stress_threshold != null
+    ? Math.round(ringCalibration.personal_stress_threshold * 100) : null;
 
   const [baseline,     setBaseline]     = useState(null);
   const [sessionCount, setSessionCount] = useState(0);
   const [avatarUri,    setAvatarUri]    = useState(null);
   const [uploading,    setUploading]    = useState(false);
+  const [driftWeeks,   setDriftWeeks]   = useState(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
   const text   = theme.text;
@@ -66,12 +87,14 @@ export default function ProfileScreen({ navigation }) {
   const loadProfile = async () => {
     if (!userId) return;
     try {
-      const [b, h] = await Promise.all([
+      const [b, h, d] = await Promise.all([
         api.get(`/baseline/${userId}`),
         api.get(`/history/${userId}`),
+        api.get(`/baseline/${userId}/drift-history`).catch(() => null),
       ]);
       setBaseline(b.data);
       setSessionCount(Object.keys(h.data?.sessions || {}).length);
+      setDriftWeeks(d?.data?.weeks || null);
       Animated.timing(fadeAnim, { toValue: 1, duration: 600, useNativeDriver: true }).start();
     } catch (e) {
       console.log('Profile load error:', e.message);
@@ -157,23 +180,92 @@ export default function ProfileScreen({ navigation }) {
           </Card>
         </View>
 
-        {/* Calibration -- plain language only, no raw baseline numbers */}
-        <Card onPress={() => navigation.navigate('Calibration')} style={styles.navCard}>
+        {/* Personalized thresholds: only rendered once at least one side
+            has actually separated Rest from Task (the onboarding maths+
+            Stroop task below) -- a user who's only done resting-baseline
+            calibration still sees nothing here rather than a premature
+            "Standard" placeholder for a task they haven't run yet. */}
+        {(personalEegPct != null || personalRingPct != null) && (
+          <Card style={styles.navCard} accentColor={COLORS.brand}>
+            <Text style={[styles.cardTitle, { color: text }]}>Your Personalized Thresholds</Text>
+            <View style={styles.thresholdRow}>
+              <Text style={[styles.cardSub, { color: muted }]}>EEG high-load</Text>
+              <Text style={[styles.thresholdValue, { color: text }]}>
+                {personalEegPct != null ? `${personalEegPct}%` : 'Standard'}
+              </Text>
+            </View>
+            <View style={styles.thresholdRow}>
+              <Text style={[styles.cardSub, { color: muted }]}>Ring stress</Text>
+              <Text style={[styles.thresholdValue, { color: text }]}>
+                {personalRingPct != null ? `${personalRingPct}%` : 'Standard'}
+              </Text>
+            </View>
+          </Card>
+        )}
+
+        {/* Calibrate -- Calm Breathing: a plain breathe-in/breathe-out
+            visual while real Ring+EEG resting calibration runs in the
+            background. */}
+        <Card style={styles.navCard} accentColor={COLORS.brand}>
+          <Text style={[styles.cardTitle, { color: text, marginBottom: 10 }]}>Calibrate — Calm Breathing</Text>
+          <CalibrateBreathingCard
+            userId={userId}
+            token={token}
+            eegDb={db}
+            onComplete={loadProfile}
+          />
+        </Card>
+
+        {/* Retake Threshold Test: the maths+Stroop task that separates
+            Rest from Task for the personal thresholds above -- normally
+            run once during onboarding (AccountSetupScreen.js), kept here
+            too so a returning user can try it back any time (e.g. their
+            first run didn't separate cleanly enough to personalize). */}
+        <Card onPress={() => navigation.navigate('ThresholdCalibration')} style={styles.navCard}>
           <View style={styles.cardHeaderRow}>
             <View style={styles.rowGap}>
               <View style={[styles.actionIconCircle, { backgroundColor: COLORS.brandSoft }]}>
                 <Icon name={NAMES.calibration} size={18} color={COLORS.brand} />
               </View>
-              <Text style={[styles.cardTitle, { color: text }]}>Calibration & Baseline</Text>
+              <Text style={[styles.cardTitle, { color: text }]}>Threshold Test (Maths + Stroop)</Text>
             </View>
             <Icon name={NAMES.chevronRight} size={18} color={muted} />
           </View>
           <Text style={[styles.cardSub, { color: muted }]}>
-            {baseline?.exists
-              ? 'Your Ring baseline is active and calibrated. Tap to recalibrate Ring + EEG.'
-              : 'No personal baseline yet — tap to calibrate your Ring and EEG headband.'}
+            Retake the maths-quiz + color-word task anytime to re-personalize your thresholds.
           </Text>
         </Card>
+
+        {/* Calibration drift -- weekly mean predicted-stress vs. the resting
+            baseline captured at calibration time, so a shift shows up as a
+            visual gap from the dashed line rather than a raw number. Weeks
+            with too few predictions to be meaningful are dropped server-side
+            (compute_baseline_drift_history() returns mean_prob_stress: null
+            for those), not shown as zero. */}
+        {baseline?.exists && Array.isArray(driftWeeks) && driftWeeks.some((w) => w.mean_prob_stress != null) && (
+          <Card style={styles.navCard}>
+            <Text style={[styles.cardTitle, { color: text }]}>Calibration Drift</Text>
+            <Text style={[styles.cardSub, { color: muted, marginBottom: 10 }]}>
+              {baseline?.drift?.drift_detected
+                ? 'Your recent readings have shifted from your original calibration — recalibrating is recommended.'
+                : 'How your recent readings compare to your original resting calibration, week by week.'}
+            </Text>
+            <LineChart
+              points={driftWeeks
+                .filter((w) => w.mean_prob_stress != null)
+                .map((w) => ({ value: Math.round(w.mean_prob_stress * 100), date: w.week_start }))}
+              width={DRIFT_CHART_WIDTH}
+              height={140}
+              color={COLORS.brand}
+              maxValue={100}
+              suffix="%"
+              baselineValue={baseline?.drift?.original_resting_mean != null
+                ? Math.round(baseline.drift.original_resting_mean * 100) : undefined}
+              baselineLabel="Your original calibration"
+              baselineColor={COLORS.normal}
+            />
+          </Card>
+        )}
 
         {/* Quick Actions */}
         <Card style={styles.navCard}>
@@ -233,6 +325,8 @@ const styles = StyleSheet.create({
   statValue: { fontSize: 22, fontWeight: '900' },
   statLabel: { fontSize: 11, marginTop: 3, fontWeight: '600' },
   navCard: { padding: 18, borderRadius: 22 },
+  thresholdRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 6 },
+  thresholdValue: { fontSize: 14, fontWeight: '900' },
   actionIconCircle: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   cardHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   rowGap: { flexDirection: 'row', alignItems: 'center', gap: 10 },
