@@ -26,6 +26,13 @@ import { useAuth } from '../../../context/AuthContext';
 
 const TREND_CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
 const RING_POLL_MS = 5000; // same cadence the old Ringscreen.js used
+// Same cross-session backfill reasoning as RingSummaryScreen.js/
+// EegSummaryScreen.js/AdminEegLiveScreen.js -- a session is one
+// login-to-logout span, not "how far back the admin trend chart should
+// remember", so pollRing() below merges this many of the user's most
+// recent sessions instead of only their latest one.
+const RECENT_SESSIONS_FOR_CHART = 4;
+const CHART_POINTS_MAX = 80;
 
 // Same Render-hosted, cold-start-tolerant pattern already used for EEG's
 // calibration check in modules/shared/CalibrationGate.js.
@@ -37,6 +44,16 @@ const eegClient = axios.create({ baseURL: EEG_API_BASE, timeout: 45000 });
 // recalibrations the selected user does while you're watching actually
 // show up without navigating away and back.
 const REFRESH_MS = 8000;
+
+function parseTimestamp(ts, fallbackMinutesAgo = 0) {
+    if (!ts) return new Date(Date.now() - fallbackMinutesAgo * 60000);
+    if (ts instanceof Date) return ts;
+    if (typeof ts === 'number') {
+        return new Date(ts < 10000000000 ? ts * 1000 : ts);
+    }
+    const d = new Date(ts);
+    return Number.isNaN(d.getTime()) ? new Date(Date.now() - fallbackMinutesAgo * 60000) : d;
+}
 
 function latestWindow(windowsObj) {
     if (!windowsObj) return null;
@@ -103,8 +120,11 @@ const RING_FEATURE_CHARTS = [
 function FeatureTrendChart({ chartWindows, featureKey, label, unit, color, muted, text }) {
   const points = [...chartWindows]
     .reverse()
-    .filter((w) => w.timestamp && w.features?.[featureKey] !== undefined && w.features?.[featureKey] !== null)
-    .map((w) => ({ value: Number(w.features[featureKey].toFixed(3)), date: new Date(w.timestamp) }));
+    .filter((w) => w.features?.[featureKey] !== undefined && w.features?.[featureKey] !== null)
+    .map((w, i) => ({
+      value: Number(w.features[featureKey].toFixed(3)),
+      date: parseTimestamp(w.timestamp || w.timestamp_end, chartWindows.length - 1 - i),
+    }));
 
   if (points.length < 2) return null;
 
@@ -112,7 +132,7 @@ function FeatureTrendChart({ chartWindows, featureKey, label, unit, color, muted
     <Card>
       <Text style={[styles.cardTitle, { color: text, marginBottom: 4 }]}>{label}</Text>
       <Text style={{ color: muted, marginBottom: 12, fontSize: 11 }}>Per telemetry window</Text>
-      <LineChart points={points} color={color} width={TREND_CHART_WIDTH} height={110} suffix={unit} />
+      <LineChart points={points} color={color} width={TREND_CHART_WIDTH} height={125} suffix={unit} />
     </Card>
   );
 }
@@ -241,14 +261,28 @@ export default function AdminUserDetailScreen({ route, navigation }) {
     }
     try {
       const h = await api.get(`/admin/history/${userId}`);
-      const sessionIds = Object.keys(h.data?.sessions || {});
+      const sessionIds = Object.keys(h.data?.sessions || {}).sort();
       const latestId = sessionIds[sessionIds.length - 1];
       if (!latestId) { setRingFeed([]); setRingChart([]); return; }
-      const s2 = await api.get(`/admin/history/${userId}/${latestId}`);
-      const predictions = Object.values(s2.data?.predictions || {})
+
+      const recentIds = sessionIds.slice(-RECENT_SESSIONS_FOR_CHART);
+      const sessionResults = await Promise.all(
+        recentIds.map((sid) => api.get(`/admin/history/${userId}/${sid}`).then((r) => r.data).catch(() => null))
+      );
+
+      const latestPredictions = Object.values(sessionResults[sessionResults.length - 1]?.predictions || {})
         .sort((a, b) => (b.window_idx ?? 0) - (a.window_idx ?? 0));
-      setRingFeed(predictions.slice(0, 5));
-      setRingChart(predictions.slice(0, 20));
+      setRingFeed(latestPredictions.slice(0, 5));
+
+      // Merged across recentIds, newest-first -- ringTrend/FeatureTrendChart
+      // both .reverse() this to get oldest-first for charting, so the sort
+      // direction here has to stay descending same as the old single-
+      // session predictions.slice(0, 20) did.
+      const merged = sessionResults
+        .flatMap((data) => Object.values(data?.predictions || {}))
+        .filter((w) => w.timestamp)
+        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      setRingChart(merged.slice(0, CHART_POINTS_MAX));
     } catch {
       // leave last-known feed showing on a transient failure
     }
@@ -349,12 +383,16 @@ export default function AdminUserDetailScreen({ route, navigation }) {
   const ringTrendColor = ringLatest?.label === 'Stress' ? COLORS.stress : COLORS.normal;
   const ringTrend = [...ringChart]
     .reverse()
-    .filter((w) => w.timestamp && w.prob_stress !== undefined && w.prob_stress !== null)
-    .map((w) => ({ value: Math.round(w.prob_stress * 100), date: new Date(w.timestamp) }));
+    .filter((w) => w.prob_stress !== undefined && w.prob_stress !== null)
+    .map((w, i) => ({
+      value: Math.round(w.prob_stress * 100),
+      date: parseTimestamp(w.timestamp || w.timestamp_end, ringChart.length - 1 - i),
+    }));
 
-  // Session baseline -- mean of the earliest readings currently loaded for
-  // this session (ringTrend is oldest-first), same derivation the user app
-  // used to show on its own Ring chart before that moved here per request
+  // Trend-window baseline -- mean of the earliest readings currently loaded
+  // (ringTrend is oldest-first, now spanning RECENT_SESSIONS_FOR_CHART
+  // sessions, not just the latest one), same derivation the user app used
+  // to show on its own Ring chart before that moved here per request
   // (deviation/baseline detail belongs in Admin, not the user-facing app).
   const ringSessionBaseline = ringTrend.length >= 3
     ? Math.round(ringTrend.slice(0, 3).reduce((sum, p) => sum + p.value, 0) / 3)
@@ -440,23 +478,23 @@ export default function AdminUserDetailScreen({ route, navigation }) {
               {ringTrend.length > 1 && (
                 <Card>
                   <View style={styles.rowBetween}>
-                    <Text style={[styles.cardTitle, { color: text, marginBottom: 0 }]}>Live Stress Trend</Text>
+                    <Text style={[styles.cardTitle, { color: text, marginBottom: 0 }]}>Stress Trend</Text>
                     <StatusDot color={ringTrendColor} active={ringConnected} />
                   </View>
                   <Text style={{ color: muted, marginTop: 4, marginBottom: 12, fontSize: 11 }}>
-                    P(stress) across the most recent windows (%)
+                    P(stress) across this and recent previous sessions' telemetry windows
                   </Text>
                   <LineChart
                     points={ringTrend}
                     color={ringTrendColor}
                     width={TREND_CHART_WIDTH}
-                    height={130}
+                    height={145}
                     maxValue={100}
-                    suffix="%"
                     baselineValue={STRESS_DECISION_THRESHOLD_PERCENT}
-                    baselineLabel="Stress level"
+                    baselineLabel="Stress threshold"
                     baseline2Value={ringSessionBaseline}
                     baseline2Label="Session start"
+                    colorZones
                   />
                 </Card>
               )}
