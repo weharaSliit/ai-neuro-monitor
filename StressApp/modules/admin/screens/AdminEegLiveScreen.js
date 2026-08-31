@@ -124,11 +124,12 @@ function SignalChart({ title, lastValue, points, min, max, color, t, last }) {
                         points={points}
                         color={color}
                         width={RAW_CHART_WIDTH}
-                        height={RAW_CHART_HEIGHT}
+                        height={160}
+                        hideValues={true}
                         fallback={<Text style={[styles.waiting, { color: t.textMuted }]}>Loading chart…</Text>}
                     />
                     <Text style={[styles.signalRange, { color: t.textMuted }]}>
-                        this block's range: {min.toFixed(1)} to {max.toFixed(1)} µV
+                        This block's range: {min.toFixed(1)} to {max.toFixed(1)} µV
                         {(max - min) < 1 ? ' — flat/railed (near-constant reading)' : ''}
                     </Text>
                 </>
@@ -497,6 +498,7 @@ export default function AdminEegLiveScreen({ route, navigation }) {
                                         color={COLORS_FLAT.brand}
                                         width={bipolarLinePoints.length * BIPOLAR_POINT_WIDTH}
                                         height={FEATURE_CHART_HEIGHT}
+                                        hideValues={true}
                                         fallback={<Text style={[styles.waiting, { color: t.textMuted }]}>Loading chart…</Text>}
                                     />
                                 </View>
