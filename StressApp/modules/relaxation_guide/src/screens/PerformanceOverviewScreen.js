@@ -40,13 +40,12 @@ const CATEGORY_PERFORMANCE = [
 ];
 
 export const PerformanceOverviewScreen = () => {
-  const { setCurrentScreen, history, userId, username, userBaseline } = useContext(AppContext);
+  const { setCurrentScreen, history, userId, username } = useContext(AppContext);
   const { theme, isDarkMode } = useContext(ThemeContext);
 
   const [activeTab, setActiveTab] = useState('reduction');
   const [selectedPoint, setSelectedPoint] = useState(null);
 
-  const baselinePct = (typeof userBaseline === 'number' && userBaseline > 0) ? (userBaseline * 100).toFixed(0) : '25';
   const displayUser = username || userId || 'User';
 
   // Compute dynamic personalized stats from user's history
@@ -164,7 +163,7 @@ export const PerformanceOverviewScreen = () => {
               🏆 Recovery Success Rate by Technique Category
             </Text>
             <Text style={[styles.cardSubtitle, { color: theme.textMuted, marginBottom: 14 }]}>
-              Clinical WESAD Baseline Recovery Benchmark Comparisons
+              Clinical WESAD Recovery Benchmark Comparisons
             </Text>
 
             {CATEGORY_PERFORMANCE.map((cat, idx) => (

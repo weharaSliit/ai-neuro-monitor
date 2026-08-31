@@ -223,24 +223,24 @@ export const apiService = {
       return res.data;
     } catch (err) {
       return {
-        technique_id: 'breathing_garden',
-        title: 'Breathing Garden',
-        description: 'Gamified pacing exercises guided by nature blooming animations.',
+        technique_id: 'water_lily_pond',
+        title: 'Lily Pond Breathing',
+        description: 'Extended exhale pacing synced with water lilies to quickly lower heart rate.',
         selected_sub_option: {
-          id: 'flower_meadow',
-          title: 'Flower Meadow',
-          description: 'Interactive flower blooming matched to 4-7-8 breathing cycles.'
+          id: 'water_lily_pond',
+          title: 'Lily Pond Breathing',
+          description: 'Extended exhale pacing synced with water lilies to quickly lower heart rate.'
         },
         available_sub_options: [
-          { id: 'flower_meadow', title: 'Flower Meadow', description: 'Interactive flower blooming' },
-          { id: 'water_lily_pond', title: 'Water Lily Pond', description: 'Expand floating water lilies' },
-          { id: 'cosmic_nebula', title: 'Cosmic Nebula', description: 'Starlight galaxy expansion pacing' }
+          { id: 'water_lily_pond', title: 'Lily Pond Breathing', description: 'Deep exhale vagal reset' },
+          { id: 'box_meditation', title: 'Box Breathing', description: 'Equal 4-4-4-4 square pacing' },
+          { id: 'soft_fascination', title: 'Nature Scenery', description: 'Restorative nature viewing' }
         ],
-        context_cluster_id: 3,
-        blended_score: 0.824,
-        physiological_sample: 0.81,
-        preference_score: 0.85,
-        execution_time_ms: 12.4
+        context_cluster_id: 1,
+        blended_score: 0.88,
+        physiological_sample: 0.85,
+        preference_score: 0.90,
+        execution_time_ms: 10.0
       };
     }
   },

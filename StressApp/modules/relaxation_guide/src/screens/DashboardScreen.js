@@ -1,7 +1,7 @@
 import React, { useState, useContext, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, Animated, Easing, Dimensions
+  ActivityIndicator, Animated, Easing, Dimensions, Modal
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { AppContext } from '../context/AppContext';
@@ -122,21 +122,6 @@ const PulseDot = ({ color }) => {
    STRESS STATE CONFIG HELPER
    ──────────────────────────────────────────────────────── */
 const getStateConfig = (stressState, stressProbability, rawLabel, theme, isCalibrated = true, hasLivePacket = true) => {
-  if (isCalibrated === false) {
-    return {
-      color: theme.warning,
-      bgTint: 'rgba(245,158,11,0.14)',
-      label: 'WAITING FOR CALIBRATION',
-      displayLabel: 'Waiting for Calibration',
-      rawLabel: 'Calibration Active',
-      emoji: '⏳',
-      tagline: 'Waiting for 2-minute baseline calibration... Real-time stress detection active after calibration',
-      icon: '⏳',
-      pct: '--',
-      breathDuration: 2000,
-    };
-  }
-
   if (hasLivePacket === false) {
     return {
       color: theme.warning,
@@ -144,6 +129,7 @@ const getStateConfig = (stressState, stressProbability, rawLabel, theme, isCalib
       label: 'WAITING FOR LIVE STREAM',
       displayLabel: 'Awaiting Telemetry',
       rawLabel: 'Awaiting Live Stream',
+      tagline: 'Awaiting device stream',
       emoji: '📡',
       icon: '📡',
       pct: '--',
@@ -168,7 +154,7 @@ const getStateConfig = (stressState, stressProbability, rawLabel, theme, isCalib
       displayLabel: 'High Stress',
       rawLabel: rawLabel || 'High Confidence Stress',
       emoji: '🔴',
-      tagline: 'High confidence sympathetic stress detected — Immediate relaxation recommended',
+      tagline: 'High stress detected',
       icon: '🫀',
       pct: pctVal,
       breathDuration: 1200,
@@ -181,7 +167,7 @@ const getStateConfig = (stressState, stressProbability, rawLabel, theme, isCalib
       displayLabel: 'Low Stress',
       rawLabel: rawLabel || 'Low Confidence Stress',
       emoji: '🟡',
-      tagline: 'Low confidence stress / mild arousal detected — Light relaxation recommended',
+      tagline: 'Mild stress detected',
       icon: '⚡',
       pct: pctVal,
       breathDuration: 2000,
@@ -194,7 +180,7 @@ const getStateConfig = (stressState, stressProbability, rawLabel, theme, isCalib
       displayLabel: 'Stress State',
       rawLabel: rawLabel || 'Stress Detected',
       emoji: '🔴',
-      tagline: 'Sympathetic arousal detected — Relaxation recommended',
+      tagline: 'Stress detected',
       icon: '🫀',
       pct: pctVal,
       breathDuration: 1400,
@@ -208,7 +194,7 @@ const getStateConfig = (stressState, stressProbability, rawLabel, theme, isCalib
     displayLabel: 'Normal / Calm',
     rawLabel: rawLabel || 'Normal State',
     emoji: '🟢',
-    tagline: 'Autonomic nervous system at optimal resting state',
+    tagline: 'Optimal resting state',
     icon: '🧘',
     pct: Math.min(99, Math.round((1 - prob) * 100)),
     breathDuration: 3200,
@@ -252,7 +238,7 @@ const ActionCard = ({ item, theme, onPress }) => {
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
   const onPressIn = () =>
-    Animated.spring(scaleAnim, { toValue: 0.94, tension: 300, friction: 10, useNativeDriver: true }).start();
+    Animated.spring(scaleAnim, { toValue: 0.96, tension: 300, friction: 10, useNativeDriver: true }).start();
   const onPressOut = () =>
     Animated.spring(scaleAnim, { toValue: 1, tension: 300, friction: 10, useNativeDriver: true }).start();
 
@@ -263,8 +249,6 @@ const ActionCard = ({ item, theme, onPress }) => {
         {
           backgroundColor: theme.bgSecondary,
           borderColor: theme.border,
-          borderTopColor: item.accent,
-          borderTopWidth: 2,
         }
       ]}
       onPress={onPress}
@@ -272,14 +256,11 @@ const ActionCard = ({ item, theme, onPress }) => {
       onPressOut={onPressOut}
       activeOpacity={0.9}
     >
-      <Animated.View style={{ alignItems: 'center', transform: [{ scale: scaleAnim }] }}>
+      <Animated.View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, transform: [{ scale: scaleAnim }] }}>
         <View style={[s.actionIconWrap, { backgroundColor: item.tint }]}>
           <Text style={s.actionIcon}>{item.icon}</Text>
         </View>
         <Text style={[s.actionLabel, { color: theme.textPrimary }]} numberOfLines={1}>{item.label}</Text>
-        <View style={[s.subBadgePill, { backgroundColor: `${item.accent}1F` }]}>
-          <Text style={[s.actionSub, { color: item.accent }]}>{item.sub}</Text>
-        </View>
       </Animated.View>
     </TouchableOpacity>
   );
@@ -314,7 +295,7 @@ export const DashboardScreen = () => {
     simMode, updateSimMode,
     isSafetyOverride, isAlertTriggered, telemetryMessage,
     isCalibrated, hasLivePacket,
-    setCurrentRecommendation, setPreInterventionLabel
+    currentRecommendation, setCurrentRecommendation, setPreInterventionLabel, setSelectedSubOption
   } = useContext(AppContext);
 
   const { theme } = useContext(ThemeContext);
@@ -350,6 +331,8 @@ export const DashboardScreen = () => {
     return () => clearInterval(t);
   }, []);
 
+  const [showInterventionModal, setShowInterventionModal] = useState(false);
+
   const triggerIntervention = async () => {
     setLoading(true);
     try {
@@ -362,24 +345,21 @@ export const DashboardScreen = () => {
         seconds_since_last_packet: 0.0
       });
       setCurrentRecommendation(recommendation);
-      showAlert({
-        title: 'Intervention Selected! 🎯',
-        text: `Based on your live signals (${stressState.toUpperCase()}), Relaxation Guide selected: ${recommendation.title}.`,
-        icon: 'info',
-        confirmButtonText: 'Start Session ▶️',
-        onConfirm: () => setCurrentScreen('Intervention')
-      });
+      if (recommendation?.selected_sub_option) {
+        setSelectedSubOption(recommendation.selected_sub_option);
+      }
+      setShowInterventionModal(true);
     } catch (e) {
       console.warn('Intervention error', e);
-      showAlert({
-        title: 'Connection Warning',
-        text: 'Unable to reach backend. Loading local flow games...',
-        icon: 'warning',
-        onConfirm: () => setCurrentScreen('Intervention')
-      });
+      setShowInterventionModal(true);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleLaunchFromModal = () => {
+    setShowInterventionModal(false);
+    setCurrentScreen('GamePlayer');
   };
 
   const sc = getStateConfig(stressState, stressProbability, rawLabel, theme, isCalibrated, hasLivePacket);
@@ -425,9 +405,6 @@ export const DashboardScreen = () => {
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
         <Animated.View style={{ opacity: fadeIn, transform: [{ translateY: slideUp }] }}>
 
-          {/* ═══════════ 1. LIVE QUOTES BANNER (TOP) ═══════════ */}
-          <LiveQuotesBanner theme={theme} />
-
           {/* ═══════════ 2. WELCOME + STATUS ROW ═══════════ */}
           <View style={[s.welcomeRow, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
             <View style={s.welcomeLeft}>
@@ -446,131 +423,76 @@ export const DashboardScreen = () => {
             </View>
           </View>
 
-          {/* ═══════════ 3. STRESS STATE HERO (PHYSIOLOGICAL SENSORS) ═══════════ */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, paddingHorizontal: 4 }}>
-            <Text style={{ fontSize: 13, fontWeight: '800', color: theme.accent, letterSpacing: 0.5 }}>🫀 PHYSIOLOGICAL STREAM (Smart Ring + Earbud)</Text>
-            <Text style={{ fontSize: 10, color: theme.textMuted }}>{activeSessionId ? `fusion_engine/${userId}/${activeSessionId}` : 'fusion_engine'}</Text>
-          </View>
-          <View style={[s.stateHero, { borderColor: sc.color, backgroundColor: sc.bgTint }]}>
-            {/* Breathing ring layer */}
-            <View style={s.breathRingWrap} pointerEvents="none">
-              <Animated.View style={[s.breathRingBase, { borderColor: sc.color, transform: [{ scale: breathRing1 }], opacity: breathRing1O }]} />
-              <Animated.View style={[s.breathRingBase, { borderColor: sc.color, transform: [{ scale: breathRing2 }], opacity: breathRing2O }]} />
-            </View>
-            {/* Top row: state badge + metrics */}
-            <View style={s.stateHeroTop}>
-              <View style={s.stateLeft}>
-                <View style={[s.stateIconCircle, { backgroundColor: sc.color + '20' }]}>
-                  <Text style={s.stateEmoji}>{sc.icon}</Text>
-                </View>
+          {/* ═══════════ LIVE TELEMETRY STREAMS ═══════════ */}
+          <Text style={[s.sectionTitle, { color: theme.textPrimary, marginBottom: 8 }]}>Live Telemetry Streams</Text>
+
+          <View style={{ gap: 10, marginBottom: 16 }}>
+            {/* 🫀 Physiological Stream */}
+            <View style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              paddingHorizontal: 14,
+              paddingVertical: 12,
+              borderRadius: 12,
+              backgroundColor: theme.bgSecondary,
+              borderWidth: 1,
+              borderColor: theme.border,
+            }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <Text style={{ fontSize: 20 }}>🫀</Text>
                 <View>
-                  <View style={[s.statePill, { backgroundColor: sc.color }]}>
-                    <Text style={s.statePillTxt}>{sc.emoji} {sc.rawLabel || sc.label}</Text>
-                  </View>
-                  <Text style={[s.stateTagline, { color: theme.textSecondary }]}>{sc.tagline}</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: theme.textPrimary }}>Physiological Stream</Text>
+                  <Text style={{ fontSize: 11, color: theme.textMuted }}>Smart Ring + Earbud</Text>
                 </View>
               </View>
-            </View>
-
-            {/* Metrics bar */}
-            <View style={[s.metricsRow, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
-              <View style={s.metricCol}>
-                <Text style={[s.metricValue, { color: sc.color }]}>{(isCalibrated && hasLivePacket) ? sc.displayLabel : (isCalibrated ? 'AWAITING...' : 'CALIBRATING')}</Text>
-                <Text style={[s.metricLabel, { color: theme.textMuted }]}>Current Stress Score</Text>
-              </View>
-              <View style={[s.metricDivider, { backgroundColor: theme.border }]} />
-              <View style={s.metricCol}>
-                <Text style={[s.metricValue, { color: theme.accent }]}>{(isCalibrated && hasLivePacket) ? (typeof sc.pct === 'number' ? `${sc.pct}%` : sc.pct) : 'WAITING...'}</Text>
-                <Text style={[s.metricLabel, { color: theme.textMuted }]}>Stress Probability</Text>
+              <View style={{ alignItems: 'flex-end', gap: 2 }}>
+                <Text style={{ fontSize: 12, fontWeight: '800', color: sc.color }}>
+                  Label: {hasLivePacket ? sc.displayLabel : 'Awaiting'}
+                </Text>
+                <Text style={{ fontSize: 12, fontWeight: '700', color: theme.accent }}>
+                  Probability: {hasLivePacket ? (typeof sc.pct === 'number' ? `${sc.pct}%` : sc.pct) : '--'}
+                </Text>
               </View>
             </View>
 
-            {/* Progress bar: Stress → Normal */}
-            <View style={s.progressSection}>
-              <View style={s.progressLabels}>
-                <Text style={[s.progressLbl, { color: theme.textMuted }]}>Low / Normal</Text>
-                <Text style={[s.progressLbl, { color: theme.textMuted }]}>Recovery Target →</Text>
-                <Text style={[s.progressLbl, { color: theme.textMuted }]}>High Stress ⚡</Text>
-              </View>
-              <View style={[s.progressBg, { backgroundColor: theme.border }]}>
-                <Animated.View style={[s.progressFill, {
-                  backgroundColor: sc.color,
-                  width: (isCalibrated && hasLivePacket) ? (sc.displayLabel.includes('Normal') ? '12%' : sc.displayLabel.includes('Low') ? '48%' : '90%') : '0%'
-                }]} />
-              </View>
-            </View>
-
-            {isSafetyOverride && (
-              <View style={[s.overrideBar, { borderColor: theme.danger }]}>
-                <Text style={[s.overrideTxt, { color: theme.danger }]}>🚨 STRESS ALERT — Instant relaxation recommended</Text>
-              </View>
-            )}
-          </View>
-
-          {/* ═══════════ 3b. LIVE PHENOTYPING STREAM HERO CARD ═══════════ */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, marginBottom: 6, paddingHorizontal: 4 }}>
-            <Text style={{ fontSize: 13, fontWeight: '800', color: sc.color, letterSpacing: 0.5 }}>⌨️ LIVE PHENOTYPING STREAM (Behavioral & Smartphone)</Text>
-            <Text style={{ fontSize: 10, color: theme.textMuted }}>{activeSessionId ? `fusion_engine/${userId}/${activeSessionId}` : 'fusion_engine'}</Text>
-          </View>
-          <View style={[s.stateHero, { borderColor: sc.color, backgroundColor: sc.bgTint }]}>
-            <View style={s.stateHeroTop}>
-              <View style={s.stateLeft}>
-                <View style={[s.stateIconCircle, { backgroundColor: sc.color + '20' }]}>
-                  <Text style={s.stateEmoji}>📱</Text>
-                </View>
+            {/* ⌨️ Phenotyping Stream */}
+            <View style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              paddingHorizontal: 14,
+              paddingVertical: 12,
+              borderRadius: 12,
+              backgroundColor: theme.bgSecondary,
+              borderWidth: 1,
+              borderColor: theme.border,
+            }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <Text style={{ fontSize: 20 }}>📱</Text>
                 <View>
-                  <View style={[s.statePill, { backgroundColor: sc.color }]}>
-                    <Text style={s.statePillTxt}>⌨️ PHENOTYPING: {sc.rawLabel || sc.label}</Text>
-                  </View>
-                  <Text style={[s.stateTagline, { color: theme.textSecondary }]}>Typing Latency · Touch Dynamics · Confidence: {(isCalibrated && hasLivePacket) ? `${sc.pct}%` : '--'}</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: theme.textPrimary }}>Phenotyping Stream</Text>
+                  <Text style={{ fontSize: 11, color: theme.textMuted }}>Behavioral & Smartphone</Text>
                 </View>
               </View>
-            </View>
-
-            {/* Phenotyping Metrics Bar */}
-            <View style={[s.metricsRow, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
-              <View style={s.metricCol}>
-                <Text style={[s.metricValue, { color: sc.color }]}>{(isCalibrated && hasLivePacket) ? sc.displayLabel : (isCalibrated ? 'AWAITING...' : 'CALIBRATING')}</Text>
-                <Text style={[s.metricLabel, { color: theme.textMuted }]}>Cognitive Stress Score</Text>
-              </View>
-              <View style={[s.metricDivider, { backgroundColor: theme.border }]} />
-              <View style={s.metricCol}>
-                <Text style={[s.metricValue, { color: theme.accent }]}>{(isCalibrated && hasLivePacket) ? (typeof sc.pct === 'number' ? `${sc.pct}%` : sc.pct) : 'WAITING...'}</Text>
-                <Text style={[s.metricLabel, { color: theme.textMuted }]}>Pheno Stress Probability</Text>
-              </View>
-            </View>
-
-            {/* Phenotyping Progress Section */}
-            <View style={s.progressSection}>
-              <View style={s.progressLabels}>
-                <Text style={[s.progressLbl, { color: theme.textMuted }]}>Calm</Text>
-                <Text style={[s.progressLbl, { color: theme.textMuted }]}>Rumination Target →</Text>
-                <Text style={[s.progressLbl, { color: theme.textMuted }]}>High Stress ⚡</Text>
-              </View>
-              <View style={[s.progressBg, { backgroundColor: theme.border }]}>
-                <View style={[s.progressFill, { backgroundColor: sc.color, width: (isCalibrated && hasLivePacket) ? (sc.displayLabel.includes('Normal') ? '12%' : sc.displayLabel.includes('Low') ? '48%' : '90%') : '0%' }]} />
+              <View style={{ alignItems: 'flex-end', gap: 2 }}>
+                <Text style={{ fontSize: 12, fontWeight: '800', color: sc.color }}>
+                  Label: {hasLivePacket ? sc.displayLabel : 'Awaiting'}
+                </Text>
+                <Text style={{ fontSize: 12, fontWeight: '700', color: theme.accent }}>
+                  Probability: {hasLivePacket ? (typeof sc.pct === 'number' ? `${sc.pct}%` : sc.pct) : '--'}
+                </Text>
               </View>
             </View>
           </View>
 
-          {/* ═══════════ CALIBRATION STATUS BANNER ═══════════ */}
-          {!isCalibrated && (
-            <View style={[s.calibrationCard, { backgroundColor: 'rgba(245,158,11,0.12)', borderColor: '#F59E0B' }]}>
-              <View style={s.calibrationHeader}>
-                <ActivityIndicator size="small" color="#F59E0B" />
-                <Text style={[s.calibrationTitle, { color: '#F59E0B' }]}>⏳ Waiting for Baseline Calibration...</Text>
-              </View>
-              <Text style={[s.calibrationBody, { color: theme.textSecondary }]}>
-                The 2-minute baseline calibration is currently active. Real-time stress detection and adaptive relaxation recommendations will initialize automatically once baseline calibration completes.
-              </Text>
-            </View>
-          )}
+
 
           {/* ═══════════ 4. QUICK ACTION GRID ═══════════ */}
           <Text style={[s.sectionTitle, { color: theme.textPrimary }]}>Quick Actions</Text>
           <View style={s.actionGrid}>
             {[
-              { id: 'Methods', icon: '🧘', label: 'Techniques', sub: '10 Methods', tint: 'rgba(56,189,248,0.14)', accent: '#38BDF8' },
+              { id: 'Methods', icon: '🧘', label: 'Techniques', sub: '10 Techniques', tint: 'rgba(56,189,248,0.14)', accent: '#38BDF8' },
               { id: 'PerformanceOverview', icon: '📊', label: 'Performance', sub: 'Analytics & Trends', tint: 'rgba(16,185,129,0.14)', accent: '#10B981' },
               { id: 'UserProfile', icon: '👤', label: 'User Profile', sub: 'Account & XP', tint: 'rgba(236,72,153,0.14)', accent: '#EC4899' },
               { id: 'CommonHome', icon: '🏠', label: 'Main Home', sub: 'Return to App', tint: 'rgba(59,130,246,0.14)', accent: '#3B82F6' },
@@ -600,8 +522,7 @@ export const DashboardScreen = () => {
             ))}
           </View>
 
-          {/* ═══════════ 4b. DAILY TIP ═══════════ */}
-          <DailyTipBanner theme={theme} />
+
 
           {/* ═══════════ 7. LAUNCH CTA ═══════════ */}
           <Animated.View style={{ transform: [{ scale: ctaScale }] }}>
@@ -625,6 +546,52 @@ export const DashboardScreen = () => {
           <View style={{ height: 24 }} />
         </Animated.View>
       </ScrollView>
+
+      {/* ═══════════ INTERVENTION RECOMMENDATION POPUP MODAL ═══════════ */}
+      <Modal
+        visible={showInterventionModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowInterventionModal(false)}
+      >
+        <View style={s.modalOverlay}>
+          <View style={[s.modalCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
+            <View style={s.modalHeaderRow}>
+              <View style={[s.modalIconRing, { backgroundColor: 'rgba(16, 185, 129, 0.15)', borderColor: '#10B981' }]}>
+                <Text style={{ fontSize: 32 }}>🪷</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[s.modalTitle, { color: theme.textPrimary }]}>
+                  {currentRecommendation?.title || 'Lily Pond Breathing'}
+                </Text>
+                <Text style={[s.modalBadgeTxt, { color: '#10B981' }]}>
+                  Recommended Relaxation Method
+                </Text>
+              </View>
+            </View>
+
+            <Text style={[s.modalDesc, { color: theme.textSecondary }]}>
+              {currentRecommendation?.description || 'Extended exhale pacing synced with water lilies to quickly lower heart rate and reduce stress.'}
+            </Text>
+
+            {/* Popup Button to Launch Technique */}
+            <TouchableOpacity
+              style={[s.modalLaunchBtn, { backgroundColor: '#10B981' }]}
+              onPress={handleLaunchFromModal}
+              activeOpacity={0.85}
+            >
+              <Text style={s.modalLaunchBtnTxt}>▶️  Start Relaxation Technique</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={s.modalCloseBtn}
+              onPress={() => setShowInterventionModal(false)}
+            >
+              <Text style={[s.modalCloseBtnTxt, { color: theme.textMuted }]}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -825,32 +792,19 @@ const s = StyleSheet.create({
     flex: 1,
     minWidth: '46%',
     maxWidth: '48.5%',
-    paddingVertical: 14,
-    paddingHorizontal: 6,
-    borderRadius: 18,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
     borderWidth: 1,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 3
+    elevation: 2
   },
   actionIconWrap: {
-    width: 44, height: 44,
-    borderRadius: 22,
-    alignItems: 'center', justifyContent: 'center',
-    marginBottom: 8
+    width: 32, height: 32,
+    borderRadius: 16,
+    alignItems: 'center', justifyContent: 'center'
   },
-  actionIcon: { fontSize: 22 },
-  actionLabel: { fontSize: 13, fontWeight: '800', textAlign: 'center' },
-  subBadgePill: {
-    marginTop: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 10
-  },
-  actionSub: { fontSize: 10, fontWeight: '800', letterSpacing: 0.3 },
+  actionIcon: { fontSize: 16 },
+  actionLabel: { fontSize: 12, fontWeight: '700' },
 
   /* ── Daily Tip ── */
   tipBanner: {
@@ -917,5 +871,79 @@ const s = StyleSheet.create({
   calibrationBody: {
     fontSize: 13,
     lineHeight: 18,
+  },
+
+  /* ── Intervention Modal Styles ── */
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 380,
+    borderRadius: 24,
+    borderWidth: 1,
+    padding: 22,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    elevation: 12
+  },
+  modalHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    width: '100%',
+    marginBottom: 14
+  },
+  modalIconRing: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '800'
+  },
+  modalBadgeTxt: {
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 2
+  },
+  modalDesc: {
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: 'center',
+    marginBottom: 20
+  },
+  modalLaunchBtn: {
+    width: '100%',
+    paddingVertical: 14,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10
+  },
+  modalLaunchBtnTxt: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 0.5
+  },
+  modalCloseBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 16
+  },
+  modalCloseBtnTxt: {
+    fontSize: 13,
+    fontWeight: '600'
   }
 });

@@ -241,31 +241,6 @@ export const MeditationGame = ({ initialMode, mode }) => {
       showsVerticalScrollIndicator={false}
       bounces={false}
     >
-      {/* Mode Switcher Header Tabs */}
-      <View style={styles.headerTabScroll}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.modeScrollRow}>
-          {meditationModes.map(m => (
-            <TouchableOpacity
-              key={m.id}
-              style={[
-                styles.modeTab,
-                { backgroundColor: tabBg, borderColor: tabBorder },
-                activeMode === m.id && { backgroundColor: m.color, borderColor: m.color }
-              ]}
-              onPress={() => {
-                setActiveMode(m.id);
-                setCyclesCompleted(0);
-              }}
-            >
-              <Text style={styles.modeTabIcon}>{m.icon}</Text>
-              <Text style={[styles.modeTabText, { color: primaryText }, activeMode === m.id && styles.modeTabTextActive]}>
-                {m.title}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      </View>
-
       {/* Mode Badge & Description */}
       <View style={styles.badgeRow}>
         <View style={[styles.badgeContainer, { backgroundColor: `${currentConfig.color}25`, borderColor: currentConfig.color }]}>
@@ -348,91 +323,48 @@ export const MeditationGame = ({ initialMode, mode }) => {
           </View>
         )}
 
-        {/* MODE: Box Meditation Water Canvas */}
+        {/* MODE: Box Meditation Tactical Square Canvas */}
         {activeMode === 'box_meditation' && (
           <View style={styles.artworkBoxContainer}>
             <Animated.View
               style={[
                 styles.zenSquare,
                 {
-                  borderColor: currentConfig.color,
-                  shadowColor: currentConfig.color,
+                  width: 170,
+                  height: 170,
+                  borderRadius: 28,
+                  borderWidth: 3,
+                  borderColor: '#0284C7',
+                  shadowColor: '#0284C7',
+                  backgroundColor: 'rgba(2, 132, 199, 0.12)',
                   transform: [{ scale: auraScale }],
+                  alignItems: 'center',
+                  justifyContent: 'center',
                 }
               ]}
             >
-              <Text style={styles.centerEmoji}>🧘</Text>
-              <Text style={styles.artworkTitleText}>{currentConfig.artworkTitle}</Text>
+              <Animated.View
+                style={{
+                  position: 'absolute',
+                  width: 190,
+                  height: 190,
+                  borderRadius: 34,
+                  borderWidth: 1.5,
+                  borderColor: 'rgba(56, 189, 248, 0.35)',
+                  opacity: auraGlow,
+                  transform: [{ scale: Animated.multiply(auraScale, 1.1) }],
+                }}
+              />
+              <Text style={{ fontSize: 36, marginBottom: 4 }}>🧊</Text>
+              <Text style={{ fontSize: 13, fontWeight: '800', color: '#0284C7', letterSpacing: 1 }}>TACTICAL 4-4-4-4</Text>
             </Animated.View>
-            <View style={styles.cornerDotTL} />
-            <View style={styles.cornerDotTR} />
-            <View style={styles.cornerDotBL} />
-            <View style={styles.cornerDotBR} />
+            <View style={[styles.cornerDotTL, { backgroundColor: '#38BDF8', width: 8, height: 8, borderRadius: 4 }]} />
+            <View style={[styles.cornerDotTR, { backgroundColor: '#38BDF8', width: 8, height: 8, borderRadius: 4 }]} />
+            <View style={[styles.cornerDotBL, { backgroundColor: '#38BDF8', width: 8, height: 8, borderRadius: 4 }]} />
+            <View style={[styles.cornerDotBR, { backgroundColor: '#38BDF8', width: 8, height: 8, borderRadius: 4 }]} />
           </View>
         )}
       </TouchableOpacity>
-
-      {/* Vagal Humming Frequency Selector & Neural Target Guidance */}
-      {activeMode === 'vagus_humming' && (
-        <View style={styles.vagalFreqSection}>
-          <Text style={styles.vagalFreqLabel}>🔊 ACOUSTIC RESONANCE TUNING</Text>
-          <View style={styles.freqChipRow}>
-            {['108 Hz Om', '128 Hz Vagal', '432 Hz Reset'].map(freq => (
-              <TouchableOpacity
-                key={freq}
-                onPress={() => {
-                  setHummingFreq(freq);
-                  if (Platform.OS !== 'web') Vibration.vibrate(15);
-                }}
-                style={[
-                  styles.freqChip,
-                  hummingFreq === freq && { backgroundColor: currentConfig.color, borderColor: currentConfig.color }
-                ]}
-              >
-                <Text style={[styles.freqChipTxt, hummingFreq === freq && { color: '#FFFFFF', fontWeight: '800' }]}>
-                  {freq}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          <View style={styles.vagalPathwayBox}>
-            <Text style={styles.vagalPathwayTxt}>
-              🧬 Neural Target: Throat Vocal Vibration (128Hz) → Jugular Foramen Vagus Nerve Plexus → Parasympathetic Heart Rate Brake
-            </Text>
-          </View>
-        </View>
-      )}
-
-      {/* Deep Abdominal Pacing Ratio Selector & Mind-Body Placement Box */}
-      {activeMode === 'diaphragmatic_pace' && (
-        <View style={styles.vagalFreqSection}>
-          <Text style={styles.vagalFreqLabel}>🫁 ABDOMINAL PACING RATIO</Text>
-          <View style={styles.freqChipRow}>
-            {['Standard 4:6', 'Deep 4:7', 'Coherence 5:5'].map(ratio => (
-              <TouchableOpacity
-                key={ratio}
-                onPress={() => {
-                  setBellyPaceRatio(ratio);
-                  if (Platform.OS !== 'web') Vibration.vibrate(15);
-                }}
-                style={[
-                  styles.freqChip,
-                  bellyPaceRatio === ratio && { backgroundColor: currentConfig.color, borderColor: currentConfig.color }
-                ]}
-              >
-                <Text style={[styles.freqChipTxt, bellyPaceRatio === ratio && { color: '#FFFFFF', fontWeight: '800' }]}>
-                  {ratio}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          <View style={styles.vagalPathwayBox}>
-            <Text style={styles.vagalPathwayTxt}>
-              🖐️ Mind-Body Cue: Place hand on your stomach • Inhale into belly (4s) → Soften belly on exhale (6s)
-            </Text>
-          </View>
-        </View>
-      )}
 
       {/* Central Guidance Phase Text */}
       <View style={styles.guidanceBox}>

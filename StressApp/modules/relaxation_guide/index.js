@@ -17,8 +17,6 @@ import { ThemeProvider, ThemeContext } from './src/context/ThemeContext';
 import { SweetAlertProvider } from './src/context/SweetAlertContext';
 import { BottomNavBar } from './src/components/BottomNavBar';
 import { RealtimeStressTrendCard } from './src/components/RealtimeStressTrendCard';
-import { BaselineAchievedModal } from './src/components/BaselineAchievedModal';
-import { BaselineNotReachedModal } from './src/components/BaselineNotReachedModal';
 
 import { DashboardScreen } from './src/screens/DashboardScreen';
 import { FusionPipelineScreen } from './src/screens/FusionPipelineScreen';
@@ -95,8 +93,6 @@ const MainNavigator = () => {
       <RealtimeStressTrendCard />
       <View style={styles.screenContainer}>{renderScreen()}</View>
       <BottomNavBar />
-      <BaselineAchievedModal />
-      <BaselineNotReachedModal />
     </View>
   );
 };

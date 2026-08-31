@@ -121,6 +121,14 @@ export const SubOptionSelectorScreen = () => {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(20)).current;
 
+  // Auto-redirect: each technique is now standalone, no sub-option selection needed
+  useEffect(() => {
+    if (currentRecommendation?.selected_sub_option) {
+      setSelectedSubOption(currentRecommendation.selected_sub_option);
+      setCurrentScreen('GamePlayer');
+    }
+  }, []);
+
   useEffect(() => {
     Animated.parallel([
       Animated.timing(fadeAnim, { toValue: 1, duration: 500, useNativeDriver: true }),

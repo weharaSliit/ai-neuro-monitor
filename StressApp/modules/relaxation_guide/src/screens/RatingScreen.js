@@ -93,27 +93,8 @@ export const RatingScreen = () => {
       const clusterId = currentRecommendation?.context_cluster_id ?? 0;
       const valRes = await apiService.validateIntervention(userId, techId, preInterventionLabel, postState, clusterId, rating);
       setLastValidationResult(valRes);
-
-      const isNormal = valRes?.is_normal_reached ?? valRes?.is_normal ?? (postState === 'normal');
-
-      if (!isNormal && (valRes?.alternative_recommendation || valRes?.closed_loop_status)) {
-        setBaselineNotReachedModal({
-          visible: true,
-          alternativeRecommendation: valRes.alternative_recommendation,
-          prob_stress: valRes.alternative_recommendation?.stress_probability || 0.60
-        });
-        setCurrentScreen('Recovery');
-      } else {
-        showAlert({
-          title: `${rating === 5 ? '⭐ Outstanding!' : '⭐ Feedback Received!'}`,
-          text: `Your ${rating}-star feedback updated your personalized preference model.`,
-          icon: 'success',
-          timer: 1800,
-        });
-        setCurrentScreen('Recovery');
-      }
+      setCurrentScreen('Recovery');
     } catch (e) {
-      showAlert({ title: 'Rating Saved', text: 'Moving to recovery analytics...', icon: 'info', timer: 1200 });
       setCurrentScreen('Recovery');
     } finally {
       setSubmitting(false);

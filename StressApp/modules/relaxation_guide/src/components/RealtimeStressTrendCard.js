@@ -8,7 +8,6 @@ export const RealtimeStressTrendCard = () => {
   const {
     stressProbability = 0.15,
     stressTrendHistory = [],
-    userBaseline = 0.25,
     stressState = 'normal',
     hasLivePacket = false,
     isCalibrated = true,
@@ -36,9 +35,6 @@ export const RealtimeStressTrendCard = () => {
   if (!hasLivePacket) {
     statusBadgeText = 'OFFLINE';
     statusColor = theme.danger || '#EF4444';
-  } else if (!isCalibrated) {
-    statusBadgeText = 'CALIBRATING';
-    statusColor = theme.warning || '#F59E0B';
   } else {
     statusBadgeText = 'LIVE 2s';
     statusColor = theme.success || '#10B981';
@@ -50,9 +46,6 @@ export const RealtimeStressTrendCard = () => {
   const initialPct = (history[0] * 100).toFixed(0);
   const diffPct = (currentPct - initialPct).toFixed(0);
   const isReducing = diffPct <= 0;
-
-  const hasBaseline = typeof userBaseline === 'number' && userBaseline > 0;
-  const baselineDisplay = hasBaseline ? `${(userBaseline * 100).toFixed(0)}%` : 'Waiting for baseline...';
 
   // SVG Line Chart Dimensions
   const chartWidth = 110;
@@ -74,13 +67,7 @@ export const RealtimeStressTrendCard = () => {
     const areaD = `${pathD} L ${points[points.length - 1].x.toFixed(1)} ${chartHeight} L ${points[0].x.toFixed(1)} ${chartHeight} Z`;
     const lastPt = points[points.length - 1];
 
-    let bY = null;
-    if (hasBaseline) {
-      const normB = Math.max(0.05, Math.min(1.0, userBaseline));
-      bY = chartHeight - (normB * (chartHeight - 10) + 5);
-    }
-
-    return { pathD, areaD, lastPt, bY };
+    return { pathD, areaD, lastPt };
   };
 
   const chartData = buildChart();
@@ -134,11 +121,7 @@ export const RealtimeStressTrendCard = () => {
       {activeTab === 'physio' ? (
         /* 🫀 PHYSIOLOGICAL RECOVERY CARD */
         <View style={[styles.card, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
-          <TouchableOpacity
-            style={styles.mainRow}
-            onPress={() => setIsExpanded(prev => !prev)}
-            activeOpacity={0.85}
-          >
+          <View style={styles.mainRow}>
             <View style={styles.leftInfo}>
               <View style={styles.titleRow}>
                 <Animated.View style={[styles.liveDot, { backgroundColor: statusColor, opacity: pulseAnim }]} />
@@ -153,7 +136,7 @@ export const RealtimeStressTrendCard = () => {
                   {hasLivePacket ? `${currentPct}%` : '--'}
                 </Text>
                 <Text style={[styles.baseVal, { color: theme.textMuted }]}>
-                  {hasBaseline ? ` Baseline: ${baselineDisplay}` : ' Baseline: Waiting for baseline...'}
+                  {hasLivePacket ? ` State: ${(stressState || 'normal').toUpperCase()}` : ' Awaiting Stream'}
                 </Text>
               </View>
             </View>
@@ -167,9 +150,6 @@ export const RealtimeStressTrendCard = () => {
                       <Stop offset="100%" stopColor={statusColor} stopOpacity="0.0" />
                     </LinearGradient>
                   </Defs>
-                  {chartData.bY !== null && (
-                    <Line x1="0" y1={chartData.bY} x2={chartWidth} y2={chartData.bY} stroke={theme.accent || '#3B82F6'} strokeWidth="1.2" strokeDasharray="3 3" opacity={0.85} />
-                  )}
                   <Path d={chartData.areaD} fill="url(#lineGrad)" />
                   <Path d={chartData.pathD} fill="none" stroke={statusColor} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
                   {chartData.lastPt && (
@@ -178,37 +158,12 @@ export const RealtimeStressTrendCard = () => {
                 </Svg>
               )}
             </View>
-
-            <View style={styles.rightWrap}>
-              <View style={[styles.deltaBadge, { backgroundColor: hasLivePacket ? (isReducing ? `${theme.success}20` : `${theme.danger}20`) : `${theme.border}20` }]}>
-                <Text style={[styles.deltaTxt, { color: hasLivePacket ? (isReducing ? theme.success : theme.danger) : theme.textMuted }]}>
-                  {hasLivePacket ? (isReducing ? `📉 ${diffPct}%` : `📈 +${diffPct}%`) : '--'}
-                </Text>
-              </View>
-              <Text style={[styles.chevron, { color: theme.textMuted }]}>{isExpanded ? '▲' : '▼'}</Text>
-            </View>
-          </TouchableOpacity>
-
-          {isExpanded && (
-            <View style={[styles.expandedBox, { borderTopColor: theme.border }]}>
-              <Text style={[styles.detailsTxt, { color: theme.textSecondary }]}>
-                {!hasLivePacket
-                  ? '🔴 Device Offline: Waiting for live telemetry stream from Smart Ring + Earbud hardware sensors...'
-                  : !isCalibrated
-                  ? '🟡 Calibrating: Waiting for baseline calibration...'
-                  : `🟢 Live 2s Stream (fusion_en_sessions): Biometric P(Stress) is ${currentPct}%. Baseline target is ${baselineDisplay}.`}
-              </Text>
-            </View>
-          )}
+          </View>
         </View>
       ) : (
         /* ⌨️ PHENOTYPING RECOVERY CARD */
         <View style={[styles.card, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
-          <TouchableOpacity
-            style={styles.mainRow}
-            onPress={() => setIsExpanded(prev => !prev)}
-            activeOpacity={0.85}
-          >
+          <View style={styles.mainRow}>
             <View style={styles.leftInfo}>
               <View style={styles.titleRow}>
                 <Animated.View style={[styles.liveDot, { backgroundColor: statusColor, opacity: pulseAnim }]} />
@@ -223,7 +178,7 @@ export const RealtimeStressTrendCard = () => {
                   {hasLivePacket ? `${currentPct}%` : '--'}
                 </Text>
                 <Text style={[styles.baseVal, { color: theme.textMuted }]}>
-                  {hasBaseline ? ` Baseline: ${baselineDisplay}` : ' Baseline: Waiting for baseline...'}
+                  {hasLivePacket ? ` State: ${(stressState || 'normal').toUpperCase()}` : ' Awaiting Stream'}
                 </Text>
               </View>
             </View>
@@ -245,24 +200,7 @@ export const RealtimeStressTrendCard = () => {
                 </Svg>
               )}
             </View>
-
-            <View style={styles.rightWrap}>
-              <View style={[styles.deltaBadge, { backgroundColor: hasLivePacket ? `${theme.success}20` : `${theme.border}20` }]}>
-                <Text style={[styles.deltaTxt, { color: hasLivePacket ? theme.success : theme.textMuted }]}>
-                  {hasLivePacket ? (isReducing ? `📉 ${diffPct}%` : `📈 +${diffPct}%`) : '--'}
-                </Text>
-              </View>
-              <Text style={[styles.chevron, { color: theme.textMuted }]}>{isExpanded ? '▲' : '▼'}</Text>
-            </View>
-          </TouchableOpacity>
-
-          {isExpanded && (
-            <View style={[styles.expandedBox, { borderTopColor: theme.border }]}>
-              <Text style={[styles.detailsTxt, { color: theme.textSecondary }]}>
-                ⌨️ Phenotyping Stream (phenotyping_sessions): Measures smartphone typing agitation, screen touch dynamics, and app-switching rumination index.
-              </Text>
-            </View>
-          )}
+          </View>
         </View>
       )}
     </View>

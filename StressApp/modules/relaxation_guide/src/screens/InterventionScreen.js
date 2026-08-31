@@ -38,6 +38,15 @@ export const InterventionScreen = () => {
   const confidenceWidthAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
+    // Auto-redirect directly to technique game
+    if (currentRecommendation) {
+      if (currentRecommendation?.selected_sub_option) {
+        setSelectedSubOption(currentRecommendation.selected_sub_option);
+      }
+      setCurrentScreen('GamePlayer');
+      return;
+    }
+
     // Entrance animation
     Animated.parallel([
       Animated.timing(fadeAnim, {
@@ -62,26 +71,7 @@ export const InterventionScreen = () => {
         useNativeDriver: false,
       })
     ]).start();
-
-    // Pulse animation for recommendation card
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseAnim, {
-          toValue: 1.02,
-          duration: 2000,
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulseAnim, {
-          toValue: 1,
-          duration: 2000,
-          useNativeDriver: true,
-        })
-      ])
-    ).start();
-
-    // Auto-show confidence meter after 2 seconds
-    setTimeout(() => setShowConfidenceMeter(true), 2000);
-  }, []);
+  }, [currentRecommendation]);
 
   if (!currentRecommendation) {
     return (
@@ -132,49 +122,7 @@ export const InterventionScreen = () => {
   };
 
   const renderConfidenceMeter = () => {
-    const score = (currentRecommendation.blended_score * 100).toFixed(0);
-    const scoreColor = score > 80 ? '#82C0A0' : score > 60 ? '#E8B368' : '#E08585';
-
-    return (
-      <Animated.View style={[
-        styles.confidenceContainer,
-        {
-          opacity: confidenceFadeAnim,
-          transform: [{
-            translateY: confidenceFadeAnim.interpolate({
-              inputRange: [0, 1],
-              outputRange: [20, 0]
-            })
-          }]
-        }
-      ]}>
-        <View style={styles.confidenceHeader}>
-          <Text style={styles.confidenceLabel}>🎯 Confidence Score</Text>
-          <Text style={[styles.confidenceValue, { color: scoreColor }]}>
-            {score}%
-          </Text>
-        </View>
-        <View style={styles.confidenceBarBg}>
-          <Animated.View
-            style={[
-              styles.confidenceBarFill,
-              {
-                width: confidenceWidthAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: ['0%', `${score}%`]
-                }),
-                backgroundColor: scoreColor
-              }
-            ]}
-          />
-        </View>
-        <Text style={styles.confidenceNote}>
-          {score > 80 ? '🌟 Highly recommended based on your preferences' :
-            score > 60 ? '💡 Good match for your current state' :
-              '🔄 Consider other options below'}
-        </Text>
-      </Animated.View>
-    );
+    return null;
   };
 
   return (
@@ -185,24 +133,6 @@ export const InterventionScreen = () => {
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
-        {/* Interactive Header */}
-        <Animated.View style={{ opacity: fadeAnim }}>
-          <View style={styles.headerChip}>
-            <Text style={styles.headerChipText}>✨ AI-Powered Recommendation</Text>
-            <Text style={styles.headerChipBadge}>v2.0</Text>
-          </View>
-
-          <Text style={styles.mainHeadline}>
-            We've analyzed your context to suggest the best technique
-          </Text>
-          <Text style={styles.subHeadline}>
-            Based on your body sensors (70%) and past preferences (30%)
-          </Text>
-        </Animated.View>
-
-        {/* Confidence Meter */}
-        {showConfidenceMeter && renderConfidenceMeter()}
-
         {/* Recommendation Card */}
         <Animated.View
           style={[
@@ -213,49 +143,13 @@ export const InterventionScreen = () => {
             }
           ]}
         >
-          <View style={styles.cardHeader}>
-            <View style={styles.recommendationBadge}>
-              <Text style={styles.recommendationBadgeText}>⭐ Top Pick</Text>
-            </View>
-            <TouchableOpacity
-              style={styles.infoButton}
-              onPress={() => Alert.alert(
-                'How this works',
-                'This recommendation combines your real-time body sensor data (70%) with your past exercise choices (30%) to pick what works best for you.',
-                [{ text: 'Got it' }]
-              )}
-            >
-              <Text style={styles.infoButtonText}>ℹ️</Text>
-            </TouchableOpacity>
-          </View>
-
           <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
             <Text style={styles.techTitle}>{currentRecommendation.title}</Text>
           </Animated.View>
 
           <Text style={styles.techDesc}>{currentRecommendation.description}</Text>
 
-          {/* Sub-option Preview */}
-          <View style={styles.subOptionHeaderContainer}>
-            <Text style={styles.subOptionHeader}>🎯 Recommended Sub-Option</Text>
-            <Text style={styles.subOptionCount}>1 of 3</Text>
-          </View>
-          <TouchableOpacity
-            style={styles.subOptionBox}
-            activeOpacity={0.7}
-            onPress={() => {
-              if (currentRecommendation?.selected_sub_option) {
-                setSelectedSubOption(currentRecommendation.selected_sub_option);
-                setCurrentScreen('GamePlayer');
-              }
-            }}
-          >
-            <Text style={styles.subTitle}>{currentRecommendation.selected_sub_option.title}</Text>
-            <Text style={styles.subDesc}>{currentRecommendation.selected_sub_option.description}</Text>
-            <Text style={styles.subTapHint}>👆 Tap to start technique</Text>
-          </TouchableOpacity>
-
-          {/* Action Buttons */}
+          {/* Action Button */}
           <TouchableOpacity
             style={[styles.acceptBtn, isAccepting && styles.acceptBtnDisabled]}
             onPress={handleAcceptRecommendation}
@@ -264,10 +158,7 @@ export const InterventionScreen = () => {
             {isAccepting ? (
               <ActivityIndicator color="#332F45" />
             ) : (
-              <>
-                <Text style={styles.acceptBtnTxt}>▶️ Start Technique</Text>
-                <Text style={styles.acceptBtnSub}>~3 minutes</Text>
-              </>
+              <Text style={styles.acceptBtnTxt}>▶️ Start Technique</Text>
             )}
           </TouchableOpacity>
         </Animated.View>

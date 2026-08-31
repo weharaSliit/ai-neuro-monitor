@@ -17,7 +17,7 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
   const [isGuest, setIsGuest] = useState(!initialUserId);
 
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
-  const [isCalibrated, setIsCalibrated] = useState(false);
+  const [isCalibrated, setIsCalibrated] = useState(true);
   const [identityChecked, setIdentityChecked] = useState(true);
 
   // Live Multi-Member Telemetry & Stress State (2 inputs: fused_stress_label & stress_probability)
@@ -44,12 +44,8 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
   const [suitabilityModalVisible, setSuitabilityModalVisible] = useState(false);
   const [suitabilityData, setSuitabilityData] = useState(null);
 
-  // Real-time Trend Line History & User Baseline (2s Polling)
+  // Real-time Trend Line History (2s Polling)
   const [stressTrendHistory, setStressTrendHistory] = useState([]);
-  const [userBaseline, setUserBaseline] = useState(null);
-  const [baselineAchievedModal, setBaselineAchievedModal] = useState({ visible: false, prob: '0.0', baseline: '0.0' });
-  const [baselineNotReachedModal, setBaselineNotReachedModal] = useState({ visible: false, alternativeRecommendation: null, prob_stress: 0.5 });
-  const hasNotifiedBaselineRef = React.useRef(false);
 
   // Intervention History
   const [historyList, setHistoryList] = useState([]);
@@ -74,13 +70,7 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
         if (typeof telemetry.has_live_packet === 'boolean') {
           setHasLivePacket(telemetry.has_live_packet);
         }
-        if (typeof telemetry.is_calibrated === 'boolean') {
-          setIsCalibrated(telemetry.is_calibrated);
-        }
-        const activeBaseline = (typeof telemetry.user_baseline === 'number' && telemetry.user_baseline > 0)
-          ? telemetry.user_baseline
-          : null;
-        setUserBaseline(activeBaseline);
+        setIsCalibrated(true);
 
         const prob = typeof telemetry.confidence === 'number'
           ? telemetry.confidence
@@ -94,32 +84,6 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
             const nextArr = [...prev, prob];
             return nextArr.slice(-12);
           });
-
-          // Check if live probability has reached or dropped below personal baseline from Firebase (only when stream is live)
-          if (telemetry.has_live_packet && activeBaseline && prob <= activeBaseline) {
-            if (!hasNotifiedBaselineRef.current) {
-              hasNotifiedBaselineRef.current = true;
-              setPostInterventionLabel('normal');
-              setLastValidationResult(prev => ({
-                ...(prev || {}),
-                reward: 1.0,
-                recovery_percentage: 100.0,
-                transition: '🎉 Baseline Achieved! (Normal Equilibrium Restored)',
-                is_normal: true,
-                is_normal_reached: true,
-                closed_loop_status: {
-                  guidance_message: '🎉 Baseline Achieved! Real-time bio-feedback verified your live stress probability returned to optimal resting equilibrium.'
-                }
-              }));
-              setBaselineAchievedModal({
-                visible: true,
-                prob: (prob * 100).toFixed(1),
-                baseline: (activeBaseline * 100).toFixed(1)
-              });
-            }
-          } else {
-            hasNotifiedBaselineRef.current = false;
-          }
         }
       } catch (e) {
         console.warn('Telemetry polling error', e);
@@ -128,7 +92,7 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [userId, simMode, userBaseline]);
+  }, [userId, simMode]);
 
   // Update simulator mode manually
   const updateSimMode = async (mode) => {
@@ -145,9 +109,6 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
       const prob = telemetry.features_flat[0];
       setStressProbability(prob);
       setStressTrendHistory(prev => [...prev.slice(-11), prob]);
-    }
-    if (typeof telemetry.user_baseline === 'number') {
-      setUserBaseline(telemetry.user_baseline);
     }
   };
 
@@ -170,7 +131,7 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
         setIsGuest,
         privacyAccepted,
         setPrivacyAccepted,
-        isCalibrated,
+        isCalibrated: true,
         setIsCalibrated,
         stressState,
         setStressState,
@@ -180,9 +141,6 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
         stressProbability,
         setStressProbability,
         stressTrendHistory,
-        userBaseline,
-        baselineAchievedModal,
-        setBaselineAchievedModal,
         simMode,
         updateSimMode,
         isSafetyOverride,
@@ -205,10 +163,6 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
         setSuitabilityData,
         historyList,
         setHistoryList,
-        baselineAchievedModal,
-        setBaselineAchievedModal,
-        baselineNotReachedModal,
-        setBaselineNotReachedModal,
         onboardingAnswers,
         setOnboardingAnswers
       }}
