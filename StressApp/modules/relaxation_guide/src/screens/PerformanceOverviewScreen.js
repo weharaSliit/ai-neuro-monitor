@@ -40,13 +40,12 @@ const CATEGORY_PERFORMANCE = [
 ];
 
 export const PerformanceOverviewScreen = () => {
-  const { setCurrentScreen, history, userId, username, userBaseline } = useContext(AppContext);
+  const { setCurrentScreen, history, userId, username } = useContext(AppContext);
   const { theme, isDarkMode } = useContext(ThemeContext);
 
   const [activeTab, setActiveTab] = useState('reduction');
   const [selectedPoint, setSelectedPoint] = useState(null);
 
-  const baselinePct = (typeof userBaseline === 'number' && userBaseline > 0) ? (userBaseline * 100).toFixed(0) : '25';
   const displayUser = username || userId || 'User';
 
   // Compute dynamic personalized stats from user's history
@@ -122,13 +121,11 @@ export const PerformanceOverviewScreen = () => {
               <View>
                 <Text style={[styles.userNameTxt, { color: theme.textPrimary }]}>{displayUser}'s Analytics</Text>
                 <Text style={[styles.userSubTxt, { color: theme.textMuted }]}>
-                  {userSessionCount} Sessions Completed · Personal Baseline Target: {baselinePct}%
+                  {userSessionCount} Sessions Completed
                 </Text>
               </View>
             </View>
-            <View style={[styles.userBadge, { backgroundColor: theme.accent + '20', borderColor: theme.accent }]}>
-              <Text style={[styles.userBadgeTxt, { color: theme.accent }]}>ADAPTIVE AI</Text>
-            </View>
+
           </View>
 
           {/* 🏆 HERO PERFORMANCE METRICS ROW */}
@@ -158,119 +155,7 @@ export const PerformanceOverviewScreen = () => {
             </View>
           </View>
 
-          {/* 📈 SECTION 1: DUAL-STREAM STRESS REDUCTION LINE TREND CHART */}
-          <View style={[styles.card, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
-            <View style={styles.cardHeader}>
-              <View>
-                <Text style={[styles.cardTitle, { color: theme.textPrimary }]}>📊 Stress Reduction Over Time</Text>
-                <Text style={[styles.cardSubtitle, { color: theme.textMuted }]}>
-                  Pre vs Post Intervention Telemetry for {displayUser}
-                </Text>
-              </View>
-            </View>
 
-            {/* Chart Legend */}
-            <View style={styles.legendRow}>
-              <View style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: '#EF4444' }]} />
-                <Text style={[styles.legendTxt, { color: theme.textMuted }]}>Pre-Stress Level</Text>
-              </View>
-              <View style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: '#10B981' }]} />
-                <Text style={[styles.legendTxt, { color: theme.textMuted }]}>Physio Post-State</Text>
-              </View>
-              <View style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: '#EC4899' }]} />
-                <Text style={[styles.legendTxt, { color: theme.textMuted }]}>Pheno Post-State</Text>
-              </View>
-            </View>
-
-            {/* SVG Line Chart */}
-            <View style={styles.chartWrap}>
-              <Svg width={CHART_WIDTH} height={CHART_HEIGHT}>
-                <Defs>
-                  <LinearGradient id="physioPostGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-                    <Stop offset="0%" stopColor="#10B981" stopOpacity="0.35" />
-                    <Stop offset="100%" stopColor="#10B981" stopOpacity="0.0" />
-                  </LinearGradient>
-                </Defs>
-
-                {/* Grid Baseline Line (User-Specific Calibration Target) */}
-                <Line
-                  x1="0"
-                  y1={CHART_HEIGHT - 20 - ((userBaseline || 0.25) * (CHART_HEIGHT - 40))}
-                  x2={CHART_WIDTH}
-                  y2={CHART_HEIGHT - 20 - ((userBaseline || 0.25) * (CHART_HEIGHT - 40))}
-                  stroke={theme.accent || '#3B82F6'}
-                  strokeWidth="1.2"
-                  strokeDasharray="4 4"
-                  opacity={0.7}
-                />
-                <SvgText
-                  x={CHART_WIDTH - 85}
-                  y={CHART_HEIGHT - 24 - ((userBaseline || 0.25) * (CHART_HEIGHT - 40))}
-                  fill={theme.accent || '#3B82F6'}
-                  fontSize="9"
-                  fontWeight="bold"
-                >
-                  Baseline {baselinePct}%
-                </SvgText>
-
-                {/* Pre-Stress Red Line */}
-                <Path
-                  d={chart.pathPhysioPre}
-                  fill="none"
-                  stroke="#EF4444"
-                  strokeWidth="2"
-                  strokeDasharray="3 3"
-                  opacity={0.8}
-                />
-
-                {/* Physio Post-State Green Line */}
-                <Path
-                  d={chart.pathPhysioPost}
-                  fill="none"
-                  stroke="#10B981"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                />
-
-                {/* Pheno Post-State Pink Line */}
-                <Path
-                  d={chart.pathPhenoPost}
-                  fill="none"
-                  stroke="#EC4899"
-                  strokeWidth="2.2"
-                  strokeLinecap="round"
-                />
-
-                {/* Data Nodes */}
-                {chart.pointsPhysioPost.map((pt, i) => (
-                  <Circle
-                    key={i}
-                    cx={pt.x}
-                    cy={pt.y}
-                    r="4"
-                    fill="#10B981"
-                    stroke="#FFFFFF"
-                    strokeWidth="1.5"
-                  />
-                ))}
-
-                {chart.pointsPhenoPost.map((pt, i) => (
-                  <Circle
-                    key={`pheno-${i}`}
-                    cx={pt.x}
-                    cy={pt.y}
-                    r="3.5"
-                    fill="#EC4899"
-                    stroke="#FFFFFF"
-                    strokeWidth="1.5"
-                  />
-                ))}
-              </Svg>
-            </View>
-          </View>
 
           {/* 🪷 SECTION 2: TECHNIQUE CATEGORY RECOVERY SUCCESS BAR CHART */}
           <View style={[styles.card, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
@@ -278,7 +163,7 @@ export const PerformanceOverviewScreen = () => {
               🏆 Recovery Success Rate by Technique Category
             </Text>
             <Text style={[styles.cardSubtitle, { color: theme.textMuted, marginBottom: 14 }]}>
-              Clinical WESAD Baseline Recovery Benchmark Comparisons
+              Clinical WESAD Recovery Benchmark Comparisons
             </Text>
 
             {CATEGORY_PERFORMANCE.map((cat, idx) => (
@@ -310,41 +195,7 @@ export const PerformanceOverviewScreen = () => {
             ))}
           </View>
 
-          {/* ⚡ SECTION 3: REINFORCEMENT LEARNING CONVERGENCE & ACCURACY */}
-          <View style={[styles.card, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
-            <View style={sRow.between}>
-              <View>
-                <Text style={[styles.cardTitle, { color: theme.textPrimary }]}>⚡ Multi-Arm Bandit (RL) Convergence</Text>
-                <Text style={[styles.cardSubtitle, { color: theme.textMuted }]}>
-                  Thompson Sampling Adaptation & Reward Accuracy
-                </Text>
-              </View>
-              <View style={[styles.badgePill, { backgroundColor: 'rgba(139,92,246,0.15)', borderColor: '#8B5CF6' }]}>
-                <Text style={{ fontSize: 10, fontWeight: '800', color: '#8B5CF6' }}>CONVERGED</Text>
-              </View>
-            </View>
 
-            <View style={[styles.learningInfoBox, { backgroundColor: theme.bgPrimary, borderColor: theme.border }]}>
-              <View style={styles.learningCol}>
-                <Text style={[styles.learningVal, { color: theme.accent }]}>0.92</Text>
-                <Text style={[styles.learningLbl, { color: theme.textMuted }]}>Mean Reward ($R_t$)</Text>
-              </View>
-              <View style={[styles.learningDivider, { backgroundColor: theme.border }]} />
-              <View style={styles.learningCol}>
-                <Text style={[styles.learningVal, { color: theme.success }]}>96.2%</Text>
-                <Text style={[styles.learningLbl, { color: theme.textMuted }]}>Exploitation Ratio</Text>
-              </View>
-              <View style={[styles.learningDivider, { backgroundColor: theme.border }]} />
-              <View style={styles.learningCol}>
-                <Text style={[styles.learningVal, { color: '#EC4899' }]}>3.8%</Text>
-                <Text style={[styles.learningLbl, { color: theme.textMuted }]}>Exploration Rate</Text>
-              </View>
-            </View>
-
-            <Text style={[styles.insightTxt, { color: theme.textSecondary }]}>
-              💡 <Text style={{ fontWeight: '700', color: theme.textPrimary }}>Adaptive Insight:</Text> The closed-loop reinforcement learning model has successfully learned your individual autonomic response profile. Parasympathetic Vagal Exhale is automatically prioritized for high physiological stress spikes.
-            </Text>
-          </View>
 
         </Animated.View>
       </ScrollView>
