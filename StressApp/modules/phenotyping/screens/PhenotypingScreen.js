@@ -72,14 +72,23 @@ function DeviationBar({ z, color, t }) {
 }
 
 // ── Interactive signal card with sparkline ──────────────────────────────────
-function MiniSignalCard({ icon, title, subtext, value, deltaText, color, sparkValues, baselineMean, z, t, onPress }) {
+// iconBounce: an Animated.Value to bob the icon (used for Activity Context
+// so the walking emoji visibly animates the moment motion is detected,
+// instead of sitting static). onPress is optional -- omit it for cards
+// where a numeric 7-day history view wouldn't mean anything (Activity
+// Context is a Still/Moving state, not a continuous baseline-tracked value).
+function MiniSignalCard({ icon, title, subtext, value, deltaText, color, sparkValues, baselineMean, z, t, onPress, iconBounce }) {
     return (
-        <TouchableOpacity onPress={onPress} activeOpacity={0.8}>
+        <TouchableOpacity onPress={onPress} activeOpacity={onPress ? 0.8 : 1} disabled={!onPress}>
             <Card style={styles.signalCard} accentColor={color}>
                 <View style={styles.signalRow}>
                     <View style={{ flex: 1 }}>
                         <View style={styles.signalTitleRow}>
-                            <Text style={styles.signalIcon}>{icon}</Text>
+                            {iconBounce ? (
+                                <Animated.Text style={[styles.signalIcon, { transform: [{ translateY: iconBounce }] }]}>{icon}</Animated.Text>
+                            ) : (
+                                <Text style={styles.signalIcon}>{icon}</Text>
+                            )}
                             <Text style={[styles.signalTitle, { color: t.text }]}>{title}</Text>
                         </View>
                         <Text style={[styles.signalSubtext, { color: t.textMuted }]} numberOfLines={1}>{subtext}</Text>
@@ -255,6 +264,27 @@ export default function PhenotypingScreen({ navigation }) {
         else label = `${Math.floor(ageMin / 60)}h ago`;
         return { ageMs, label, isFresh: ageMs >= 0 && ageMs < 90_000 };
     }, [lastUpdated, now]);
+
+    // Freshness of the prediction actually driving the "Behavioral Sensor
+    // Status" gauge below (latestPrediction, a different Firebase path than
+    // the data_logs-based signalFreshness above). The gauge label is fully
+    // live-wired to real Firebase data -- if it looks "stuck," this makes
+    // that visible: either it's a fresh reading (the real behavior IS
+    // currently reading as stressed) or it's stale (sensor hasn't posted a
+    // new window recently), which are two very different things to act on.
+    const predictionFreshness = useMemo(() => {
+        const ts = latestPrediction?.timestamp;
+        if (!ts) return { ageMs: null, label: null, isFresh: false };
+        const updatedAt = new Date(ts);
+        if (isNaN(updatedAt.getTime())) return { ageMs: null, label: null, isFresh: false };
+        const ageMs = now.getTime() - updatedAt.getTime();
+        const ageMin = Math.floor(ageMs / 60000);
+        let label;
+        if (ageMs < 45_000) label = 'just now';
+        else if (ageMin < 60) label = `${ageMin}m ago`;
+        else label = `${Math.floor(ageMin / 60)}h ago`;
+        return { ageMs, label, isFresh: ageMs >= 0 && ageMs < 90_000 };
+    }, [latestPrediction, now]);
 
     // ── Onboarding check
     useFocusEffect(useCallback(() => {
@@ -589,6 +619,22 @@ export default function PhenotypingScreen({ navigation }) {
                             </View>
                         </View>
                     </View>
+
+                    {/* Freshness of the reading driving the status above -- makes it
+                        visible whether this is a current live reading or a stale one,
+                        instead of leaving "why isn't this changing?" unanswered. */}
+                    {liveCalibStatus?.isCalibrated && (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, marginTop: 4 }}>
+                            <StatusDot color={predictionFreshness.isFresh ? COLORS.normal : t.textMuted} active={predictionFreshness.isFresh} size={6} />
+                            <Text style={{ fontSize: 10.5, fontWeight: '700', color: predictionFreshness.isFresh ? COLORS.normal : t.textMuted }}>
+                                {predictionFreshness.isFresh
+                                    ? 'Live reading · updated just now'
+                                    : predictionFreshness.label
+                                        ? `Last reading ${predictionFreshness.label} — sensor idle`
+                                        : 'Waiting for first reading'}
+                            </Text>
+                        </View>
+                    )}
                 </Card>
 
                 {/* Passive Behavioral Signals — only shown when live data exists */}
@@ -633,7 +679,12 @@ export default function PhenotypingScreen({ navigation }) {
                                 baselineMean={s.baselineMean}
                                 z={s.z}
                                 t={t}
-                                onPress={() => navigation.navigate('PhenotypingSignalHistory', { signalId: s.id })}
+                                iconBounce={s.id === 'activity' && isUserMoving ? motionBounce : null}
+                                onPress={
+                                    s.id === 'activity'
+                                        ? undefined
+                                        : () => navigation.navigate('PhenotypingSignalHistory', { signalId: s.id })
+                                }
                             />
                         ))}
                     </View>
@@ -649,6 +700,8 @@ export default function PhenotypingScreen({ navigation }) {
                             onPress={() => navigation.navigate('PhenotypingAnalysis', { initialTab: 'overview', mode: 'analysis' })} />
                         <QuickAction icon="📝" label="Feedback" color={COLORS.brand} isDark={isDark}
                             onPress={() => navigation.navigate('PhenotypingEma', { initialTab: 'feedback', mode: 'feedback' })} />
+                        <QuickAction icon="✅" label="Validation" color={COLORS.stress} isDark={isDark}
+                            onPress={() => navigation.navigate('PhenotypingValidation')} />
                     </View>
                 </View>
 
@@ -919,10 +972,10 @@ const styles = StyleSheet.create({
     signalRight: { alignItems: 'flex-end', gap: 2, minWidth: 80 },
     signalValue: { fontSize: 15, fontWeight: '900', marginTop: 2 },
     signalDelta: { fontSize: 9, fontWeight: '700', opacity: 0.85 },
-    actionsRow: { flexDirection: 'row', gap: 10 },
-    actionTile: { borderRadius: 18, borderWidth: 1, paddingVertical: 16, alignItems: 'center', gap: 6 },
-    actionIcon: { fontSize: 20 },
-    actionLabel: { fontSize: 11, fontWeight: '800', textAlign: 'center' },
+    actionsRow: { flexDirection: 'row', gap: 8 },
+    actionTile: { borderRadius: 16, borderWidth: 1, paddingVertical: 13, paddingHorizontal: 4, alignItems: 'center', gap: 5 },
+    actionIcon: { fontSize: 18 },
+    actionLabel: { fontSize: 9.5, fontWeight: '800', textAlign: 'center' },
     lastUpdated: { textAlign: 'center', fontSize: 10, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 12 },
 
     // Modal styles

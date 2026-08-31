@@ -45,6 +45,7 @@ import PhenotypingSignalHistoryScreen from './modules/phenotyping/screens/Phenot
 import PhenotypingAlertDetailScreen from './modules/phenotyping/screens/PhenotypingAlertDetailScreen';
 import PhenotypingOnboardingScreen from './modules/phenotyping/screens/PhenotypingOnboardingScreen';
 import PhenotypingAnalysisScreen from './modules/phenotyping/screens/PhenotypingAnalysisScreen';
+import PhenotypingValidationScreen from './modules/phenotyping/screens/PhenotypingValidationScreen';
 import RelaxationGuideModule from './modules/relaxation_guide';
 import { AppContext } from './modules/physiological/screens/AppState';
 import { ThemeProvider, useTheme } from './modules/physiological/config/ThemeContext';
@@ -81,6 +82,7 @@ const linking = {
       PhenotypingSignalHistory: 'phenotyping-signal-history',
       PhenotypingAlertDetail: 'phenotyping-alert',
       PhenotypingOnboarding: 'phenotyping-onboarding',
+      PhenotypingValidation: 'phenotyping-validation',
     },
   },
 };
@@ -213,6 +215,11 @@ function RootNavigator() {
             name="PhenotypingAnalysis"
             component={PhenotypingAnalysisScreen}
             options={{ headerShown: false, title: 'Pattern Charts' }}
+          />
+          <Stack.Screen
+            name="PhenotypingValidation"
+            component={PhenotypingValidationScreen}
+            options={{ headerShown: false, title: 'Validation Report' }}
           />
         </>
       ) : (

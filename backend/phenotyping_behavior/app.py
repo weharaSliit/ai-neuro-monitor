@@ -52,7 +52,7 @@ REFERENCE_BASELINES = {
 # immediately instead of waiting through their own 7-day window). Their
 # baseline was computed from 5,386 real behavioral windows collected on
 # their own device over 9 real days (2026-08-23 .. 2026-08-31).
-BASELINE_TEMPLATE_USER_ID = "6234de4b-8875-4d59-b1a0-cdca6089a972"  # Ojani
+BASELINE_TEMPLATE_USER_ID = "6234de4b-8875-4d59-b1a0-cdca6089a972"  
 
 def get_seed_baseline():
     """
