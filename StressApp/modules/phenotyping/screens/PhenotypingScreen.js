@@ -159,8 +159,9 @@ export default function PhenotypingScreen({ navigation }) {
     }, []);
 
     // ── Reference baseline for new-user seeding. The backend's
-    // REFERENCE_BASELINES (see /behavior/reference-baseline) is the single
-    // source of truth -- fetched once and cached offline rather than
+    // get_seed_baseline() (see /behavior/reference-baseline) is the single
+    // source of truth -- it's the template participant's real, fully-
+    // calibrated 7-day baseline, fetched once and cached offline rather than
     // duplicated here, so recalibrating only requires updating one place.
     const [referenceBaselines, setReferenceBaselines] = useState(null);
     useEffect(() => {
