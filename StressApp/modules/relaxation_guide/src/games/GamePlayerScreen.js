@@ -35,164 +35,95 @@ const TECHNIQUE_DETAILS = {
     icon: '🪷',
     color: '#10B981',
     bg: 'rgba(16, 185, 129, 0.12)',
-    rank: 'Fast Recovery (90s)',
-    meaningTitle: '🪷 Deep Exhale Relief',
+    rank: 'WESAD Score: 0.95',
+    meaningTitle: '🪷 Deep Exhale Vagal Reset',
     meaningDesc: 'Slow exhalations signal your nervous system to calm down, quickly lowering heart rate and body stress.',
     defaultBpm: 6,
-    hasPace: true,
-    suggestedMin: 1.5,
-    suggestedSec: 90,
-    durationOptions: [1, 1.5, 2, 3],
-  },
-  vagus_humming: {
-    id: 'vagus_humming',
-    title: 'Humming Exhale',
-    icon: '🧘‍♀️',
-    color: '#8B5CF6',
-    bg: 'rgba(139, 92, 246, 0.12)',
-    rank: 'Resonant Sound (2 min)',
-    meaningTitle: '🧘‍♀️ Soothing Sound Vibration',
-    meaningDesc: 'Vocal humming creates gentle vibrations that stimulate your calming nerves to relieve stress.',
-    defaultBpm: 5.5,
-    hasPace: true,
-    suggestedMin: 2,
-    suggestedSec: 120,
-    durationOptions: [1, 2, 3, 4],
-  },
-  cosmic_nebula: {
-    id: 'cosmic_nebula',
-    title: 'Cosmic Nebula',
-    icon: '🌌',
-    color: '#A78BFA',
-    bg: 'rgba(167, 139, 250, 0.12)',
-    rank: 'Heart Resonance (2 min)',
-    meaningTitle: '🌌 Starlight Breathing Rhythm',
-    meaningDesc: 'Breathing smoothly at ~6 breaths per minute aligns your heart rhythm for deep inner calm.',
-    defaultBpm: 6,
-    hasPace: true,
-    suggestedMin: 2,
-    suggestedSec: 120,
-    durationOptions: [1, 2, 3, 4],
-  },
-  flower_meadow: {
-    id: 'flower_meadow',
-    title: 'Flower Meadow',
-    icon: '🌺',
-    color: '#EC4899',
-    bg: 'rgba(236, 72, 153, 0.12)',
-    rank: '4-7-8 Breathing (2.5 min)',
-    meaningTitle: '🌺 4-7-8 Parasympathetic Reset',
-    meaningDesc: '4s inhale, 7s hold, and 8s slow exhale increases relaxation and lowers tension.',
-    defaultBpm: 4.5,
-    hasPace: false,
-    suggestedMin: 2.5,
-    suggestedSec: 150,
-    durationOptions: [1, 2, 2.5, 3],
+    suggestedMin: 3,
   },
   diaphragmatic_pace: {
     id: 'diaphragmatic_pace',
-    title: 'Deep Belly Breathing',
+    title: 'Deep Belly Pacing',
     icon: '🫁',
-    color: '#3B82F6',
-    bg: 'rgba(59, 130, 246, 0.12)',
-    rank: 'Deep Relaxation (3 min)',
-    meaningTitle: '🫁 Abdominal Breath Expansion',
-    meaningDesc: 'Deep belly breathing relaxes chest tightness and slows down a racing pulse.',
-    defaultBpm: 5,
-    hasPace: true,
-    suggestedMin: 3,
-    suggestedSec: 180,
-    durationOptions: [1.5, 2, 3, 4],
+    color: '#0284C7',
+    bg: 'rgba(2, 132, 199, 0.12)',
+    rank: 'WESAD Score: 0.88',
+    meaningTitle: '🫁 Lower Lobe Abdominal Expansion',
+    meaningDesc: 'Expanding stomach outward on inhale and softening inward on exhale resets ANS balance.',
+    defaultBpm: 6,
+    suggestedMin: 4,
   },
   box_meditation: {
     id: 'box_meditation',
     title: 'Box Breathing',
     icon: '🧊',
-    color: '#38BDF8',
-    bg: 'rgba(56, 189, 248, 0.12)',
-    rank: '4-4-4-4 Rhythm (3 min)',
+    color: '#0284C7',
+    bg: 'rgba(2, 132, 199, 0.12)',
+    rank: 'WESAD Score: 0.86',
     meaningTitle: '🧊 Balanced Square Breathing',
     meaningDesc: 'Equal 4s inhale, 4s hold, 4s exhale, and 4s pause restores calm and steady focus.',
     defaultBpm: 6,
-    hasPace: false,
     suggestedMin: 3,
-    suggestedSec: 180,
-    durationOptions: [1.5, 2, 3, 4],
-  },
-  soft_fascination: {
-    id: 'soft_fascination',
-    title: 'Nature Scenery',
-    icon: '🌿',
-    color: '#059669',
-    bg: 'rgba(5, 150, 105, 0.12)',
-    rank: 'Nature Rest (3 min)',
-    meaningTitle: '🌿 Restorative Nature Rest',
-    meaningDesc: 'Gentle nature scenes give your brain a break from intense focus and mental tiredness.',
-    defaultBpm: 6,
-    hasPace: false,
-    suggestedMin: 3,
-    suggestedSec: 180,
-    durationOptions: [2, 3, 4, 5],
-  },
-  progressive_muscle: {
-    id: 'progressive_muscle',
-    title: 'Muscle Tension Release',
-    icon: '🦾',
-    color: '#D97706',
-    bg: 'rgba(217, 119, 6, 0.12)',
-    rank: 'Body Tension Release (3.5 min)',
-    meaningTitle: '🦾 Muscle Relaxation',
-    meaningDesc: 'Systematically tensing and releasing muscles releases physical tension and body stress.',
-    defaultBpm: 6,
-    hasPace: false,
-    suggestedMin: 3.5,
-    suggestedSec: 210,
-    durationOptions: [2, 3, 3.5, 5],
-  },
-  guided_imagery: {
-    id: 'guided_imagery',
-    title: 'Guided Forest Walk',
-    icon: '🌲',
-    color: '#047857',
-    bg: 'rgba(4, 120, 87, 0.12)',
-    rank: 'Forest Walk (4 min)',
-    meaningTitle: '🌲 Peaceful Mind Imagery',
-    meaningDesc: 'Multisensory forest trail imagery redirects your thoughts away from worry and stress.',
-    defaultBpm: 6,
-    hasPace: false,
-    suggestedMin: 4,
-    suggestedSec: 240,
-    durationOptions: [2, 3, 4, 5],
   },
   pattern_alignment: {
     id: 'pattern_alignment',
-    title: 'Memory Focus Match',
+    title: 'Memory Match',
     icon: '🧩',
-    color: '#7E57C2',
-    bg: 'rgba(126, 87, 194, 0.12)',
-    rank: 'Focus & Memory (4.5 min)',
+    color: '#F59E0B',
+    bg: 'rgba(245, 158, 11, 0.12)',
+    rank: 'WESAD Score: 0.77',
     meaningTitle: '🧩 Focus & Pattern Match',
     meaningDesc: 'A light visual matching puzzle shifts your active focus away from stressful thoughts.',
     defaultBpm: 6,
-    hasPace: false,
-    suggestedMin: 4.5,
-    suggestedSec: 270,
-    durationOptions: [2, 3, 4.5, 5],
+    suggestedMin: 2,
+  },
+  body_scan_mindful: {
+    id: 'body_scan_mindful',
+    title: 'Mindful Body Scan',
+    icon: '🧘‍♂️',
+    color: '#3B82F6',
+    bg: 'rgba(59, 130, 246, 0.12)',
+    rank: 'WESAD Score: 0.74',
+    meaningTitle: '🧘‍♂️ Attentional Body Sweep',
+    meaningDesc: 'Systematic attentional sweep across body regions to release somatic hyperarousal.',
+    defaultBpm: 6,
+    suggestedMin: 5,
+  },
+  autogenic_warmth: {
+    id: 'autogenic_warmth',
+    title: 'Autogenic Thermal Focus',
+    icon: '🔥',
+    color: '#EF4444',
+    bg: 'rgba(239, 68, 68, 0.12)',
+    rank: 'WESAD Score: 0.62',
+    meaningTitle: '🔥 Somatosensory Thermal Warmth',
+    meaningDesc: 'Somatosensory thermal focus for peripheral vasodilation and vascular relaxation.',
+    defaultBpm: 6,
+    suggestedMin: 4,
+  },
+  silent_zen_timer: {
+    id: 'silent_zen_timer',
+    title: 'Silent Zen Presence',
+    icon: '⛩️',
+    color: '#14B8A6',
+    bg: 'rgba(20, 184, 166, 0.12)',
+    rank: 'WESAD Score: 0.55',
+    meaningTitle: '⛩️ Mindful Zen Interval',
+    meaningDesc: 'Unguided silent presence meditation with interval chimes to cultivate baseline calm.',
+    defaultBpm: 6,
+    suggestedMin: 3,
   },
 };
 
 const getTechKey = (id) => {
   const raw = (id || '').toLowerCase();
   if (raw === 'water_lily_pond' || raw === 'lily_pond') return 'water_lily_pond';
-  if (raw === 'vagus_humming') return 'vagus_humming';
-  if (raw === 'cosmic_nebula') return 'cosmic_nebula';
-  if (raw === 'flower_meadow') return 'flower_meadow';
-  if (raw === 'diaphragmatic_pace') return 'diaphragmatic_pace';
-  if (raw === 'box_meditation') return 'box_meditation';
-  if (raw === 'soft_fascination' || raw === 'nature' || raw === 'cloud_float') return 'soft_fascination';
-  if (raw === 'progressive_muscle' || raw === 'muscle') return 'progressive_muscle';
-  if (raw === 'guided_imagery') return 'guided_imagery';
-  if (raw === 'pattern_alignment' || raw === 'pattern' || raw === 'pattern_align') return 'pattern_alignment';
+  if (raw === 'diaphragmatic_pace' || raw === 'belly_pacing') return 'diaphragmatic_pace';
+  if (raw === 'box_meditation' || raw === 'box') return 'box_meditation';
+  if (raw === 'pattern_alignment' || raw === 'pattern') return 'pattern_alignment';
+  if (raw === 'body_scan_mindful' || raw === 'body_scan') return 'body_scan_mindful';
+  if (raw === 'autogenic_warmth' || raw === 'autogenic') return 'autogenic_warmth';
+  if (raw === 'silent_zen_timer' || raw === 'zen') return 'silent_zen_timer';
   return 'water_lily_pond';
 };
 
@@ -208,8 +139,8 @@ export const GamePlayerScreen = () => {
   const techKey = getTechKey(subId);
   const tech = TECHNIQUE_DETAILS[techKey] || TECHNIQUE_DETAILS.water_lily_pond;
 
-  const [gameState, setGameState] = useState('setup'); // setup, playing, paused, completed
-  const [hasStarted, setHasStarted] = useState(false);
+  const [gameState, setGameState] = useState('playing'); // playing, paused, completed
+  const [hasStarted, setHasStarted] = useState(true);
   const [selectedMin, setSelectedMin] = useState(tech.suggestedMin || 1.5);
   const [sessionSeconds, setSessionSeconds] = useState((tech.suggestedMin || 1.5) * 60);
   const [paceBpm, setPaceBpm] = useState(tech.defaultBpm || 6);
@@ -273,127 +204,21 @@ export const GamePlayerScreen = () => {
     switch (techKey) {
       case 'water_lily_pond':
         return <LilyPondGame initialScreen="session" initialDurationMin={selectedMin} initialBpm={paceBpm} onStartSession={handleStartSession} />;
-      case 'flower_meadow':
-        return <FlowerMeadowGame onStartSession={handleStartSession} />;
-      case 'cosmic_nebula':
-        return <PulseWaveGame mode="cosmic_nebula" initialScreen="session" initialDurationMin={selectedMin} initialBpm={paceBpm} onStartSession={handleStartSession} />;
 
-      case 'vagus_humming':
-      case 'diaphragmatic_pace':
       case 'box_meditation':
+      case 'diaphragmatic_pace':
+      case 'body_scan_mindful':
+      case 'silent_zen_timer':
         return <MeditationGame mode={techKey} initialMode={techKey} initialDurationMin={selectedMin} initialBpm={paceBpm} onStartSession={handleStartSession} />;
 
-      case 'soft_fascination':
-      case 'progressive_muscle':
-      case 'guided_imagery':
       case 'pattern_alignment':
+      case 'autogenic_warmth':
         return <CognitiveDeStressGame mode={techKey} subOptionId={techKey} initialScreen="session" initialDurationMin={selectedMin} onFinish={handleFinishGame} onStartSession={handleStartSession} />;
 
       default:
         return <LilyPondGame initialScreen="session" initialDurationMin={selectedMin} initialBpm={paceBpm} onStartSession={handleStartSession} />;
     }
   };
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // UNIFIED BEGIN / SETUP SCREEN (IDENTICAL FOR ALL 10 TECHNIQUES)
-  // ═══════════════════════════════════════════════════════════════════════════
-  if (!hasStarted || gameState === 'setup') {
-    const paceOptions = [4.5, 5, 5.5, 6, 6.5, 7];
-    const durationOptions = tech.durationOptions || [1, 1.5, 2, 3];
-
-    return (
-      <SafeAreaView style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
-        <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} backgroundColor={theme.bgSecondary} />
-        <Header title="Technique Setup" showBack onBack={() => setCurrentScreen('SubOptionSelector')} />
-
-        <ScrollView contentContainerStyle={styles.unifiedSetupScroll} showsVerticalScrollIndicator={false}>
-          {/* Header Card: Icon + Title + Rank */}
-          <View style={[styles.unifiedCardHeader, { borderColor: tech.color + '40', backgroundColor: isDarkMode ? tech.bg : `${tech.color}15` }]}>
-            <View style={[styles.unifiedIconRing, { borderColor: tech.color, backgroundColor: tech.color + '20' }]}>
-              <Text style={styles.unifiedIconTxt}>{tech.icon}</Text>
-            </View>
-            <Text style={[styles.unifiedTitle, { color: theme.textPrimary }]}>{tech.title}</Text>
-            <View style={[styles.unifiedBadge, { backgroundColor: tech.color }]}>
-              <Text style={styles.unifiedBadgeTxt}>{tech.rank}</Text>
-            </View>
-          </View>
-
-          {/* Meaning & Purpose Box */}
-          <View style={[styles.meaningCard, { borderColor: theme.border, backgroundColor: theme.bgSecondary }]}>
-            <View style={styles.meaningHeader}>
-              <Text style={[styles.meaningTitle, { color: tech.color }]}>{tech.meaningTitle}</Text>
-            </View>
-            <Text style={[styles.meaningBody, { color: theme.textSecondary }]}>{tech.meaningDesc}</Text>
-          </View>
-
-          {/* Breathing Pace Selector */}
-          {tech.hasPace && (
-            <View style={styles.selectorSection}>
-              <Text style={[styles.selectorLabel, { color: theme.textMuted }]}>🌬️ BREATHING PACE</Text>
-              <View style={styles.chipRow}>
-                {paceOptions.map(bpm => (
-                  <TouchableOpacity
-                    key={bpm}
-                    onPress={() => setPaceBpm(bpm)}
-                    style={[
-                      styles.unifiedChip,
-                      { backgroundColor: theme.bgSecondary, borderColor: theme.border },
-                      paceBpm === bpm && { backgroundColor: tech.color, borderColor: tech.color }
-                    ]}
-                  >
-                    <Text style={[styles.unifiedChipTxt, { color: theme.textPrimary }, paceBpm === bpm && { color: '#FFFFFF', fontWeight: '800' }]}>
-                      {bpm} bpm
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              <Text style={[styles.selectorHint, { color: theme.textMuted }]}>6 bpm is clinical baroreflex HRV resonance standard</Text>
-            </View>
-          )}
-
-          {/* Session Length Selector */}
-          <View style={styles.selectorSection}>
-            <Text style={[styles.selectorLabel, { color: theme.textMuted }]}>⏱️ SESSION LENGTH (RECOMMENDED: {tech.suggestedMin} MIN)</Text>
-            <View style={styles.chipRow}>
-              {durationOptions.map(min => {
-                const isSelected = selectedMin === min;
-                return (
-                  <TouchableOpacity
-                    key={min}
-                    onPress={() => {
-                      setSelectedMin(min);
-                      setSessionSeconds(min * 60);
-                    }}
-                    style={[
-                      styles.unifiedChipLarge,
-                      { backgroundColor: theme.bgSecondary, borderColor: theme.border },
-                      isSelected && { backgroundColor: tech.color, borderColor: tech.color }
-                    ]}
-                  >
-                    <Text style={[styles.unifiedChipTxtLarge, { color: theme.textPrimary }, isSelected && { color: '#FFFFFF', fontWeight: '800' }]}>
-                      {min} min
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-            <Text style={[styles.selectorHint, { color: theme.textMuted }]}>Targeted real-time stress intervention duration</Text>
-          </View>
-
-          {/* Begin Button */}
-          <TouchableOpacity
-            style={[styles.unifiedBeginBtn, { backgroundColor: tech.color }]}
-            onPress={() => {
-              handleStartSession(selectedMin * 60);
-            }}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.unifiedBeginBtnTxt}>▶️  Begin Technique ({selectedMin} min)</Text>
-          </TouchableOpacity>
-        </ScrollView>
-      </SafeAreaView>
-    );
-  }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // ACTIVE GAME CANVAS SCREEN
@@ -416,7 +241,7 @@ export const GamePlayerScreen = () => {
         <View style={styles.headerTop}>
           <TouchableOpacity
             style={styles.backButton}
-            onPress={() => setHasStarted(false)}
+            onPress={() => setCurrentScreen('Dashboard')}
           >
             <Ionicons name="arrow-back" size={22} color={theme.textPrimary} />
           </TouchableOpacity>
@@ -702,6 +527,8 @@ const styles = StyleSheet.create({
   canvasContainer: {
     flex: 1,
     width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
     overflow: 'hidden',
   },
   pausedOverlay: {

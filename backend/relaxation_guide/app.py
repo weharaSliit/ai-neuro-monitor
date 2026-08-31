@@ -131,6 +131,9 @@ def read_and_process_fusion_output():
     res_dict["user_baseline"] = user_baseline
     res_dict["has_live_packet"] = has_live_pk
     res_dict["is_calibrated"] = is_calib
+    res_dict["raw_label"] = fusion_data.get("raw_label", fused_lbl)
+    res_dict["confidence"] = stress_prob
+    res_dict["active_session_id"] = fusion_data.get("active_session_id")
     return jsonify(res_dict), 200
 
 

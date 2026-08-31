@@ -45,7 +45,7 @@ const COLORS = {
   text: '#E9E4FF',
 };
 
-const ResonancePulseBreathing = ({ onStartSession, onDurationChange, initialScreen = 'session' }) => {
+const ResonancePulseBreathing = ({ onStartSession, onDurationChange, initialScreen = 'session', initialDurationMin }) => {
   const themeContext = React.useContext(ThemeContext);
   const theme = themeContext?.theme || {};
   const isDarkMode = themeContext?.isDarkMode ?? true;
@@ -55,9 +55,10 @@ const ResonancePulseBreathing = ({ onStartSession, onDurationChange, initialScre
   const mutedTextColor = isDarkMode ? 'rgba(233,228,255,0.45)' : (theme.textMuted || '#64748B');
   const containerBg = isDarkMode ? COLORS.backgroundDeep : (theme.bgPrimary || '#F8FAFC');
 
-  const [screen, setScreen] = useState(initialScreen); // 'setup' | 'session' | 'complete'
-  const [paceBpm, setPaceBpm] = useState(6.0);
-  const [durationMin, setDurationMin] = useState(1);
+  const [durationMin, setDurationMin] = useState(initialDurationMin || 3);
+  useEffect(() => {
+    if (initialDurationMin) setDurationMin(initialDurationMin);
+  }, [initialDurationMin]);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [breathCount, setBreathCount] = useState(0);
   const [breathDirection, setBreathDirection] = useState('in'); // 'in' | 'out'
@@ -209,72 +210,13 @@ const ResonancePulseBreathing = ({ onStartSession, onDurationChange, initialScre
   const orbScale = orbAnim.interpolate({ inputRange: [0, 1], outputRange: [0.82, 1.35] });
   const orbGlow = orbAnim.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.9] });
 
-  // =========================================================================
-  // SETUP
-  // =========================================================================
-  if (screen === 'setup') {
-    return (
-      <Animated.View style={[styles.container, { backgroundColor: COLORS.background, opacity: screenFade }]}>
-        <View style={styles.setupWrap}>
-          <Text style={styles.setupTitle}>Resonance Pulse Breathing</Text>
-          <Text style={styles.setupSubtitle}>
-            Follow the pulse as it slowly grows and settles. Breathing smoothly at a slow, steady
-            pace like this is the basis of clinical heart-rate-variability biofeedback training.
-          </Text>
+  useEffect(() => {
+    if (screen === 'setup') {
+      setScreen('session');
+    }
+  }, [screen]);
 
-          <Text style={styles.sectionLabel}>Breathing pace</Text>
-          <View style={styles.paceRow}>
-            {PACE_OPTIONS.map(bpm => (
-              <TouchableOpacity
-                key={bpm}
-                onPress={() => setPaceBpm(bpm)}
-                style={[styles.paceChip, paceBpm === bpm && styles.paceChipActive]}
-              >
-                <Text style={[styles.paceChipText, paceBpm === bpm && styles.paceChipTextActive]}>
-                  {bpm}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          <Text style={styles.paceHint}>breaths per minute — 6 is a common starting point</Text>
-
-          <Text style={[styles.sectionLabel, { marginTop: 22 }]}>Session length</Text>
-          <View style={styles.paceRow}>
-            {DURATION_OPTIONS_MIN.map(min => (
-              <TouchableOpacity
-                key={min}
-                onPress={() => {
-                  setDurationMin(min);
-                  if (onDurationChange) onDurationChange(min * 60);
-                }}
-                style={[styles.durationChip, durationMin === min && styles.paceChipActive]}
-              >
-                <Text style={[styles.paceChipText, durationMin === min && styles.paceChipTextActive]}>
-                  {min} min
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          <TouchableOpacity style={styles.startButton} onPress={() => {
-            if (onStartSession) onStartSession(durationMin * 60);
-            startSession();
-          }}>
-            <Text style={styles.startButtonText}>Begin</Text>
-          </TouchableOpacity>
-
-          <Text style={styles.citation}>
-            Lehrer &amp; Gevirtz, 2014, Frontiers in Psychology; Goessl et al., 2017, Psychological
-            Medicine (meta-analysis).
-          </Text>
-          <Text style={styles.disclaimer}>
-            This paces your breathing — it does not measure your heart rate. Not a substitute for
-            medical or mental health care.
-          </Text>
-        </View>
-      </Animated.View>
-    );
-  }
+  if (screen === 'setup') return null;
 
   // =========================================================================
   // SESSION

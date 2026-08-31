@@ -117,8 +117,24 @@ class StressPredictor:
         dwell_time      = float(firebase_metrics.get('avg_dwell', 0))
         flight_time     = float(firebase_metrics.get('avg_flight', 0))
         scroll_velocity = float(firebase_metrics.get('scroll_velocity', 0))
-        tilt_angle      = float(firebase_metrics.get('tilt_angle', 0))
         cpm             = float(firebase_metrics.get('cpm', 0))
+
+        # Tilt baseline (needed here, ahead of the other baselines below, as
+        # the fallback value for a not-yet-available reading -- see tilt_angle).
+        mean_tilt = user_baselines.get('tilt_angle', {}).get('mean', 59.09)
+        std_tilt  = user_baselines.get('tilt_angle', {}).get('std',  38.81)
+
+        # tilt_angle is JSON null when KeystrokeCollectorService.java's
+        # accelerometer gravity filter hasn't warmed up yet (common right
+        # after the service starts). `.get(key, default)` only applies the
+        # default when the key is ABSENT, not when it's present with value
+        # None, so `float(firebase_metrics.get('tilt_angle', 0))` would raise
+        # TypeError on this. Substituting the baseline mean here reads as "no
+        # deviation yet" (z_tilt below comes out ~0) instead of crashing, or
+        # worse, silently defaulting to 0 -- which would read as a huge false
+        # deviation against a real baseline mean of ~59 degrees.
+        tilt_raw   = firebase_metrics.get('tilt_angle')
+        tilt_angle = float(tilt_raw) if tilt_raw is not None else mean_tilt
 
         feat_array = np.array([[dwell_time, flight_time, scroll_velocity, tilt_angle, cpm]])
 
@@ -155,11 +171,9 @@ class StressPredictor:
         std_scroll  = user_baselines.get('scroll_velocity', {}).get('std',  12)
         z_scroll    = abs(calculate_z_score(scroll_velocity, mean_scroll, std_scroll))
 
-        # Tilt angle deviation from personal baseline
-        # Default = Kaggle population mean (59.09 deg, std 38.81) for uncalibrated users
-        mean_tilt = user_baselines.get('tilt_angle', {}).get('mean', 59.09)
-        std_tilt  = user_baselines.get('tilt_angle', {}).get('std',  38.81)
-        z_tilt    = abs(calculate_z_score(tilt_angle, mean_tilt, std_tilt))
+        # Tilt angle deviation from personal baseline (mean_tilt/std_tilt
+        # computed above, ahead of tilt_angle's None fallback)
+        z_tilt = abs(calculate_z_score(tilt_angle, mean_tilt, std_tilt))
 
         # Typing speed (CPM) deviation from personal baseline
         # Default = Kaggle population mean (39.40 cpm, std 30.36) for uncalibrated users

@@ -124,7 +124,7 @@ export const RecoveryScreen = () => {
   const preNorm     = (preInterventionLabel || '').toLowerCase();
   const isNormal    = lastValidationResult?.is_normal_reached ?? lastValidationResult?.is_normal ?? (postNorm === 'normal');
   const recoveryPct = isNormal ? 100.0 : (lastValidationResult?.recovery_percentage ?? 45.0);
-  const transition  = isNormal ? '🎉 Baseline Achieved! (Normal Equilibrium Restored)' : (lastValidationResult?.transition ?? 'Partial Recovery');
+  const transition  = isNormal ? '🎉 Target Recovery Achieved! (Normal Equilibrium Restored)' : (lastValidationResult?.transition ?? 'Partial Recovery');
   const displayPre  = (preNorm === 'stress' || preNorm === 'high_stress' || preNorm === 'pre-stress') ? 'STRESS' : 'NORMAL';
   const displayPost = (isNormal || postNorm === 'normal') ? 'NORMAL' : 'STRESS';
   const preColor    = displayPre === 'STRESS' ? theme.danger : theme.success;
@@ -227,13 +227,13 @@ export const RecoveryScreen = () => {
           </View>
         </Animated.View>
 
-        {/* Guidance based on baseline status */}
+        {/* Guidance based on recovery status */}
         {isNormal ? (
           <View style={[styles.guidanceCard, { backgroundColor: theme.success + '14', borderColor: theme.success }]}>
-            <Text style={[styles.guidanceTitle, { color: theme.success }]}>🎯 Closed-Loop Adaptive Guidance — Baseline Achieved!</Text>
+            <Text style={[styles.guidanceTitle, { color: theme.success }]}>🎯 Closed-Loop Adaptive Guidance — Target Recovery Achieved!</Text>
             <Text style={[styles.guidanceText, { color: theme.textSecondary }]}>
               {lastValidationResult?.closed_loop_status?.guidance_message ||
-                "🎉 Baseline Achieved! Real-time bio-feedback verified your live stress probability returned to optimal resting equilibrium."}
+                "🎉 Target Recovery Achieved! Real-time bio-feedback verified your live stress probability returned to optimal resting equilibrium."}
             </Text>
           </View>
         ) : (
@@ -242,7 +242,7 @@ export const RecoveryScreen = () => {
             <Text style={[styles.guidanceText, { color: theme.textSecondary }]}>
               {altRec?.reason ||
                 lastValidationResult?.closed_loop_status?.guidance_message ||
-                "Baseline not yet reached. Smart AI selected an alternative technique for your recovery."}
+                "Target level not yet reached. Smart AI selected an alternative technique for your recovery."}
             </Text>
             <TouchableOpacity
               style={[styles.guidanceBtn, { backgroundColor: theme.warning }]}

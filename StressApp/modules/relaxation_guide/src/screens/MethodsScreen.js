@@ -25,137 +25,98 @@ export const MethodsScreen = () => {
   const [modalVisible, setModalVisible] = useState(false);
   const [pendingSubOption, setPendingSubOption] = useState(null);
 
-  const categories = [
+  const techniques = [
     {
-      id: "guided_meditation",
-      title: "Breathwork & Meditation",
-      icon: "🧘‍♀️",
-      sub_options: [
-        { id: "water_lily_pond", title: "Lily Pond Breathing", description: "Deep breathing with water lilies." },
-        { id: "vagus_humming", title: "Humming Exhale", description: "Humming to lower stress quickly." },
-        { id: "diaphragmatic_pace", title: "Deep Belly Breathing", description: "Deep belly breathing for quick calm." },
-        { id: "box_meditation", title: "Box Breathing", description: "4-4-4-4 rhythm for balance." }
-      ]
+      id: 'water_lily_pond',
+      title: 'Lily Pond Breathing',
+      icon: '🪷',
+      description: 'Extended exhale pacing synced with water lilies to lower stress.',
+      color: '#10B981'
     },
     {
-      id: "breathing_garden",
-      title: "Breathing Garden",
-      icon: "🌸",
-      sub_options: [
-        { id: "cosmic_nebula", title: "Cosmic Nebula", description: "Starlight breathing rhythm." },
-        { id: "flower_meadow", title: "Flower Meadow", description: "4-7-8 breathing with flowers." }
-      ]
+      id: 'diaphragmatic_pace',
+      title: 'Deep Belly Pacing',
+      icon: '🫁',
+      description: 'Deep abdominal lower-lobe lung expansion for rapid pulse reduction.',
+      color: '#0284C7'
     },
     {
-      id: "cognitive_destress",
-      title: "Quick Relief",
-      icon: "🌿",
-      sub_options: [
-        { id: "soft_fascination", title: "Nature Scenery", description: "Calming nature scenery." },
-        { id: "progressive_muscle", title: "Muscle Release", description: "Release body muscle tension." },
-        { id: "guided_imagery", title: "Forest Walk", description: "Peaceful forest walk imagery." },
-        { id: "pattern_alignment", title: "Memory Match", description: "Fun pattern match for focus." }
-      ]
-    }
+      id: 'box_meditation',
+      title: 'Box Breathing',
+      icon: '🧊',
+      description: 'Equal 4s square breathing rhythm for tactical calm and focus.',
+      color: '#38BDF8'
+    },
+    {
+      id: 'pattern_alignment',
+      title: 'Memory Match',
+      icon: '🧩',
+      description: 'Tactile color pattern puzzle to clear intrusive worry and refocus.',
+      color: '#F59E0B'
+    },
+    {
+      id: 'body_scan_mindful',
+      title: 'Mindful Body Scan',
+      icon: '🧘‍♂️',
+      description: 'Systematic attentional sweep across body regions to drop tension.',
+      color: '#3B82F6'
+    },
+    {
+      id: 'autogenic_warmth',
+      title: 'Autogenic Thermal Focus',
+      icon: '🔥',
+      description: 'Somatosensory thermal warmth focus for deep body relaxation.',
+      color: '#EF4444'
+    },
+    {
+      id: 'silent_zen_timer',
+      title: 'Silent Zen Presence',
+      icon: '⛩️',
+      description: 'Unguided silent presence meditation with peaceful chime intervals.',
+      color: '#14B8A6'
+    },
   ];
 
-  const handleTryMethod = async (cat, subOpt) => {
-    setLoadingId(subOpt.id);
+  const launchTechnique = (tech) => {
     setPreInterventionLabel(stressState);
-    try {
-      // Run Smart Suitability Checker
-      const suit = await apiService.checkSuitability(userId, cat.id, stressState, stressProbability);
-      setPendingSubOption({ category: cat, subOpt });
-
-      if (!suit.is_suitable) {
-        setModalData(suit);
-        setModalVisible(true);
-      } else {
-        launchGame(cat, subOpt);
-      }
-    } catch (e) {
-      launchGame(cat, subOpt);
-    } finally {
-      setLoadingId(null);
-    }
-  };
-
-  const launchGame = (cat, subOpt) => {
+    const subOpt = { id: tech.id, title: tech.title, description: tech.description };
     setSelectedSubOption(subOpt);
     setCurrentRecommendation({
-      technique_id: cat.id,
-      title: cat.title,
-      description: `Selected ${subOpt.title} from Catalog`,
+      technique_id: tech.id,
+      title: tech.title,
+      description: tech.description,
       selected_sub_option: subOpt,
-      available_sub_options: cat.sub_options,
+      available_sub_options: [subOpt],
       context_cluster_id: 1,
       blended_score: 0.85,
       physiological_sample: 0.8,
       preference_score: 0.9,
       execution_time_ms: 10.0
     });
-
-    showAlert({
-      title: `Launching ${subOpt.title} ${cat.icon}`,
-      text: subOpt.description,
-      icon: 'info',
-      confirmButtonText: 'Start Session ⚡',
-      onConfirm: () => setCurrentScreen('GamePlayer')
-    });
+    setCurrentScreen('GamePlayer');
   };
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
       <Header title="Relaxation Catalog" showBack onBack={() => setCurrentScreen('Dashboard')} />
 
-      <SuitabilityModal
-        visible={modalVisible}
-        data={modalData}
-        onProceed={() => {
-          setModalVisible(false);
-          if (pendingSubOption) launchGame(pendingSubOption.category, pendingSubOption.subOpt);
-        }}
-        onSwitch={() => {
-          setModalVisible(false);
-          // Switch to recommended Breathing Garden
-          launchGame(categories[1], categories[1].sub_options[0]);
-        }}
-      />
-
       <ScrollView contentContainerStyle={styles.content}>
-        <Text style={[styles.heading, { color: theme.textPrimary }]}>Relaxation Catalog</Text>
-        <Text style={[styles.sub, { color: theme.textSecondary }]}>
-          Choose an exercise to start relaxing.
-        </Text>
-
-        {categories.map((cat) => (
-          <View key={cat.id} style={[styles.catCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
-            <View style={styles.catHeader}>
-              <Text style={styles.catIcon}>{cat.icon}</Text>
-              <Text style={[styles.catTitle, { color: theme.textPrimary }]}>{cat.title}</Text>
-            </View>
-
-            {cat.sub_options.map((sub) => (
-              <View key={sub.id} style={[styles.subRow, { backgroundColor: theme.bgPrimary }]}>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.subTitle, { color: theme.textPrimary }]}>{sub.title}</Text>
-                  <Text style={[styles.subDesc, { color: theme.textMuted }]}>{sub.description}</Text>
-                </View>
-
-                <TouchableOpacity
-                  style={[styles.tryBtn, { backgroundColor: theme.accent }]}
-                  onPress={() => handleTryMethod(cat, sub)}
-                  disabled={loadingId === sub.id}
-                >
-                  {loadingId === sub.id ? (
-                    <ActivityIndicator size="small" color={theme.accentText} />
-                  ) : (
-                    <Text style={[styles.tryBtnTxt, { color: theme.accentText }]}>Start →</Text>
-                  )}
-                </TouchableOpacity>
+        {techniques.map((tech) => (
+          <TouchableOpacity
+            key={tech.id}
+            style={[styles.techCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border, borderLeftColor: tech.color, borderLeftWidth: 4 }]}
+            onPress={() => launchTechnique(tech)}
+            activeOpacity={0.85}
+          >
+            <View style={styles.techRow}>
+              <Text style={styles.techIcon}>{tech.icon}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.techTitle, { color: theme.textPrimary }]}>{tech.title}</Text>
+                <Text style={[styles.techDesc, { color: theme.textMuted }]}>{tech.description}</Text>
               </View>
-            ))}
-          </View>
+              <Text style={{ fontSize: 16, color: tech.color, marginLeft: 6 }}>▶</Text>
+            </View>
+          </TouchableOpacity>
         ))}
       </ScrollView>
     </View>
@@ -167,60 +128,44 @@ const styles = StyleSheet.create({
     flex: 1
   },
   content: {
-    padding: 16
+    padding: 16,
+    gap: 8
   },
-  heading: {
-    fontSize: 20,
-    fontWeight: '800',
-    marginBottom: 4
-  },
-  sub: {
-    fontSize: 12,
-    lineHeight: 17,
-    marginBottom: 16
-  },
-  catCard: {
-    padding: 14,
-    borderRadius: 16,
-    marginBottom: 14,
-    borderWidth: 1
-  },
-  catHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10
-  },
-  catIcon: {
-    fontSize: 22,
-    marginRight: 8
-  },
-  catTitle: {
-    fontSize: 16,
-    fontWeight: '800'
-  },
-  subRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 10,
+  techCard: {
+    paddingVertical: 12,
+    paddingHorizontal: 14,
     borderRadius: 12,
-    marginBottom: 6
+    borderWidth: 1,
   },
-  subTitle: {
-    fontSize: 13,
+  techRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12
+  },
+  techIcon: {
+    fontSize: 24
+  },
+  techTitle: {
+    fontSize: 14,
     fontWeight: '700'
   },
-  subDesc: {
-    fontSize: 11,
+  techDesc: {
+    fontSize: 12,
     marginTop: 2
   },
-  tryBtn: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
+  badgePill: {
+    paddingVertical: 2,
+    paddingHorizontal: 8,
     borderRadius: 8,
-    marginLeft: 8
+    borderWidth: 1
   },
-  tryBtnTxt: {
-    fontSize: 12,
+  badgeTxt: {
+    fontSize: 10,
     fontWeight: '800'
+  },
+  evidenceTxt: {
+    fontSize: 10,
+    marginTop: 4,
+    fontStyle: 'italic'
   }
 });

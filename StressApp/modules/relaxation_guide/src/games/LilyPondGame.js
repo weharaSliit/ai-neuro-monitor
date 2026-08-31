@@ -77,7 +77,10 @@ const LilyBreathingGame = ({
   const [screen, setScreen] = useState(initialScreen);
   const [patternId, setPatternId] = useState('extended');
   const [bpm, setBpm] = useState(initialBpm || PATTERNS.extended.defaultBpm);
-  const [durationMin, setDurationMin] = useState(initialDurationMin || 1);
+  const [durationMin, setDurationMin] = useState(initialDurationMin || 3);
+  useEffect(() => {
+    if (initialDurationMin) setDurationMin(initialDurationMin);
+  }, [initialDurationMin]);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [breathCount, setBreathCount] = useState(0);
   const [phase, setPhase] = useState('idle'); // 'idle' | 'inhale' | 'exhale'
@@ -396,82 +399,13 @@ const LilyBreathingGame = ({
   const mainTxtColor = isDarkMode ? COLORS.text : '#064E3B';
   const dimTxtColor = isDarkMode ? COLORS.textDim : '#047857';
 
-  // =========================================================================
-  // SETUP SCREEN
-  // =========================================================================
-  if (screen === 'setup') {
-    return (
-      <Animated.View style={[styles.container, { backgroundColor: theme.bgPrimary || COLORS.background, opacity: screenFade }]}>
-        <View style={styles.setupWrap}>
-          <Text style={[styles.setupTitle, { color: theme.textPrimary || COLORS.text }]}>🪷 Lily Pond Breathing</Text>
-          <Text style={[styles.setupSubtitle, { color: theme.textSecondary || COLORS.textDim }]}>
-            Touch and hold the glowing lotus flower to inhale as it blooms open. Release to exhale as it gently settles closed.
-          </Text>
+  useEffect(() => {
+    if (screen === 'setup') {
+      setScreen('session');
+    }
+  }, [screen]);
 
-          <Text style={[styles.sectionLabel, { color: theme.accent || COLORS.accentLight }]}>Select Breathing Pattern</Text>
-          {Object.values(PATTERNS).map(p => (
-            <TouchableOpacity
-              key={p.id}
-              onPress={() => selectPattern(p.id)}
-              style={[
-                styles.patternCard,
-                { backgroundColor: theme.bgSecondary || 'rgba(255, 255, 255, 0.04)', borderColor: theme.border || 'rgba(255, 255, 255, 0.1)' },
-                patternId === p.id && styles.patternCardActive
-              ]}
-              activeOpacity={0.8}
-            >
-              <View style={styles.patternCardRow}>
-                <Text style={[styles.patternName, { color: theme.textPrimary || COLORS.text }]}>{p.label}</Text>
-                {patternId === p.id && <Ionicons name="checkmark-circle" size={18} color={theme.accent || COLORS.accentLight} />}
-              </View>
-              <Text style={[styles.patternBlurb, { color: theme.textSecondary || COLORS.textDim }]}>{p.blurb}</Text>
-              <Text style={styles.patternCitation}>{p.citation}</Text>
-            </TouchableOpacity>
-          ))}
-
-          <Text style={[styles.sectionLabel, { marginTop: 16, color: theme.accent || COLORS.accentLight }]}>Breathing Pace (BPM)</Text>
-          <View style={styles.chipRow}>
-            {BPM_OPTIONS.map(b => (
-              <TouchableOpacity
-                key={b}
-                onPress={() => setBpm(b)}
-                style={[styles.chip, { backgroundColor: theme.bgSecondary, borderColor: theme.border }, bpm === b && styles.chipActive]}
-              >
-                <Text style={[styles.chipText, { color: theme.textPrimary }, bpm === b && styles.chipTextActive]}>{b} bpm</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          <Text style={[styles.sectionLabel, { marginTop: 16, color: theme.accent || COLORS.accentLight }]}>Session Duration</Text>
-          <View style={styles.chipRow}>
-            {DURATION_OPTIONS_MIN.map(min => (
-              <TouchableOpacity
-                key={min}
-                onPress={() => {
-                  setDurationMin(min);
-                  if (onDurationChange) onDurationChange(min * 60);
-                }}
-                style={[styles.chip, { backgroundColor: theme.bgSecondary, borderColor: theme.border }, durationMin === min && styles.chipActive]}
-              >
-                <Text style={[styles.chipText, { color: theme.textPrimary }, durationMin === min && styles.chipTextActive]}>{min} min</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          <TouchableOpacity
-            style={[styles.startButton, { backgroundColor: theme.accent || COLORS.accent }]}
-            onPress={() => {
-              if (onStartSession) onStartSession(durationMin * 60);
-              startSession();
-            }}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.startButtonText}>Begin Session</Text>
-          </TouchableOpacity>
-        </View>
-      </Animated.View>
-    );
-  }
+  if (screen === 'setup') return null;
 
   // =========================================================================
   // SESSION SCREEN
