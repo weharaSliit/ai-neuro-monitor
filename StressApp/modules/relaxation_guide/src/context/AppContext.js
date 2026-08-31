@@ -23,6 +23,9 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
   // Live Multi-Member Telemetry & Stress State (2 inputs: fused_stress_label & stress_probability)
   const [stressState, setStressState] = useState('normal');
   const [stressProbability, setStressProbability] = useState(0.15);
+  const [confidence, setConfidence] = useState(0.15);
+  const [rawLabel, setRawLabel] = useState('Normal');
+  const [activeSessionId, setActiveSessionId] = useState(null);
   const [simMode, setSimMode] = useState('normal');
 
   const [isSafetyOverride, setIsSafetyOverride] = useState(false);
@@ -62,7 +65,9 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
         const telemetry = simMode === 'normal'
           ? await apiService.getLiveFusionTelemetry(userId)
           : await apiService.getProcessedTelemetry(userId, 0.0);
-        setStressState(telemetry.effective_label);
+        setStressState(telemetry.effective_label || 'normal');
+        if (telemetry.raw_label) setRawLabel(telemetry.raw_label);
+        if (telemetry.active_session_id) setActiveSessionId(telemetry.active_session_id);
         setIsSafetyOverride(telemetry.is_safety_override);
         setIsAlertTriggered(telemetry.is_alert_triggered);
         setTelemetryMessage(telemetry.message);
@@ -77,9 +82,14 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
           : null;
         setUserBaseline(activeBaseline);
 
-        if (telemetry.features_flat && telemetry.features_flat.length >= 1) {
-          const prob = telemetry.features_flat[0];
-          setStressProbability(prob);
+        const prob = typeof telemetry.confidence === 'number'
+          ? telemetry.confidence
+          : (telemetry.features_flat && telemetry.features_flat.length >= 1 ? telemetry.features_flat[0] : 0.15);
+        
+        setStressProbability(prob);
+        setConfidence(prob);
+
+        if (telemetry.features_flat || typeof telemetry.confidence === 'number') {
           setStressTrendHistory(prev => {
             const nextArr = [...prev, prob];
             return nextArr.slice(-12);
@@ -164,6 +174,9 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
         setIsCalibrated,
         stressState,
         setStressState,
+        rawLabel,
+        activeSessionId,
+        confidence,
         stressProbability,
         setStressProbability,
         stressTrendHistory,
