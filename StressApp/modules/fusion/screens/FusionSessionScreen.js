@@ -211,6 +211,23 @@ export default function FusionSessionScreen({ navigation }) {
     const stressPhase = latest?.stress_phase;
     const stressAlertMessage = latest?.stress_alert_message;
 
+    // fused_relative_index: comparable-across-modalities/users alternative
+    // to fused_probability (see fusion_engin.py's compute_realtime_
+    // multimodal_fusion() docstring) -- 0 = exactly at this window's
+    // combined personal threshold, so unlike fused_probability's raw 0-100%
+    // (which has no fixed meaning: EEG's and Ring's own population
+    // thresholds differ, before any personal calibration adds more spread
+    // on top), this number means the same thing for every user. Shown as
+    // "X% above/below your personal baseline" -- *100 turns "1.0 index
+    // unit" (as elevated as the biggest shift either modality's own
+    // calibration considers meaningful) into a familiar percent-style
+    // figure, not a literal fraction of anything. ADDITIVE -- every other
+    // field on this screen (heroStateLabel, fusedHistory, multiSeriesPoints)
+    // keeps reading fused_probability/fused_label exactly as before.
+    const relativeIndex = latest?.fused_relative_index;
+    const relativePct = relativeIndex != null ? Math.round(relativeIndex * 100) : null;
+    const relativeElevated = relativeIndex != null && relativeIndex >= 0;
+
     return (
         <ScreenBackground>
             <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
@@ -470,6 +487,22 @@ const styles = StyleSheet.create({
     thresholdValue: {
         fontSize: 14,
         fontWeight: '900',
+    },
+    relativeCard: {
+        marginHorizontal: 20,
+        marginVertical: 10,
+        padding: 18,
+        borderRadius: 22,
+    },
+    relativeValue: {
+        fontSize: 28,
+        fontWeight: '900',
+        letterSpacing: -0.3,
+    },
+    relativeCaption: {
+        fontSize: 12,
+        fontWeight: '600',
+        marginTop: 2,
     },
     pss4Card: {
         marginHorizontal: 20,

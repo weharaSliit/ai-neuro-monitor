@@ -67,6 +67,7 @@ def _modality_input(window: dict, m: str) -> dict:
         "signal_quality": window.get(f"signal_quality_{m}"),
         "model_acc": window.get(f"model_acc_{m}"),
         "threshold": window.get(f"threshold_{m}"),
+        "threshold_scale": window.get(f"threshold_scale_{m}"),
     }
 
 
@@ -193,6 +194,14 @@ def poll_once(session_ref, session_meta_ref) -> dict:
             # a domain-shift-style artifact worth investigating, not a
             # silent exclusion.
             "implausible_modalities": fused["implausible_modalities"],
+            # Comparable-across-modalities/users alternative to fused_
+            # probability -- see compute_realtime_multimodal_fusion()'s own
+            # docstring for the normalization. 0 = exactly at this window's
+            # combined personal threshold, +1 = as elevated as the biggest
+            # shift either modality's own calibration considers meaningful.
+            # ADDITIVE -- fused_probability/fused_threshold/fused_label
+            # keep their exact existing values for every current consumer.
+            "fused_relative_index": fused["fused_relative_index"],
         }
 
         if "eeg" in fused["active_modalities"]:
