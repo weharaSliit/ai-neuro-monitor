@@ -29,13 +29,6 @@ export const TelemetrySimulatorCard = ({
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.modeBtn, currentMode === 'pre-stress' && { backgroundColor: theme.warning }]}
-          onPress={() => onModeChange('pre-stress')}
-        >
-          <Text style={styles.modeBtnText}>Pre-Stress (P=0.55)</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
           style={[styles.modeBtn, currentMode === 'stress' && { backgroundColor: theme.danger }]}
           onPress={() => onModeChange('stress')}
         >

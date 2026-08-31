@@ -1,722 +1,1292 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableWithoutFeedback,
+  TouchableOpacity,
   Animated,
   Dimensions,
-  Easing
+  Easing,
+  Vibration,
+  Platform,
+  ScrollView,
+  Image,
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { ThemeContext } from '../context/ThemeContext';
 
 const { width, height } = Dimensions.get('window');
+const AMBIENT_TICK_MS = 50;
 
-export const CognitiveDeStressGame = () => {
-  const [bubbles, setBubbles] = useState([]);
-  const [score, setScore] = useState(0);
-  const [combo, setCombo] = useState(0);
-  const [maxCombo, setMaxCombo] = useState(0);
-  const [totalPopped, setTotalPopped] = useState(0);
-  const [gameState, setGameState] = useState('playing');
-  const [particles, setParticles] = useState([]);
-  const [floatingTexts, setFloatingTexts] = useState([]);
-  const [powerups, setPowerups] = useState([]);
-  const [shakeAnim] = useState(new Animated.Value(0));
-  const [glowAnim] = useState(new Animated.Value(0));
+// ---------------------------------------------------------------------------
+// Enhanced Healthcare Relaxation Guide with Gamification
+// ---------------------------------------------------------------------------
+const TECHNIQUES = {
+  soft_fascination: {
+    id: 'soft_fascination',
+    name: '🌿 Nature Scenery',
+    subtitle: 'Restorative Nature',
+    description: 'Watch gentle, slowly changing nature scenes to quickly restore mental calm.',
+    citation: '✨ Restorative Nature Viewing',
+    emoji: '🌿',
+    color: '#059669',
+  },
+  progressive_muscle: {
+    id: 'progressive_muscle',
+    name: '🧘 Muscle Release',
+    subtitle: 'Somatic Relief',
+    description: 'Gently tighten and release muscles to drop physical tension and body stress.',
+    citation: '✨ Somatic Tension Release',
+    emoji: '🧘',
+    color: '#D97706',
+  },
+  guided_imagery: {
+    id: 'guided_imagery',
+    name: '🌲 Forest Walk',
+    subtitle: 'Guided Imagery',
+    description: 'Peaceful guided forest trail walk to shift your mind away from stress.',
+    citation: '✨ Forest Imagery Walk',
+    emoji: '🌲',
+    color: '#047857',
+  },
+  pattern_alignment: {
+    id: 'pattern_alignment',
+    name: '🎯 Memory Match',
+    subtitle: 'Focus Reset',
+    description: 'A calm visual matching puzzle to clear intrusive worry and refocus your mind.',
+    citation: '✨ Focus & Memory Match',
+    emoji: '🎯',
+    color: '#7E57C2',
+  },
+};
 
-  const spawnTimer = useRef(null);
-  const gameLoop = useRef(null);
-  const difficultyLevel = useRef(1);
+const DURATION_OPTIONS_MIN = [1, 2, 3, 5];
 
-  // Stress-related bubble types with colors and effects
-  const STRESS_TYPES = [
-    { id: 'tension', label: 'Tension', color: '#EF4444', emoji: '😰', points: 10 },
-    { id: 'worry', label: 'Worry', color: '#F59E0B', emoji: '😟', points: 15 },
-    { id: 'fatigue', label: 'Fatigue', color: '#8B5CF6', emoji: '😩', points: 20 },
-    { id: 'overthink', label: 'Overthink', color: '#EC4899', emoji: '🤔', points: 25 },
-    { id: 'anxiety', label: 'Anxiety', color: '#F472B6', emoji: '😬', points: 30 },
-    { id: 'stress', label: 'Stress', color: '#DC2626', emoji: '😫', points: 35 },
-  ];
+const THEME = {
+  soft_fascination: { primary: '#059669', secondary: '#A7F3D0', background: '#041B13', accent: '#10B981' },
+  progressive_muscle: { primary: '#D97706', secondary: '#FCD34D', background: '#1A1206', accent: '#F59E0B' },
+  guided_imagery: { primary: '#047857', secondary: '#6EE7B7', background: '#031912', accent: '#059669' },
+  pattern_alignment: { primary: '#7E57C2', secondary: '#B39DDB', background: '#140A28', accent: '#9575CD' },
+};
 
-  // Power-up types
-  const POWERUP_TYPES = [
-    { id: 'multiplier', label: 'x2', color: '#FCD34D', emoji: '⭐', duration: 5000 },
-    { id: 'bomb', label: '💥', color: '#EF4444', emoji: '💥', duration: 0 },
-    { id: 'slow', label: '🐢', color: '#34D399', emoji: '🐢', duration: 3000 },
-  ];
+const CALM_PALETTE = ['#81D4FA', '#A5D6A7', '#CE93D8', '#FFCC80', '#FFAB91'];
 
-  // Create a new bubble
-  const createBubble = (customType = null) => {
-    const type = customType || STRESS_TYPES[Math.floor(Math.random() * STRESS_TYPES.length)];
-    const size = 60 + Math.random() * 50;
-    const x = 30 + Math.random() * (width - 60 - size);
-    const y = -50 - Math.random() * 100;
-    const speed = 0.5 + Math.random() * (1 + difficultyLevel.current * 0.1);
-    const wobble = Math.random() * 2 - 1;
-    const phase = Math.random() * Math.PI * 2;
+// ===========================================================================
+// Activity 1 — Progressive Muscle Relaxation (Enhanced with Visuals)
+// ===========================================================================
+const TENSE_SECONDS = 5;
+const RELEASE_SECONDS = 10;
 
-    return {
-      id: Date.now() + Math.random(),
-      type,
-      x,
-      y,
-      size,
-      speed,
-      wobble,
-      phase,
-      opacity: 1,
-      scale: 0.8 + Math.random() * 0.4,
-      rotation: Math.random() * 360,
-      isPopping: false,
-      popProgress: 0,
-      points: type.points * difficultyLevel.current,
-    };
-  };
+const MUSCLE_GROUPS = [
+  { id: 'hands', label: '🤲 Hands & Forearms', tenseCue: 'Clench your fists tightly', releaseCue: 'Let your hands go completely loose', icon: '✊' },
+  { id: 'arms', label: '💪 Upper Arms', tenseCue: 'Bend your elbows, tighten your biceps', releaseCue: 'Let your arms fall heavy and loose', icon: '💪' },
+  { id: 'shoulders', label: '🫂 Shoulders & Neck', tenseCue: 'Raise your shoulders toward your ears', releaseCue: 'Drop your shoulders, soften your neck', icon: '🫂' },
+  { id: 'face', label: '😌 Face', tenseCue: 'Scrunch your whole face tightly', releaseCue: 'Let your face go completely smooth', icon: '😌' },
+  { id: 'torso', label: '🫁 Chest & Stomach', tenseCue: 'Tighten your stomach and chest', releaseCue: 'Let your breath settle and soften', icon: '🫁' },
+  { id: 'legs', label: '🦵 Legs & Feet', tenseCue: 'Point your toes, tighten your legs', releaseCue: 'Let your legs feel heavy and loose', icon: '🦵' },
+];
 
-  // Create particle explosion
-  const createExplosion = (x, y, color, count = 25) => {
-    const newParticles = [];
-    for (let i = 0; i < count; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const velocity = 2 + Math.random() * 8;
-      newParticles.push({
-        id: Date.now() + Math.random(),
-        x,
-        y,
-        vx: Math.cos(angle) * velocity,
-        vy: Math.sin(angle) * velocity - 2,
-        life: 1,
-        size: 3 + Math.random() * 8,
-        color: color,
-        gravity: 0.1 + Math.random() * 0.1,
-      });
-    }
-    setParticles(prev => [...prev, ...newParticles]);
-  };
+const MuscleRelaxationActivity = ({ colors, onTally }) => {
+  const [groupIndex, setGroupIndex] = useState(0);
+  const [phase, setPhase] = useState('tense'); // 'tense' | 'release'
+  const [secondsLeft, setSecondsLeft] = useState(TENSE_SECONDS);
+  const [isHolding, setIsHolding] = useState(false);
+  const [energyBalls, setEnergyBalls] = useState([]);
+  const [completedGroups, setCompletedGroups] = useState([]);
 
-  // Create floating text
-  const createFloatingText = (x, y, text, color = '#FFFFFF') => {
-    setFloatingTexts(prev => [...prev, {
-      id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}_${Math.random()}`,
-      x,
-      y,
-      text,
-      color,
-      opacity: 1,
-      vy: -2 - Math.random() * 1,
-      scale: 1,
-    }]);
-  };
+  const scale = useRef(new Animated.Value(0.9)).current;
+  const warmth = useRef(new Animated.Value(0)).current;
+  const pulseAnim = useRef(new Animated.Value(1)).current;
 
-  // Pop bubble with effects
-  const popBubble = (bubble) => {
-    if (bubble.isPopping) return;
-
-    // Mark as popping
-    setBubbles(prev => prev.map(b =>
-      b.id === bubble.id ? { ...b, isPopping: true } : b
-    ));
-
-    // Create explosion
-    createExplosion(bubble.x + bubble.size / 2, bubble.y + bubble.size / 2, bubble.type.color, 30);
-
-    // Calculate score with combo
-    const comboBonus = Math.floor(combo / 5) + 1;
-    const points = bubble.points * comboBonus;
-    setScore(prev => prev + points);
-    setCombo(prev => prev + 1);
-    setTotalPopped(prev => prev + 1);
-
-    if (combo + 1 > maxCombo) {
-      setMaxCombo(combo + 1);
-    }
-
-    // Floating text with combo info
-    let text = `+${points}`;
-    if (combo > 0) {
-      text += ` x${comboBonus}`;
-    }
-    createFloatingText(
-      bubble.x + bubble.size / 2 - 30,
-      bubble.y - 10,
-      text,
-      bubble.type.color
-    );
-
-    // Combo milestone
-    if (combo > 0 && combo % 5 === 0) {
-      createFloatingText(
-        bubble.x + bubble.size / 2 - 50,
-        bubble.y - 50,
-        `🔥 ${combo + 1}x COMBO!`,
-        '#FCD34D'
-      );
-
-      // Spawn power-up on combo milestones
-      if (combo % 10 === 0) {
-        spawnPowerup(bubble.x + bubble.size / 2, bubble.y);
-      }
-    }
-
-    // Screen shake on high combo
-    if (combo > 5) {
-      Animated.sequence([
-        Animated.timing(shakeAnim, {
-          toValue: 5,
-          duration: 50,
-          useNativeDriver: true,
-        }),
-        Animated.timing(shakeAnim, {
-          toValue: -5,
-          duration: 50,
-          useNativeDriver: true,
-        }),
-        Animated.timing(shakeAnim, {
-          toValue: 3,
-          duration: 50,
-          useNativeDriver: true,
-        }),
-        Animated.timing(shakeAnim, {
-          toValue: 0,
-          duration: 50,
-          useNativeDriver: true,
-        }),
-      ]).start();
-    }
-
-    // Remove bubble after animation
-    setTimeout(() => {
-      setBubbles(prev => prev.filter(b => b.id !== bubble.id));
-    }, 300);
-  };
-
-  // Spawn power-up
-  const spawnPowerup = (x, y) => {
-    const type = POWERUP_TYPES[Math.floor(Math.random() * POWERUP_TYPES.length)];
-    setPowerups(prev => [...prev, {
-      id: Date.now() + Math.random(),
-      type,
-      x: x - 25,
-      y: y - 25,
-      size: 50,
-      opacity: 1,
-      rotation: 0,
-    }]);
-  };
-
-  // Collect power-up
-  const collectPowerup = (powerup) => {
-    setPowerups(prev => prev.filter(p => p.id !== powerup.id));
-
-    createExplosion(powerup.x + 25, powerup.y + 25, powerup.type.color, 40);
-    createFloatingText(
-      powerup.x,
-      powerup.y - 20,
-      `✨ ${powerup.type.emoji} ${powerup.type.label}`,
-      powerup.type.color
-    );
-
-    // Apply power-up effect
-    switch (powerup.type.id) {
-      case 'multiplier':
-        setScore(prev => prev * 2);
-        createFloatingText(powerup.x, powerup.y - 60, '⚡ SCORE x2!', '#FCD34D');
-        break;
-      case 'bomb':
-        // Clear all bubbles with explosion
-        setBubbles(prev => {
-          prev.forEach(b => {
-            if (!b.isPopping) {
-              createExplosion(b.x + b.size / 2, b.y + b.size / 2, '#EF4444', 15);
-            }
-          });
-          return [];
-        });
-        createFloatingText(width / 2 - 50, height / 2, '💥 BOMB!', '#EF4444');
-        break;
-      case 'slow':
-        // Slow down all bubbles
-        setBubbles(prev => prev.map(b => ({
-          ...b,
-          speed: b.speed * 0.5,
-        })));
-        setTimeout(() => {
-          setBubbles(prev => prev.map(b => ({
-            ...b,
-            speed: b.speed * 2,
-          })));
-        }, powerup.type.duration);
-        createFloatingText(powerup.x, powerup.y - 60, '🐢 SLOWED!', '#34D399');
-        break;
-    }
-  };
-
-  // Spawn bubbles
+  // Pulse animation during active holding
   useEffect(() => {
-    spawnTimer.current = setInterval(() => {
-      const count = Math.floor(1 + difficultyLevel.current / 2);
-      const newBubbles = [];
-      for (let i = 0; i < count; i++) {
-        newBubbles.push(createBubble());
-      }
-      setBubbles(prev => [...prev, ...newBubbles]);
-    }, 1500 / difficultyLevel.current);
-
-    return () => clearInterval(spawnTimer.current);
-  }, []);
-
-  // Game loop
-  useEffect(() => {
-    gameLoop.current = setInterval(() => {
-      // Update bubbles
-      setBubbles(prev => {
-        const updated = prev.map(bubble => ({
-          ...bubble,
-          y: bubble.y + bubble.speed,
-          x: bubble.x + Math.sin(bubble.phase + Date.now() * 0.001) * bubble.wobble * 0.5,
-          rotation: bubble.rotation + 0.5,
-          opacity: bubble.y > height - 50 ? bubble.opacity * 0.99 : bubble.opacity,
-        }));
-        // Remove bubbles that go off screen or get too small
-        return updated.filter(b => b.y < height + 100 && b.opacity > 0.1);
-      });
-
-      // Update particles
-      setParticles(prev => {
-        const updated = prev.map(p => ({
-          ...p,
-          x: p.x + p.vx,
-          y: p.y + p.vy,
-          vy: p.vy + p.gravity,
-          life: p.life - 0.02,
-          size: p.size * 0.99,
-        }));
-        return updated.filter(p => p.life > 0);
-      });
-
-      // Update floating texts
-      setFloatingTexts(prev => {
-        const updated = prev.map(t => ({
-          ...t,
-          y: t.y + t.vy,
-          opacity: t.opacity - 0.02,
-          scale: t.scale + 0.01,
-        }));
-        return updated.filter(t => t.opacity > 0);
-      });
-
-      // Update powerups
-      setPowerups(prev => {
-        const updated = prev.map(p => ({
-          ...p,
-          y: p.y + 0.5,
-          rotation: p.rotation + 1,
-          opacity: p.y > height - 100 ? p.opacity * 0.99 : p.opacity,
-        }));
-        return updated.filter(p => p.y < height + 50 && p.opacity > 0.1);
-      });
-
-      // Increase difficulty
-      if (totalPopped > 0 && totalPopped % 10 === 0) {
-        difficultyLevel.current = Math.min(difficultyLevel.current + 0.2, 5);
-      }
-
-      // Check game over condition (too many bubbles)
-      setBubbles(prev => {
-        if (prev.length > 30) {
-          setGameState('gameover');
-        }
-        return prev;
-      });
-
-    }, 16);
-
-    return () => clearInterval(gameLoop.current);
-  }, [totalPopped]);
-
-  // Touch handler
-  const handleTouch = (evt) => {
-    const { locationX, locationY } = evt.nativeEvent;
-
-    // Check if touching a powerup
-    const powerupHit = powerups.find(p =>
-      locationX > p.x && locationX < p.x + p.size &&
-      locationY > p.y && locationY < p.y + p.size
-    );
-    if (powerupHit) {
-      collectPowerup(powerupHit);
-      return;
-    }
-
-    // Check if touching a bubble
-    const bubbleHit = bubbles.find(b =>
-      !b.isPopping &&
-      locationX > b.x && locationX < b.x + b.size &&
-      locationY > b.y && locationY < b.y + b.size
-    );
-
-    if (bubbleHit) {
-      popBubble(bubbleHit);
+    if (isHolding && phase === 'tense') {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, { toValue: 1.12, duration: 400, useNativeDriver: false }),
+          Animated.timing(pulseAnim, { toValue: 0.96, duration: 400, useNativeDriver: false }),
+        ])
+      ).start();
     } else {
-      // Miss effect
-      createFloatingText(locationX - 20, locationY - 20, '❌ Miss!', '#EF4444');
-      setCombo(0);
+      pulseAnim.setValue(1);
+    }
+  }, [isHolding, phase]);
+
+  // Phase countdown timer — 100% safe side-effect handling
+  useEffect(() => {
+    let timer = null;
+    if (phase === 'tense' && isHolding) {
+      timer = setInterval(() => {
+        setSecondsLeft(prev => {
+          if (prev <= 1) {
+            clearInterval(timer);
+            triggerRelease();
+            return RELEASE_SECONDS;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    } else if (phase === 'release') {
+      timer = setInterval(() => {
+        setSecondsLeft(prev => {
+          if (prev <= 1) {
+            clearInterval(timer);
+            advanceToNextGroup();
+            return TENSE_SECONDS;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+    return () => clearInterval(timer);
+  }, [phase, isHolding]);
+
+  const triggerRelease = () => {
+    setPhase('release');
+    setIsHolding(false);
+    setSecondsLeft(RELEASE_SECONDS);
+    if (Platform.OS !== 'web') Vibration.vibrate([0, 40, 80, 120]);
+    spawnEnergyBalls();
+
+    // Trigger parent tally safely outside render/updater cycle
+    setTimeout(() => {
+      if (onTally) onTally();
+    }, 50);
+
+    Animated.parallel([
+      Animated.timing(scale, { toValue: 0.85, duration: 800, easing: Easing.out(Easing.cubic), useNativeDriver: false }),
+      Animated.timing(warmth, { toValue: 0, duration: 600, useNativeDriver: false }),
+    ]).start();
+  };
+
+  const advanceToNextGroup = () => {
+    setCompletedGroups(prev => [...new Set([...prev, MUSCLE_GROUPS[groupIndex].id])]);
+    const nextIdx = (groupIndex + 1) % MUSCLE_GROUPS.length;
+    setGroupIndex(nextIdx);
+    setPhase('tense');
+    setSecondsLeft(TENSE_SECONDS);
+    setIsHolding(false);
+
+    Animated.parallel([
+      Animated.timing(scale, { toValue: 0.9, duration: 600, useNativeDriver: false }),
+      Animated.timing(warmth, { toValue: 1, duration: 600, useNativeDriver: false }),
+    ]).start();
+  };
+
+  const handlePressIn = () => {
+    if (phase !== 'tense') return;
+    setIsHolding(true);
+    if (Platform.OS !== 'web') Vibration.vibrate(25);
+    Animated.parallel([
+      Animated.timing(scale, { toValue: 1.2, duration: 500, useNativeDriver: false }),
+      Animated.timing(warmth, { toValue: 1, duration: 400, useNativeDriver: false }),
+    ]).start();
+  };
+
+  const handlePressOut = () => {
+    if (phase === 'tense' && isHolding) {
+      setIsHolding(false);
+      Animated.timing(scale, { toValue: 0.9, duration: 400, useNativeDriver: false }).start();
     }
   };
 
-  // Reset game
-  const resetGame = () => {
-    setBubbles([]);
-    setScore(0);
-    setCombo(0);
-    setMaxCombo(0);
-    setTotalPopped(0);
-    setParticles([]);
-    setFloatingTexts([]);
-    setPowerups([]);
-    difficultyLevel.current = 1;
-    setGameState('playing');
+  const spawnEnergyBalls = () => {
+    const newBalls = Array.from({ length: 12 }, () => ({
+      id: Math.random(),
+      x: (Math.random() - 0.5) * 220,
+      y: (Math.random() - 0.5) * 220,
+      size: Math.random() * 24 + 8,
+    }));
+    setEnergyBalls(newBalls);
+    setTimeout(() => setEnergyBalls([]), 2200);
   };
 
-  // Get stress type color based on score
-  const getMoodColor = () => {
-    if (score < 100) return '#FCD34D';
-    if (score < 300) return '#34D399';
-    if (score < 500) return '#60A5FA';
-    return '#A78BFA';
-  };
+  const group = MUSCLE_GROUPS[groupIndex];
 
   return (
-    <TouchableWithoutFeedback onPress={handleTouch}>
-      <Animated.View style={[
-        styles.container,
-        { transform: [{ translateX: shakeAnim }] }
-      ]}>
-        {/* Particles */}
-        {particles.map(p => (
-          <Animated.View
-            key={p.id}
-            style={[
-              styles.particle,
-              {
-                left: p.x - p.size / 2,
-                top: p.y - p.size / 2,
-                width: p.size,
-                height: p.size,
-                backgroundColor: p.color,
-                opacity: p.life,
-                borderRadius: p.size / 2,
-              }
-            ]}
-          />
-        ))}
+    <View style={activityStyles.centerWrap}>
+      {/* Energy particles on release */}
+      {energyBalls.map(ball => (
+        <Animated.View
+          key={ball.id}
+          style={{
+            position: 'absolute',
+            width: ball.size,
+            height: ball.size,
+            borderRadius: ball.size / 2,
+            backgroundColor: '#FFD700',
+            opacity: 0.8,
+            transform: [{ translateX: ball.x }, { translateY: ball.y }],
+          }}
+        />
+      ))}
 
-        {/* Floating Texts */}
-        {floatingTexts.map(t => (
-          <Animated.Text
-            key={t.id}
-            style={[
-              styles.floatingText,
-              {
-                left: t.x,
-                top: t.y,
-                opacity: t.opacity,
-                color: t.color,
-                transform: [{ scale: t.scale }],
-              }
-            ]}
-          >
-            {t.text}
-          </Animated.Text>
-        ))}
+      {/* Muscle Region Quick Selectors */}
+      <View style={activityStyles.muscleRegionBar}>
+        {MUSCLE_GROUPS.map((g, idx) => {
+          const isDone = completedGroups.includes(g.id);
+          const isCurrent = idx === groupIndex;
+          return (
+            <TouchableOpacity
+              key={g.id}
+              onPress={() => {
+                setGroupIndex(idx);
+                setPhase('tense');
+                setSecondsLeft(TENSE_SECONDS);
+                setIsHolding(false);
+              }}
+              style={[
+                activityStyles.muscleRegionChip,
+                isCurrent && { backgroundColor: colors.accent || '#F59E0B', borderColor: colors.accent || '#F59E0B' },
+                isDone && !isCurrent && { backgroundColor: `${colors.secondary}30`, borderColor: colors.secondary }
+              ]}
+            >
+              <Text style={{ fontSize: 11 }}>{g.icon}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
 
-        {/* Bubbles */}
-        {bubbles.map(bubble => (
-          <Animated.View
-            key={bubble.id}
-            style={[
-              styles.bubble,
-              {
-                left: bubble.x,
-                top: bubble.y,
-                width: bubble.size,
-                height: bubble.size,
-                borderRadius: bubble.size / 2,
-                backgroundColor: bubble.type.color + '40',
-                borderColor: bubble.type.color,
-                opacity: bubble.opacity,
-                transform: [
-                  { scale: bubble.isPopping ? 0.1 : bubble.scale },
-                  { rotate: `${bubble.rotation}deg` },
-                ],
-              }
-            ]}
-          >
-            <Text style={styles.bubbleEmoji}>{bubble.type.emoji}</Text>
-            <Text style={[styles.bubbleLabel, { color: bubble.type.color }]}>
-              {bubble.type.label}
-            </Text>
-          </Animated.View>
-        ))}
-
-        {/* Powerups */}
-        {powerups.map(powerup => (
-          <Animated.View
-            key={powerup.id}
-            style={[
-              styles.powerup,
-              {
-                left: powerup.x,
-                top: powerup.y,
-                width: powerup.size,
-                height: powerup.size,
-                borderRadius: powerup.size / 2,
-                backgroundColor: powerup.type.color + '60',
-                borderColor: powerup.type.color,
-                opacity: powerup.opacity,
-                transform: [{ rotate: `${powerup.rotation}deg` }],
-              }
-            ]}
-          >
-            <Text style={styles.powerupEmoji}>{powerup.type.emoji}</Text>
-          </Animated.View>
-        ))}
-
-        {/* HUD */}
-        <View style={styles.hud}>
-          <View style={styles.hudLeft}>
-            <Text style={styles.hudLabel}>🎯 SCORE</Text>
-            <Text style={styles.hudValue}>{score}</Text>
-          </View>
-
-          <View style={styles.hudCenter}>
-            <Text style={styles.hudLabel}>⚡ COMBO</Text>
-            <Text style={[
-              styles.hudValue,
-              combo > 5 && styles.comboHigh,
-              combo > 10 && styles.comboSuper,
-            ]}>
-              {combo}x
-            </Text>
-          </View>
-
-          <View style={styles.hudRight}>
-            <Text style={styles.hudLabel}>💨 POPPED</Text>
-            <Text style={styles.hudValue}>{totalPopped}</Text>
-          </View>
-        </View>
-
-        {/* Status bar */}
-        <View style={styles.statusBar}>
-          <View style={[styles.moodIndicator, { backgroundColor: getMoodColor() }]} />
-          <Text style={styles.statusText}>
-            {gameState === 'gameover' ? '😵 Game Over!' :
-              difficultyLevel.current < 2 ? '😌 Relaxed' :
-                difficultyLevel.current < 3 ? '🧘 Focused' :
-                  difficultyLevel.current < 4 ? '💪 Challenging' :
-                    '⚡ Intense!'}
+      {/* Interactive Muscle Orb Container */}
+      <TouchableOpacity
+        activeOpacity={0.9}
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+        disabled={phase === 'release'}
+        style={{ marginVertical: 10 }}
+      >
+        <Animated.View
+          style={[
+            activityStyles.muscleOrb,
+            {
+              borderColor: phase === 'tense' ? (isHolding ? '#F59E0B' : colors.secondary) : '#10B981',
+              backgroundColor: phase === 'tense' ? (isHolding ? 'rgba(245,158,11,0.25)' : `${colors.primary}22`) : 'rgba(16,185,129,0.25)',
+              transform: [{ scale: Animated.multiply(scale, pulseAnim) }],
+            },
+          ]}
+        >
+          <Text style={activityStyles.muscleIcon}>{group.icon}</Text>
+          <Text style={[activityStyles.musclePhaseWord, { color: phase === 'tense' ? (isHolding ? '#F59E0B' : '#FFFFFF') : '#10B981' }]}>
+            {phase === 'tense' ? (isHolding ? '⚡ SQUEEZING...' : '👇 HOLD TO TENSE') : '🌀 RELEASING...'}
           </Text>
-          <Text style={styles.difficultyText}>
-            Level {Math.floor(difficultyLevel.current)}
-          </Text>
-        </View>
+          <Text style={activityStyles.muscleCountdown}>{secondsLeft}s</Text>
+        </Animated.View>
+      </TouchableOpacity>
 
-        {/* Bottom controls */}
-        <View style={styles.controls}>
-          <View style={styles.controlGroup}>
-            <Text style={styles.controlText}>
-              {gameState === 'gameover' ?
-                '💔 Too many stress bubbles! Tap to restart' :
-                `👆 Tap bubbles to release stress • ${STRESS_TYPES.length} stress types`}
-            </Text>
-            {gameState === 'gameover' && (
-              <TouchableWithoutFeedback onPress={resetGame}>
-                <View style={styles.restartButton}>
-                  <Text style={styles.restartText}>🔄 Play Again</Text>
-                </View>
-              </TouchableWithoutFeedback>
-            )}
-          </View>
-        </View>
-      </Animated.View>
-    </TouchableWithoutFeedback>
+      <Text style={[activityStyles.muscleGroupLabel, { color: colors.secondary }]}>
+        {group.label}
+      </Text>
+      <Text style={activityStyles.muscleCue}>
+        {phase === 'tense'
+          ? (isHolding ? `⚡ ${group.tenseCue} — Keep Squeezing!` : `🔹 Press & HOLD button to ${group.tenseCue.toLowerCase()}`)
+          : `🔸 ${group.releaseCue} — Feel the tension dissolving.`}
+      </Text>
+
+      {/* Interactive Guidance Hint */}
+      <View style={activityStyles.holdHintBar}>
+        <Text style={activityStyles.holdHintTxt}>
+          {phase === 'tense'
+            ? '💡 Physical Action: Press & Hold the orb to squeeze your muscles for 5s'
+            : '✨ Somatic Release: Let muscles sink completely loose & heavy'}
+        </Text>
+      </View>
+    </View>
   );
 };
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0F0A1A',
+// ===========================================================================
+// Activity 2 — Pattern Alignment (Gamified with Score)
+// ===========================================================================
+const GRID_SIZE = 9;
+
+const PatternAlignActivity = ({ colors, onTally }) => {
+  const makePattern = () =>
+    Array.from({ length: GRID_SIZE }, () => Math.floor(Math.random() * CALM_PALETTE.length));
+
+  const [target, setTarget] = useState(makePattern);
+  const [cells, setCells] = useState(() => makePattern());
+  const [justAligned, setJustAligned] = useState(false);
+  const [score, setScore] = useState(0);
+  const [combo, setCombo] = useState(0);
+  const [floatingTexts, setFloatingTexts] = useState([]);
+
+  const cycleCell = (index) => {
+    if (justAligned) return;
+    setCells(prev => {
+      const next = [...prev];
+      next[index] = (next[index] + 1) % CALM_PALETTE.length;
+      return next;
+    });
+    // Haptic feedback
+    if (Platform.OS !== 'web') Vibration.vibrate(5);
+  };
+
+  useEffect(() => {
+    const allMatch = cells.every((c, i) => c === target[i]);
+    if (allMatch && !justAligned) {
+      setJustAligned(true);
+      const newCombo = combo + 1;
+      setCombo(newCombo);
+      const points = newCombo * 10;
+      setScore(prev => prev + points);
+      onTally();
+
+      // Show floating text
+      const text = `+${points} ✨`;
+      setFloatingTexts(prev => [...prev, { id: Math.random(), text, y: 0, opacity: 1 }]);
+      setTimeout(() => {
+        setFloatingTexts(prev => prev.filter(t => t.id !== floatingTexts[0]?.id));
+      }, 1500);
+
+      if (Platform.OS !== 'web') Vibration.vibrate(14);
+      setTimeout(() => {
+        setTarget(makePattern());
+        setCells(makePattern());
+        setJustAligned(false);
+      }, 1200);
+    }
+  }, [cells]);
+
+  return (
+    <View style={activityStyles.patternWrap}>
+      {/* Score display */}
+      <View style={activityStyles.scoreDisplay}>
+        <Text style={[activityStyles.scoreText, { color: colors.accent }]}>
+          🏆 Score: {score}
+        </Text>
+        {combo > 0 && (
+          <Text style={[activityStyles.comboText, { color: colors.secondary }]}>
+            🔥 Combo: {combo}
+          </Text>
+        )}
+      </View>
+
+      {/* Floating texts */}
+      {floatingTexts.map(ft => (
+        <Animated.Text
+          key={ft.id}
+          style={[
+            activityStyles.floatingText,
+            {
+              transform: [{ translateY: ft.y }],
+              opacity: ft.opacity,
+            }
+          ]}
+        >
+          {ft.text}
+        </Animated.Text>
+      ))}
+
+      <Text style={[activityStyles.hint, { color: colors.secondary, marginBottom: 18 }]}>
+        Match each tile to the reference pattern 🎯
+      </Text>
+
+      <View style={activityStyles.referenceGrid}>
+        {target.map((colorIdx, i) => (
+          <View
+            key={i}
+            style={[activityStyles.referenceCell, { backgroundColor: CALM_PALETTE[colorIdx] }]}
+          />
+        ))}
+      </View>
+
+      <View style={[activityStyles.mainGrid, justAligned && { opacity: 0.6 }]}>
+        {cells.map((colorIdx, i) => {
+          const matched = colorIdx === target[i];
+          return (
+            <TouchableOpacity
+              key={i}
+              onPress={() => cycleCell(i)}
+              style={[
+                activityStyles.mainCell,
+                {
+                  backgroundColor: CALM_PALETTE[colorIdx],
+                  borderColor: matched ? '#fff' : 'rgba(255,255,255,0.15)',
+                  borderWidth: matched ? 3 : 1,
+                },
+              ]}
+            />
+          );
+        })}
+      </View>
+
+      {justAligned && (
+        <Text style={[activityStyles.alignedText, { color: colors.accent }]}>
+          ✅ Aligned! 🎉
+        </Text>
+      )}
+    </View>
+  );
+};
+
+// ===========================================================================
+// Activity 3 — Nature Restoration (Immersive with Interactive Elements)
+// ===========================================================================
+const NatureRestorationActivity = ({ colors, onTally }) => {
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const rotateAnim = useRef(new Animated.Value(0)).current;
+  const [particles, setParticles] = useState([]);
+  const [ripples, setRipples] = useState([]);
+  const [stressLevel, setStressLevel] = useState(100);
+  const [breathCount, setBreathCount] = useState(0);
+
+  // Rhythmic breathing pulse
+  useEffect(() => {
+    const breathLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1.2,
+          duration: 4000,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: false,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 1.0,
+          duration: 4000,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: false,
+        }),
+      ])
+    );
+    breathLoop.start();
+
+    Animated.loop(
+      Animated.timing(rotateAnim, {
+        toValue: 1,
+        duration: 30000,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      })
+    ).start();
+
+    return () => breathLoop.stop();
+  }, []);
+
+  // Ambient particles
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setParticles(prev =>
+        prev.map(p => ({ ...p, opacity: p.opacity - 0.03, y: p.y - 0.8 }))
+          .filter(p => p.opacity > 0)
+      );
+
+      setRipples(prev =>
+        prev.map(r => ({ ...r, radius: r.radius + 2, opacity: r.opacity - 0.03 }))
+          .filter(r => r.opacity > 0)
+      );
+    }, AMBIENT_TICK_MS);
+
+    return () => clearInterval(timer);
+  }, []);
+
+  const handleFocalTap = () => {
+    if (Platform.OS !== 'web') Vibration.vibrate(14);
+    if (onTally) onTally();
+
+    // Reduce stress
+    setStressLevel(prev => Math.max(0, prev - 5));
+    setBreathCount(prev => prev + 1);
+
+    // Create ripple effect
+    setRipples(prev => [
+      ...prev,
+      { id: Math.random(), radius: 30, opacity: 0.9 }
+    ]);
+
+    // Create particles
+    const natureEmojis = ['🌸', '🍃', '🪷', '🌺', '💫', '✨', '🦋', '🌿'];
+    const newParticles = Array.from({ length: 12 }, () => ({
+      id: Math.random(),
+      x: (width || 360) / 2 + (Math.random() * 120 - 60),
+      y: (height || 600) / 3 + (Math.random() * 120 - 60),
+      opacity: 1.0,
+      emoji: natureEmojis[Math.floor(Math.random() * natureEmojis.length)],
+      scale: Math.random() * 0.5 + 0.5,
+    }));
+    setParticles(prev => [...prev, ...newParticles]);
+  };
+
+  const rotateInterpolate = rotateAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
+
+  return (
+    <View style={activityStyles.natureContainer}>
+      {/* Stress level indicator */}
+      <View style={activityStyles.stressIndicator}>
+        <Text style={activityStyles.stressLabel}>🧘 Stress Level</Text>
+        <View style={activityStyles.stressBar}>
+          <Animated.View
+            style={[
+              activityStyles.stressFill,
+              {
+                width: `${stressLevel}%`,
+                backgroundColor: stressLevel > 70 ? '#EF4444' :
+                  stressLevel > 40 ? '#F59E0B' : '#10B981'
+              }
+            ]}
+          />
+        </View>
+        <Text style={activityStyles.stressValue}>{stressLevel}%</Text>
+      </View>
+
+      {/* Breath count */}
+      <Text style={activityStyles.breathCounter}>
+        🌬️ Breaths: {breathCount}
+      </Text>
+
+      {/* Background Ambient Glow */}
+      <View style={activityStyles.natureGlowAura} />
+
+      {/* Ripples */}
+      {ripples.map(r => (
+        <View
+          key={r.id}
+          style={{
+            position: 'absolute',
+            top: '38%',
+            alignSelf: 'center',
+            width: r.radius * 2,
+            height: r.radius * 2,
+            marginTop: -r.radius,
+            borderRadius: r.radius,
+            borderWidth: 2,
+            borderColor: '#34D399',
+            opacity: r.opacity,
+          }}
+        />
+      ))}
+
+      {/* Particles */}
+      {particles.map(p => (
+        <Animated.Text
+          key={p.id}
+          style={{
+            position: 'absolute',
+            left: p.x,
+            top: p.y,
+            fontSize: 20 * p.scale,
+            opacity: p.opacity,
+            transform: [{ scale: p.scale }],
+          }}
+        >
+          {p.emoji}
+        </Animated.Text>
+      ))}
+
+      {/* Central Nature Orb */}
+      <View style={activityStyles.focalWrap}>
+        <TouchableOpacity
+          activeOpacity={0.8}
+          onPress={handleFocalTap}
+          style={{ alignItems: 'center', justifyContent: 'center' }}
+        >
+          <Animated.View
+            style={[
+              activityStyles.outerBreathingRing,
+              {
+                transform: [{ scale: pulseAnim }],
+                borderColor: 'rgba(52, 211, 153, 0.4)',
+                backgroundColor: 'rgba(52, 211, 153, 0.06)',
+              }
+            ]}
+          />
+
+          <Animated.View
+            style={[
+              activityStyles.innerLotusOrb,
+              {
+                transform: [{ scale: pulseAnim }, { rotate: rotateInterpolate }],
+                borderColor: '#34D399',
+                backgroundColor: '#0F3826',
+              }
+            ]}
+          >
+            <Text style={activityStyles.lotusIcon}>🪷</Text>
+            <Text style={activityStyles.breathHint}>Tap to relax</Text>
+          </Animated.View>
+        </TouchableOpacity>
+
+        <Text style={activityStyles.focalSubLabel}>Tap the lotus to release stress 🌸</Text>
+      </View>
+
+      {/* Tips */}
+      <View style={activityStyles.tipsContainer}>
+        <Text style={activityStyles.tipText}>
+          💡 Tip: Focus on your breath and the gentle movement
+        </Text>
+      </View>
+    </View>
+  );
+};
+
+// ===========================================================================
+// Activity 4 — Guided Forest Walk (Shinrin-Yoku Biophilic Trail)
+// ===========================================================================
+const FOREST_STATIONS = [
+  {
+    id: 'canopy',
+    name: '🌲 Ancient Pine Canopy',
+    subtitle: 'Shinrin-Yoku Station #1',
+    description: 'Inhale deep cedar and pine resin mist. Feel the cool mountain forest canopy breeze.',
+    actionIcon: '🌲',
+    actionText: 'Inhale Pine Mist',
+    color: '#047857',
+    ambientEmoji: ['🌲', '🍃', '✨', '💨']
+  },
+  {
+    id: 'stream',
+    name: '💧 Crystal Mountain Stream',
+    subtitle: 'Shinrin-Yoku Station #2',
+    description: 'Dip your hands into the crystal clear mountain spring. Feel the cool water washing away stress.',
+    actionIcon: '💧',
+    actionText: 'Dip Hand in Stream',
+    color: '#38BDF8',
+    ambientEmoji: ['💧', '🌊', '✨', '🍃']
+  },
+  {
+    id: 'clearing',
+    name: '☀️ Sun-Dappled Clearing',
+    subtitle: 'Shinrin-Yoku Station #3',
+    description: 'Feel warm golden sunlight filtering through green leaves, warming your forehead and shoulders.',
+    actionIcon: '☀️',
+    actionText: 'Soak Sun Rays',
+    color: '#F59E0B',
+    ambientEmoji: ['☀️', '✨', '🍂', '🦋']
+  },
+  {
+    id: 'sanctuary',
+    name: '🔔 Mountain Sanctuary Peak',
+    subtitle: 'Shinrin-Yoku Station #4',
+    description: 'Listen to deep mountain silence and distant bamboo wind chimes. Prefrontal bandwidth restored.',
+    actionIcon: '🔔',
+    actionText: 'Ring Wind Chime',
+    color: '#A78BFA',
+    ambientEmoji: ['🔔', '🕊️', '🌸', '✨']
+  }
+];
+
+const GuidedForestWalkActivity = ({ colors, onTally }) => {
+  const [stationIdx, setStationIdx] = useState(0);
+  const [stepProgress, setStepProgress] = useState(0);
+  const [stepsTaken, setStepsTaken] = useState(0);
+  const [particles, setParticles] = useState([]);
+  const [breathPhase, setBreathPhase] = useState('inhale');
+
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const currentStation = FOREST_STATIONS[stationIdx];
+
+  // Paced respiration loop
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.14, duration: 4000, easing: Easing.inOut(Easing.ease), useNativeDriver: false }),
+        Animated.timing(pulseAnim, { toValue: 0.95, duration: 6000, easing: Easing.inOut(Easing.ease), useNativeDriver: false }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, []);
+
+  // Inhale/Exhale phase text switcher
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setBreathPhase(p => (p === 'inhale' ? 'exhale' : 'inhale'));
+    }, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleTakeStep = () => {
+    if (Platform.OS !== 'web') Vibration.vibrate(18);
+
+    setStepsTaken(s => s + 1);
+    const nextProg = stepProgress + 25;
+
+    // Spawn floating nature particles along path
+    const ems = currentStation.ambientEmoji;
+    const newP = Array.from({ length: 6 }, () => ({
+      id: Math.random(),
+      x: (Math.random() - 0.5) * 240,
+      y: (Math.random() - 0.5) * 180,
+      emoji: ems[Math.floor(Math.random() * ems.length)],
+      size: Math.random() * 12 + 16,
+    }));
+    setParticles(prev => [...prev, ...newP]);
+    setTimeout(() => setParticles(p => p.slice(3)), 2000);
+
+    if (nextProg >= 100) {
+      setStepProgress(0);
+      setStationIdx(prev => (prev + 1) % FOREST_STATIONS.length);
+      if (onTally) onTally();
+      if (Platform.OS !== 'web') Vibration.vibrate([0, 50, 100, 150]);
+    } else {
+      setStepProgress(nextProg);
+    }
+  };
+
+  return (
+    <View style={activityStyles.forestContainer}>
+      {/* Station Title & Progress Bar Header */}
+      <View style={activityStyles.forestHeader}>
+        <View style={activityStyles.stationBadgeRow}>
+          <Text style={[activityStyles.stationBadgeTxt, { color: currentStation.color }]}>{currentStation.subtitle}</Text>
+          <Text style={activityStyles.forestStepsTxt}>👣 {stepsTaken} Steps Taken</Text>
+        </View>
+
+        <Text style={activityStyles.stationTitle}>{currentStation.name}</Text>
+        <Text style={activityStyles.stationDesc}>{currentStation.description}</Text>
+
+        {/* Trail Progress Bar */}
+        <View style={activityStyles.trailProgressTrack}>
+          <View style={[activityStyles.trailProgressFill, { width: `${stepProgress}%`, backgroundColor: currentStation.color }]} />
+        </View>
+      </View>
+
+      {/* Interactive Forest Canvas Area */}
+      <View style={activityStyles.forestCanvas}>
+        {/* Floating Particles */}
+        {particles.map(p => (
+          <Text
+            key={p.id}
+            style={{
+              position: 'absolute',
+              fontSize: p.size,
+              transform: [{ translateX: p.x }, { translateY: p.y }],
+              opacity: 0.85,
+            }}
+          >
+            {p.emoji}
+          </Text>
+        ))}
+
+        {/* Central Biophilic Interactive Station Orb */}
+        <TouchableOpacity activeOpacity={0.85} onPress={handleTakeStep}>
+          <Animated.View
+            style={[
+              activityStyles.forestOrb,
+              {
+                borderColor: currentStation.color,
+                backgroundColor: `${currentStation.color}25`,
+                transform: [{ scale: pulseAnim }],
+              }
+            ]}
+          >
+            <Text style={activityStyles.forestOrbIcon}>{currentStation.actionIcon}</Text>
+            <Text style={activityStyles.forestOrbLabel}>{currentStation.actionText}</Text>
+            <Text style={activityStyles.breathPhaseTxt}>
+              {breathPhase === 'inhale' ? '🌬️ Inhale Forest Air (4s)' : '🍃 Exhale Tension (6s)'}
+            </Text>
+          </Animated.View>
+        </TouchableOpacity>
+
+        {/* Station Navigation Dots */}
+        <View style={activityStyles.stationDotsRow}>
+          {FOREST_STATIONS.map((st, i) => (
+            <View
+              key={st.id}
+              style={[
+                activityStyles.stationDot,
+                {
+                  backgroundColor: i === stationIdx ? st.color : 'rgba(255,255,255,0.15)',
+                  width: i === stationIdx ? 18 : 8,
+                }
+              ]}
+            />
+          ))}
+        </View>
+      </View>
+
+      {/* Trail Step Action Button */}
+      <TouchableOpacity
+        style={[activityStyles.forestStepBtn, { backgroundColor: currentStation.color }]}
+        onPress={handleTakeStep}
+        activeOpacity={0.85}
+      >
+        <Text style={activityStyles.forestStepBtnTxt}>👣  Walk Trail & Breathe Deeply</Text>
+      </TouchableOpacity>
+    </View>
+  );
+};
+
+const activityStyles = StyleSheet.create({
+  centerWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
+
+  muscleRegionBar: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  muscleRegionChip: {
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  holdHintBar: {
+    marginTop: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  holdHintTxt: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 11,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+
+  // Muscle relaxation styles
+  muscleOrb: {
+    width: 170,
+    height: 170,
+    borderRadius: 85,
+    borderWidth: 3,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+    shadowColor: '#fff',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+  },
+  muscleIcon: { fontSize: 28, marginBottom: 4 },
+  musclePhaseWord: { color: '#fff', fontSize: 14, fontWeight: '700', marginBottom: 2 },
+  muscleCountdown: { color: '#fff', fontSize: 32, fontWeight: '300' },
+  muscleGroupLabel: { fontSize: 17, fontWeight: '700', marginBottom: 4 },
+  muscleCue: { color: 'rgba(255,255,255,0.85)', fontSize: 13, textAlign: 'center', lineHeight: 18 },
+  muscleProgress: { flexDirection: 'row', marginTop: 20, gap: 8 },
+  muscleDot: { width: 10, height: 10, borderRadius: 5 },
+
+  // Pattern alignment styles
+  patternWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 20 },
+  scoreDisplay: { flexDirection: 'row', justifyContent: 'space-between', width: '100%', marginBottom: 12 },
+  scoreText: { fontSize: 18, fontWeight: '600' },
+  comboText: { fontSize: 16, fontWeight: '500' },
+  floatingText: { position: 'absolute', fontSize: 24, fontWeight: 'bold' },
+  hint: { fontSize: 12, opacity: 0.8, fontWeight: '600' },
+  referenceGrid: {
+    width: 90,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: 26,
+    borderRadius: 8,
     overflow: 'hidden',
   },
-  particle: {
-    position: 'absolute',
+  referenceCell: { width: 30, height: 30 },
+  mainGrid: {
+    width: 210,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    borderRadius: 14,
+    overflow: 'hidden',
   },
-  floatingText: {
-    position: 'absolute',
-    fontSize: 22,
-    fontWeight: 'bold',
-    textShadowColor: 'rgba(0,0,0,0.8)',
-    textShadowOffset: { width: 2, height: 2 },
-    textShadowRadius: 4,
-  },
-  bubble: {
-    position: 'absolute',
-    justifyContent: 'center',
+  mainCell: { width: 70, height: 70 },
+  alignedText: { fontSize: 18, fontWeight: '700', marginTop: 16 },
+
+  // Nature restoration styles
+  natureContainer: {
+    flex: 1,
+    backgroundColor: '#04150E',
     alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+  natureGlowAura: {
+    position: 'absolute',
+    width: 300,
+    height: 300,
+    borderRadius: 150,
+    backgroundColor: 'rgba(52, 211, 153, 0.08)',
+  },
+  stressIndicator: {
+    position: 'absolute',
+    top: 40,
+    left: 20,
+    right: 20,
+  },
+  stressLabel: { color: 'rgba(255,255,255,0.6)', fontSize: 12, marginBottom: 4 },
+  stressBar: { height: 6, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 3, overflow: 'hidden' },
+  stressFill: { height: '100%', borderRadius: 3 },
+  stressValue: { color: 'rgba(255,255,255,0.4)', fontSize: 10, marginTop: 2, textAlign: 'right' },
+  breathCounter: { color: 'rgba(255,255,255,0.5)', fontSize: 14, marginTop: 60, marginBottom: 20 },
+  focalWrap: { alignItems: 'center', justifyContent: 'center' },
+  outerBreathingRing: {
+    width: 240,
+    height: 240,
+    borderRadius: 120,
     borderWidth: 2,
-    shadowColor: '#000',
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
+    position: 'absolute',
+  },
+  innerLotusOrb: {
+    width: 150,
+    height: 150,
+    borderRadius: 75,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#34D399',
     shadowOffset: { width: 0, height: 0 },
-    elevation: 5,
-  },
-  bubbleEmoji: {
-    fontSize: 24,
-  },
-  bubbleLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    marginTop: 2,
-    textShadowColor: 'rgba(0,0,0,0.5)',
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 4,
-  },
-  powerup: {
-    position: 'absolute',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    shadowColor: '#FCD34D',
-    shadowOpacity: 0.8,
+    shadowOpacity: 0.3,
     shadowRadius: 20,
     elevation: 10,
   },
-  powerupEmoji: {
-    fontSize: 28,
-  },
-  hud: {
+  lotusIcon: { fontSize: 50 },
+  breathHint: { color: 'rgba(255,255,255,0.3)', fontSize: 10, marginTop: 4 },
+  focalSubLabel: { color: '#6EE7B7', fontSize: 14, fontWeight: '600', marginTop: 30 },
+  tipsContainer: {
     position: 'absolute',
-    top: 30,
-    left: 20,
-    right: 20,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    zIndex: 10,
-  },
-  hudLeft: {
-    backgroundColor: 'rgba(15, 10, 26, 0.8)',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(251, 191, 36, 0.2)',
-    alignItems: 'center',
-  },
-  hudCenter: {
-    backgroundColor: 'rgba(15, 10, 26, 0.8)',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(236, 72, 153, 0.2)',
-    alignItems: 'center',
-  },
-  hudRight: {
-    backgroundColor: 'rgba(15, 10, 26, 0.8)',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
+    bottom: 30,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(15, 56, 38, 0.6)',
     borderRadius: 12,
     borderWidth: 1,
     borderColor: 'rgba(52, 211, 153, 0.2)',
+  },
+  tipText: { color: '#A7F3D0', fontSize: 12, textAlign: 'center' },
+
+  // Guided Forest Walk Styles
+  forestContainer: { flex: 1, alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 12, width: '100%' },
+  forestHeader: { width: '100%', alignItems: 'center' },
+  stationBadgeRow: { flexDirection: 'row', justifyContent: 'space-between', width: '100%', alignItems: 'center', marginBottom: 4 },
+  stationBadgeTxt: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5 },
+  forestStepsTxt: { fontSize: 11, color: 'rgba(255,255,255,0.6)', fontWeight: '600' },
+  stationTitle: { fontSize: 18, fontWeight: '800', color: '#FFFFFF', textAlign: 'center', marginVertical: 2 },
+  stationDesc: { fontSize: 12, color: 'rgba(255,255,255,0.7)', textAlign: 'center', lineHeight: 17, marginBottom: 8, paddingHorizontal: 10 },
+  trailProgressTrack: { width: '100%', height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.1)', overflow: 'hidden' },
+  trailProgressFill: { height: '100%', borderRadius: 3 },
+  forestCanvas: { flex: 1, alignItems: 'center', justifyContent: 'center', width: '100%', minHeight: 150 },
+  forestOrb: {
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    borderWidth: 3,
     alignItems: 'center',
-  },
-  hudLabel: {
-    color: '#64748B',
-    fontSize: 9,
-    fontWeight: '600',
-    letterSpacing: 1,
-  },
-  hudValue: {
-    color: '#FFFFFF',
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  comboHigh: {
-    color: '#F472B6',
-  },
-  comboSuper: {
-    color: '#F59E0B',
-    textShadowColor: '#F59E0B',
-    textShadowRadius: 10,
-  },
-  statusBar: {
-    position: 'absolute',
-    top: 100,
-    left: 20,
-    right: 20,
-    flexDirection: 'row',
     justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(15, 10, 26, 0.6)',
-    paddingVertical: 4,
-    paddingHorizontal: 12,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
-    zIndex: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    padding: 10,
   },
-  moodIndicator: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 8,
+  forestOrbIcon: { fontSize: 34, marginBottom: 4 },
+  forestOrbLabel: { fontSize: 14, fontWeight: '800', color: '#FFFFFF', marginBottom: 2 },
+  breathPhaseTxt: { fontSize: 10, color: 'rgba(255,255,255,0.75)', fontWeight: '600', textAlign: 'center' },
+  stationDotsRow: { flexDirection: 'row', gap: 6, marginTop: 12, alignItems: 'center' },
+  stationDot: { height: 8, borderRadius: 4 },
+  forestStepBtn: { width: '100%', paddingVertical: 12, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginTop: 6 },
+  forestStepBtnTxt: { color: '#FFFFFF', fontSize: 15, fontWeight: '800', letterSpacing: 0.5 },
+});
+
+// ===========================================================================
+// Main Session Component (Enhanced with Gamification)
+// ===========================================================================
+export const GroundedStressReliefSession = ({
+  mode,
+  subOptionId,
+  initialMode,
+  onFinish,
+  onStartSession,
+  onDurationChange,
+  initialScreen = 'session'
+}) => {
+  const themeContext = React.useContext(ThemeContext);
+  const theme = themeContext?.theme || {};
+  const isDarkMode = themeContext?.isDarkMode ?? true;
+
+  const getInitialTechnique = () => {
+    const raw = (mode || subOptionId || initialMode || '').toLowerCase();
+    if (raw === 'pattern' || raw === 'pattern_align' || raw === 'pattern_alignment') return 'pattern_alignment';
+    if (raw === 'guided_imagery' || raw === 'forest' || raw === 'forest_walk') return 'guided_imagery';
+    if (raw === 'nature' || raw === 'cloud_float' || raw === 'soft_fascination') return 'soft_fascination';
+    return 'progressive_muscle';
+  };
+
+  const [screen, setScreen] = useState(initialScreen);
+  const [techniqueId, setTechniqueId] = useState(getInitialTechnique);
+  const [durationMin, setDurationMin] = useState(1);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [tally, setTally] = useState(0);
+  const [isPaused, setIsPaused] = useState(false);
+  const [totalCalmScore, setTotalCalmScore] = useState(0);
+
+  const tickRef = useRef(null);
+  const screenFade = useRef(new Animated.Value(1)).current;
+
+  const technique = TECHNIQUES[techniqueId] || TECHNIQUES.progressive_muscle;
+  const colors = THEME[techniqueId] || THEME.progressive_muscle || { primary: '#059669', secondary: '#A7F3D0', background: '#041B13', accent: '#10B981' };
+
+  const primaryTextColor = isDarkMode ? '#FFFFFF' : (theme.textPrimary || '#0F172A');
+  const secondaryTextColor = isDarkMode ? 'rgba(255,255,255,0.75)' : (theme.textSecondary || '#334155');
+  const mutedTextColor = isDarkMode ? 'rgba(255,255,255,0.45)' : (theme.textMuted || '#64748B');
+  const containerBg = isDarkMode ? (colors?.background || '#0A1628') : (theme.bgPrimary || '#F8FAFC');
+  const totalSeconds = durationMin * 60;
+
+  useEffect(() => {
+    if (screen !== 'session') return;
+    tickRef.current = setInterval(() => {
+      if (isPaused) return;
+      setElapsedSeconds(prev => {
+        const next = prev + 1;
+        if (next >= totalSeconds) {
+          clearInterval(tickRef.current);
+          setScreen('complete');
+        }
+        return next;
+      });
+    }, 1000);
+    return () => clearInterval(tickRef.current);
+  }, [screen, isPaused, totalSeconds]);
+
+  const fadeTo = (next) => {
+    Animated.timing(screenFade, { toValue: 0, duration: 180, useNativeDriver: false }).start(() => {
+      setScreen(next);
+      Animated.timing(screenFade, { toValue: 1, duration: 260, useNativeDriver: false }).start();
+    });
+  };
+
+  const startSession = () => {
+    setElapsedSeconds(0);
+    setTally(0);
+    setTotalCalmScore(0);
+    setIsPaused(false);
+    fadeTo('session');
+  };
+
+  const endSessionEarly = () => {
+    clearInterval(tickRef.current);
+    fadeTo('complete');
+  };
+
+  const handleTally = useCallback(() => {
+    setTally(t => t + 1);
+    setTotalCalmScore(s => s + 10);
+  }, []);
+
+  const tallyLabel =
+    techniqueId === 'progressive_muscle' ? 'muscle groups released' :
+      techniqueId === 'pattern_alignment' ? 'patterns aligned' :
+        techniqueId === 'guided_imagery' ? 'forest stations reached' :
+          'relaxation moments';
+
+  if (screen === 'setup') {
+    return (
+      <Animated.View style={[styles.container, { backgroundColor: containerBg, opacity: screenFade }]}>
+        <ScrollView contentContainerStyle={styles.setupScroll} showsVerticalScrollIndicator={false}>
+          <Text style={[styles.setupTitle, { color: primaryTextColor }]}>🧘 Grounding Exercises</Text>
+          <Text style={[styles.setupSubtitle, { color: secondaryTextColor }]}>
+            Simple, calming activities designed to help you relax your mind and body without any rush.
+            Earn calm points as you progress!
+          </Text>
+
+          <Text style={[styles.sectionLabel, { color: mutedTextColor }]}>Select Technique</Text>
+          {Object.values(TECHNIQUES).map((t) => (
+            <TouchableOpacity
+              key={t.id}
+              style={[
+                styles.techCard,
+                { borderColor: techniqueId === t.id ? colors.accent : 'rgba(255,255,255,0.08)', backgroundColor: isDarkMode ? 'rgba(255,255,255,0.03)' : (theme.bgSecondary || '#FFFFFF') }
+              ]}
+              onPress={() => setTechniqueId(t.id)}
+            >
+              <View style={styles.techCardHeader}>
+                <Text style={[styles.techName, { color: primaryTextColor }]}>{t.name}</Text>
+                <Text style={[styles.techSubtitle, { color: colors.accent }]}>{t.subtitle}</Text>
+              </View>
+              <Text style={[styles.techDescription, { color: secondaryTextColor }]}>{t.description}</Text>
+              <Text style={[styles.techCitation, { color: mutedTextColor }]}>{t.citation}</Text>
+            </TouchableOpacity>
+          ))}
+
+          <Text style={[styles.sectionLabel, { color: mutedTextColor }]}>Session Length</Text>
+          <View style={styles.durationRow}>
+            {DURATION_OPTIONS_MIN.map(min => (
+              <TouchableOpacity
+                key={min}
+                style={[
+                  styles.durationChip,
+                  { backgroundColor: durationMin === min ? colors.accent : (isDarkMode ? 'rgba(255,255,255,0.05)' : (theme.bgSecondary || '#FFFFFF')), borderColor: theme.border }
+                ]}
+                onPress={() => setDurationMin(min)}
+              >
+                <Text style={[styles.durationChipText, { color: durationMin === min ? '#FFFFFF' : primaryTextColor }]}>{min} min</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <TouchableOpacity
+            style={[styles.startButton, { backgroundColor: colors.accent }]}
+            onPress={startSession}
+          >
+            <Text style={styles.startButtonText}>Begin Session ▶</Text>
+          </TouchableOpacity>
+
+          <Text style={[styles.disclaimer, { color: mutedTextColor }]}>
+            Biophilic Shinrin-Yoku imagery engages prefrontal restorative networks to lower stress.
+          </Text>
+        </ScrollView>
+      </Animated.View>
+    );
+  }
+
+  if (screen === 'session') {
+    const progress = Math.min(1, elapsedSeconds / totalSeconds);
+    return (
+      <Animated.View style={[styles.container, { backgroundColor: containerBg, opacity: screenFade }]}>
+        <View style={styles.sessionProgressTrack}>
+          <View style={[styles.sessionProgressFill, { width: `${progress * 100}%`, backgroundColor: colors.accent }]} />
+        </View>
+
+        <View style={styles.techniqueHeader}>
+          <Text style={[styles.techniqueHeaderText, { color: primaryTextColor }]}>
+            {technique.emoji} {technique.name}
+          </Text>
+          <Text style={[styles.techniqueHeaderSub, { color: mutedTextColor }]}>
+            ⏱️ {Math.floor(elapsedSeconds / 60)}:{String(elapsedSeconds % 60).padStart(2, '0')} / {durationMin}:00
+          </Text>
+          <Text style={styles.calmScoreText}>
+            🌟 Calm Score: {totalCalmScore}
+          </Text>
+        </View>
+
+        <View style={{ flex: 1 }}>
+          {techniqueId === 'progressive_muscle' && <MuscleRelaxationActivity colors={colors} onTally={handleTally} />}
+          {techniqueId === 'pattern_alignment' && <PatternAlignActivity colors={colors} onTally={handleTally} />}
+          {techniqueId === 'soft_fascination' && <NatureRestorationActivity colors={colors} onTally={handleTally} />}
+          {techniqueId === 'guided_imagery' && <GuidedForestWalkActivity colors={colors} onTally={handleTally} />}
+        </View>
+
+        <View style={styles.sessionFooter}>
+          {tallyLabel && <Text style={[styles.breathCountText, { color: secondaryTextColor }]}>✅ {tally} {tallyLabel}</Text>}
+          <View style={styles.footerButtons}>
+            <TouchableOpacity onPress={() => setIsPaused(p => !p)}>
+              <Text style={[styles.endLink, { color: mutedTextColor }]}>{isPaused ? '▶️ Resume' : '⏸️ Pause'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={endSessionEarly}>
+              <Text style={[styles.endLink, { color: mutedTextColor }]}>⏹️ End session</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Animated.View>
+    );
+  }
+
+  // Complete screen
+  const minutesDone = (elapsedSeconds / 60).toFixed(1);
+  const stressReduction = Math.min(100, totalCalmScore * 0.5);
+
+  return (
+    <Animated.View style={[styles.container, { backgroundColor: containerBg, opacity: screenFade }]}>
+      <LinearGradient
+        colors={['rgba(16, 185, 129, 0.1)', 'transparent']}
+        style={styles.completeGradient}
+      />
+
+      <Text style={[styles.completeTitle, { color: primaryTextColor }]}>🎉 Session Complete!</Text>
+      <Text style={[styles.completeSubtitle, { color: secondaryTextColor }]}>Great job taking time for yourself</Text>
+
+      <View style={styles.completeStatsRow}>
+        <View style={styles.completeStat}>
+          <Text style={[styles.completeStatValue, { color: colors.accent }]}>🌟</Text>
+          <Text style={[styles.completeStatLabel, { color: primaryTextColor }]}>{totalCalmScore}</Text>
+          <Text style={[styles.completeStatSub, { color: mutedTextColor }]}>Calm Points</Text>
+        </View>
+        <View style={styles.completeStat}>
+          <Text style={[styles.completeStatValue, { color: colors.accent }]}>⏱️</Text>
+          <Text style={[styles.completeStatLabel, { color: primaryTextColor }]}>{minutesDone}m</Text>
+          <Text style={[styles.completeStatSub, { color: mutedTextColor }]}>Time Spent</Text>
+        </View>
+        <View style={styles.completeStat}>
+          <Text style={[styles.completeStatValue, { color: colors.accent }]}>📉</Text>
+          <Text style={[styles.completeStatLabel, { color: primaryTextColor }]}>{stressReduction.toFixed(0)}%</Text>
+          <Text style={[styles.completeStatSub, { color: mutedTextColor }]}>Est. Reduction</Text>
+        </View>
+      </View>
+
+      <Text style={[styles.completeNote, { color: secondaryTextColor }]}>{technique.description}</Text>
+
+      <TouchableOpacity
+        style={[styles.startButton, { backgroundColor: colors.accent }]}
+        onPress={() => (onFinish ? onFinish() : startSession())}
+      >
+        <Text style={styles.startButtonText}>Complete Exercise & Submit Rating →</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.secondaryButton} onPress={() => fadeTo('setup')}>
+        <Text style={styles.secondaryButtonText}>Choose another technique</Text>
+      </TouchableOpacity>
+    </Animated.View>
+  );
+};
+
+// Backward-compatible aliases for existing imports.
+export const CognitiveDeStressGame = GroundedStressReliefSession;
+export const SensoryGroundingSession = GroundedStressReliefSession;
+
+const styles = StyleSheet.create({
+  container: { flex: 1, alignItems: 'center', overflow: 'hidden', width: '100%' },
+
+  setupScroll: { paddingTop: 60, paddingHorizontal: 24, paddingBottom: 40, width: '100%' },
+  setupTitle: { color: '#fff', fontSize: 28, fontWeight: '300', marginBottom: 8 },
+  setupSubtitle: { color: 'rgba(255,255,255,0.5)', fontSize: 13, lineHeight: 19, marginBottom: 28 },
+  sectionLabel: {
+    color: 'rgba(255,255,255,0.4)', fontSize: 11, textTransform: 'uppercase',
+    letterSpacing: 1, marginBottom: 10, marginTop: 6,
   },
-  statusText: {
-    color: '#C7D2FE',
-    fontSize: 11,
-    fontWeight: '600',
-    marginRight: 12,
+  techCard: {
+    borderWidth: 1, borderRadius: 14, padding: 14, marginBottom: 10,
+    backgroundColor: 'rgba(255,255,255,0.03)',
   },
-  difficultyText: {
-    color: '#64748B',
-    fontSize: 10,
+  techCardHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 },
+  techName: { color: '#fff', fontSize: 15, fontWeight: '500' },
+  techSubtitle: { fontSize: 13, fontWeight: '600' },
+  techDescription: { color: 'rgba(255,255,255,0.55)', fontSize: 12, lineHeight: 17, marginBottom: 6 },
+  techCitation: { color: 'rgba(255,255,255,0.3)', fontSize: 10, fontStyle: 'italic' },
+  durationRow: { flexDirection: 'row', gap: 10, marginBottom: 28 },
+  durationChip: {
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)', borderRadius: 20,
+    paddingVertical: 8, paddingHorizontal: 18,
   },
-  controls: {
-    position: 'absolute',
-    bottom: 30,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-    zIndex: 10,
+  durationChipText: { color: '#fff', fontSize: 13 },
+  startButton: { borderRadius: 26, paddingVertical: 15, alignItems: 'center', marginBottom: 14, width: '100%', paddingHorizontal: 20 },
+  startButtonText: { color: '#0A1628', fontSize: 16, fontWeight: '600' },
+  secondaryButton: { paddingVertical: 10, alignItems: 'center' },
+  secondaryButtonText: { color: 'rgba(255,255,255,0.5)', fontSize: 13 },
+  disclaimer: { color: 'rgba(255,255,255,0.25)', fontSize: 10, textAlign: 'center', marginTop: 4 },
+
+  sessionProgressTrack: {
+    position: 'absolute', top: 0, left: 0, right: 0, height: 3,
+    backgroundColor: 'rgba(255,255,255,0.06)',
   },
-  controlGroup: {
-    backgroundColor: 'rgba(15, 10, 26, 0.7)',
-    paddingVertical: 8,
-    paddingHorizontal: 20,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
-    alignItems: 'center',
-  },
-  controlText: {
-    color: '#94A3B8',
-    fontSize: 11,
-    fontWeight: '500',
-    textAlign: 'center',
-  },
-  restartButton: {
-    marginTop: 8,
-    backgroundColor: 'rgba(236, 72, 153, 0.2)',
-    paddingVertical: 6,
-    paddingHorizontal: 20,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#EC4899',
-  },
-  restartText: {
-    color: '#EC4899',
-    fontSize: 14,
-    fontWeight: 'bold',
+  sessionProgressFill: { height: '100%' },
+  techniqueHeader: { alignItems: 'center', marginTop: 12, marginBottom: 4 },
+  techniqueHeaderText: { color: 'rgba(255,255,255,0.7)', fontSize: 13, fontWeight: '500' },
+  techniqueHeaderSub: { color: 'rgba(255,255,255,0.3)', fontSize: 10, marginTop: 2 },
+  calmScoreText: { color: '#F59E0B', fontSize: 12, fontWeight: '600', marginTop: 2 },
+
+  sessionFooter: { alignItems: 'center', marginBottom: 10, gap: 6 },
+  breathCountText: { color: 'rgba(255,255,255,0.6)', fontSize: 12 },
+  footerButtons: { flexDirection: 'row', gap: 20 },
+  endLink: { color: 'rgba(255,255,255,0.35)', fontSize: 12, textDecorationLine: 'underline' },
+
+  completeGradient: { position: 'absolute', top: 0, left: 0, right: 0, height: 300 },
+  completeTitle: { color: '#fff', fontSize: 26, fontWeight: '700', marginTop: 80, marginBottom: 8 },
+  completeSubtitle: { color: 'rgba(255,255,255,0.6)', fontSize: 14, marginBottom: 30 },
+  completeStatsRow: { flexDirection: 'row', gap: 24, marginBottom: 30 },
+  completeStat: { alignItems: 'center' },
+  completeStatValue: { fontSize: 28, fontWeight: '600' },
+  completeStatLabel: { color: '#fff', fontSize: 16, fontWeight: '700', marginTop: 4 },
+  completeStatSub: { color: 'rgba(255,255,255,0.4)', fontSize: 11, marginTop: 2 },
+  completeNote: {
+    color: 'rgba(255,255,255,0.55)', fontSize: 13, lineHeight: 19,
+    textAlign: 'center', paddingHorizontal: 36, marginBottom: 40,
   },
 });

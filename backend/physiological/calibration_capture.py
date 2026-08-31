@@ -57,14 +57,21 @@ from backend.physiological.firebase_service import (
     save_baseline_adaptation, save_personal_stress_threshold, save_resting_scores,
 )
 
-# Task-calibration capture size: 1 window (WINDOW_SEC=60) is what this
-# scoring path needs regardless of how long the onboarding quiz UI runs
-# for -- StressApp/modules/eeg/screens/EegThresholdTaskScreen.js's own
-# TASK_DURATION_SEC (75s, deliberately longer than this 60s + EEG's own
-# ~53s worst case, so the quiz's countdown absorbs the capture time
-# instead of the user seeing a post-quiz wait) is independent of this
-# constant -- no extra constant needed here beyond WINDOW_SEC itself.
-N_TASK_WIN = 1
+# Task-calibration capture size, in WINDOW_SEC=60 windows. Was 1 (only
+# ~1 minute of task data), then 6 (6 minutes) -- now 8 (8 minutes) to
+# match StressApp/modules/eeg/screens/EegThresholdTaskScreen.js's
+# onboarding task, now a 5-activity sequence (serial subtraction -> maths
+# quiz -> sequence-recall puzzle -> ticking-clock sorter -> Stroop)
+# chosen specifically because a single short window's mean was coming out
+# well below the population decision threshold (~0.4 vs ~0.71) -- the
+# model needs SUSTAINED elevated load to register confidently, and a
+# 1-2 minute task mostly just captures physiological ramp-up (HRV/GSR
+# response lags the stressor by tens of seconds), not the sustained state
+# itself. run_task_calibration_capture() below now averages prob_stress
+# across all N_TASK_WIN windows (dropping individually-rejected ones)
+# rather than using only the first, so the extra windows actually get
+# used, not just requested.
+N_TASK_WIN = 8
 
 # Hard wall-clock ceiling on both capture loops below. Both are entirely
 # message-driven (close_window() only ever runs from inside on_message()),
@@ -431,18 +438,28 @@ def run_calibration_capture(user_id, on_progress=None):
 
 
 def run_task_calibration_capture(user_id, on_progress=None):
-    """Personal-threshold task-phase capture: captures exactly N_TASK_WIN=1
-    window (WINDOW_SEC=60, the shared task duration this project settled
-    on -- see EEG's mirror, backend/psychological/mqtt_bridge.py's
-    N_THRESHOLD_TASK_BLOCKS / THRESHOLD_TASK_POLL_INTERVAL_SEC) from a
-    fresh MQTT connection dedicated to this one call (see
-    _connect_capture_client() -- no settle delay, baseline calibration run
-    moments earlier already confirmed good ring contact), scores it the
-    same way save_calibration_windows() scores resting windows
-    (predict_window(), baseline-normalized), and computes this user's
-    personal STRESS_DECISION_THRESHOLD against the resting scores that
+    """Personal-threshold task-phase capture: captures N_TASK_WIN
+    consecutive windows (WINDOW_SEC=60 each -- see EEG's mirror,
+    backend/psychological/mqtt_bridge.py's N_THRESHOLD_TASK_BLOCKS /
+    BLOCK_SEC) from a fresh MQTT connection dedicated to this one call
+    (see _connect_capture_client() -- no settle delay, baseline
+    calibration run moments earlier already confirmed good ring contact),
+    scores EACH window the same way save_calibration_windows() scores
+    resting windows (predict_window(), baseline-normalized), and computes
+    this user's personal STRESS_DECISION_THRESHOLD from the MEAN of all
+    successfully-scored task windows against the resting scores that
     capture already saved (see compute_personal_stress_threshold(),
     predictor.py).
+
+    N_TASK_WIN > 1 matters here specifically: a single 60s window's
+    average is heavily diluted by the first ~15-20s of physiological
+    ramp-up (autonomic/HRV response has real latency) before the task's
+    own difficulty has had time to build any sustained load -- averaging
+    across the whole multi-minute task (StressApp/modules/eeg/screens/
+    EegThresholdTaskScreen.js's serial-subtraction + maths + n-back +
+    Stroop sequence) instead of just its first minute is what actually
+    lets a real, sustained response come through instead of being
+    swamped by that one early window's ramp-up.
 
     on_progress(status, extra) is called at:
       'capturing'      extra={}
@@ -538,20 +555,32 @@ def run_task_calibration_capture(user_id, on_progress=None):
 
         _notify('saving')
         try:
-            w = collected_windows[0]
-            features_2d, motion_rejected, feat_dict, hrv_is_fallback = extract_features(
-                w['ibi_array'], w['gsr_adc_array'], w['acc_array'], w['gsr_calibration'], actual_fs=w['actual_fs'],
-            )
-            if motion_rejected or hrv_is_fallback:
-                _notify('error', message='Task window rejected (movement or insufficient heart-rate data)')
+            # Score every collected window individually and drop only the
+            # individual ones that fail (movement/insufficient heart-rate
+            # signal) rather than aborting the whole capture over one bad
+            # window out of N_TASK_WIN -- with several minutes of task
+            # data now, the user's hands being busy typing during any
+            # single window is expected, not fatal.
+            task_scores = []
+            for w in collected_windows:
+                features_2d, motion_rejected, feat_dict, hrv_is_fallback = extract_features(
+                    w['ibi_array'], w['gsr_adc_array'], w['acc_array'], w['gsr_calibration'], actual_fs=w['actual_fs'],
+                )
+                if motion_rejected or hrv_is_fallback:
+                    continue
+                task_scores.append(float(predict_window(features_2d, baseline_mean, baseline_std)['prob_stress']))
+
+            if not task_scores:
+                _notify('error', message='Every task window was rejected (movement or insufficient heart-rate data)')
                 return None
-            task_score = float(predict_window(features_2d, baseline_mean, baseline_std)['prob_stress'])
-            threshold = compute_personal_stress_threshold(resting_scores, [task_score])
+
+            threshold = compute_personal_stress_threshold(resting_scores, task_scores)
             result = {
                 'status': 'ok' if threshold is not None else 'not_separated',
                 'personal_stress_threshold': threshold,
                 'resting_mean': float(np.mean(resting_scores)),
-                'task_mean': task_score,
+                'task_mean': float(np.mean(task_scores)),
+                'n_task_windows': len(task_scores),
             }
             if threshold is not None:
                 save_personal_stress_threshold(user_id, threshold)

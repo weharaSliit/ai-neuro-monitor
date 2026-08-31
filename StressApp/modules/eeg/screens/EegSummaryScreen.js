@@ -17,9 +17,12 @@ import StatusDot from '../../shared/StatusDot';
 import Icon, { NAMES } from '../../shared/Icon';
 import MoodBadge from '../../shared/MoodBadge';
 import LineChart from '../../shared/LineChart';
+import { useCalibrationSummary } from '../../shared/CalibrationGate';
+import { eegClient } from '../../shared/eegApiClient';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import { COLORS } from '../../physiological/config/theme';
 import { useAuth } from '../../../context/AuthContext';
+import { useDeviceStatus } from '../../shared/CalibrationGate';
 import { TASK_STATE_LABELS, EEG_TREND_LABELS } from '../config/config';
 
 // 5 relative band powers (the standard δ/θ/α/β/γ breakdown) + the 3 features
@@ -40,7 +43,7 @@ const FEATURE_TREND_CONFIG = [
     { key: 'theta_beta_ratio', label: 'θ/β ratio', color: '#d97706' },
     { key: 'spectral_entropy', label: 'Spectral entropy', color: '#0d9488' },
 ];
-const TREND_CHART_WIDTH = Dimensions.get('window').width - 2 * 20 - 2 * 18 - 20;
+const TREND_CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
 const TREND_CHART_HEIGHT = 70;
 
 function sortedWindows(windowsObj) {
@@ -61,19 +64,43 @@ function currentStateLabel(latest) {
   return latest.high_load_alert ? 'High Load' : 'Relaxed';
 }
 
-// live_raw is overwritten roughly every 1s while wearable02 is genuinely
-// streaming (backend/psychological/mqtt_bridge.py's _post_live_raw()) --
-// 10s gives generous margin for jitter/a slow poll cycle while still
-// flipping "connected" off promptly once the device actually drops,
-// rather than staying stuck at whatever the last successful write said.
-const LIVE_RAW_STALE_SEC = 10;
-
 function latestWindow(windowsObj) {
   if (!windowsObj) return null;
   const keys = Object.keys(windowsObj).filter((k) => /^\d+$/.test(k));
   if (keys.length === 0) return null;
   keys.sort((a, b) => Number(a) - Number(b));
   return windowsObj[keys[keys.length - 1]];
+}
+
+function percentile(sorted, p) {
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor(p * (sorted.length - 1))));
+  return sorted[idx];
+}
+
+// Clamps a feature-trend series to its own p5-p95 range (+10% padding) before
+// charting -- same fix as AdminEegLiveScreen.js's waveform chart, applied
+// here too. Without it, gifted-charts auto-scales the y-axis to the raw
+// data's own min/max with no protection against outliers -- one anomalous
+// block (e.g. a motion/drift artifact -- see pipeline.py's
+// DELTA_POWER_IMPLAUSIBLE_SD investigation this session, which found
+// affected features can run 2-3 orders of magnitude off) dominates the
+// whole axis and flattens every other, genuinely-informative block into an
+// indistinguishable line along the bottom.
+function clampOutliers(points) {
+  if (!points || points.length < 2) return points;
+  const values = points.map((p) => p.value);
+  const sorted = [...values].sort((a, b) => a - b);
+  let lo = percentile(sorted, 0.05);
+  let hi = percentile(sorted, 0.95);
+  if (hi <= lo) {
+    const pad = Math.abs(lo) * 0.1 || 1;
+    lo -= pad;
+    hi += pad;
+  }
+  const pad = (hi - lo) * 0.1;
+  const clampLo = lo - pad;
+  const clampHi = hi + pad;
+  return points.map((p) => ({ ...p, value: Math.min(clampHi, Math.max(clampLo, p.value)) }));
 }
 
 function DistBar({ label, value, total, color, muted }) {
@@ -90,52 +117,36 @@ function DistBar({ label, value, total, color, muted }) {
 
 export default function EegSummaryScreen() {
   const { theme, COLORS } = useTheme();
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const userId = user?.userId;
 
-  const [currentSessionId, setCurrentSessionId] = useState(null);
-  const [hasSession, setHasSession] = useState(false);
+  // eegOnline/eegSessionId: shared with AccountSetupScreen.js/
+  // CalibrateBreathingCard.js/FusionSessionScreen.js's device-status row --
+  // was previously a SEPARATE, dead local implementation here keyed off the
+  // old live_raw field, which the backend stopped writing entirely once EEG
+  // liveness moved to the latest per-block record's own timestamp (see
+  // useDeviceStatus()'s own docstring). That field never updating meant
+  // hasSession here was permanently stuck false, silently hiding every card
+  // on this screen (Current State/Quality/Feature Trends all gate on it)
+  // regardless of whether real data existed. useDeviceStatus() also already
+  // covers the calibration-in-progress liveness signal this session added.
+  const { eegOnline: hasSession, eegSessionId: currentSessionId } = useDeviceStatus(userId, db);
+  const { eeg: eegCalibration } = useCalibrationSummary(userId, token);
+
   const [sessionWindows, setSessionWindows] = useState(null);
   const [recentSessions, setRecentSessions] = useState([]);
   const [sessionDist, setSessionDist] = useState({ normal: 0, stress: 0 });
+  const [driftWeeks, setDriftWeeks] = useState(null);
 
   useEffect(() => {
     if (!userId) return;
-    const pRef = ref(db, 'psychological/current_session_id');
-    const h = onValue(pRef, (snap) => {
-      setCurrentSessionId(snap.val() || null);
-    });
-    return () => off(pRef, 'value', h);
-  }, [userId]);
-
-  // hasSession reflects whether wearable02 is genuinely streaming right
-  // now. The session pointer alone isn't enough -- it's never cleared, so
-  // it stays truthy forever once any session has existed. live_raw's own
-  // existence isn't enough either -- it's overwritten in place, so once
-  // written it stays "there" even after the device goes offline for the
-  // rest of that session. Only the write's own timestamp actually tells
-  // you whether it's still live -- recomputed on an interval since a
-  // Firebase listener alone won't notice time passing with no new writes.
-  const [lastRawTs, setLastRawTs] = useState(null);
-
-  useEffect(() => {
-    if (!userId || !currentSessionId) {
-      setLastRawTs(null);
-      return;
-    }
-    const rawRef = ref(db, `psychological/${userId}/${currentSessionId}/live_raw`);
-    const h = onValue(rawRef, (snap) => setLastRawTs(snap.val()?.timestamp ?? null));
-    return () => off(rawRef, 'value', h);
-  }, [userId, currentSessionId]);
-
-  useEffect(() => {
-    const evaluate = () => {
-      setHasSession(lastRawTs != null && (Date.now() / 1000 - lastRawTs) < LIVE_RAW_STALE_SEC);
-    };
-    evaluate();
-    const t = setInterval(evaluate, 3000);
-    return () => clearInterval(t);
-  }, [lastRawTs]);
+    let cancelled = false;
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    eegClient.get(`/calibration/${userId}/drift-history`, { headers })
+      .then((res) => { if (!cancelled) setDriftWeeks(res.data?.weeks || null); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [userId, token]);
 
   useEffect(() => {
     if (!userId || !currentSessionId) {
@@ -157,7 +168,9 @@ export default function EegSummaryScreen() {
     const points = windowsList
       .filter((w) => !w.skipped && w.features_eeg?.bipolar?.[key] != null)
       .map((w) => ({ value: w.features_eeg.bipolar[key], date: new Date(w.timestamp_end * 1000) }));
-    return { key, label, color, points, last: points[points.length - 1]?.value };
+    // last (the numeric readout above each chart) stays the TRUE value --
+    // only the plotted line itself gets outlier-clamped.
+    return { key, label, color, points: clampOutliers(points), last: points[points.length - 1]?.value };
   });
   const hasFeatureTrends = featureSeries.some((s) => s.points.length > 1);
 
@@ -252,6 +265,37 @@ export default function EegSummaryScreen() {
           </Card>
         )}
 
+        {/* Calibration Drift -- weekly mean task_state_score vs. this
+            user's own earliest live EEG samples after calibration (see
+            compute_eeg_baseline_drift_history(), backend/psychological/
+            firebase_service.py, for why EEG's reference point differs from
+            Ring's resting-calibration mean). Weeks with too few windows to
+            be meaningful are dropped server-side, not shown as zero. */}
+        {Array.isArray(driftWeeks) && driftWeeks.some((w) => w.mean_task_state_score != null) && (
+          <Card accentColor={COLORS.brand} elevated style={styles.card}>
+            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 4 }]}>Calibration Drift</Text>
+            <Text style={[styles.cardSub, { color: t.textMuted, marginBottom: 12 }]}>
+              {eegCalibration?.drift?.checked && eegCalibration.drift.drift_detected
+                ? 'Your recent readings have shifted from your original calibration — recalibrating is recommended.'
+                : 'How your recent cognitive-load readings compare to your earliest readings after calibration, week by week.'}
+            </Text>
+            <LineChart
+              points={driftWeeks
+                .filter((w) => w.mean_task_state_score != null)
+                .map((w) => ({ value: Math.round(w.mean_task_state_score * 100), date: w.week_start }))}
+              width={TREND_CHART_WIDTH}
+              height={140}
+              color={COLORS.brand}
+              maxValue={100}
+              suffix="%"
+              baselineValue={eegCalibration?.drift?.original_resting_mean != null
+                ? Math.round(eegCalibration.drift.original_resting_mean * 100) : undefined}
+              baselineLabel="Your earliest reading"
+              baselineColor={COLORS.normal}
+            />
+          </Card>
+        )}
+
         {/* Feature Trends: how the extracted signal features are moving
             block-to-block (~25s cadence) across this live session. */}
         {hasSession && hasFeatureTrends && (
@@ -326,8 +370,7 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', marginBottom: 18 },
   headerIconCircle: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
   title: { fontSize: 22, fontWeight: '900', letterSpacing: -0.2 },
-  subtitle: { fontSize: 12, marginTop: 2 },
-  card: { marginHorizontal: 20, marginVertical: 8, padding: 18, borderRadius: 22 },
+  card: { marginVertical: 6 },
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   rowGap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   cardTitle: { fontSize: 15, fontWeight: '800' },
@@ -350,7 +393,7 @@ const styles = StyleSheet.create({
   distBarFill: { height: 8, borderRadius: 4 },
   distVal: { fontSize: 12, fontWeight: '800', minWidth: 60, textAlign: 'right' },
   distValue: { width: 22, fontSize: 13, fontWeight: '800', textAlign: 'right' },
-  distLabel: { width: 65, fontSize: 11, fontWeight: '600' },
+  distLabel: { minWidth: 65, fontSize: 11, fontWeight: '600' },
   activityRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1 },
   activityLabel: { fontSize: 13, fontWeight: '700' },
   activitySub: { fontSize: 11, marginTop: 1 },

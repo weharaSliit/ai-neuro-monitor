@@ -11,29 +11,190 @@ import {
   ScrollView
 } from 'react-native';
 import { AppContext } from '../context/AppContext';
+import { ThemeContext } from '../context/ThemeContext';
 import { Header } from '../components/Header';
 import { Timer } from '../components/Timer';
 import { Ionicons } from '@expo/vector-icons';
 
 // Import Interactive Games & Guided Meditation
-import { AdaptiveRainGame } from '../games/AdaptiveRainGame';
-import { ForestGame } from '../games/ForestGame';
-import { OceanGame } from '../games/OceanGame';
 import { FlowerMeadowGame } from '../games/FlowerMeadowGame';
-import { ZenGardenGame } from '../games/ZenGardenGame';
 import { LilyPondGame } from '../games/LilyPondGame';
 import { PulseWaveGame } from '../games/PulseWaveGame';
-import { ParticleFieldGame } from '../games/ParticleFieldGame';
-import { BreathingLightGame } from '../games/BreathingLightGame';
-import { ZenRunnerGame } from '../games/ZenRunnerGame';
-import { LuminaBladeGame } from '../games/LuminaBladeGame';
-import { OrbDefenseGame } from '../games/OrbDefenseGame';
-import { PatternMatrixGame } from '../games/PatternMatrixGame';
 import { CognitiveDeStressGame } from '../games/CognitiveDeStressGame';
 import { MeditationGame } from '../games/MeditationGame';
-import { FocusArcade } from '../games/FocusArcadeGame';
 
 const { width, height } = Dimensions.get('window');
+
+// ═══════════════════════════════════════════════════════════════════════════
+// UNIFIED TECHNIQUE CLINICAL METADATA & NEUROLOGICAL MEANINGS
+// ═══════════════════════════════════════════════════════════════════════════
+const TECHNIQUE_DETAILS = {
+  water_lily_pond: {
+    id: 'water_lily_pond',
+    title: 'Lily Pond Breathing',
+    icon: '🪷',
+    color: '#10B981',
+    bg: 'rgba(16, 185, 129, 0.12)',
+    rank: 'Fast Recovery (90s)',
+    meaningTitle: '🪷 Deep Exhale Relief',
+    meaningDesc: 'Slow exhalations signal your nervous system to calm down, quickly lowering heart rate and body stress.',
+    defaultBpm: 6,
+    hasPace: true,
+    suggestedMin: 1.5,
+    suggestedSec: 90,
+    durationOptions: [1, 1.5, 2, 3],
+  },
+  vagus_humming: {
+    id: 'vagus_humming',
+    title: 'Humming Exhale',
+    icon: '🧘‍♀️',
+    color: '#8B5CF6',
+    bg: 'rgba(139, 92, 246, 0.12)',
+    rank: 'Resonant Sound (2 min)',
+    meaningTitle: '🧘‍♀️ Soothing Sound Vibration',
+    meaningDesc: 'Vocal humming creates gentle vibrations that stimulate your calming nerves to relieve stress.',
+    defaultBpm: 5.5,
+    hasPace: true,
+    suggestedMin: 2,
+    suggestedSec: 120,
+    durationOptions: [1, 2, 3, 4],
+  },
+  cosmic_nebula: {
+    id: 'cosmic_nebula',
+    title: 'Cosmic Nebula',
+    icon: '🌌',
+    color: '#A78BFA',
+    bg: 'rgba(167, 139, 250, 0.12)',
+    rank: 'Heart Resonance (2 min)',
+    meaningTitle: '🌌 Starlight Breathing Rhythm',
+    meaningDesc: 'Breathing smoothly at ~6 breaths per minute aligns your heart rhythm for deep inner calm.',
+    defaultBpm: 6,
+    hasPace: true,
+    suggestedMin: 2,
+    suggestedSec: 120,
+    durationOptions: [1, 2, 3, 4],
+  },
+  flower_meadow: {
+    id: 'flower_meadow',
+    title: 'Flower Meadow',
+    icon: '🌺',
+    color: '#EC4899',
+    bg: 'rgba(236, 72, 153, 0.12)',
+    rank: '4-7-8 Breathing (2.5 min)',
+    meaningTitle: '🌺 4-7-8 Parasympathetic Reset',
+    meaningDesc: '4s inhale, 7s hold, and 8s slow exhale increases relaxation and lowers tension.',
+    defaultBpm: 4.5,
+    hasPace: false,
+    suggestedMin: 2.5,
+    suggestedSec: 150,
+    durationOptions: [1, 2, 2.5, 3],
+  },
+  diaphragmatic_pace: {
+    id: 'diaphragmatic_pace',
+    title: 'Deep Belly Breathing',
+    icon: '🫁',
+    color: '#3B82F6',
+    bg: 'rgba(59, 130, 246, 0.12)',
+    rank: 'Deep Relaxation (3 min)',
+    meaningTitle: '🫁 Abdominal Breath Expansion',
+    meaningDesc: 'Deep belly breathing relaxes chest tightness and slows down a racing pulse.',
+    defaultBpm: 5,
+    hasPace: true,
+    suggestedMin: 3,
+    suggestedSec: 180,
+    durationOptions: [1.5, 2, 3, 4],
+  },
+  box_meditation: {
+    id: 'box_meditation',
+    title: 'Box Breathing',
+    icon: '🧊',
+    color: '#38BDF8',
+    bg: 'rgba(56, 189, 248, 0.12)',
+    rank: '4-4-4-4 Rhythm (3 min)',
+    meaningTitle: '🧊 Balanced Square Breathing',
+    meaningDesc: 'Equal 4s inhale, 4s hold, 4s exhale, and 4s pause restores calm and steady focus.',
+    defaultBpm: 6,
+    hasPace: false,
+    suggestedMin: 3,
+    suggestedSec: 180,
+    durationOptions: [1.5, 2, 3, 4],
+  },
+  soft_fascination: {
+    id: 'soft_fascination',
+    title: 'Nature Scenery',
+    icon: '🌿',
+    color: '#059669',
+    bg: 'rgba(5, 150, 105, 0.12)',
+    rank: 'Nature Rest (3 min)',
+    meaningTitle: '🌿 Restorative Nature Rest',
+    meaningDesc: 'Gentle nature scenes give your brain a break from intense focus and mental tiredness.',
+    defaultBpm: 6,
+    hasPace: false,
+    suggestedMin: 3,
+    suggestedSec: 180,
+    durationOptions: [2, 3, 4, 5],
+  },
+  progressive_muscle: {
+    id: 'progressive_muscle',
+    title: 'Muscle Tension Release',
+    icon: '🦾',
+    color: '#D97706',
+    bg: 'rgba(217, 119, 6, 0.12)',
+    rank: 'Body Tension Release (3.5 min)',
+    meaningTitle: '🦾 Muscle Relaxation',
+    meaningDesc: 'Systematically tensing and releasing muscles releases physical tension and body stress.',
+    defaultBpm: 6,
+    hasPace: false,
+    suggestedMin: 3.5,
+    suggestedSec: 210,
+    durationOptions: [2, 3, 3.5, 5],
+  },
+  guided_imagery: {
+    id: 'guided_imagery',
+    title: 'Guided Forest Walk',
+    icon: '🌲',
+    color: '#047857',
+    bg: 'rgba(4, 120, 87, 0.12)',
+    rank: 'Forest Walk (4 min)',
+    meaningTitle: '🌲 Peaceful Mind Imagery',
+    meaningDesc: 'Multisensory forest trail imagery redirects your thoughts away from worry and stress.',
+    defaultBpm: 6,
+    hasPace: false,
+    suggestedMin: 4,
+    suggestedSec: 240,
+    durationOptions: [2, 3, 4, 5],
+  },
+  pattern_alignment: {
+    id: 'pattern_alignment',
+    title: 'Memory Focus Match',
+    icon: '🧩',
+    color: '#7E57C2',
+    bg: 'rgba(126, 87, 194, 0.12)',
+    rank: 'Focus & Memory (4.5 min)',
+    meaningTitle: '🧩 Focus & Pattern Match',
+    meaningDesc: 'A light visual matching puzzle shifts your active focus away from stressful thoughts.',
+    defaultBpm: 6,
+    hasPace: false,
+    suggestedMin: 4.5,
+    suggestedSec: 270,
+    durationOptions: [2, 3, 4.5, 5],
+  },
+};
+
+const getTechKey = (id) => {
+  const raw = (id || '').toLowerCase();
+  if (raw === 'water_lily_pond' || raw === 'lily_pond') return 'water_lily_pond';
+  if (raw === 'vagus_humming') return 'vagus_humming';
+  if (raw === 'cosmic_nebula') return 'cosmic_nebula';
+  if (raw === 'flower_meadow') return 'flower_meadow';
+  if (raw === 'diaphragmatic_pace') return 'diaphragmatic_pace';
+  if (raw === 'box_meditation') return 'box_meditation';
+  if (raw === 'soft_fascination' || raw === 'nature' || raw === 'cloud_float') return 'soft_fascination';
+  if (raw === 'progressive_muscle' || raw === 'muscle') return 'progressive_muscle';
+  if (raw === 'guided_imagery') return 'guided_imagery';
+  if (raw === 'pattern_alignment' || raw === 'pattern' || raw === 'pattern_align') return 'pattern_alignment';
+  return 'water_lily_pond';
+};
 
 export const GamePlayerScreen = () => {
   const {
@@ -41,376 +202,213 @@ export const GamePlayerScreen = () => {
     selectedSubOption,
     setCurrentScreen
   } = useContext(AppContext);
+  const { theme, isDarkMode, toggleTheme } = useContext(ThemeContext);
 
-  const [gameState, setGameState] = useState('playing'); // playing, paused, completed
+  const subId = selectedSubOption ? selectedSubOption.id : 'water_lily_pond';
+  const techKey = getTechKey(subId);
+  const tech = TECHNIQUE_DETAILS[techKey] || TECHNIQUE_DETAILS.water_lily_pond;
+
+  const [gameState, setGameState] = useState('setup'); // setup, playing, paused, completed
+  const [hasStarted, setHasStarted] = useState(false);
+  const [selectedMin, setSelectedMin] = useState(tech.suggestedMin || 1.5);
+  const [sessionSeconds, setSessionSeconds] = useState((tech.suggestedMin || 1.5) * 60);
+  const [paceBpm, setPaceBpm] = useState(tech.defaultBpm || 6);
   const [score, setScore] = useState(0);
   const [level, setLevel] = useState(1);
-  const [achievements, setAchievements] = useState([]);
-  const [showStats, setShowStats] = useState(false);
   const [gameTime, setGameTime] = useState(0);
 
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const scaleAnim = useRef(new Animated.Value(1)).current;
-  const slideAnim = useRef(new Animated.Value(0)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
-
   const timerRef = useRef(null);
-  const statsInterval = useRef(null);
 
-  const subId = selectedSubOption ? selectedSubOption.id : 'resonance_circle';
-
-  // Game metadata
-  const gameMetadata = {
-    // Focus Arcade Games
-    resonance_circle: {
-      title: 'Resonance Circle',
-      icon: '🔄',
-      color: '#60A5FA',
-      description: 'Visual biofeedback for heart rate variability training using paced resonance'
-    },
-    mindful_sweep: {
-      title: 'Mindful Sweep',
-      icon: '🧠',
-      color: '#34D399',
-      description: 'Gentle attention guidance through body awareness zones'
-    },
-    aurora_flow: {
-      title: 'Aurora Flow',
-      icon: '🌌',
-      color: '#C084FC',
-      description: 'Paced color transition training for parasympathetic activation'
-    },
-    serenity_spiral: {
-      title: 'Serenity Spiral',
-      icon: '🌀',
-      color: '#FBBF24',
-      description: 'Calming spiral meditation for attention restoration therapy'
-    },
-    stillness_dots: {
-      title: 'Stillness Dots',
-      icon: '🎯',
-      color: '#F472B6',
-      description: 'Visual anchoring technique for attention stabilization'
-    },
-
-    // Guided Meditation & Breathwork
-    box_meditation: {
-      title: 'Box Meditation',
-      icon: '📦',
-      color: '#38BDF8',
-      description: 'Structured 4-4-4-4 visual pacing for rapid autonomic calm'
-    },
-    zen_body_scan: {
-      title: 'Zen Body Scan',
-      icon: '🧘',
-      color: '#10B981',
-      description: 'Mindful muscle relaxation with expanding aura visuals'
-    },
-    chakra_meditation: {
-      title: 'Chakra Harmonizer',
-      icon: '✨',
-      color: '#EC4899',
-      description: '432Hz & 528Hz frequency alignment for deep mental focus'
-    },
-    transcendental_mind: {
-      title: 'Silent Zen Timer',
-      icon: '🔔',
-      color: '#F59E0B',
-      description: 'Minimalist meditation timer with periodic singing bowl bells'
-    },
-    sound_meditation: {
-      title: 'Acoustic Meditation',
-      icon: '🎵',
-      color: '#818CF8',
-      description: 'Resonant soundscape meditation for effortless presence'
-    },
-
-    // Sensory & Tactile Games
-    rain_scene: {
-      title: 'Rain Meditation',
-      icon: '🌧️',
-      color: '#38BDF8',
-      description: 'Soothing rain sounds with interactive ripples'
-    },
-    sunset_glow: {
-      title: 'Sunset Glow',
-      icon: '🌅',
-      color: '#F59E0B',
-      description: 'Warm dusk horizon color transitions for circadian calming'
-    },
-    mountain_breeze: {
-      title: 'Mountain Breeze',
-      icon: '🏔️',
-      color: '#34D399',
-      description: 'Crisp mountain wind flows reacting to touch orientation'
-    },
-    forest_scene: {
-      title: 'Forest Adventure',
-      icon: '🌲',
-      color: '#10B981',
-      description: 'Collect fireflies in an enchanted forest'
-    },
-    ocean_scene: {
-      title: 'Ocean Waves',
-      icon: '🌊',
-      color: '#3B82F6',
-      description: 'Ride the waves with calming ocean sounds'
-    },
-    flower_meadow: {
-      title: 'Bloom Garden',
-      icon: '🌺',
-      color: '#EC4899',
-      description: 'Guided 4-7-8 breath relaxation with living garden ecosystem'
-    },
-    zen_rock_garden: {
-      title: 'Zen Garden',
-      icon: '🪨',
-      color: '#F59E0B',
-      description: 'Rake sand patterns for mindfulness'
-    },
-    water_lily_pond: {
-      title: 'Lily Pond',
-      icon: '🪷',
-      color: '#8B5CF6',
-      description: 'Watch lilies bloom in peaceful water'
-    },
-    pulse_wave: {
-      title: 'Pulse Wave',
-      icon: '📳',
-      color: '#F472B6',
-      description: 'Synchronize with healing vibrations'
-    },
-    particle_field: {
-      title: 'Particle Field',
-      icon: '✨',
-      color: '#A78BFA',
-      description: 'Manipulate particles with touch'
-    },
-    breathing_light: {
-      title: 'Breathing Light',
-      icon: '💡',
-      color: '#818CF8',
-      description: 'Follow the light for deep relaxation'
-    },
-
-    // Cognitive De-Stress & Fidget Games
-    bubble_pop: {
-      title: 'Zen Bubble Pop',
-      icon: '🧼',
-      color: '#F43F5E',
-      description: 'Tactile stress bubble popping with satisfying visual particle bursts'
-    },
-    pattern_align: {
-      title: 'Pattern Alignment',
-      icon: '🧩',
-      color: '#3B82F6',
-      description: 'Frosted glass pattern matching puzzle to soothe overthinking'
-    },
-    stress_shatter: {
-      title: 'Stress Release Shatter',
-      icon: '💥',
-      color: '#EF4444',
-      description: 'Tap-to-shatter dark glass stress objects into harmless shards'
-    },
-    cloud_float: {
-      title: 'Cloud Floating',
-      icon: '☁️',
-      color: '#38BDF8',
-      description: 'Interact with soft drifting clouds in an open sky sanctuary'
-    },
-    sand_drop: {
-      title: 'Cascade Sand',
-      icon: '⏳',
-      color: '#F59E0B',
-      description: 'Granular sand fall physics with calming hourglass flow'
-    },
-    cosmic_nebula: {
-      title: 'Cosmic Nebula',
-      icon: '🌌',
-      color: '#A78BFA',
-      description: 'Deep galaxy dust particles expanding to breathing pulse'
-    },
-    crystal_cave: {
-      title: 'Crystal Cave',
-      icon: '💎',
-      color: '#06B6D4',
-      description: 'Resonant crystal cavern with glowing harmonic audio visualizers'
-    }
-  };
-
-  const meta = gameMetadata[subId] || gameMetadata.resonance_circle;
-
-  // Pulsing animation for the game container
   useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseAnim, {
-          toValue: 1.02,
-          duration: 2000,
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulseAnim, {
-          toValue: 1,
-          duration: 2000,
-          useNativeDriver: true,
-        }),
-      ])
-    ).start();
-  }, []);
-
-  // Track game time
-  useEffect(() => {
-    statsInterval.current = setInterval(() => {
-      setGameTime(prev => prev + 1);
-    }, 1000);
-
-    return () => clearInterval(statsInterval.current);
-  }, []);
-
-  // Achievement system
-  const checkAchievements = (newScore) => {
-    const newAchievements = [];
-
-    if (newScore >= 100 && !achievements.includes('first_100')) {
-      newAchievements.push('first_100');
+    if (tech) {
+      setSelectedMin(tech.suggestedMin || 1.5);
+      setSessionSeconds((tech.suggestedMin || 1.5) * 60);
+      if (tech.defaultBpm) setPaceBpm(tech.defaultBpm);
     }
-    if (newScore >= 500 && !achievements.includes('score_500')) {
-      newAchievements.push('score_500');
+  }, [techKey]);
+
+  const handleStartSession = (durationInSec) => {
+    if (typeof durationInSec === 'number' && durationInSec > 0) {
+      setSessionSeconds(durationInSec);
+    } else {
+      setSessionSeconds(selectedMin * 60);
     }
-    if (gameTime >= 60 && !achievements.includes('minute_master')) {
-      newAchievements.push('minute_master');
-    }
-    if (level >= 5 && !achievements.includes('level_up')) {
-      newAchievements.push('level_up');
-    }
-
-    if (newAchievements.length > 0) {
-      setAchievements(prev => [...prev, ...newAchievements]);
-      // Show achievement notification
-      setShowStats(true);
-      setTimeout(() => setShowStats(false), 3000);
-    }
-  };
-
-  const renderGameCanvas = () => {
-    switch (subId) {
-      // Focus Arcade
-      case 'resonance_circle':
-      case 'mindful_sweep':
-      case 'aurora_flow':
-      case 'serenity_spiral':
-      case 'stillness_dots':
-        return <FocusArcade mode={subId} initialMode={subId} />;
-
-      // Guided Meditation
-      case 'box_meditation':
-        return <MeditationGame mode="box_meditation" initialMode="box_meditation" />;
-      case 'zen_body_scan':
-        return <MeditationGame mode="zen_body_scan" initialMode="zen_body_scan" />;
-      case 'chakra_meditation':
-        return <MeditationGame mode="chakra_meditation" initialMode="chakra_meditation" />;
-      case 'transcendental_mind':
-        return <MeditationGame mode="transcendental_mind" initialMode="transcendental_mind" />;
-      case 'sound_meditation':
-        return <MeditationGame mode="sound_meditation" initialMode="sound_meditation" />;
-
-      // Nature Sensory & Ambient Environments
-      case 'rain_scene':
-      case 'sunset_glow':
-      case 'mountain_breeze':
-        return <AdaptiveRainGame mode={subId} />;
-      case 'forest_scene':
-        return <ForestGame />;
-      case 'ocean_scene':
-        return <OceanGame />;
-      case 'flower_meadow':
-        return <FlowerMeadowGame />;
-      case 'zen_rock_garden':
-        return <ZenGardenGame />;
-      case 'water_lily_pond':
-        return <LilyPondGame />;
-      case 'pulse_wave':
-      case 'cosmic_nebula':
-      case 'crystal_cave':
-        return <PulseWaveGame mode={subId} />;
-      case 'particle_field':
-        return <ParticleFieldGame />;
-      case 'breathing_light':
-        return <BreathingLightGame />;
-
-      // Cognitive De-Stress & Fidget Arcade
-      case 'bubble_pop':
-      case 'pattern_align':
-      case 'stress_shatter':
-      case 'cloud_float':
-      case 'sand_drop':
-        return <CognitiveDeStressGame mode={subId} />;
-
-      default:
-        return <FocusArcade mode="resonance_circle" initialMode="resonance_circle" />;
-    }
+    setHasStarted(true);
+    setGameState('playing');
   };
 
   const handleFinishGame = () => {
-    // Animate out
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 0,
-        duration: 500,
-        useNativeDriver: true,
-      }),
-      Animated.timing(scaleAnim, {
-        toValue: 0.95,
-        duration: 500,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      setCurrentScreen('Rating');
-    });
+    setGameState('completed');
+    setCurrentScreen('Rating');
   };
 
   const togglePause = () => {
-    setGameState(prev => prev === 'playing' ? 'paused' : 'playing');
+    setGameState(prev => (prev === 'playing' ? 'paused' : 'playing'));
   };
 
-  const handleScoreUpdate = (newScore) => {
-    setScore(newScore);
-    // Check for level ups
-    const newLevel = Math.floor(newScore / 100) + 1;
-    if (newLevel !== level) {
-      setLevel(newLevel);
-      checkAchievements(newScore);
+  // Timer interval
+  useEffect(() => {
+    if (hasStarted && gameState === 'playing') {
+      timerRef.current = setInterval(() => {
+        setGameTime(prev => {
+          const next = prev + 1;
+          if (next >= sessionSeconds) {
+            clearInterval(timerRef.current);
+            handleFinishGame();
+          }
+          return next;
+        });
+      }, 1000);
+    } else {
+      clearInterval(timerRef.current);
+    }
+
+    return () => clearInterval(timerRef.current);
+  }, [hasStarted, gameState, sessionSeconds]);
+
+  const renderGameCanvas = () => {
+    switch (techKey) {
+      case 'water_lily_pond':
+        return <LilyPondGame initialScreen="session" initialDurationMin={selectedMin} initialBpm={paceBpm} onStartSession={handleStartSession} />;
+      case 'flower_meadow':
+        return <FlowerMeadowGame onStartSession={handleStartSession} />;
+      case 'cosmic_nebula':
+        return <PulseWaveGame mode="cosmic_nebula" initialScreen="session" initialDurationMin={selectedMin} initialBpm={paceBpm} onStartSession={handleStartSession} />;
+
+      case 'vagus_humming':
+      case 'diaphragmatic_pace':
+      case 'box_meditation':
+        return <MeditationGame mode={techKey} initialMode={techKey} initialDurationMin={selectedMin} initialBpm={paceBpm} onStartSession={handleStartSession} />;
+
+      case 'soft_fascination':
+      case 'progressive_muscle':
+      case 'guided_imagery':
+      case 'pattern_alignment':
+        return <CognitiveDeStressGame mode={techKey} subOptionId={techKey} initialScreen="session" initialDurationMin={selectedMin} onFinish={handleFinishGame} onStartSession={handleStartSession} />;
+
+      default:
+        return <LilyPondGame initialScreen="session" initialDurationMin={selectedMin} initialBpm={paceBpm} onStartSession={handleStartSession} />;
     }
   };
 
-  const getAchievementIcon = (id) => {
-    const icons = {
-      first_100: '🏅',
-      score_500: '🌟',
-      minute_master: '⏰',
-      level_up: '🎯',
-    };
-    return icons[id] || '✨';
-  };
+  // ═══════════════════════════════════════════════════════════════════════════
+  // UNIFIED BEGIN / SETUP SCREEN (IDENTICAL FOR ALL 10 TECHNIQUES)
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (!hasStarted || gameState === 'setup') {
+    const paceOptions = [4.5, 5, 5.5, 6, 6.5, 7];
+    const durationOptions = tech.durationOptions || [1, 1.5, 2, 3];
 
-  const getAchievementText = (id) => {
-    const texts = {
-      first_100: 'First 100 Points!',
-      score_500: '500 Points Achieved!',
-      minute_master: '1 Minute Master!',
-      level_up: 'Level Up!',
-    };
-    return texts[id] || 'Achievement Unlocked!';
-  };
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
+        <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} backgroundColor={theme.bgSecondary} />
+        <Header title="Technique Setup" showBack onBack={() => setCurrentScreen('SubOptionSelector')} />
 
+        <ScrollView contentContainerStyle={styles.unifiedSetupScroll} showsVerticalScrollIndicator={false}>
+          {/* Header Card: Icon + Title + Rank */}
+          <View style={[styles.unifiedCardHeader, { borderColor: tech.color + '40', backgroundColor: isDarkMode ? tech.bg : `${tech.color}15` }]}>
+            <View style={[styles.unifiedIconRing, { borderColor: tech.color, backgroundColor: tech.color + '20' }]}>
+              <Text style={styles.unifiedIconTxt}>{tech.icon}</Text>
+            </View>
+            <Text style={[styles.unifiedTitle, { color: theme.textPrimary }]}>{tech.title}</Text>
+            <View style={[styles.unifiedBadge, { backgroundColor: tech.color }]}>
+              <Text style={styles.unifiedBadgeTxt}>{tech.rank}</Text>
+            </View>
+          </View>
+
+          {/* Meaning & Purpose Box */}
+          <View style={[styles.meaningCard, { borderColor: theme.border, backgroundColor: theme.bgSecondary }]}>
+            <View style={styles.meaningHeader}>
+              <Text style={[styles.meaningTitle, { color: tech.color }]}>{tech.meaningTitle}</Text>
+            </View>
+            <Text style={[styles.meaningBody, { color: theme.textSecondary }]}>{tech.meaningDesc}</Text>
+          </View>
+
+          {/* Breathing Pace Selector */}
+          {tech.hasPace && (
+            <View style={styles.selectorSection}>
+              <Text style={[styles.selectorLabel, { color: theme.textMuted }]}>🌬️ BREATHING PACE</Text>
+              <View style={styles.chipRow}>
+                {paceOptions.map(bpm => (
+                  <TouchableOpacity
+                    key={bpm}
+                    onPress={() => setPaceBpm(bpm)}
+                    style={[
+                      styles.unifiedChip,
+                      { backgroundColor: theme.bgSecondary, borderColor: theme.border },
+                      paceBpm === bpm && { backgroundColor: tech.color, borderColor: tech.color }
+                    ]}
+                  >
+                    <Text style={[styles.unifiedChipTxt, { color: theme.textPrimary }, paceBpm === bpm && { color: '#FFFFFF', fontWeight: '800' }]}>
+                      {bpm} bpm
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <Text style={[styles.selectorHint, { color: theme.textMuted }]}>6 bpm is clinical baroreflex HRV resonance standard</Text>
+            </View>
+          )}
+
+          {/* Session Length Selector */}
+          <View style={styles.selectorSection}>
+            <Text style={[styles.selectorLabel, { color: theme.textMuted }]}>⏱️ SESSION LENGTH (RECOMMENDED: {tech.suggestedMin} MIN)</Text>
+            <View style={styles.chipRow}>
+              {durationOptions.map(min => {
+                const isSelected = selectedMin === min;
+                return (
+                  <TouchableOpacity
+                    key={min}
+                    onPress={() => {
+                      setSelectedMin(min);
+                      setSessionSeconds(min * 60);
+                    }}
+                    style={[
+                      styles.unifiedChipLarge,
+                      { backgroundColor: theme.bgSecondary, borderColor: theme.border },
+                      isSelected && { backgroundColor: tech.color, borderColor: tech.color }
+                    ]}
+                  >
+                    <Text style={[styles.unifiedChipTxtLarge, { color: theme.textPrimary }, isSelected && { color: '#FFFFFF', fontWeight: '800' }]}>
+                      {min} min
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <Text style={[styles.selectorHint, { color: theme.textMuted }]}>Targeted real-time stress intervention duration</Text>
+          </View>
+
+          {/* Begin Button */}
+          <TouchableOpacity
+            style={[styles.unifiedBeginBtn, { backgroundColor: tech.color }]}
+            onPress={() => {
+              handleStartSession(selectedMin * 60);
+            }}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.unifiedBeginBtnTxt}>▶️  Begin Technique ({selectedMin} min)</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ACTIVE GAME CANVAS SCREEN
+  // ═══════════════════════════════════════════════════════════════════════════
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#0F172A" />
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} backgroundColor={theme.bgSecondary} />
 
       {/* Game Header */}
       <Animated.View style={[
         styles.headerContainer,
         {
+          backgroundColor: theme.bgSecondary,
+          borderBottomColor: theme.border,
+          borderBottomWidth: 1,
           opacity: fadeAnim,
           transform: [{ scale: scaleAnim }]
         }
@@ -418,56 +416,61 @@ export const GamePlayerScreen = () => {
         <View style={styles.headerTop}>
           <TouchableOpacity
             style={styles.backButton}
-            onPress={() => setCurrentScreen('SubOptionSelector')}
+            onPress={() => setHasStarted(false)}
           >
-            <Ionicons name="arrow-back" size={24} color="#94A3B8" />
+            <Ionicons name="arrow-back" size={22} color={theme.textPrimary} />
           </TouchableOpacity>
 
           <View style={styles.gameTitle}>
-            <Text style={styles.gameIcon}>{meta.icon}</Text>
-            <Text style={styles.gameTitleText}>{meta.title}</Text>
+            <Text style={styles.gameIcon}>{tech.icon}</Text>
+            <Text style={[styles.gameTitleText, { color: theme.textPrimary }]} numberOfLines={1}>{tech.title}</Text>
           </View>
 
           <TouchableOpacity style={styles.pauseButton} onPress={togglePause}>
             <Ionicons
               name={gameState === 'playing' ? 'pause' : 'play'}
-              size={24}
-              color="#94A3B8"
+              size={22}
+              color={theme.textPrimary}
             />
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.gameDescription}>{meta.description}</Text>
+        <Text style={[styles.gameDescription, { color: theme.textMuted }]} numberOfLines={1}>{tech.rank} · {tech.meaningTitle}</Text>
       </Animated.View>
 
       {/* Timer & Stats Bar */}
       <Animated.View style={[
         styles.statsBar,
-        { opacity: fadeAnim }
+        { backgroundColor: theme.bgSecondary, borderColor: theme.border, opacity: fadeAnim }
       ]}>
         <View style={styles.timerWrapper}>
-          <Timer initialSeconds={60} onComplete={handleFinishGame} />
+          <Text style={[styles.statLabel, { color: theme.textMuted }]}>⏱️ TARGET TIME</Text>
+          <Text style={[styles.statValue, { color: tech.color || theme.accent }]}>
+            {selectedMin} min ({sessionSeconds}s)
+          </Text>
         </View>
 
         <View style={styles.statsWrapper}>
           <View style={styles.statItem}>
-            <Text style={styles.statLabel}>Score</Text>
-            <Text style={styles.statValue}>{score}</Text>
+            <Text style={[styles.statLabel, { color: theme.textMuted }]}>Score</Text>
+            <Text style={[styles.statValue, { color: theme.textPrimary }]}>{score}</Text>
           </View>
-          <View style={styles.statDivider} />
+          <View style={[styles.statDivider, { backgroundColor: theme.border }]} />
           <View style={styles.statItem}>
-            <Text style={styles.statLabel}>Level</Text>
-            <Text style={styles.statValue}>{level}</Text>
+            <Text style={[styles.statLabel, { color: theme.textMuted }]}>Level</Text>
+            <Text style={[styles.statValue, { color: theme.textPrimary }]}>{level}</Text>
           </View>
-          <View style={styles.statDivider} />
+          <View style={[styles.statDivider, { backgroundColor: theme.border }]} />
           <View style={styles.statItem}>
-            <Text style={styles.statLabel}>Time</Text>
-            <Text style={styles.statValue}>{gameTime}s</Text>
+            <Text style={[styles.statLabel, { color: theme.textMuted }]}>Time</Text>
+            <Text style={[styles.statValue, { color: theme.textPrimary }]}>
+              {Math.floor(gameTime / 60)}:{String(gameTime % 60).padStart(2, '0')}
+            </Text>
           </View>
         </View>
       </Animated.View>
 
-      {/* Game Canvas */}
+      {/* Game Canvas Container */}
       <Animated.View style={[
         styles.canvasContainer,
         {
@@ -481,11 +484,11 @@ export const GamePlayerScreen = () => {
         {gameState === 'playing' ? (
           renderGameCanvas()
         ) : (
-          <View style={styles.pausedOverlay}>
-            <View style={styles.pausedContent}>
+          <View style={[styles.pausedOverlay, { backgroundColor: isDarkMode ? 'rgba(15, 23, 42, 0.9)' : 'rgba(255, 255, 255, 0.92)' }]}>
+            <View style={[styles.pausedContent, { backgroundColor: theme.bgSecondary, borderColor: theme.border, borderWidth: 1 }]}>
               <Text style={styles.pausedIcon}>⏸️</Text>
-              <Text style={styles.pausedText}>Game Paused</Text>
-              <TouchableOpacity style={styles.resumeButton} onPress={togglePause}>
+              <Text style={[styles.pausedText, { color: theme.textPrimary }]}>Session Paused</Text>
+              <TouchableOpacity style={[styles.resumeButton, { backgroundColor: theme.accent }]} onPress={togglePause}>
                 <Text style={styles.resumeButtonText}>Resume</Text>
               </TouchableOpacity>
             </View>
@@ -493,61 +496,16 @@ export const GamePlayerScreen = () => {
         )}
       </Animated.View>
 
-      {/* Achievement Notification */}
-      {showStats && achievements.length > 0 && (
-        <Animated.View style={styles.achievementNotification}>
-          <View style={styles.achievementContent}>
-            <Text style={styles.achievementIcon}>
-              {getAchievementIcon(achievements[achievements.length - 1])}
-            </Text>
-            <View style={styles.achievementTextContainer}>
-              <Text style={styles.achievementTitle}>Achievement Unlocked!</Text>
-              <Text style={styles.achievementDesc}>
-                {getAchievementText(achievements[achievements.length - 1])}
-              </Text>
-            </View>
-          </View>
-        </Animated.View>
-      )}
-
-      {/* Footer */}
-      <Animated.View style={[
-        styles.footer,
-        { opacity: fadeAnim }
-      ]}>
-        <View style={styles.footerContent}>
-          <View style={styles.progressContainer}>
-            <View style={styles.progressBar}>
-              <View style={[styles.progressFill, { width: `${(score % 100)}%` }]} />
-            </View>
-            <Text style={styles.progressText}>
-              {score % 100}% to next level
-            </Text>
-          </View>
-
-          <TouchableOpacity style={styles.finishBtn} onPress={handleFinishGame}>
-            <Text style={styles.finishBtnTxt}>Complete Exercise →</Text>
-            <Ionicons name="checkmark-circle" size={20} color="#FFFFFF" />
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.footerActions}>
-          <TouchableOpacity style={styles.actionBtn} onPress={() => setShowStats(!showStats)}>
-            <Ionicons name="stats-chart" size={18} color="#94A3B8" />
-            <Text style={styles.actionBtnText}>Stats</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.actionBtn} onPress={() => { }}>
-            <Ionicons name="volume-high" size={18} color="#94A3B8" />
-            <Text style={styles.actionBtnText}>Sound</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.actionBtn} onPress={() => { }}>
-            <Ionicons name="share-social" size={18} color="#94A3B8" />
-            <Text style={styles.actionBtnText}>Share</Text>
-          </TouchableOpacity>
-        </View>
-      </Animated.View>
+      {/* Complete Activity & Proceed Footer Bar */}
+      <View style={[styles.completeFooterBar, { backgroundColor: theme.bgSecondary, borderTopColor: theme.border }]}>
+        <TouchableOpacity
+          style={[styles.completeBtn, { backgroundColor: tech.color || theme.accent || '#10B981' }]}
+          onPress={handleFinishGame}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.completeBtnTxt}>✅  Complete Activity & Proceed  →</Text>
+        </TouchableOpacity>
+      </View>
     </SafeAreaView>
   );
 };
@@ -555,54 +513,168 @@ export const GamePlayerScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0F172A'
+    backgroundColor: '#0F172A',
+  },
+  unifiedSetupScroll: {
+    padding: 20,
+    gap: 16,
+    paddingBottom: 40,
+  },
+  unifiedCardHeader: {
+    alignItems: 'center',
+    padding: 24,
+    borderRadius: 24,
+    borderWidth: 1.5,
+    gap: 12,
+  },
+  unifiedIconRing: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  unifiedIconTxt: {
+    fontSize: 36,
+  },
+  unifiedTitle: {
+    color: '#FFFFFF',
+    fontSize: 22,
+    fontWeight: '800',
+    textAlign: 'center',
+    letterSpacing: -0.3,
+  },
+  unifiedBadge: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  unifiedBadgeTxt: {
+    color: '#0F172A',
+    fontWeight: '800',
+    fontSize: 12,
+    letterSpacing: 0.3,
+  },
+  meaningCard: {
+    padding: 18,
+    borderRadius: 20,
+    borderWidth: 1,
+    gap: 8,
+  },
+  meaningHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  meaningTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 0.2,
+  },
+  meaningBody: {
+    color: '#94A3B8',
+    fontSize: 13,
+    lineHeight: 20,
+  },
+  selectorSection: {
+    gap: 8,
+  },
+  selectorLabel: {
+    color: '#94A3B8',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 1,
+  },
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  unifiedChip: {
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+    borderRadius: 18,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    backgroundColor: 'rgba(30, 41, 59, 0.5)',
+  },
+  unifiedChipTxt: {
+    color: '#E2E8F0',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  unifiedChipLarge: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+    borderRadius: 18,
+    paddingVertical: 12,
+    alignItems: 'center',
+    backgroundColor: 'rgba(30, 41, 59, 0.5)',
+  },
+  unifiedChipTxtLarge: {
+    color: '#E2E8F0',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  selectorHint: {
+    color: '#64748B',
+    fontSize: 11,
+  },
+  unifiedBeginBtn: {
+    paddingVertical: 16,
+    borderRadius: 20,
+    alignItems: 'center',
+    marginTop: 8,
+    elevation: 4,
+  },
+  unifiedBeginBtnTxt: {
+    color: '#0F172A',
+    fontSize: 16,
+    fontWeight: '900',
+    letterSpacing: 0.5,
   },
   headerContainer: {
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
   },
   headerTop: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    marginBottom: 2,
   },
   backButton: {
-    padding: 8,
-    borderRadius: 12,
-    backgroundColor: 'rgba(30, 41, 59, 0.5)',
+    padding: 6,
   },
   gameTitle: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 6,
+    flexShrink: 1,
   },
   gameIcon: {
-    fontSize: 24,
-    marginRight: 8,
+    fontSize: 20,
   },
   gameTitleText: {
-    color: '#FFFFFF',
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: 'bold',
   },
-  gameDescription: {
-    color: '#94A3B8',
-    fontSize: 12,
-    marginTop: 4,
-    marginLeft: 4,
-  },
   pauseButton: {
-    padding: 8,
-    borderRadius: 12,
-    backgroundColor: 'rgba(30, 41, 59, 0.5)',
+    padding: 6,
+  },
+  gameDescription: {
+    fontSize: 11,
+    textAlign: 'center',
   },
   statsBar: {
     flexDirection: 'row',
-    paddingHorizontal: 20,
-    paddingVertical: 8,
-    backgroundColor: 'rgba(15, 23, 42, 0.8)',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(30, 41, 59, 0.5)',
   },
   timerWrapper: {
     flex: 1,
@@ -610,177 +682,75 @@ const styles = StyleSheet.create({
   statsWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginLeft: 12,
+    gap: 8,
   },
   statItem: {
     alignItems: 'center',
-    paddingHorizontal: 8,
   },
   statLabel: {
-    color: '#64748B',
     fontSize: 9,
-    fontWeight: '600',
     textTransform: 'uppercase',
   },
   statValue: {
-    color: '#FFFFFF',
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: 'bold',
   },
   statDivider: {
     width: 1,
-    height: 20,
-    backgroundColor: 'rgba(30, 41, 59, 0.5)',
+    height: 16,
   },
   canvasContainer: {
     flex: 1,
-    margin: 12,
-    borderRadius: 16,
+    width: '100%',
     overflow: 'hidden',
-    backgroundColor: 'rgba(15, 23, 42, 0.5)',
-    borderWidth: 1,
-    borderColor: 'rgba(30, 41, 59, 0.5)',
-    position: 'relative',
-  },
-  gameWrapper: {
-    flex: 1,
   },
   pausedOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(15, 23, 42, 0.8)',
+    ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 10,
+    zIndex: 99,
   },
   pausedContent: {
     alignItems: 'center',
+    padding: 24,
+    borderRadius: 16,
+    borderWidth: 1,
   },
   pausedIcon: {
-    fontSize: 48,
-    marginBottom: 16,
+    fontSize: 36,
+    marginBottom: 12,
   },
   pausedText: {
-    color: '#FFFFFF',
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: 'bold',
-    marginBottom: 16,
+    marginBottom: 18,
   },
   resumeButton: {
-    backgroundColor: '#3B82F6',
-    paddingVertical: 12,
-    paddingHorizontal: 32,
-    borderRadius: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
   },
   resumeButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: 'bold',
   },
-  achievementNotification: {
-    position: 'absolute',
-    top: 120,
-    left: 20,
-    right: 20,
-    backgroundColor: 'rgba(16, 185, 129, 0.95)',
-    borderRadius: 16,
-    padding: 16,
-    shadowColor: '#10B981',
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    elevation: 10,
-    zIndex: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-  },
-  achievementContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  achievementIcon: {
-    fontSize: 32,
-    marginRight: 12,
-  },
-  achievementTextContainer: {
-    flex: 1,
-  },
-  achievementTitle: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
-  achievementDesc: {
-    color: 'rgba(255,255,255,0.9)',
-    fontSize: 12,
-    marginTop: 2,
-  },
-  footer: {
-    padding: 16,
+  completeFooterBar: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(30, 41, 59, 0.5)',
+    width: '100%',
   },
-  footerContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  progressContainer: {
-    flex: 1,
-    marginRight: 12,
-  },
-  progressBar: {
-    height: 4,
-    backgroundColor: 'rgba(30, 41, 59, 0.5)',
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  progressFill: {
-    height: '100%',
-    backgroundColor: '#10B981',
-    borderRadius: 2,
-  },
-  progressText: {
-    color: '#94A3B8',
-    fontSize: 10,
-    marginTop: 4,
-  },
-  finishBtn: {
-    backgroundColor: '#10B981',
+  completeBtn: {
     paddingVertical: 12,
-    paddingHorizontal: 20,
     borderRadius: 12,
-    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    minWidth: 140,
+    elevation: 3,
   },
-  finishBtnTxt: {
+  completeBtnTxt: {
     color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 14,
-    marginRight: 8,
-  },
-  footerActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    marginTop: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(30, 41, 59, 0.3)',
-  },
-  actionBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  actionBtnText: {
-    color: '#94A3B8',
-    fontSize: 12,
-    marginLeft: 6,
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 0.3,
   },
 });
-
-export default GamePlayerScreen;

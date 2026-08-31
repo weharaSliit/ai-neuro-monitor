@@ -1,6 +1,9 @@
 import json
 import os
 import time
+from datetime import datetime, timezone
+
+import numpy as np
 
 from backend.common.config import CALIBRATION_SOFT_AGE_DAYS, CALIBRATION_HARD_AGE_DAYS
 from backend.common.firebase_config import FIREBASE_DB_URL, FUSION_EN_ROOT, RTDB_NAMESPACES
@@ -301,4 +304,149 @@ def get_calibration_status(user_id: str) -> dict:
         'is_stale_hard': age_days > CALIBRATION_HARD_AGE_DAYS,
         'personal_high_load_p': profile.get('personal_high_load_p'),
         'population_high_load_p': POPULATION_HIGH_LOAD_P,
+        # Piggybacks on this same call (not a separate endpoint/round-trip)
+        # since CalibrationGate.js's useCalibrationSummary already fetches
+        # this response on every poll -- see compute_eeg_baseline_drift()'s
+        # docstring above for what this measures and its real limitation.
+        'drift': compute_eeg_baseline_drift(user_id),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  DRIFT DETECTION -- EEG analogue of backend/physiological/
+#  firebase_service.py's compute_baseline_drift()/compute_baseline_drift_history()
+#  (see those docstrings for the same "heuristic, not a certainty" caveat:
+#  recent predictions include genuine real-world high-load moments, not
+#  just rest, so this can't distinguish "calibration went stale" from
+#  "this person has genuinely been under load lately").
+#
+#  EEG calibration doesn't persist a resting-state probability SAMPLE LIST
+#  the way Ring's baseline calibration does -- engine.baseline_shift
+#  (calibration_service.py) is a raw-signal offset, not a probability, so
+#  there's no stored "original resting mean" to anchor against here.
+#  Instead this anchors to this user's own EARLIEST available live
+#  task_state_score samples (right after calibration) and compares them to
+#  their most recent ones -- same "has this shifted" question, just
+#  answered from this user's own live history instead of a stored
+#  calibration artifact.
+# ═══════════════════════════════════════════════════════════════════
+
+EEG_DRIFT_THRESHOLD = 0.15
+EEG_DRIFT_LOOKBACK_DAYS = 7
+EEG_DRIFT_MIN_SAMPLES = 10
+
+# The only fixed (non-session-id) children ever written directly under
+# {RTDB_NAMESPACE}/{user_id} -- see _calibration_profile_ref()'s
+# extra_path values and EegFirebaseSession's four stores above. Session
+# ids are ISO timestamps (StressApp/context/AuthContext.js), which sort
+# lexicographically before any of these (digits < lowercase letters in
+# ASCII), so a plain order_by_key().limit_to_last() would otherwise pull
+# these three in ahead of genuinely recent sessions once a user has fewer
+# real sessions than the query limit.
+_EEG_NON_SESSION_KEYS = {'calibration_profile', 'calibration_result', 'threshold_result'}
+
+
+def _eeg_db_ref(path: str):
+    """Raw Firebase Admin ref for reads that don't fit FirebaseSync's fixed
+    root_path+session_id shape (e.g. scanning ALL of a user's sessions
+    below) -- reuses whatever app resolve_credential()/EegFirebaseSession
+    already initialized this process, or initializes it fresh on first
+    touch. Returns None if Firebase isn't configured, same fallback every
+    other read/write in this module uses."""
+    cred = resolve_credential()
+    if cred is None:
+        return None
+    import firebase_admin
+    from firebase_admin import credentials, db
+    try:
+        app = firebase_admin.get_app()
+    except ValueError:
+        app = firebase_admin.initialize_app(credentials.Certificate(cred), {'databaseURL': FIREBASE_DB_URL})
+    return db.reference(path, app=app)
+
+
+def _eeg_recent_sessions(user_id, limit=30):
+    ref = _eeg_db_ref(f'{RTDB_NAMESPACE}/{user_id}')
+    if ref is None:
+        return {}
+    children = ref.order_by_key().limit_to_last(limit).get() or {}
+    return {k: v for k, v in children.items() if k not in _EEG_NON_SESSION_KEYS}
+
+
+def _eeg_window_scores(sessions):
+    """Flattens {session_id: {window: record}} (see EegFirebaseSession.push()
+    / make_eeg_output_record()) into a chronological list of
+    (timestamp_end, task_state_score) pairs, skipped/unscored windows
+    dropped."""
+    out = []
+    for session in sessions.values():
+        if not isinstance(session, dict):
+            continue
+        for rec in session.values():
+            if not isinstance(rec, dict) or rec.get('skipped'):
+                continue
+            score = rec.get('task_state_score')
+            ts = rec.get('timestamp_end')
+            if score is None or ts is None:
+                continue
+            out.append((float(ts), float(score)))
+    out.sort(key=lambda pair: pair[0])
+    return out
+
+
+def compute_eeg_baseline_drift(user_id):
+    """See this section's module-level docstring above for why EEG's
+    reference point is its own earliest live samples rather than a stored
+    resting-calibration mean. checked=False (not enough history yet, on
+    either end) means the caller should show nothing rather than a shaky
+    verdict."""
+    sessions = _eeg_recent_sessions(user_id, limit=30)
+    scores = _eeg_window_scores(sessions)
+    if len(scores) < EEG_DRIFT_MIN_SAMPLES * 2:
+        return {'checked': False}
+
+    original_mean = float(np.mean([s for _, s in scores[:EEG_DRIFT_MIN_SAMPLES]]))
+
+    cutoff = datetime.now(timezone.utc).timestamp() - EEG_DRIFT_LOOKBACK_DAYS * 86400
+    recent = [s for ts, s in scores if ts >= cutoff]
+    if len(recent) < EEG_DRIFT_MIN_SAMPLES:
+        return {'checked': False}
+
+    recent_mean = float(np.mean(recent))
+    drift = recent_mean - original_mean
+    return {
+        'checked': True,
+        'original_resting_mean': original_mean,
+        'recent_mean': recent_mean,
+        'drift': drift,
+        'drift_detected': abs(drift) > EEG_DRIFT_THRESHOLD,
+        'n_recent_samples': len(recent),
+    }
+
+
+def compute_eeg_baseline_drift_history(user_id, n_weeks=8):
+    """Same comparison as compute_eeg_baseline_drift(), bucketed into the
+    last n_weeks separately -- feeds the EEG summary screen's drift-trend
+    chart. A week with fewer than EEG_DRIFT_MIN_SAMPLES windows gets
+    mean_task_state_score=None/drift=None (chart skips it) rather than a
+    misleadingly precise number from too little data."""
+    sessions = _eeg_recent_sessions(user_id, limit=200)
+    scores = _eeg_window_scores(sessions)
+    if len(scores) < EEG_DRIFT_MIN_SAMPLES * 2:
+        return []
+    original_mean = float(np.mean([s for _, s in scores[:EEG_DRIFT_MIN_SAMPLES]]))
+
+    now = datetime.now(timezone.utc).timestamp()
+    weeks = []
+    for i in range(n_weeks - 1, -1, -1):
+        week_end = now - i * 7 * 86400
+        week_start = week_end - 7 * 86400
+        bucket = [s for ts, s in scores if week_start <= ts < week_end]
+        enough = len(bucket) >= EEG_DRIFT_MIN_SAMPLES
+        weeks.append({
+            'week_start': datetime.fromtimestamp(week_start, tz=timezone.utc).isoformat(),
+            'n_samples': len(bucket),
+            'mean_task_state_score': float(np.mean(bucket)) if enough else None,
+            'drift': (float(np.mean(bucket)) - original_mean) if enough else None,
+        })
+    return weeks

@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Dimensions } from 'react-native';
 import ScreenBackground from '../modules/shared/ScreenBackground';
 import Button from '../modules/shared/Button';
 import ZenMeditationHero from '../modules/shared/ZenMeditationHero';
@@ -7,6 +7,8 @@ import { COLORS } from '../modules/physiological/config/theme';
 
 export default function WelcomeScreen({ navigation }) {
   const text = COLORS.light.text;
+  const windowWidth = Dimensions.get('window').width;
+  const heroSize = Math.min(330, windowWidth - 48);
 
   return (
     <ScreenBackground>
@@ -15,15 +17,18 @@ export default function WelcomeScreen({ navigation }) {
         showsVerticalScrollIndicator={false}
         bounces={false}
       >
-        {/* Serene Meditation Hero Illustration */}
+        {/* Top Serene Meditation Hero Illustration */}
         <View style={styles.heroWrapper}>
-          <ZenMeditationHero size={240} />
+          <ZenMeditationHero size={heroSize} />
         </View>
 
-        {/* Wordmark */}
+        {/* Wordmark & Inspiring Stress Quote */}
         <View style={styles.copyBlock}>
           <Text style={[styles.wordmark, { color: text }]}>
             Mind<Text style={{ color: COLORS.brand }}>Pulse</Text>
+          </Text>
+          <Text style={[styles.quote, { color: COLORS.light.textMuted }]}>
+            “In the midst of movement and chaos, keep stillness inside of you.”
           </Text>
         </View>
 
@@ -52,31 +57,40 @@ const styles = StyleSheet.create({
   scrollContainer: {
     flexGrow: 1,
     paddingHorizontal: 24,
-    paddingTop: 16,
-    paddingBottom: 32,
+    paddingTop: 20,
+    paddingBottom: 36,
     justifyContent: 'space-between',
   },
   heroWrapper: {
     alignItems: 'center',
     justifyContent: 'center',
-    marginVertical: 10,
+    marginVertical: 12,
   },
   copyBlock: {
     alignItems: 'center',
-    paddingHorizontal: 10,
-    marginBottom: 16,
+    paddingHorizontal: 16,
+    marginBottom: 20,
   },
   wordmark: {
-    fontSize: 38,
+    fontSize: 40,
     fontWeight: '900',
     letterSpacing: -0.8,
-    marginBottom: 4,
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+  quote: {
+    fontSize: 14,
+    fontStyle: 'italic',
+    fontWeight: '500',
+    letterSpacing: 0.1,
+    textAlign: 'center',
+    lineHeight: 20,
   },
   actions: {
     paddingTop: 8,
   },
   pillButton: {
     borderRadius: 28,
-    paddingVertical: 15,
+    paddingVertical: 16,
   },
 });
