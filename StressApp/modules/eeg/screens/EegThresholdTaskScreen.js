@@ -10,6 +10,7 @@ import { eegClient } from '../../shared/eegApiClient';
 import physiologicalApi from '../../physiological/api/client';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import { useAuth } from '../../../context/AuthContext';
+import { useCalibrationSummary } from '../../shared/CalibrationGate';
 
 // Five back-to-back timed activities (serial subtraction -> maths quiz ->
 // sequence-recall puzzle -> ticking-clock sorter -> Stroop), 8 minutes
@@ -257,6 +258,17 @@ export default function EegThresholdTaskScreen({ navigation }) {
   const { theme: t, COLORS } = useTheme();
   const { user, token, completeOnboarding } = useAuth();
   const userId = user?.userId;
+
+  // Both sides already carry a personal threshold whenever a returning
+  // user's stored profile got picked up by /calibrate's or Ring's own
+  // skip-ahead logic (see backend/psychological/app.py's /calibrate route
+  // docstring) -- this screen used to send EVERY onboarding pass through
+  // the full ~8 minute task regardless, discarding that already-personal
+  // value and forcing a redo nobody asked for. Checked once up front so
+  // the intro can offer "keep current" instead.
+  const { loading: calibLoading, ring: ringCalib, eeg: eegCalib } = useCalibrationSummary(userId, token);
+  const alreadyPersonalized = !calibLoading
+    && eegCalib?.personal_high_load_p != null && ringCalib?.personal_stress_threshold != null;
 
   const [sessionId, setSessionId] = useState(null);
   const [phase, setPhase] = useState('intro'); // intro | serialSub | quiz | puzzle | stroop | review
@@ -782,7 +794,26 @@ export default function EegThresholdTaskScreen({ navigation }) {
   return (
     <ScreenBackground>
       <View style={styles.container}>
-        {phase === 'intro' && (
+        {phase === 'intro' && alreadyPersonalized && (
+          <Card elevated style={styles.card}>
+            <View style={styles.headerRow}>
+              <Icon name={NAMES.eeg} size={22} color={COLORS.brand} />
+              <Text style={[styles.title, { color: t.text }]}>Threshold Already Personalized</Text>
+            </View>
+            <Text style={[styles.body, { color: t.textMuted }]}>
+              Your high-load (EEG) and stress (Ring) thresholds are already personalized -- EEG at
+              {' '}{Math.round(eegCalib.personal_high_load_p * 100)}%, Ring at{' '}
+              {Math.round(ringCalib.personal_stress_threshold * 100)}%. You can keep these, or redo
+              the ~8 minute task to refresh them against your current physiology.
+            </Text>
+            <Button label="Keep Current & Continue" onPress={finish} variant="primary" style={{ marginTop: 16 }} />
+            <TouchableOpacity onPress={startSerialSub} disabled={!userId} activeOpacity={0.7} style={styles.skipRow}>
+              <Text style={[styles.skipText, { color: t.textMuted }]}>Redo anyway →</Text>
+            </TouchableOpacity>
+          </Card>
+        )}
+
+        {phase === 'intro' && !alreadyPersonalized && (
           <Card elevated style={styles.card}>
             <View style={styles.headerRow}>
               <Icon name={NAMES.eeg} size={22} color={COLORS.brand} />
@@ -798,7 +829,7 @@ export default function EegThresholdTaskScreen({ navigation }) {
               -- so this measures how YOUR signal moves between rest and a genuine high-load state,
               for both your Ring and EEG, instead of relying on a population average.
             </Text>
-            <Button label="Start Task" onPress={startSerialSub} disabled={!userId} variant="primary" style={{ marginTop: 16 }} />
+            <Button label="Start Task" onPress={startSerialSub} disabled={!userId || calibLoading} variant="primary" style={{ marginTop: 16 }} />
             <TouchableOpacity onPress={finish} activeOpacity={0.7} style={styles.skipRow}>
               <Text style={[styles.skipText, { color: t.textMuted }]}>Skip for now →</Text>
             </TouchableOpacity>
