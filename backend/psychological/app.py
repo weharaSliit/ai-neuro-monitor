@@ -500,6 +500,18 @@ def predict():
             "high_load_alert": record.get("high_load_alert"),
             "micro_break_recommended": record.get("micro_break_recommended"),
             "fatigue_warning": record.get("fatigue_warning"),
+            # Same effective value make_eeg_output_record() stored as
+            # 'effective_high_load_p' (personal if finalize_personal_threshold()
+            # succeeded for this user, else the population default) -- not
+            # previously echoed back to the caller, so mqtt_bridge.py's console
+            # log had no way to show what threshold a block was actually judged
+            # against.
+            "personal_threshold": state["engine"].thresholds.high_load_p,
+            # Extracted per-block signal features (band powers, Hjorth params,
+            # etc. -- see BIPOLAR_FEATURE_SUFFIXES, firebase_sync.py) that were
+            # already being pushed to Firebase for EegSummaryScreen.js's
+            # Feature Trends card, but never returned from this route itself.
+            "features_eeg": record.get("features_eeg"),
             # See /calibrate's identical field -- same session's Firebase
             # handle, so this can only ever match what /calibrate reported.
             "firebase_enabled": state["firebase"].enabled,

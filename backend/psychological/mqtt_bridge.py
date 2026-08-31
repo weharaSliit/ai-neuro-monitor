@@ -43,6 +43,16 @@ EMPTY_BUFFER_WARN_INTERVAL_SEC = 5.0
 # ramp-up-diluted block -- same reasoning as physiological's N_TASK_WIN.
 N_THRESHOLD_TASK_BLOCKS = 19
 
+# Concise feature subset for the console log -- same 5 band powers + 3
+# highest-|coefficient| non-band features EegSummaryScreen.js's Feature
+# Trends card charts (FEATURE_TREND_CONFIG, EegSummaryScreen.js), not the
+# full ~29-feature bipolar dict -- that's legible per-block, this isn't.
+FEATURE_LOG_KEYS = (
+    "delta_rel_power", "theta_rel_power", "alpha_rel_power",
+    "beta_rel_power", "gamma_rel_power",
+    "ptp", "theta_beta_ratio", "spectral_entropy",
+)
+
 # A block already drained from the buffer is gone from it either way -- a
 # transient failure (Render cold start, a network blip) shouldn't mean it's
 # gone from EVERYWHERE. A couple of short retries covers that; only once
@@ -253,7 +263,12 @@ def run():
                             AUTH_HEADERS, timeout=45, label="calibrate",
                         )
                         calibrated = bool(data and data.get("success"))
-                        if not calibrated:
+                        if calibrated:
+                            print(f"[calibrate] calibrated_baseline(resting_calibrated_p)="
+                                  f"{data.get('resting_calibrated_p')} "
+                                  f"personal_threshold={data.get('personal_high_load_p')} "
+                                  f"degraded={data.get('baseline_degraded')}")
+                        else:
                             print("[calibrate] failed after retries -- discarding these "
                                   "blocks, retrying with a fresh set")
                             calibration_blocks = []
@@ -279,7 +294,14 @@ def run():
                     else:
                         print(f"[predict] block {block_idx} task_state_score="
                               f"{data.get('task_state_score')} label={data.get('task_state_label')} "
+                              f"personal_threshold={data.get('personal_threshold')} "
                               f"high_load_alert={data.get('high_load_alert')}")
+                        bipolar = ((data.get("features_eeg") or {}).get("bipolar")) or {}
+                        feat_str = ", ".join(
+                            f"{k}={bipolar[k]:.3f}" for k in FEATURE_LOG_KEYS if bipolar.get(k) is not None
+                        )
+                        if feat_str:
+                            print(f"[predict] block {block_idx} features: {feat_str}")
                 else:
                     print(f"[predict] block {block_idx} FAILED after retries -- "
                           f"saving to fallback CSV instead of losing it")
