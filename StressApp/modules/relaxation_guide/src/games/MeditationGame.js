@@ -11,214 +11,189 @@ import {
   Platform,
   Vibration,
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { ThemeContext } from '../context/ThemeContext';
 
-const { width, height } = Dimensions.get('window');
+const { width } = Dimensions.get('window');
 
 /**
- * MeditationGame
- * Displays 5 visually distinct, bespoke relaxation experiences:
- * 1. Box Meditation (Cyan Water Box Pacing with Dynamic Audio Breath Sync)
- * 2. Zen Body Scan (Emerald Aura Node PMR Scan)
- * 3. Chakra Harmonizer (Lotus Energy Mandala with 432Hz Align)
- * 4. Silent Zen Timer (Japanese Bronze Bell Chimes)
- * 5. Acoustic Meditation (Celestial Soundwave Frequency Bar Visualizer)
+ * 🧘 MeditationGame — Minimalist Serene Relaxation Engine
+ * Simplified, unified color palette: Calm Deep Teal & Soft Slate
  */
-export const MeditationGame = ({ initialMode, mode }) => {
+export const MeditationGame = ({ initialMode, mode, initialDurationMin, onStartSession }) => {
   const themeContext = React.useContext(ThemeContext);
   const theme = themeContext?.theme || {};
   const isDarkMode = themeContext?.isDarkMode ?? true;
 
-  const startingMode = mode || initialMode || 'vagus_humming';
-  const [activeMode, setActiveMode] = useState(startingMode);
-  const [secondsLeft, setSecondsLeft] = useState(4);
-  const [phaseText, setPhaseText] = useState('🌬️ Inhale Nose...');
-  const [isPaused, setIsPaused] = useState(false);
-  const [cyclesCompleted, setCyclesCompleted] = useState(0);
-  const [hummingFreq, setHummingFreq] = useState('128 Hz Vagal');
-  const [bellyPaceRatio, setBellyPaceRatio] = useState('Standard 4:6');
+  const activeModeKey = mode || initialMode || 'diaphragmatic_pace';
+  const [activeMode, setActiveMode] = useState(activeModeKey);
 
-  // Sync mode state when prop changes
   useEffect(() => {
-    const target = mode || initialMode;
-    if (target && target !== activeMode) {
-      setActiveMode(target);
+    if (mode || initialMode) {
+      setActiveMode(mode || initialMode);
     }
   }, [mode, initialMode]);
 
-  // Animation values
-  const auraScale = useRef(new Animated.Value(1)).current;
-  const auraGlow = useRef(new Animated.Value(0.4)).current;
+  // Session State
+  const [isPaused, setIsPaused] = useState(false);
+  const [cyclesCompleted, setCyclesCompleted] = useState(0);
+  const [secondsLeft, setSecondsLeft] = useState(4);
+  const [phaseTitle, setPhaseTitle] = useState('INHALE');
+  const [phaseInstruction, setPhaseInstruction] = useState('Inhale deeply into lower lungs through nose');
+  const [scientificTip, setScientificTip] = useState('Extended exhalation stimulates the Vagus nerve, lowering heart rate.');
+  const [activeBodyRegion, setActiveBodyRegion] = useState(0);
+  const [vagalBoost, setVagalBoost] = useState(15);
+
+  // Animated values
+  const boxLaserProgress = useRef(new Animated.Value(0)).current;
+  const bellyCylinderHeight = useRef(new Animated.Value(0.3)).current;
+  const zenBowlStrike = useRef(new Animated.Value(1)).current;
   const rippleAnim = useRef(new Animated.Value(0)).current;
-  const ringRotate = useRef(new Animated.Value(0)).current;
-  const waveAnim1 = useRef(new Animated.Value(0.5)).current;
-  const waveAnim2 = useRef(new Animated.Value(0.3)).current;
-  const waveAnim3 = useRef(new Animated.Value(0.7)).current;
 
-  const meditationModes = [
-    {
-      id: 'vagus_humming',
-      title: 'Humming Exhale',
-      badge: 'Resonant Sound',
-      icon: '🧘‍♀️',
-      color: '#8B5CF6',
-      bgGradient: ['#1E1035', '#3B0764'],
-      desc: 'Soothing humming exhalations to lower stress quickly.',
-      emojis: ['🧘‍♀️', '🔊', '✨', '💜', '🌌', '🪷'],
-      artworkTitle: 'ACOUSTIC RESONANCE',
-    },
-    {
-      id: 'water_lily_pond',
-      title: 'Lily Pond Breathing',
-      badge: 'Fast Recovery',
-      icon: '🪷',
-      color: '#10B981',
-      bgGradient: ['#041B13', '#064E3B'],
-      desc: 'Expanding water lily blooms synced to deep exhalations.',
-      emojis: ['🪷', '💧', '🌊', '🍃', '✨', '🧘‍♀️'],
-      artworkTitle: 'LOTUS BLOOM',
-    },
-    {
-      id: 'diaphragmatic_pace',
-      title: 'Deep Belly Breathing',
-      badge: 'Deep Relaxation',
-      icon: '🫁',
-      color: '#3B82F6',
-      bgGradient: ['#0B192C', '#1E3A8A'],
-      desc: 'Slow abdominal pacing for fast pulse reduction.',
-      emojis: ['🫁', '🌬️', '🌊', '💙', '✨', '🧘'],
-      artworkTitle: 'BELLY PULSE',
-    },
-    {
-      id: 'box_meditation',
-      title: 'Box Breathing',
-      badge: '4-4-4-4 Rhythm',
-      icon: '🧊',
-      color: '#0284C7',
-      bgGradient: ['#0A192F', '#0F2B48'],
-      desc: 'Equal 4s square breath pacing for calm and balance.',
-      emojis: ['🧊', '🧊', '⏹️', '🌬️', '💧', '🧘'],
-      artworkTitle: 'ZEN BOX BREATH',
-    },
-  ];
-
-  const chakraRings = [
-    { name: 'Crown', color: '#9333EA', freq: '768Hz' },
-    { name: 'Third Eye', color: '#4F46E5', freq: '720Hz' },
-    { name: 'Throat', color: '#0284C7', freq: '672Hz' },
-    { name: 'Heart', color: '#10B981', freq: '528Hz' },
-    { name: 'Solar', color: '#EAB308', freq: '432Hz' },
-    { name: 'Sacral', color: '#F97316', freq: '360Hz' },
-    { name: 'Root', color: '#EF4444', freq: '288Hz' },
-  ];
-
-  const currentConfig = meditationModes.find(m => m.id === activeMode) || meditationModes[0];
-
-  // Ambient soundwave bar animation loop
+  // Box Breathing 4-4-4-4 Tactical Respiration Pattern
   useEffect(() => {
-    Animated.loop(
-      Animated.parallel([
-        Animated.sequence([
-          Animated.timing(waveAnim1, { toValue: 1.0, duration: 800, useNativeDriver: true }),
-          Animated.timing(waveAnim1, { toValue: 0.3, duration: 800, useNativeDriver: true }),
-        ]),
-        Animated.sequence([
-          Animated.timing(waveAnim2, { toValue: 0.2, duration: 1100, useNativeDriver: true }),
-          Animated.timing(waveAnim2, { toValue: 0.9, duration: 1100, useNativeDriver: true }),
-        ]),
-        Animated.sequence([
-          Animated.timing(waveAnim3, { toValue: 0.8, duration: 950, useNativeDriver: true }),
-          Animated.timing(waveAnim3, { toValue: 0.4, duration: 950, useNativeDriver: true }),
-        ])
-      ])
-    ).start();
-  }, []);
+    if (activeMode !== 'box_meditation' || isPaused) return;
 
-  // Pacing cycle logic for different modes
-  useEffect(() => {
-    if (isPaused) return;
-
-    let cycleStep = 0;
-    const runCycle = () => {
-      if (activeMode === 'vagus_humming') {
-        const steps = [
-          { label: '🌬️ Inhale Nose (4s)', phase: 'inhale', sec: 4, scale: 1.35, glow: 0.9 },
-          { label: '🔊 Hum Exhale "MMMM..." (8s)', phase: 'exhale', sec: 8, scale: 0.9, glow: 0.3 },
-        ];
-        const curr = steps[cycleStep % 2];
-        setPhaseText(curr.label);
-        setSecondsLeft(curr.sec);
-
-        Animated.parallel([
-          Animated.timing(auraScale, { toValue: curr.scale, duration: curr.sec * 1000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-          Animated.timing(auraGlow, { toValue: curr.glow, duration: curr.sec * 1000, useNativeDriver: true }),
-        ]).start();
-
-        cycleStep++;
-        if (cycleStep % 2 === 0) setCyclesCompleted(c => c + 1);
-
-      } else if (activeMode === 'diaphragmatic_pace') {
-        const steps = [
-          { label: '🌬️ Deep Abdominal Inhale (4s)', phase: 'inhale', sec: 4, scale: 1.35, glow: 0.9 },
-          { label: '😮‍💨 Slow Paced Exhale (6s)', phase: 'exhale', sec: 6, scale: 0.95, glow: 0.3 },
-        ];
-        const curr = steps[cycleStep % 2];
-        setPhaseText(curr.label);
-        setSecondsLeft(curr.sec);
-
-        Animated.parallel([
-          Animated.timing(auraScale, { toValue: curr.scale, duration: curr.sec * 1000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-          Animated.timing(auraGlow, { toValue: curr.glow, duration: curr.sec * 1000, useNativeDriver: true }),
-        ]).start();
-
-        cycleStep++;
-        if (cycleStep % 2 === 0) setCyclesCompleted(c => c + 1);
-
-      } else if (activeMode === 'box_meditation') {
-        const steps = [
-          { label: '🌬️ Inhale (4s)', phase: 'inhale', sec: 4, scale: 1.4, glow: 0.9 },
-          { label: '⏸️ Hold Top (4s)', phase: 'hold', sec: 4, scale: 1.4, glow: 0.9 },
-          { label: '😮‍💨 Exhale (4s)', phase: 'exhale', sec: 4, scale: 1.0, glow: 0.3 },
-          { label: '⏸️ Rest Hold (4s)', phase: 'rest', sec: 4, scale: 1.0, glow: 0.3 },
-        ];
-        const curr = steps[cycleStep % 4];
-        setPhaseText(curr.label);
-        setSecondsLeft(curr.sec);
-
-        Animated.parallel([
-          Animated.timing(auraScale, { toValue: curr.scale, duration: curr.sec * 1000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-          Animated.timing(auraGlow, { toValue: curr.glow, duration: curr.sec * 1000, useNativeDriver: true }),
-        ]).start();
-
-        cycleStep++;
-        if (cycleStep % 4 === 0) setCyclesCompleted(c => c + 1);
-
+    let step = 0;
+    const runBoxCycle = () => {
+      const edge = step % 4;
+      if (edge === 0) {
+        setPhaseTitle('1. INHALE (4s)');
+        setPhaseInstruction('Inhale deeply into lower lungs through nose');
+        setScientificTip('Inhaling expands lung volume, preparing for vagal equilibrium.');
+        setSecondsLeft(4);
+      } else if (edge === 1) {
+        setPhaseTitle('2. HOLD TOP (4s)');
+        setPhaseInstruction('Hold breath calmly with relaxed shoulders');
+        setScientificTip('Holding breath balances O2 and CO2 levels in blood plasma.');
+        setSecondsLeft(4);
+      } else if (edge === 2) {
+        setPhaseTitle('3. EXHALE (4s)');
+        setPhaseInstruction('Release breath smoothly through mouth');
+        setScientificTip('Exhaling stimulates the Vagus nerve, slowing heart rate.');
+        setSecondsLeft(4);
       } else {
-        // silent_zen_timer
-        setPhaseText('🔔 Silent Zen Presence');
-        setSecondsLeft(8);
+        setPhaseTitle('4. REST HOLD (4s)');
+        setPhaseInstruction('Pause empty before next breath cycle');
+        setScientificTip('Resting empty resets sympathetic cardiac drive to baseline.');
+        setSecondsLeft(4);
+      }
 
-        Animated.sequence([
-          Animated.timing(auraScale, { toValue: 1.15, duration: 4000, useNativeDriver: true }),
-          Animated.timing(auraScale, { toValue: 1.0, duration: 4000, useNativeDriver: true }),
-        ]).start();
+      boxLaserProgress.setValue(edge * 0.25);
+      Animated.timing(boxLaserProgress, {
+        toValue: (edge + 1) * 0.25,
+        duration: 4000,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      }).start();
 
-        cycleStep++;
+      step++;
+      if (step % 4 === 0) {
         setCyclesCompleted(c => c + 1);
+        setVagalBoost(v => Math.min(95, v + 8));
       }
     };
 
-    runCycle();
-    const intervalTime = activeMode === 'vagus_humming' ? 6000 : activeMode === 'diaphragmatic_pace' ? 5000 : activeMode === 'box_meditation' ? 4000 : 8000;
-    const timer = setInterval(runCycle, intervalTime);
-    return () => clearInterval(timer);
+    runBoxCycle();
+    const interval = setInterval(runBoxCycle, 4000);
+    return () => clearInterval(interval);
   }, [activeMode, isPaused]);
 
-  // Handle Canvas Tap Interaction
-  const handleCanvasTap = (evt) => {
-    if (Platform.OS !== 'web') {
-      Vibration.vibrate(12);
-    }
+  // Deep Belly Pacing 4s Inhale / 6s Exhale Pattern
+  useEffect(() => {
+    if (activeMode !== 'diaphragmatic_pace' || isPaused) return;
+
+    let isInhale = true;
+    const runBellyCycle = () => {
+      if (isInhale) {
+        setPhaseTitle('BELLY INHALE (4s)');
+        setPhaseInstruction('Expand lower abdomen outward slowly through nose');
+        setScientificTip('Diaphragmatic expansion engages phrenic nerve abdominal receptors.');
+        setSecondsLeft(4);
+        Animated.timing(bellyCylinderHeight, {
+          toValue: 0.95,
+          duration: 4000,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: false,
+        }).start();
+      } else {
+        setPhaseTitle('EXTENDED EXHALE (6s)');
+        setPhaseInstruction('Soften stomach inward toward spine slowly through mouth');
+        setScientificTip('6-second extended exhalation produces maximum HRV vagal recovery.');
+        setSecondsLeft(6);
+        Animated.timing(bellyCylinderHeight, {
+          toValue: 0.25,
+          duration: 6000,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: false,
+        }).start();
+        setCyclesCompleted(c => c + 1);
+        setVagalBoost(v => Math.min(95, v + 10));
+      }
+      isInhale = !isInhale;
+    };
+
+    runBellyCycle();
+    const interval = setInterval(runBellyCycle, isInhale ? 6000 : 4000);
+    return () => clearInterval(interval);
+  }, [activeMode, isPaused]);
+
+  // Mindful Body Scan Somatic Tension Sweep
+  useEffect(() => {
+    if (activeMode !== 'body_scan_mindful' || isPaused) return;
+
+    const regions = [
+      { name: 'CROWN & FOREHEAD', instruction: 'Unclamp jaw & smooth forehead tension', tip: 'Releasing jaw muscles drops trigeminal nerve tension signal.' },
+      { name: 'SHOULDERS & NECK', instruction: 'Drop shoulder blades downward away from ears', tip: 'Trapezius relaxation reduces cervical sympathetic trunk tightness.' },
+      { name: 'CHEST & HEART', instruction: 'Breathe warm light directly into heart center', tip: 'Heart center focus increases cardiac vagal tone.' },
+      { name: 'ABDOMEN & CORE', instruction: 'Release deep stomach muscle tightness', tip: 'Somatic core relaxation decreases abdominal cortisol pooling.' },
+      { name: 'FEET & ANKLES', instruction: 'Feel heavy grounding connection into floor', tip: 'Peripheral limb awareness diverts blood flow away from anxious brain centers.' },
+    ];
+
+    let rIdx = 0;
+    const runBodyCycle = () => {
+      const reg = regions[rIdx % regions.length];
+      setActiveBodyRegion(rIdx % regions.length);
+      setPhaseTitle(reg.name);
+      setPhaseInstruction(reg.instruction);
+      setScientificTip(reg.tip);
+      setSecondsLeft(6);
+      rIdx++;
+      if (rIdx % regions.length === 0) {
+        setCyclesCompleted(c => c + 1);
+        setVagalBoost(v => Math.min(95, v + 7));
+      }
+    };
+
+    runBodyCycle();
+    const interval = setInterval(runBodyCycle, 6000);
+    return () => clearInterval(interval);
+  }, [activeMode, isPaused]);
+
+  // Silent Zen Open Monitoring Chime Pattern
+  useEffect(() => {
+    if (activeMode !== 'silent_zen_timer' || isPaused) return;
+
+    setPhaseTitle('SILENT OPEN MONITORING');
+    setPhaseInstruction('Unguided silent awareness • Rest in natural presence');
+    setScientificTip('Open Monitoring meditation quiets Default Mode Network (DMN) rumination loops.');
+    setSecondsLeft(8);
+
+    const interval = setInterval(() => {
+      setCyclesCompleted(c => c + 1);
+      setVagalBoost(v => Math.min(95, v + 6));
+    }, 8000);
+    return () => clearInterval(interval);
+  }, [activeMode, isPaused]);
+
+  const handleStrikeBowl = () => {
+    if (Platform.OS !== 'web') Vibration.vibrate(20);
+    zenBowlStrike.setValue(1);
+    Animated.sequence([
+      Animated.timing(zenBowlStrike, { toValue: 1.35, duration: 200, useNativeDriver: true }),
+      Animated.timing(zenBowlStrike, { toValue: 1.0, duration: 600, useNativeDriver: true }),
+    ]).start();
+
     rippleAnim.setValue(0);
     Animated.timing(rippleAnim, {
       toValue: 1,
@@ -228,486 +203,397 @@ export const MeditationGame = ({ initialMode, mode }) => {
     }).start();
   };
 
-  const containerBg = isDarkMode ? currentConfig.bgGradient[0] : (theme.bgPrimary || '#FAF9FC');
-  const primaryText = isDarkMode ? '#FFFFFF' : (theme.textPrimary || '#1E293B');
-  const secondaryText = isDarkMode ? 'rgba(255,255,255,0.6)' : (theme.textSecondary || '#475569');
-  const tabBg = isDarkMode ? 'rgba(255,255,255,0.06)' : (theme.bgSecondary || '#FFFFFF');
-  const tabBorder = isDarkMode ? 'rgba(255,255,255,0.12)' : (theme.border || '#E2E8F0');
+  // Serene Minimalist Palette (Teal & Slate)
+  const getThemeDetails = () => {
+    switch (activeMode) {
+      case 'box_meditation':
+        return { title: 'Box Breathing', badge: 'WESAD Score: 0.86 · 4-4-4-4 Square', icon: '🧊' };
+      case 'diaphragmatic_pace':
+        return { title: 'Deep Belly Pacing', badge: 'WESAD Score: 0.88 · 4s/6s Ratio', icon: '🫁' };
+      case 'body_scan_mindful':
+        return { title: 'Mindful Body Scan', badge: 'WESAD Score: 0.74 · Somatic Sweep', icon: '🧘‍♂️' };
+      case 'silent_zen_timer':
+      default:
+        return { title: 'Silent Zen Presence', badge: 'WESAD Score: 0.55 · Zen Presence', icon: '⛩️' };
+    }
+  };
+
+  const techInfo = getThemeDetails();
+  const primaryTeal = '#0D9488';
+  const textColor = isDarkMode ? '#FFFFFF' : '#0F172A';
+  const subTextColor = isDarkMode ? 'rgba(255,255,255,0.7)' : '#475569';
+  const bgGradient = isDarkMode ? ['#061D1A', '#0B2925'] : ['#F8FAFC', '#F0FDFA'];
+  const cardBg = isDarkMode ? 'rgba(13, 148, 136, 0.15)' : '#FFFFFF';
+  const borderColor = isDarkMode ? 'rgba(13, 148, 136, 0.35)' : '#CBD5E1';
+
+  const bodyRegions = [
+    { name: 'Head & Jaw', icon: '🧠' },
+    { name: 'Shoulders & Neck', icon: '💆‍♂️' },
+    { name: 'Chest & Heart', icon: '🫁' },
+    { name: 'Abdomen & Core', icon: '✨' },
+    { name: 'Feet & Grounding', icon: '👣' },
+  ];
 
   return (
-    <ScrollView
-      style={{ flex: 1, width: '100%' }}
-      contentContainerStyle={[styles.container, { backgroundColor: containerBg }]}
-      showsVerticalScrollIndicator={false}
-      bounces={false}
-    >
-      {/* Mode Switcher Header Tabs */}
-      <View style={styles.headerTabScroll}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.modeScrollRow}>
-          {meditationModes.map(m => (
-            <TouchableOpacity
-              key={m.id}
-              style={[
-                styles.modeTab,
-                { backgroundColor: tabBg, borderColor: tabBorder },
-                activeMode === m.id && { backgroundColor: m.color, borderColor: m.color }
-              ]}
-              onPress={() => {
-                setActiveMode(m.id);
-                setCyclesCompleted(0);
-              }}
-            >
-              <Text style={styles.modeTabIcon}>{m.icon}</Text>
-              <Text style={[styles.modeTabText, { color: primaryText }, activeMode === m.id && styles.modeTabTextActive]}>
-                {m.title}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      </View>
-
-      {/* Mode Badge & Description */}
-      <View style={styles.badgeRow}>
-        <View style={[styles.badgeContainer, { backgroundColor: `${currentConfig.color}25`, borderColor: currentConfig.color }]}>
-          <Text style={[styles.badgeText, { color: currentConfig.color }]}>{currentConfig.badge}</Text>
+    <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false} bounces={false}>
+      <LinearGradient colors={bgGradient} style={styles.gradientWrapper}>
+        {/* Top Header Card */}
+        <View style={[styles.headerCard, { backgroundColor: cardBg, borderColor }]}>
+          <View style={[styles.headerIconRing, { backgroundColor: 'rgba(13, 148, 136, 0.2)' }]}>
+            <Text style={styles.headerIcon}>{techInfo.icon}</Text>
+          </View>
+          <View style={styles.headerTextWrap}>
+            <Text style={[styles.headerTitle, { color: textColor }]}>{techInfo.title}</Text>
+            <Text style={[styles.headerBadge, { color: primaryTeal }]}>{techInfo.badge}</Text>
+          </View>
+          <View style={[styles.cycleBadge, { backgroundColor: primaryTeal }]}>
+            <Text style={styles.cycleBadgeTxt}>{cyclesCompleted} Cycles</Text>
+          </View>
         </View>
-        <Text style={[styles.cyclesText, { color: secondaryText }]}>Cycles: {cyclesCompleted}</Text>
-      </View>
 
-      {/* Central Interactive Artwork Canvas */}
-      <TouchableOpacity activeOpacity={0.9} style={styles.canvasContainer} onPress={handleCanvasTap}>
-        {/* Ripple Shockwave Overlay */}
-        <Animated.View
-          style={[
-            styles.rippleCircle,
-            {
-              borderColor: currentConfig.color,
-              opacity: rippleAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 0] }),
-              transform: [{ scale: rippleAnim.interpolate({ inputRange: [0, 1], outputRange: [0.5, 2.5] }) }],
-            }
-          ]}
-        />
-
-        {/* MODE: Vagal Humming Laryngeal Resonance Canvas */}
-        {activeMode === 'vagus_humming' && (
-          <View style={styles.artworkBoxContainer}>
-            <Animated.View
-              style={[
-                styles.vagalResonanceOuter,
-                {
-                  borderColor: currentConfig.color,
-                  backgroundColor: `${currentConfig.color}25`,
-                  transform: [{ scale: auraScale }],
-                }
-              ]}
-            >
-              <Animated.View
-                style={[
-                  styles.vagalSoundwaveRing,
-                  {
-                    borderColor: '#C084FC',
-                    opacity: auraGlow,
-                    transform: [{ scale: Animated.multiply(auraScale, 1.25) }],
-                  }
-                ]}
-              />
-              <Text style={styles.vagalCenterIcon}>🗣️</Text>
-              <Text style={styles.vagalCenterTxt}>🔊 {hummingFreq}</Text>
-              <Text style={styles.artworkTitleText}>LARYNGEAL VAGAL STIMULATION</Text>
-            </Animated.View>
+        {/* Live Vagal Activation Recovery Bar */}
+        <View style={[styles.vagalMeterCard, { backgroundColor: cardBg, borderColor }]}>
+          <View style={styles.vagalMeterHeader}>
+            <Text style={[styles.vagalMeterTitle, { color: primaryTeal }]}>🌿 PHYSIOLOGICAL RECOVERY</Text>
+            <Text style={[styles.vagalMeterVal, { color: primaryTeal }]}>+{vagalBoost}% Vagal Tone</Text>
           </View>
-        )}
-
-        {/* MODE: Deep Abdominal Pacing Canvas */}
-        {activeMode === 'diaphragmatic_pace' && (
-          <View style={styles.artworkBoxContainer}>
-            <Animated.View
-              style={[
-                styles.vagalResonanceOuter,
-                {
-                  borderColor: currentConfig.color,
-                  backgroundColor: `${currentConfig.color}25`,
-                  transform: [{ scale: auraScale }],
-                }
-              ]}
-            >
-              <Animated.View
-                style={[
-                  styles.vagalSoundwaveRing,
-                  {
-                    borderColor: '#60A5FA',
-                    opacity: auraGlow,
-                    transform: [{ scale: Animated.multiply(auraScale, 1.25) }],
-                  }
-                ]}
-              />
-              <Text style={styles.vagalCenterIcon}>🫁</Text>
-              <Text style={styles.vagalCenterTxt}>BELLY {bellyPaceRatio}</Text>
-              <Text style={styles.artworkTitleText}>LOWER LOBE EXPANSION</Text>
-            </Animated.View>
+          <View style={styles.vagalTrack}>
+            <View style={[styles.vagalFill, { width: `${vagalBoost}%`, backgroundColor: primaryTeal }]} />
           </View>
-        )}
+        </View>
 
-        {/* MODE: Box Meditation Water Canvas */}
+        {/* ═══════════════════════════════════════════════════════════════════
+            PATTERN 1: BOX BREATHING 4-4-4-4 TACTICAL SQUARE
+           ═══════════════════════════════════════════════════════════════════ */}
         {activeMode === 'box_meditation' && (
-          <View style={styles.artworkBoxContainer}>
-            <Animated.View
-              style={[
-                styles.zenSquare,
-                {
-                  borderColor: currentConfig.color,
-                  shadowColor: currentConfig.color,
-                  transform: [{ scale: auraScale }],
-                }
-              ]}
-            >
-              <Text style={styles.centerEmoji}>🧘</Text>
-              <Text style={styles.artworkTitleText}>{currentConfig.artworkTitle}</Text>
-            </Animated.View>
-            <View style={styles.cornerDotTL} />
-            <View style={styles.cornerDotTR} />
-            <View style={styles.cornerDotBL} />
-            <View style={styles.cornerDotBR} />
+          <View style={styles.canvasContainer}>
+            <View style={[styles.laserSquareFrame, { borderColor: isDarkMode ? '#0D9488' : '#94A3B8' }]}>
+              <View style={[styles.laserCornerNode, styles.cTL, phaseTitle.includes('1.') && styles.nodeActive]}>
+                <Text style={styles.cNodeTxt}>Inhale 4s</Text>
+              </View>
+              <View style={[styles.laserCornerNode, styles.cTR, phaseTitle.includes('2.') && styles.nodeActive]}>
+                <Text style={styles.cNodeTxt}>Hold 4s</Text>
+              </View>
+              <View style={[styles.laserCornerNode, styles.cBR, phaseTitle.includes('3.') && styles.nodeActive]}>
+                <Text style={styles.cNodeTxt}>Exhale 4s</Text>
+              </View>
+              <View style={[styles.laserCornerNode, styles.cBL, phaseTitle.includes('4.') && styles.nodeActive]}>
+                <Text style={styles.cNodeTxt}>Rest 4s</Text>
+              </View>
+
+              <View style={styles.laserCenterContent}>
+                <Text style={styles.centerEmoji}>🧊</Text>
+                <Text style={[styles.centerTimer, { color: textColor }]}>{secondsLeft}s</Text>
+                <Text style={[styles.centerPhaseTag, { color: primaryTeal }]}>{phaseTitle}</Text>
+              </View>
+            </View>
+
+            <View style={styles.edgeStatusRow}>
+              <View style={[styles.edgePill, phaseTitle.includes('1.') && styles.edgePillActive]}>
+                <Text style={styles.edgePillTxt}>Inhale</Text>
+              </View>
+              <View style={[styles.edgePill, phaseTitle.includes('2.') && styles.edgePillActive]}>
+                <Text style={styles.edgePillTxt}>Hold</Text>
+              </View>
+              <View style={[styles.edgePill, phaseTitle.includes('3.') && styles.edgePillActive]}>
+                <Text style={styles.edgePillTxt}>Exhale</Text>
+              </View>
+              <View style={[styles.edgePill, phaseTitle.includes('4.') && styles.edgePillActive]}>
+                <Text style={styles.edgePillTxt}>Rest</Text>
+              </View>
+            </View>
           </View>
         )}
-      </TouchableOpacity>
 
-      {/* Vagal Humming Frequency Selector & Neural Target Guidance */}
-      {activeMode === 'vagus_humming' && (
-        <View style={styles.vagalFreqSection}>
-          <Text style={styles.vagalFreqLabel}>🔊 ACOUSTIC RESONANCE TUNING</Text>
-          <View style={styles.freqChipRow}>
-            {['108 Hz Om', '128 Hz Vagal', '432 Hz Reset'].map(freq => (
-              <TouchableOpacity
-                key={freq}
-                onPress={() => {
-                  setHummingFreq(freq);
-                  if (Platform.OS !== 'web') Vibration.vibrate(15);
-                }}
+        {/* ═══════════════════════════════════════════════════════════════════
+            PATTERN 2: DEEP BELLY PACING 4s INHALE / 6s EXTENDED EXHALE
+           ═══════════════════════════════════════════════════════════════════ */}
+        {activeMode === 'diaphragmatic_pace' && (
+          <View style={styles.canvasContainer}>
+            <View style={styles.diaphragmGaugeRow}>
+              <View style={styles.ribcageTicks}>
+                <Text style={[styles.tickTxt, { color: subTextColor }]}>— 100% Full</Text>
+                <Text style={[styles.tickTxt, { color: subTextColor }]}>— Mid Lungs</Text>
+                <Text style={[styles.tickTxt, { color: subTextColor }]}>— Diaphragm</Text>
+              </View>
+
+              <View style={[styles.cylinderFrame, { borderColor: primaryTeal, backgroundColor: isDarkMode ? 'rgba(13, 148, 136, 0.1)' : '#F0FDFA' }]}>
+                <Animated.View
+                  style={[
+                    styles.cylinderLiquidFill,
+                    {
+                      backgroundColor: primaryTeal,
+                      height: bellyCylinderHeight.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: ['0%', '100%'],
+                      }),
+                    }
+                  ]}
+                />
+                <View style={styles.cylinderOverlayContent}>
+                  <Text style={styles.centerEmoji}>🫁</Text>
+                  <Text style={[styles.centerTimer, { color: textColor }]}>{secondsLeft}s</Text>
+                  <Text style={[styles.centerPhaseTag, { color: '#FFFFFF' }]}>{phaseTitle}</Text>
+                </View>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* ═══════════════════════════════════════════════════════════════════
+            PATTERN 3: MINDFUL BODY SCAN SOMATIC SWEEP
+           ═══════════════════════════════════════════════════════════════════ */}
+        {activeMode === 'body_scan_mindful' && (
+          <View style={styles.canvasContainer}>
+            <View style={styles.anatomicalMapCard}>
+              <View style={styles.anatomicalSilhouette}>
+                {bodyRegions.map((reg, idx) => (
+                  <TouchableOpacity
+                    key={idx}
+                    activeOpacity={0.8}
+                    style={[
+                      styles.somaticZonePill,
+                      { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.06)' : '#FFFFFF', borderColor },
+                      activeBodyRegion === idx && {
+                        backgroundColor: primaryTeal,
+                        borderColor: primaryTeal,
+                      }
+                    ]}
+                    onPress={() => setActiveBodyRegion(idx)}
+                  >
+                    <Text style={styles.somaticZoneIcon}>{reg.icon}</Text>
+                    <Text style={[styles.somaticZoneName, { color: isDarkMode ? '#FFFFFF' : '#0F172A' }, activeBodyRegion === idx && styles.zoneTxtActive]}>
+                      {reg.name}
+                    </Text>
+                    {activeBodyRegion === idx && <Text style={styles.activeDot}>🟢 Active Zone</Text>}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* ═══════════════════════════════════════════════════════════════════
+            PATTERN 4: SILENT ZEN TIBETAN SINGING BOWL INSTRUMENT
+           ═══════════════════════════════════════════════════════════════════ */}
+        {activeMode === 'silent_zen_timer' && (
+          <View style={styles.canvasContainer}>
+            <TouchableOpacity activeOpacity={0.85} style={styles.zenInstrumentArea} onPress={handleStrikeBowl}>
+              <Animated.View
                 style={[
-                  styles.freqChip,
-                  hummingFreq === freq && { backgroundColor: currentConfig.color, borderColor: currentConfig.color }
+                  styles.singingBowlContainer,
+                  {
+                    borderColor: primaryTeal,
+                    backgroundColor: isDarkMode ? 'rgba(13, 148, 136, 0.15)' : '#CCFBF1',
+                    transform: [{ scale: zenBowlStrike }],
+                  }
                 ]}
               >
-                <Text style={[styles.freqChipTxt, hummingFreq === freq && { color: '#FFFFFF', fontWeight: '800' }]}>
-                  {freq}
-                </Text>
-              </TouchableOpacity>
-            ))}
+                <Animated.View
+                  style={[
+                    styles.bowlAcousticRipple,
+                    {
+                      borderColor: '#2DD4BF',
+                      opacity: rippleAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 0] }),
+                      transform: [{ scale: rippleAnim.interpolate({ inputRange: [0, 1], outputRange: [0.7, 2.3] }) }],
+                    }
+                  ]}
+                />
+                <Text style={styles.bowlEmojiIcon}>🥣</Text>
+                <Text style={[styles.bowlTitleTxt, { color: textColor }]}>TIBETAN SINGING BOWL</Text>
+                <Text style={[styles.bowlActionTag, { color: primaryTeal }]}>🔔 TAP TO STRIKE BOWL</Text>
+              </Animated.View>
+            </TouchableOpacity>
           </View>
-          <View style={styles.vagalPathwayBox}>
-            <Text style={styles.vagalPathwayTxt}>
-              🧬 Neural Target: Throat Vocal Vibration (128Hz) → Jugular Foramen Vagus Nerve Plexus → Parasympathetic Heart Rate Brake
-            </Text>
-          </View>
+        )}
+
+        {/* Guidance Display Card */}
+        <View style={[styles.guidanceCard, { backgroundColor: cardBg, borderColor }]}>
+          <Text style={[styles.guidanceTitle, { color: primaryTeal }]}>{phaseTitle}</Text>
+          <Text style={[styles.guidanceInstruction, { color: textColor }]}>{phaseInstruction}</Text>
+          <Text style={[styles.scientificTipTxt, { color: subTextColor }]}>💡 {scientificTip}</Text>
         </View>
-      )}
 
-      {/* Deep Abdominal Pacing Ratio Selector & Mind-Body Placement Box */}
-      {activeMode === 'diaphragmatic_pace' && (
-        <View style={styles.vagalFreqSection}>
-          <Text style={styles.vagalFreqLabel}>🫁 ABDOMINAL PACING RATIO</Text>
-          <View style={styles.freqChipRow}>
-            {['Standard 4:6', 'Deep 4:7', 'Coherence 5:5'].map(ratio => (
-              <TouchableOpacity
-                key={ratio}
-                onPress={() => {
-                  setBellyPaceRatio(ratio);
-                  if (Platform.OS !== 'web') Vibration.vibrate(15);
-                }}
-                style={[
-                  styles.freqChip,
-                  bellyPaceRatio === ratio && { backgroundColor: currentConfig.color, borderColor: currentConfig.color }
-                ]}
-              >
-                <Text style={[styles.freqChipTxt, bellyPaceRatio === ratio && { color: '#FFFFFF', fontWeight: '800' }]}>
-                  {ratio}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          <View style={styles.vagalPathwayBox}>
-            <Text style={styles.vagalPathwayTxt}>
-              🖐️ Mind-Body Cue: Place hand on your stomach • Inhale into belly (4s) → Soften belly on exhale (6s)
-            </Text>
-          </View>
-        </View>
-      )}
-
-      {/* Central Guidance Phase Text */}
-      <View style={styles.guidanceBox}>
-        <Text style={[styles.phaseTextDisplay, { color: currentConfig.color }]}>{phaseText}</Text>
-        <Text style={[styles.subtextInstruction, { color: secondaryText }]}>
-          {activeMode === 'vagus_humming'
-            ? 'Hum gently with closed lips on exhale "Mmmmm..."'
-            : activeMode === 'diaphragmatic_pace'
-              ? 'Expand stomach outward on inhale • Soften stomach inward on exhale'
-              : 'Tap screen to release tension • Sync breath with visual guide'}
-        </Text>
-      </View>
-
-      {/* Play/Pause Control Footer */}
-      <View style={styles.footerControls}>
+        {/* Session Controls */}
         <TouchableOpacity
-          style={[styles.playBtn, { backgroundColor: currentConfig.color }]}
-          onPress={() => setIsPaused(!isPaused)}
+          style={[styles.sessionControlBtn, { backgroundColor: primaryTeal }]}
+          onPress={() => setIsPaused(p => !p)}
+          activeOpacity={0.85}
         >
-          <Text style={styles.playBtnText}>{isPaused ? '▶ Resume' : '⏸ Pause'}</Text>
+          <Text style={styles.sessionControlBtnTxt}>{isPaused ? '▶  Resume Session' : '⏸  Pause Session'}</Text>
         </TouchableOpacity>
-      </View>
+      </LinearGradient>
     </ScrollView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flexGrow: 1,
-    paddingTop: 4,
+  scrollContainer: { flexGrow: 1 },
+  gradientWrapper: {
+    flex: 1,
+    paddingTop: 14,
+    paddingBottom: 24,
     alignItems: 'center',
-    justifyContent: 'flex-start',
-    paddingBottom: 12,
+    justifyContent: 'center',
+    minHeight: 520,
   },
-  headerTabScroll: {
-    width: '100%',
-    paddingHorizontal: 10,
-  },
-  modeScrollRow: {
-    flexDirection: 'row',
-    gap: 6,
-    paddingVertical: 4,
-  },
-  modeTab: {
+  headerCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 5,
-    paddingHorizontal: 12,
+    width: width * 0.9,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     borderRadius: 18,
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
-    gap: 5,
+    borderWidth: 1.5,
+    marginBottom: 6,
+    gap: 12,
   },
-  modeTabIcon: {
-    fontSize: 14,
+  headerIconRing: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
+  headerIcon: { fontSize: 24 },
+  headerTextWrap: { flex: 1 },
+  headerTitle: { fontSize: 16, fontWeight: '800', letterSpacing: -0.3 },
+  headerBadge: { fontSize: 11, fontWeight: '700', marginTop: 2 },
+  cycleBadge: { paddingVertical: 4, paddingHorizontal: 10, borderRadius: 12 },
+  cycleBadgeTxt: { color: '#FFFFFF', fontSize: 11, fontWeight: '800' },
+
+  vagalMeterCard: {
+    width: width * 0.9,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    marginBottom: 8,
   },
-  modeTabText: {
-    color: 'rgba(255, 255, 255, 0.7)',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  modeTabTextActive: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-  },
-  badgeRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    width: width * 0.88,
-    marginVertical: 3,
-  },
-  badgeContainer: {
-    paddingVertical: 3,
-    paddingHorizontal: 10,
-    borderRadius: 10,
-    borderWidth: 1,
-  },
-  badgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
-  cyclesText: {
-    color: 'rgba(255,255,255,0.6)',
-    fontSize: 12,
-    fontWeight: '500',
-  },
+  vagalMeterHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 },
+  vagalMeterTitle: { fontSize: 10, fontWeight: '800', letterSpacing: 0.8 },
+  vagalMeterVal: { fontSize: 11, fontWeight: '800' },
+  vagalTrack: { width: '100%', height: 6, borderRadius: 3, backgroundColor: 'rgba(0,0,0,0.08)', overflow: 'hidden' },
+  vagalFill: { height: '100%', borderRadius: 3 },
+
   canvasContainer: {
-    width: width * 0.85,
-    height: Math.min(width * 0.42, 170),
+    width: width * 0.9,
+    height: Math.min(width * 0.68, 250),
     alignItems: 'center',
     justifyContent: 'center',
-    marginVertical: 2,
+    marginVertical: 6,
   },
-  artworkBoxContainer: {
-    width: '100%',
-    height: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-  },
-  rippleCircle: {
-    position: 'absolute',
-    width: 90,
-    height: 90,
-    borderRadius: 45,
-    borderWidth: 2,
-  },
-  zenSquare: {
-    width: 100,
-    height: 100,
+
+  // Box Breathing Laser Frame
+  laserSquareFrame: {
+    width: 180,
+    height: 180,
     borderRadius: 22,
     borderWidth: 2.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.8,
-    shadowRadius: 16,
-  },
-  centerEmoji: {
-    fontSize: 34,
-  },
-  artworkTitleText: {
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: 8,
-    fontWeight: '700',
-    letterSpacing: 1.2,
-    marginTop: 4,
-  },
-  cornerDotTL: { position: 'absolute', top: 6, left: 6, width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.3)' },
-  cornerDotTR: { position: 'absolute', top: 6, right: 6, width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.3)' },
-  cornerDotBL: { position: 'absolute', bottom: 6, left: 6, width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.3)' },
-  cornerDotBR: { position: 'absolute', bottom: 6, right: 6, width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.3)' },
-  auraCircle: {
-    width: 160,
-    height: 160,
-    borderRadius: 80,
+    position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  bodyNodeColumn: {
-    gap: 4,
-    width: '100%',
-    alignItems: 'center',
+  laserCornerNode: {
+    position: 'absolute',
+    paddingVertical: 2,
+    paddingHorizontal: 6,
+    borderRadius: 8,
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
   },
-  bodyNodePill: {
+  cTL: { top: -10, left: -10 },
+  cTR: { top: -10, right: -10 },
+  cBR: { bottom: -10, right: -10 },
+  cBL: { bottom: -10, left: -10 },
+  cNodeTxt: { color: '#FFFFFF', fontSize: 9, fontWeight: '800' },
+  nodeActive: { backgroundColor: '#0D9488' },
+  laserCenterContent: { alignItems: 'center', justifyContent: 'center' },
+  edgeStatusRow: { flexDirection: 'row', gap: 6, marginTop: 10 },
+  edgePill: { paddingVertical: 3, paddingHorizontal: 8, borderRadius: 8, backgroundColor: 'rgba(0,0,0,0.06)' },
+  edgePillActive: { backgroundColor: '#0D9488' },
+  edgePillTxt: { color: '#FFFFFF', fontSize: 9, fontWeight: '800' },
+
+  // Deep Belly Cylinder
+  diaphragmGaugeRow: { flexDirection: 'row', alignItems: 'center', gap: 18 },
+  ribcageTicks: { gap: 14 },
+  tickTxt: { fontSize: 10, fontWeight: '700' },
+  cylinderFrame: {
+    width: 120,
+    height: 190,
+    borderRadius: 24,
+    borderWidth: 2.5,
+    overflow: 'hidden',
+    justifyContent: 'flex-end',
+    position: 'relative',
+  },
+  cylinderLiquidFill: { width: '100%', borderRadius: 20 },
+  cylinderOverlayContent: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // Mindful Body Scan Map
+  anatomicalMapCard: { width: '100%', height: '100%', justifyContent: 'center' },
+  anatomicalSilhouette: { width: '100%', gap: 5 },
+  somaticZonePill: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 3,
-    paddingHorizontal: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
     borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-    width: '82%',
-    gap: 6,
+    borderWidth: 1.5,
+    gap: 8,
   },
-  bodyNodeIcon: { fontSize: 12 },
-  bodyNodeText: { color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: '500' },
-  bodyNodeTextActive: { color: '#FFFFFF', fontWeight: '700' },
-  chakraRingItem: {
-    position: 'absolute',
-    borderWidth: 2,
-    opacity: 0.75,
-  },
-  singingBowlOuter: {
-    width: 130,
-    height: 130,
-    borderRadius: 65,
+  somaticZoneIcon: { fontSize: 15 },
+  somaticZoneName: { flex: 1, fontSize: 11, fontWeight: '700' },
+  zoneTxtActive: { color: '#FFFFFF', fontWeight: '800' },
+  activeDot: { color: '#FFFFFF', fontSize: 9, fontWeight: '800' },
+
+  // Tibetan Singing Bowl
+  zenInstrumentArea: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' },
+  singingBowlContainer: {
+    width: 180,
+    height: 180,
+    borderRadius: 90,
     borderWidth: 3,
     alignItems: 'center',
     justifyContent: 'center',
+    padding: 10,
   },
-  singingBowlInner: {
-    width: 85,
-    height: 85,
-    borderRadius: 42.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bowlEmoji: { fontSize: 34 },
-  waveBarContainer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 10,
-    height: 130,
-  },
-  waveBar: {
-    width: 14,
-    borderRadius: 7,
-  },
-  guidanceBox: {
-    alignItems: 'center',
-    marginVertical: 3,
-  },
-  phaseTextDisplay: {
-    fontSize: 20,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-    textAlign: 'center',
-  },
-  subtextInstruction: {
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: 10,
-    marginTop: 2,
-  },
-  footerControls: {
-    flexDirection: 'row',
-    gap: 10,
-    width: width * 0.88,
-    justifyContent: 'center',
-    marginTop: 4,
-    marginBottom: 6,
-  },
-  playBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 26,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 4,
-  },
-  playBtnText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-
-  // Vagal Humming Acoustic Styles
-  vagalResonanceOuter: {
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    borderWidth: 2.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#8B5CF6',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.6,
-    shadowRadius: 16,
-  },
-  vagalSoundwaveRing: {
+  bowlAcousticRipple: {
     position: 'absolute',
-    width: 130,
-    height: 130,
-    borderRadius: 65,
+    width: 180,
+    height: 180,
+    borderRadius: 90,
     borderWidth: 2,
   },
-  vagalCenterIcon: { fontSize: 32, marginBottom: 2 },
-  vagalCenterTxt: { color: '#E9D5FF', fontSize: 11, fontWeight: '800', letterSpacing: 0.5, marginBottom: 2 },
-  vagalFreqSection: { width: '88%', alignItems: 'center', marginVertical: 4 },
-  vagalFreqLabel: { color: 'rgba(255,255,255,0.4)', fontSize: 9, fontWeight: '700', letterSpacing: 0.8, marginBottom: 4 },
-  freqChipRow: { flexDirection: 'row', gap: 6, marginBottom: 6 },
-  freqChip: {
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.15)',
-    backgroundColor: 'rgba(255,255,255,0.06)',
+  bowlEmojiIcon: { fontSize: 40, marginBottom: 4 },
+  bowlTitleTxt: { fontSize: 11, fontWeight: '800', letterSpacing: 0.8, textAlign: 'center' },
+  bowlActionTag: { fontSize: 9, fontWeight: '800', marginTop: 4, letterSpacing: 0.5 },
+
+  // Shared Typography
+  centerEmoji: { fontSize: 30, marginBottom: 2 },
+  centerTimer: { fontSize: 24, fontWeight: '800', letterSpacing: -0.5 },
+  centerPhaseTag: { fontSize: 10, fontWeight: '800', letterSpacing: 1.2, marginTop: 2, textTransform: 'uppercase' },
+
+  // Guidance Card
+  guidanceCard: {
+    width: width * 0.9,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    marginVertical: 6,
   },
-  freqChipTxt: { color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: '600' },
-  vagalPathwayBox: {
-    paddingVertical: 5,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    backgroundColor: 'rgba(139,92,246,0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(139,92,246,0.25)',
+  guidanceTitle: { fontSize: 16, fontWeight: '800', letterSpacing: 0.5, textAlign: 'center' },
+  guidanceInstruction: { fontSize: 12, fontWeight: '600', textAlign: 'center', marginTop: 3 },
+  scientificTipTxt: { fontSize: 10, fontWeight: '600', textAlign: 'center', marginTop: 6 },
+
+  // Session Control Button
+  sessionControlBtn: {
+    width: width * 0.9,
+    paddingVertical: 14,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 4,
   },
-  vagalPathwayTxt: { color: '#D8B4FE', fontSize: 10, textAlign: 'center', fontWeight: '500', lineHeight: 14 },
+  sessionControlBtnTxt: { color: '#FFFFFF', fontSize: 15, fontWeight: '800', letterSpacing: 0.5 },
 });

@@ -16,7 +16,7 @@ export const MemberTelemetryCard = ({
   const probVal = typeof stressProbability === 'number' ? stressProbability : appContext?.stressProbability;
 
   const getLabelColor = (label, prob) => {
-    if (!isCalibrated || !isLive) return theme.warning;
+    if (!isLive) return theme.warning;
     const l = (label || '').toLowerCase();
     if (l === 'stress' || l === 'high_stress' || l === 'high' || l === 'acute' || (typeof prob === 'number' && prob >= 0.60)) return theme.danger;
     return theme.success;
@@ -26,8 +26,8 @@ export const MemberTelemetryCard = ({
     const l = (lbl || '').toLowerCase();
     return l === 'stress' || l === 'high_stress' || l === 'high' || l === 'acute' || l === 'pre-stress' || l === 'pre_stress';
   };
-  const probPct = (isCalibrated && isLive && typeof probVal === 'number') ? (probVal * 100).toFixed(0) + '%' : '--';
-  const displayLabel = (isCalibrated && isLive) ? (isStressState(stressState) ? 'STRESS' : 'NORMAL') : (!isCalibrated ? 'CALIBRATING' : 'AWAITING STREAM');
+  const probPct = (isLive && typeof probVal === 'number') ? (probVal * 100).toFixed(0) + '%' : '--';
+  const displayLabel = isLive ? (isStressState(stressState) ? 'STRESS' : 'NORMAL') : 'AWAITING STREAM';
 
   return (
     <View style={[styles.card, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
@@ -42,7 +42,7 @@ export const MemberTelemetryCard = ({
           </View>
           <Text style={[styles.boxVal, { color: theme.textPrimary }]}>{displayLabel}</Text>
           <View style={[styles.miniBadge, { backgroundColor: getLabelColor(stressState, probVal) }]}>
-            <Text style={styles.miniBadgeTxt}>{(isCalibrated && isLive) ? 'FUSED LABEL' : (!isCalibrated ? 'CALIBRATING' : 'AWAITING STREAM')}</Text>
+            <Text style={styles.miniBadgeTxt}>{isLive ? 'FUSED LABEL' : 'AWAITING STREAM'}</Text>
           </View>
         </View>
 
@@ -54,7 +54,7 @@ export const MemberTelemetryCard = ({
           </View>
           <Text style={[styles.boxVal, { color: theme.accent }]}>{probPct}</Text>
           <View style={[styles.miniBadge, { backgroundColor: getLabelColor(stressState, probVal) }]}>
-            <Text style={styles.miniBadgeTxt}>{(isCalibrated && isLive) ? 'P(STRESS)' : 'AWAITING DATA'}</Text>
+            <Text style={styles.miniBadgeTxt}>{isLive ? 'P(STRESS)' : 'AWAITING DATA'}</Text>
           </View>
         </View>
 
@@ -65,10 +65,8 @@ export const MemberTelemetryCard = ({
             <Text style={[styles.boxTitle, { color: theme.textPrimary }]}>Member 4: Calm AI Closed-Loop Engine</Text>
           </View>
           <Text style={[styles.boxValSub, { color: theme.textSecondary }]}>
-            {(isCalibrated && isLive && typeof probVal === 'number')
+            {(isLive && typeof probVal === 'number')
               ? `Dynamically quantizes (Label=${stressState}, P=${probVal.toFixed(2)}) into Context Clusters & updates Thompson Bandit`
-              : !isCalibrated
-              ? 'Waiting for baseline calibration to complete before initializing Context Clusters & Thompson Bandit'
               : 'Awaiting live multimodal fusion stream from sensors to initialize Context Clusters & Thompson Bandit'}
           </Text>
         </View>
