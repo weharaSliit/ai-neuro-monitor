@@ -48,10 +48,11 @@ def create_user_profile(user_id, name, initial_baselines):
     Saves a new user and their 7-day calibration baseline.
     initial_baselines: dict { 'avg_dwell': {'mean': 0.12, 'std': 0.02}, ... }
     """
+    lk_tz = timezone(timedelta(hours=5, minutes=30))
     ref = _ref(f'users/{user_id}')
     ref.set({
         'name': name,
-        'created_at': datetime.now().isoformat(),
+        'created_at': datetime.now(lk_tz).isoformat(),
         'baselines': initial_baselines,
         'is_calibrated': True
     })
@@ -85,10 +86,11 @@ def set_user_calibration_status(user_id, is_calibrated, window_count=0):
     Updates the calibration status flag for a user profile.
     Called after the 7-day baseline has been successfully computed.
     """
+    lk_tz = timezone(timedelta(hours=5, minutes=30))
     _ref(f'users/{user_id}').update({
         'is_calibrated': is_calibrated,
         'calibration_window_count': window_count,
-        'calibrated_at': datetime.now().isoformat()
+        'calibrated_at': datetime.now(lk_tz).isoformat()
     })
 
 # --- DATA INGESTION (Objective 3) ---
@@ -114,8 +116,15 @@ def save_stress_prediction(user_id, result):
     directly from Firebase without recomputing on the client.
     """
     ref = _ref(f'predictions/{user_id}')
+    # Sri Lanka local time, matching save_behavioral_window()'s data_logs
+    # timestamps -- datetime.now() (naive) previously wrote the server's
+    # bare UTC wall-clock with no timezone marker, which the app's
+    # `new Date(p.timestamp)` then parsed as if it were ALREADY local
+    # (UTC+5:30) time, making every reading appear ~5.5 hours older than
+    # it actually was (e.g. a reading from moments ago showing "5h ago").
+    lk_tz = timezone(timedelta(hours=5, minutes=30))
     ref.push({
-        'timestamp':   datetime.now().isoformat(),
+        'timestamp':   datetime.now(lk_tz).isoformat(),
         'label':       result['label'],
         'stress_score': result['score'],
         'confidence':  result.get('confidence', 0.5),
@@ -161,10 +170,14 @@ def save_validation_label(user_id, label_type, score):
     """
     Saves user self-reports (PSS-4 or SISS) for research validation.
     label_type: 'pss4' (weekly) or 'siss' (daily)
+    Sri Lanka local time (see save_stress_prediction) -- must stay
+    consistent with predictions' timestamps since the Validation screen
+    matches self-reports to nearby predictions by timestamp proximity.
     """
+    lk_tz = timezone(timedelta(hours=5, minutes=30))
     ref = _ref(f'validation_labels/{user_id}/{label_type}')
     ref.push({
-        'timestamp': datetime.now().isoformat(),
+        'timestamp': datetime.now(lk_tz).isoformat(),
         'score': score
     })
 
