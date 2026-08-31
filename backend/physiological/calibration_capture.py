@@ -462,8 +462,8 @@ def run_task_calibration_capture(user_id, on_progress=None):
     swamped by that one early window's ramp-up.
 
     on_progress(status, extra) is called at:
-      'capturing'      extra={}
-      'window_skipped' extra={'ibi', 'gsr', 'acc'}
+      'capturing'      extra={'window_idx', 'n_windows'}
+      'window_skipped' extra={'ibi', 'gsr', 'acc', 'window_idx', 'n_windows'}
       'saving'         extra={}
       'done'           extra={'status': 'ok'|'not_separated',
                                'personal_stress_threshold': float|None,
@@ -499,12 +499,14 @@ def run_task_calibration_capture(user_id, on_progress=None):
             duration = WINDOW_SEC
         actual_fs = max(1, round(len(state['gsr_buf']) / duration))
         if (len(state['ibi_buf']) < 10 or len(state['gsr_buf']) < 20 or len(state['acc_buf']) < 10):
-            _notify('window_skipped', ibi=len(state['ibi_buf']), gsr=len(state['gsr_buf']), acc=len(state['acc_buf']))
+            _notify('window_skipped', ibi=len(state['ibi_buf']), gsr=len(state['gsr_buf']), acc=len(state['acc_buf']),
+                    window_idx=len(collected_windows), n_windows=N_TASK_WIN)
         else:
             collected_windows.append({
                 "ibi_array": state['ibi_buf'], "gsr_adc_array": state['gsr_buf'],
                 "acc_array": state['acc_buf'], "gsr_calibration": GSR_CAL, "actual_fs": actual_fs,
             })
+            _notify('capturing', window_idx=len(collected_windows), n_windows=N_TASK_WIN)
         state['ibi_buf'], state['gsr_buf'], state['acc_buf'] = [], [], []
         state['window_start'] = time.time()
 
@@ -535,7 +537,7 @@ def run_task_calibration_capture(user_id, on_progress=None):
         return None
 
     try:
-        _notify('capturing')
+        _notify('capturing', window_idx=0, n_windows=N_TASK_WIN)
         capture_deadline = time.time() + _capture_timeout_sec(N_TASK_WIN)
         while len(collected_windows) < N_TASK_WIN:
             if time.time() > capture_deadline:

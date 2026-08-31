@@ -39,6 +39,7 @@ import ProfileScreen from './modules/physiological/screens/ProfileScreen';
 import RingSummaryScreen from './modules/physiological/screens/RingSummaryScreen';
 import EegSummaryScreen from './modules/eeg/screens/EegSummaryScreen';
 import EegThresholdTaskScreen from './modules/eeg/screens/EegThresholdTaskScreen';
+import CalibrationTrendScreen from './modules/shared/CalibrationTrendScreen';
 import PhenotypingEmaScreen from './modules/phenotyping/screens/PhenotypingEmaScreen';
 import PhenotypingSignalDetailScreen from './modules/phenotyping/screens/PhenotypingSignalDetailScreen';
 import PhenotypingSignalHistoryScreen from './modules/phenotyping/screens/PhenotypingSignalHistoryScreen';
@@ -61,6 +62,7 @@ const linking = {
       Register: 'register',
       AccountSetup: 'account-setup',
       ThresholdCalibration: 'threshold-calibration',
+      CalibrationTrend: 'calibration-trend',
       Admin: 'admin',
       Physiological: {
         path: '',
@@ -148,6 +150,11 @@ function RootNavigator() {
           <Stack.Screen name="Admin" component={AdminNavigator} />
           <Stack.Screen name="AccountSetup" component={AccountSetupScreen} />
           <Stack.Screen name="ThresholdCalibration" component={EegThresholdTaskScreen} />
+          <Stack.Screen
+            name="CalibrationTrend"
+            component={CalibrationTrendScreen}
+            options={{ headerShown: true, title: 'Calibration Progress' }}
+          />
           <Stack.Screen name="Physiological" component={PhysiologicalNavigator} />
           <Stack.Screen
             name="Profile"
