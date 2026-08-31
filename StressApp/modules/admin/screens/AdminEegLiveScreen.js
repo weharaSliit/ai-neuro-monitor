@@ -24,6 +24,7 @@ import Card from '../../shared/Card';
 import Button from '../../shared/Button';
 import Icon, { NAMES } from '../../shared/Icon';
 import LineChart from '../../shared/LineChart';
+import Svg, { Path, Circle, Line as SvgLine } from 'react-native-svg';
 import { ref, onValue, off, query, orderByChild, limitToLast } from 'firebase/database';
 import { db } from '../../../firebase';
 import { COLORS } from '../../physiological/config/theme';
@@ -33,8 +34,6 @@ import { useAuth } from '../../../context/AuthContext';
 
 const CHART_POINTS = 120;
 const RAW_CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
-const RAW_CHART_HEIGHT = 260;
-const RAW_CHART_CLIP_HEIGHT = RAW_CHART_HEIGHT + 16;
 
 function downsampleWithIndices(values) {
     if (!values || values.length === 0) return { values: [], indices: [] };
@@ -63,8 +62,6 @@ const BIPOLAR_FEATURES = [
     { key: 'mean', label: 'mean' }, { key: 'std', label: 'std' }, { key: 'rms', label: 'rms' }, { key: 'ptp', label: 'ptp' },
     { key: 'sample_entropy', label: 'samp ent' },
 ];
-const BIPOLAR_POINT_WIDTH = 28;
-const FEATURE_CHART_HEIGHT = 170;
 
 function percentile(sorted, p) {
     const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor(p * (sorted.length - 1))));
@@ -77,22 +74,11 @@ function chartRange(values) {
     let lo = percentile(sorted, 0.05);
     let hi = percentile(sorted, 0.95);
     if (hi <= lo) { lo -= 1; hi += 1; }
-    // 10% vertical headroom applied only to the PLOTTED points, not the
-    // min/max returned below (still true p5-p95, used for the "this block's
-    // range" text) -- no maxValue is passed to LineChart for this raw µV
-    // chart, so gifted-charts auto-scales its y-axis to exactly the range of
-    // the data it's given. Clamping points straight to [lo, hi] left the
-    // waveform's own extremes sitting flush against the chart's top/bottom
-    // edge with no breathing room, which is what made the line hard to read.
     const pad = (hi - lo) * 0.1;
     const clampLo = lo - pad;
     const clampHi = hi + pad;
     const { values: dsValues } = downsampleWithIndices(values);
     const now = Date.now();
-    // wave_uv (pipeline.py::_downsample_wave()) is already decimated
-    // server-side and carries no per-point timestamp -- points are spaced
-    // evenly across the block's real BLOCK_SEC duration instead of a millis
-    // alignment, which is all a shape-preview chart needs.
     const points = dsValues.map((v, i) => ({
         value: Math.min(clampHi, Math.max(clampLo, v)),
         date: new Date(now - (dsValues.length - i) * 1000 * (25 / dsValues.length)),
@@ -109,6 +95,122 @@ function sortedWindowsList(windowsObj) {
 
 const TREND_CHART_POINTS_LIMIT = 40; // ~40 blocks * 25s/block = ~16.7 min of live trend history
 
+function BipolarWaveformChart({ points, min, max, color, width, height = 150 }) {
+    if (!points || points.length < 2) return null;
+    const PAD_X = 6;
+    const PAD_Y = 14;
+    const plotWidth = Math.max(10, width - PAD_X * 2);
+    const plotHeight = Math.max(10, height - PAD_Y * 2);
+
+    const range = (max - min) || 1;
+    const toX = (i) => PAD_X + (i / (points.length - 1)) * plotWidth;
+    const toY = (val) => PAD_Y + (1 - Math.min(1, Math.max(0, (val - min) / range))) * plotHeight;
+
+    const zeroY = toY(0);
+    const hasZero = zeroY >= PAD_Y && zeroY <= (height - PAD_Y);
+
+    let pathD = '';
+    points.forEach((p, i) => {
+        const x = toX(i);
+        const y = toY(p.value);
+        if (i === 0) {
+            pathD += `M ${x.toFixed(1)} ${y.toFixed(1)}`;
+        } else {
+            pathD += ` L ${x.toFixed(1)} ${y.toFixed(1)}`;
+        }
+    });
+
+    return (
+        <View style={{ width, height, overflow: 'hidden', backgroundColor: '#F8FAFC', borderRadius: 14, borderWidth: 1, borderColor: '#E2E8F0', padding: 2 }}>
+            <Svg width={width - 4} height={height - 4}>
+                {/* Horizontal reference grid lines */}
+                <SvgLine x1={PAD_X} y1={PAD_Y} x2={width - PAD_X} y2={PAD_Y} stroke="#CBD5E1" strokeWidth={0.8} strokeDasharray="3,3" />
+                {hasZero && (
+                    <SvgLine x1={PAD_X} y1={zeroY} x2={width - PAD_X} y2={zeroY} stroke="#94A3B8" strokeWidth={1} strokeDasharray="4,3" />
+                )}
+                <SvgLine x1={PAD_X} y1={height - PAD_Y} x2={width - PAD_X} y2={height - PAD_Y} stroke="#CBD5E1" strokeWidth={0.8} strokeDasharray="3,3" />
+
+                {/* The Waveform Path */}
+                <Path d={pathD} stroke={color} strokeWidth={2} fill="none" strokeLinejoin="round" strokeLinecap="round" />
+            </Svg>
+        </View>
+    );
+}
+
+function BipolarFeaturesChart({ features, pointWidth = 36, height = 150 }) {
+    if (!features) return null;
+    const rawValues = BIPOLAR_FEATURES.map(({ key }) => {
+        const v = features[key] ?? 0;
+        return Math.sign(v) * Math.log10(1 + Math.abs(v));
+    });
+
+    let min = Math.min(...rawValues);
+    let max = Math.max(...rawValues);
+    if (min === max) { min -= 1; max += 1; }
+    const pad = (max - min) * 0.15;
+    const plotMin = min - pad;
+    const plotMax = max + pad;
+    const range = (plotMax - plotMin) || 1;
+
+    const totalWidth = BIPOLAR_FEATURES.length * pointWidth;
+    const PAD_Y = 16;
+    const plotHeight = height - PAD_Y * 2;
+    const toY = (val) => PAD_Y + (1 - (val - plotMin) / range) * plotHeight;
+
+    const coords = rawValues.map((v, i) => ({
+        x: i * pointWidth + pointWidth / 2,
+        y: toY(v),
+        raw: features[BIPOLAR_FEATURES[i].key] ?? 0,
+    }));
+
+    let pathD = '';
+    coords.forEach((c, i) => {
+        if (i === 0) pathD += `M ${c.x.toFixed(1)} ${c.y.toFixed(1)}`;
+        else pathD += ` L ${c.x.toFixed(1)} ${c.y.toFixed(1)}`;
+    });
+
+    return (
+        <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled={true} style={{ width: '100%' }}>
+            <View style={{ width: totalWidth, paddingVertical: 4 }}>
+                <Svg width={totalWidth} height={height}>
+                    {/* Grid lines */}
+                    <SvgLine x1={0} y1={PAD_Y} x2={totalWidth} y2={PAD_Y} stroke="#E2E8F0" strokeWidth={0.8} strokeDasharray="3,3" />
+                    <SvgLine x1={0} y1={height / 2} x2={totalWidth} y2={height / 2} stroke="#CBD5E1" strokeWidth={0.8} strokeDasharray="4,3" />
+                    <SvgLine x1={0} y1={height - PAD_Y} x2={totalWidth} y2={height - PAD_Y} stroke="#E2E8F0" strokeWidth={0.8} strokeDasharray="3,3" />
+
+                    {/* Vertical guideline for each feature column */}
+                    {coords.map((c, i) => (
+                        <SvgLine key={`v-${i}`} x1={c.x} y1={PAD_Y} x2={c.x} y2={height - PAD_Y} stroke="#F1F5F9" strokeWidth={1} />
+                    ))}
+
+                    {/* Connected Feature Line */}
+                    <Path d={pathD} stroke={COLORS.brand} strokeWidth={2.2} fill="none" strokeLinejoin="round" />
+
+                    {/* Feature Data Points */}
+                    {coords.map((c, i) => (
+                        <Circle key={`pt-${i}`} cx={c.x} cy={c.y} r={4} fill={COLORS.brand} stroke="#FFFFFF" strokeWidth={1.5} />
+                    ))}
+                </Svg>
+
+                {/* Column Labels exactly aligned to each point */}
+                <View style={{ flexDirection: 'row', width: totalWidth, marginTop: 6 }}>
+                    {BIPOLAR_FEATURES.map(({ key, label: fLabel }) => {
+                        const real = features[key] ?? 0;
+                        return (
+                            <View key={key} style={{ width: pointWidth, alignItems: 'center' }}>
+                                <Text style={[styles.featureLabelText, { color: COLORS.light.textSub }]} numberOfLines={1}>{fLabel}</Text>
+                                <Text style={[styles.featureValueText, { color: COLORS.light.textMuted }]} numberOfLines={1}>
+                                    {Math.abs(real) >= 1000 ? real.toFixed(0) : real.toFixed(1)}
+                                </Text>
+                            </View>
+                        );
+                    })}
+                </View>
+            </View>
+        </ScrollView>
+    );
+}
+
 function SignalChart({ title, lastValue, points, min, max, color, t, last }) {
     return (
         <View style={[styles.signalBlock, last ? null : { marginBottom: 16 }]}>
@@ -120,13 +222,13 @@ function SignalChart({ title, lastValue, points, min, max, color, t, last }) {
             </View>
             {points.length > 1 ? (
                 <>
-                    <LineChart
+                    <BipolarWaveformChart
                         points={points}
                         color={color}
                         width={RAW_CHART_WIDTH}
-                        height={160}
-                        hideValues={true}
-                        fallback={<Text style={[styles.waiting, { color: t.textMuted }]}>Loading chart…</Text>}
+                        height={150}
+                        min={min}
+                        max={max}
                     />
                     <Text style={[styles.signalRange, { color: t.textMuted }]}>
                         This block's range: {min.toFixed(1)} to {max.toFixed(1)} µV
@@ -260,39 +362,7 @@ export default function AdminEegLiveScreen({ route, navigation }) {
     const hasWave = !!(waveUv && waveUv.length > 0);
     const waveChart = hasWave ? chartRange(waveUv) : { points: [], min: 0, max: 1 };
     const lastWave = waveUv?.[waveUv.length - 1];
-    const signedLog = (v) => Math.sign(v) * Math.log10(1 + Math.abs(v));
     const bipolarFeatures = latest?.features_eeg?.bipolar;
-    // No `date` on these points -- each one is a DIFFERENT feature (delta
-    // power, spectral entropy, ...) at the same instant, not a time series,
-    // so a real per-point date doesn't exist. Omitting it (rather than the
-    // previous `new Date(i)` placeholder) keeps LineChart's haveAllTimes
-    // check false, so it doesn't render a nonsense x-axis of fake
-    // timestamps -- featureLabelRow below already carries the real
-    // per-feature labels, aligned to the same BIPOLAR_POINT_WIDTH spacing.
-    //
-    // p5-p95 clamped (+10% padding, same technique as chartRange() above
-    // and EegSummaryScreen.js's clampOutliers()) -- the 29 features span
-    // wildly different natural scales even after signedLog compression
-    // (e.g. total_power vs. a 0-1 ratio), so without clamping, one or two
-    // large-magnitude features stretch the shared y-axis enough to flatten
-    // every smaller-scale feature's real block-to-block variation into an
-    // indistinguishable line.
-    const bipolarRawValues = bipolarFeatures ? BIPOLAR_FEATURES.map(({ key }) => signedLog(bipolarFeatures[key] ?? 0)) : [];
-    const bipolarLinePoints = (() => {
-        if (!bipolarFeatures || bipolarRawValues.length < 2) return [];
-        const sorted = [...bipolarRawValues].sort((a, b) => a - b);
-        let lo = percentile(sorted, 0.05);
-        let hi = percentile(sorted, 0.95);
-        if (hi <= lo) {
-            const pad = Math.abs(lo) * 0.1 || 1;
-            lo -= pad;
-            hi += pad;
-        }
-        const pad = (hi - lo) * 0.1;
-        const clampLo = lo - pad;
-        const clampHi = hi + pad;
-        return bipolarRawValues.map((v) => ({ value: Math.min(clampHi, Math.max(clampLo, v)) }));
-    })();
 
     // Cognitive-load-vs-threshold trend: task_state_score (0-1) per block,
     // scaled to 0-100 to match LineChart's colorZones convention (Ring/
@@ -387,16 +457,14 @@ export default function AdminEegLiveScreen({ route, navigation }) {
                                     </Text>
                                 </View>
 
-                                {calibrationResult?.status === 'ok' && (
-                                    <View style={styles.metaRow}>
-                                        <Text style={[styles.metaLabel, { color: t.textSub }]}>Sensitivity</Text>
-                                        <Text style={[styles.metaValue, { color: t.text }]}>
-                                            {calibrationResult.thresholds_personalized
-                                                ? `Personalized (${calibrationResult.baseline_shift >= 0 ? '+' : ''}${(calibrationResult.baseline_shift * 100).toFixed(1)}%)`
-                                                : 'Standard (not enough clean blocks to personalize)'}
-                                        </Text>
-                                    </View>
-                                )}
+                                <View style={styles.metaRow}>
+                                    <Text style={[styles.metaLabel, { color: t.textSub }]}>Sensitivity</Text>
+                                    <Text style={[styles.metaValue, { color: t.text }]}>
+                                        {calibrationResult?.status === 'ok' && calibrationResult.thresholds_personalized
+                                            ? `Personalized (${calibrationResult.baseline_shift >= 0 ? '+' : ''}${(calibrationResult.baseline_shift * 100).toFixed(1)}%)`
+                                            : 'Standard (not enough clean blocks to personalize)'}
+                                    </Text>
+                                </View>
 
                                 {baselineDegraded && (
                                     <Text style={[styles.warningText, { color: COLORS_FLAT.stress }]}>
@@ -484,39 +552,17 @@ export default function AdminEegLiveScreen({ route, navigation }) {
                     </Card>
                 )}
 
-                {watching && bipolarLinePoints.length > 0 && (
+                {watching && bipolarFeatures && (
                     <Card>
                         <Text style={[styles.label, { color: t.textSub, marginBottom: 4 }]}>Bipolar (T7 − T8) Differential Features</Text>
                         <Text style={[styles.hint, { color: t.textMuted, marginBottom: 12 }]}>
                             All 29 features from this block's T7−T8 differential signal. Updates every 25s block.
                         </Text>
-                        <ScrollView horizontal showsHorizontalScrollIndicator>
-                            <View style={{ width: bipolarLinePoints.length * BIPOLAR_POINT_WIDTH }}>
-                                <View style={{ height: FEATURE_CHART_HEIGHT }}>
-                                    <LineChart
-                                        points={bipolarLinePoints}
-                                        color={COLORS_FLAT.brand}
-                                        width={bipolarLinePoints.length * BIPOLAR_POINT_WIDTH}
-                                        height={FEATURE_CHART_HEIGHT}
-                                        hideValues={true}
-                                        fallback={<Text style={[styles.waiting, { color: t.textMuted }]}>Loading chart…</Text>}
-                                    />
-                                </View>
-                                <View style={styles.featureLabelRow}>
-                                    {BIPOLAR_FEATURES.map(({ key, label: fLabel }) => {
-                                        const real = bipolarFeatures[key] ?? 0;
-                                        return (
-                                            <View key={key} style={[styles.featureLabelItem, { width: BIPOLAR_POINT_WIDTH }]}>
-                                                <Text style={[styles.featureLabelText, { color: t.textSub }]}>{fLabel}</Text>
-                                                <Text style={[styles.featureValueText, { color: t.textMuted }]}>
-                                                    {Math.abs(real) >= 1000 ? real.toFixed(0) : real.toFixed(2)}
-                                                </Text>
-                                            </View>
-                                        );
-                                    })}
-                                </View>
-                            </View>
-                        </ScrollView>
+                        <BipolarFeaturesChart
+                            features={bipolarFeatures}
+                            pointWidth={36}
+                            height={140}
+                        />
                     </Card>
                 )}
 
@@ -552,8 +598,6 @@ const styles = StyleSheet.create({
     signalTitle:      { fontSize: 12, fontWeight: '700' },
     signalValue:      { fontSize: 13, fontWeight: '800' },
     signalRange:      { fontSize: 10, marginTop: 4 },
-    featureLabelRow:   { flexDirection: 'row', marginTop: 8 },
-    featureLabelItem:  { alignItems: 'center' },
     featureLabelText:  { fontSize: 8, textAlign: 'center' },
     featureValueText:  { fontSize: 8, fontWeight: '700', marginTop: 2 },
 });
