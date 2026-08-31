@@ -810,6 +810,9 @@ export default function EegThresholdTaskScreen({ navigation }) {
             <TouchableOpacity onPress={startSerialSub} disabled={!userId} activeOpacity={0.7} style={styles.skipRow}>
               <Text style={[styles.skipText, { color: t.textMuted }]}>Redo anyway →</Text>
             </TouchableOpacity>
+            <TouchableOpacity onPress={() => navigation.navigate('CalibrationTrend')} activeOpacity={0.7} style={styles.skipRow}>
+              <Text style={[styles.skipText, { color: COLORS.brand }]}>View calibration trend →</Text>
+            </TouchableOpacity>
           </Card>
         )}
 
@@ -832,6 +835,9 @@ export default function EegThresholdTaskScreen({ navigation }) {
             <Button label="Start Task" onPress={startSerialSub} disabled={!userId || calibLoading} variant="primary" style={{ marginTop: 16 }} />
             <TouchableOpacity onPress={finish} activeOpacity={0.7} style={styles.skipRow}>
               <Text style={[styles.skipText, { color: t.textMuted }]}>Skip for now →</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => navigation.navigate('CalibrationTrend')} activeOpacity={0.7} style={styles.skipRow}>
+              <Text style={[styles.skipText, { color: COLORS.brand }]}>View calibration trend →</Text>
             </TouchableOpacity>
           </Card>
         )}
