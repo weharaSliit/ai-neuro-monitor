@@ -32,6 +32,35 @@ from backend.phenotyping_behavior.ema_service import update_personalized_baselin
 app = Flask(__name__)
 CORS(app)
 
+REFERENCE_BASELINES = {
+    'avg_dwell':        {'mean': 88.246993,   'std': 31.837077},
+    'dwell_std':        {'mean': 53.094011,   'std': 21.784443},
+    'avg_flight':       {'mean': 220.281697,  'std': 79.034951},
+    'flight_std':       {'mean': 132.677431,  'std': 54.43413},
+    'interaction_rate': {'mean': 0.754617,    'std': 3.987897},
+    'scroll_velocity':  {'mean': 1425.401759, 'std': 6497.52037},
+    'tilt_angle':       {'mean': 59.0,        'std': 15.0},
+    'cpm':              {'mean': 39.0,        'std': 12.0},
+    'app_switch_rate':  {'mean': 0.019252,    'std': 0.200632},
+}
+
+def auto_seed_baseline(user_id):
+    """If user has no baselines, seed the reference baseline and mark calibrated."""
+    existing = get_user_baselines(user_id)
+    if existing:
+        return existing  # already has baselines
+    print(f"[AUTO-SEED] {user_id}: No baselines found — seeding reference baseline")
+    # Use .update() so we ONLY write baselines + calibration flag
+    # without overwriting the user's display_name or other profile fields.
+    from backend.phenotyping_behavior.firebase_service import _ref
+    _ref(f'users/{user_id}').update({
+        'baselines': REFERENCE_BASELINES,
+        'is_calibrated': True,
+        'calibrated_at': __import__('datetime').datetime.now().isoformat(),
+    })
+    print(f"[AUTO-SEED] {user_id}: Baseline seeded + is_calibrated=true")
+    return REFERENCE_BASELINES
+
 # Initialize Firebase on startup
 init_firebase()
 
@@ -78,8 +107,11 @@ def predict_behavioral_stress():
     is_valid = data.get('data_valid', True)
 
     # 3. Get Personalized Baseline (Objective 2)
+    # Auto-seeds reference baseline for new users with no baselines
     baselines = get_user_baselines(user_id)
-    
+    if not baselines:
+        baselines = auto_seed_baseline(user_id)
+
     # 4. Perform Inference (Objective 1 Model)
     # user_id enables temporal drift confirmation (see predictor.py step 4b)
     result = predictor.predict(window_features, baselines, user_id)
@@ -389,6 +421,16 @@ def evaluate_accuracy_endpoint():
     results = run_evaluation(user_id)
     return jsonify({"status": "success", "user_id": user_id, "results": results})
 
+
+@app.route('/behavior/reference-baseline', methods=['GET'])
+def reference_baseline():
+    """
+    Returns the population reference baseline used to auto-seed new users
+    (see auto_seed_baseline()). This is the single source of truth for those
+    numbers -- the frontend fetches from here instead of hardcoding its own
+    copy, so recalibrating only requires updating REFERENCE_BASELINES above.
+    """
+    return jsonify({"baselines": REFERENCE_BASELINES})
 
 @app.route('/health', methods=['GET'])
 def health():

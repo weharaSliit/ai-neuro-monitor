@@ -87,6 +87,18 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
+    // Windows only: the default .cxx path under this deeply nested project directory
+    // pushes autolinked native modules' object file paths past the 260-char Windows
+    // limit (ninja: "Filename longer than 260 characters"). Redirect CMake's build
+    // staging directory to a short path to keep object paths under the limit.
+    if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+        externalNativeBuild {
+            cmake {
+                buildStagingDirectory "C:/rnbuild/stressapp"
+            }
+        }
+    }
+
     namespace 'com.mindpulse.stressapp'
     defaultConfig {
         applicationId 'com.mindpulse.stressapp'
@@ -155,7 +167,7 @@ android {
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
-
+    implementation 'com.google.android.gms:play-services-location:21.3.0'
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";
     def isWebpAnimatedEnabled = (findProperty('expo.webp.animated') ?: "") == "true";

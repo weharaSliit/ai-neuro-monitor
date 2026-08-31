@@ -582,7 +582,20 @@ public class KeystrokeCollectorService extends AccessibilityService {
                 payload.put("dwell_times",       dwellArr);
                 payload.put("flight_times",      flightArr);
                 payload.put("scroll_velocity",   avgScroll);
-                payload.put("tilt_angle",         tiltAngleSnapshot);
+                // Tilt angle: only send when accelerometer gravity filter has warmed up.
+                // gravityFilter starts at [0,0,0]; if still zeroed, the phone hasn't moved
+                // and the reading is meaningless — send null so the dashboard shows "— °"
+                // instead of a misleading "0°".
+                boolean tiltSettled = Math.abs(gravityFilter[0]) > 0.01
+                                   || Math.abs(gravityFilter[1]) > 0.01
+                                   || Math.abs(gravityFilter[2]) > 0.01;
+                if (tiltSettled) {
+                    payload.put("tilt_angle", tiltAngleSnapshot);
+                } else {
+                    payload.put("tilt_angle", JSONObject.NULL);
+                    Log.d(TAG, "Tilt not settled yet -- omitting tilt_angle from payload");
+                }
+
                 payload.put("cpm",               cpm);
                 payload.put("interaction_rate",  interactionRate);
                 payload.put("app_switch_rate",   appSwitchRate);
