@@ -3,8 +3,8 @@
 // Concise visual breadcrumb + interactive sensor toggle + 7-Day Roadmap.
 // Matches the app theme design tokens.
 // ============================================================
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, NativeModules, Platform, Switch } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, NativeModules, Platform, Switch, Linking } from 'react-native';
 import ScreenBackground from '../../shared/ScreenBackground';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../../physiological/config/ThemeContext';
@@ -28,19 +28,27 @@ export default function PhenotypingOnboardingScreen({ navigation }) {
     const { theme: t, COLORS } = useTheme();
 
     const [step, setStep] = useState(1);
-    const [sensorToggle, setSensorToggle] = useState(false);
     const [saving, setSaving] = useState(false);
 
-    const handleToggleSensor = (val) => {
-        setSensorToggle(val);
-        if (val) {
-            if (Platform.OS === 'android' && PhenotypingIdentity) {
-                PhenotypingIdentity.requestRuntimePermissions();
-                PhenotypingIdentity.scheduleEmaNotifications();
-            }
-            setTimeout(() => setStep(2), 450);
+    // ── Sensor verification state
+    const [sensorCheckStatus, setSensorCheckStatus] = useState('unknown'); // 'unknown' | 'checking' | 'on' | 'off'
+
+    const checkSensorStatus = useCallback(async () => {
+        if (Platform.OS !== 'android' || !PhenotypingIdentity?.isAccessibilityServiceEnabled) {
+            setSensorCheckStatus('on');
+            return;
         }
-    };
+        setSensorCheckStatus('checking');
+        try {
+            const enabled = await PhenotypingIdentity.isAccessibilityServiceEnabled();
+            setSensorCheckStatus(enabled ? 'on' : 'off');
+        } catch {
+            setSensorCheckStatus('off');
+        }
+    }, []);
+
+    // Check on mount
+    useEffect(() => { checkSensorStatus(); }, [checkSensorStatus]);
 
     const finish = async () => {
         setSaving(true);
@@ -86,28 +94,96 @@ export default function PhenotypingOnboardingScreen({ navigation }) {
                             </View>
                         </View>
 
-                        {/* Interactive Sensor Switch */}
-                        <View style={[styles.toggleCard, { backgroundColor: sensorToggle ? COLORS.normalSoft : t.pillBg, borderColor: sensorToggle ? COLORS.normal : t.border }]}>
-                            <View style={{ flex: 1, marginRight: 10 }}>
-                                <Text style={[styles.toggleTitle, { color: t.text }]}>PhenoCare Sensor</Text>
-                                <Text style={[styles.toggleSub, { color: sensorToggle ? COLORS.normalDark : t.textMuted }]}>
-                                    {sensorToggle ? '✓ Sensor Active & Streaming' : 'Tap switch to turn ON'}
+                        {/* ── Live Sensor Status Pill ── */}
+                        <View style={[styles.sensorStatusRow, {
+                            backgroundColor: sensorCheckStatus === 'on'
+                                ? (COLORS.normalSoft || (COLORS.normal + '18'))
+                                : sensorCheckStatus === 'checking'
+                                    ? t.pillBg
+                                    : (COLORS.stressSoft || (COLORS.stress + '18')),
+                            borderColor: sensorCheckStatus === 'on'
+                                ? (COLORS.normal + '60')
+                                : sensorCheckStatus === 'checking'
+                                    ? t.border
+                                    : (COLORS.stress + '40'),
+                        }]}>
+                            <Text style={{ fontSize: 18 }}>
+                                {sensorCheckStatus === 'on' ? '✅' : sensorCheckStatus === 'checking' ? '⏳' : '❌'}
+                            </Text>
+                            <View style={{ flex: 1, marginLeft: 10 }}>
+                                <Text style={[styles.sensorStatusTitle, {
+                                    color: sensorCheckStatus === 'on'
+                                        ? (COLORS.normalDark || COLORS.normal)
+                                        : sensorCheckStatus === 'checking'
+                                            ? t.textMuted
+                                            : (COLORS.stressDark || COLORS.stress),
+                                }]}>
+                                    {sensorCheckStatus === 'on'
+                                        ? 'PhenoCare Sensor Active'
+                                        : sensorCheckStatus === 'checking'
+                                            ? 'Checking sensor status…'
+                                            : 'Sensor Not Enabled'}
+                                </Text>
+                                <Text style={[styles.sensorStatusSub, { color: t.textMuted }]}>
+                                    {sensorCheckStatus === 'on'
+                                        ? 'Accessibility service is running'
+                                        : sensorCheckStatus === 'checking'
+                                            ? 'Reading from phone settings'
+                                            : 'Go to Settings → Accessibility → PhenoCare'}
                                 </Text>
                             </View>
-                            <Switch
-                                value={sensorToggle}
-                                onValueChange={handleToggleSensor}
-                                trackColor={{ false: t.border, true: COLORS.normal }}
-                                thumbColor={sensorToggle ? '#FFF' : '#FFF'}
-                            />
                         </View>
 
+                        {/* ── Open Settings + Check Again row ── */}
+                        {sensorCheckStatus !== 'on' && (
+                            <View style={styles.sensorActionRow}>
+                                <TouchableOpacity
+                                    style={[styles.sensorActionBtn, { backgroundColor: COLORS.brand, flex: 2 }]}
+                                    onPress={() => {
+                                        if (Platform.OS === 'android') {
+                                            Linking.sendIntent('android.settings.ACCESSIBILITY_SETTINGS').catch(() =>
+                                                Linking.openSettings()
+                                            );
+                                        } else {
+                                            Linking.openSettings();
+                                        }
+                                    }}
+                                    activeOpacity={0.8}
+                                >
+                                    <Text style={styles.sensorActionBtnText}>⚙️  Open Accessibility Settings</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[styles.sensorActionBtn, { backgroundColor: t.pillBg, borderWidth: 1.5, borderColor: t.border, flex: 1 }]}
+                                    onPress={checkSensorStatus}
+                                    activeOpacity={0.8}
+                                >
+                                    <Text style={[styles.sensorActionBtnText, { color: COLORS.brand }]}>↺  Check</Text>
+                                </TouchableOpacity>
+                            </View>
+                        )}
+
+                        {/* ── Continue button — only enabled when sensor ON ── */}
                         <TouchableOpacity
-                            style={[styles.modalActionBtn, { backgroundColor: COLORS.brand }]}
-                            onPress={() => handleToggleSensor(true)}
-                            activeOpacity={0.8}
+                            style={[styles.modalActionBtn, {
+                                backgroundColor: sensorCheckStatus === 'on' ? COLORS.brand : t.pillBg,
+                                borderWidth: sensorCheckStatus === 'on' ? 0 : 1.5,
+                                borderColor: t.border,
+                                marginTop: 14,
+                            }]}
+                            onPress={() => {
+                                if (sensorCheckStatus !== 'on') return;
+                                if (Platform.OS === 'android' && PhenotypingIdentity) {
+                                    PhenotypingIdentity.scheduleEmaNotifications();
+                                }
+                                setStep(2);
+                            }}
+                            activeOpacity={sensorCheckStatus === 'on' ? 0.8 : 1}
                         >
-                            <Text style={styles.modalActionBtnText}>Turn On Sensor →</Text>
+                            <Text style={[styles.modalActionBtnText, {
+                                color: sensorCheckStatus === 'on' ? '#FFF' : t.textMuted,
+                            }]}>
+                                {sensorCheckStatus === 'on' ? 'Continue →' : 'Enable sensor to continue'}
+                            </Text>
                         </TouchableOpacity>
                     </View>
                 )}
@@ -265,6 +341,40 @@ const styles = StyleSheet.create({
         fontSize: 11,
         marginTop: 2,
         fontWeight: '600',
+    },
+    // Sensor verification styles
+    sensorStatusRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        borderRadius: 16,
+        borderWidth: 1.5,
+        padding: 14,
+        marginBottom: 12,
+    },
+    sensorStatusTitle: {
+        fontSize: 13,
+        fontWeight: '800',
+    },
+    sensorStatusSub: {
+        fontSize: 11,
+        marginTop: 2,
+        fontWeight: '500',
+    },
+    sensorActionRow: {
+        flexDirection: 'row',
+        gap: 8,
+        marginBottom: 4,
+    },
+    sensorActionBtn: {
+        borderRadius: 12,
+        paddingVertical: 10,
+        alignItems: 'center',
+        paddingHorizontal: 8,
+    },
+    sensorActionBtnText: {
+        color: '#FFF',
+        fontSize: 11.5,
+        fontWeight: '800',
     },
     modalActionBtn: {
         borderRadius: 16,

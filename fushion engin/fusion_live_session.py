@@ -67,7 +67,41 @@ def _modality_input(window: dict, m: str) -> dict:
         "signal_quality": window.get(f"signal_quality_{m}"),
         "model_acc": window.get(f"model_acc_{m}"),
         "threshold": window.get(f"threshold_{m}"),
+        "threshold_scale": window.get(f"threshold_scale_{m}"),
     }
+
+
+STRESS_ALERT_MESSAGE = (
+    "Increasing stress — try to step away from the activity you're currently engaged in."
+)
+
+
+def _compute_stress_phase(fused_prob: float, fused_threshold: float,
+                           baseline_mean: float | None, trend: str) -> tuple[str, str | None]:
+    """Two-tier trend-aware phase, separate from fused_label/HIGH_STRESS
+    (which only checks current value vs. threshold, regardless of
+    direction) -- ADDITIVE, does not replace or feed back into
+    fused_label/fused_probability/fused_threshold anywhere. Recomputed
+    fresh every window from this window's own trend/values, never sticky
+    across windows -- a session that was alerting can drop straight back to
+    'stable' the moment trend stops being 'increasing', with no separate
+    memory of the prior alert.
+
+      'increasing_stress_alert': at/above the effective threshold AND still
+        rising -- distinct from merely being above threshold (that's
+        fused_label's job); this specifically flags the case where stress
+        is BOTH already high AND getting worse right now.
+      'trending_towards_stress': between this session's own baseline and
+        the threshold, and rising -- an early, sub-threshold signal.
+      'stable': everything else (falling, flat, below baseline, or no
+        baseline established yet to compare against).
+    """
+    if trend == "increasing" and fused_prob >= fused_threshold:
+        return "increasing_stress_alert", STRESS_ALERT_MESSAGE
+    if (trend == "increasing" and baseline_mean is not None
+            and baseline_mean <= fused_prob < fused_threshold):
+        return "trending_towards_stress", None
+    return "stable", None
 
 
 def poll_once(session_ref, session_meta_ref) -> dict:
@@ -121,6 +155,9 @@ def poll_once(session_ref, session_meta_ref) -> dict:
         trend = _trend_direction(fused_history[: i + 1])
         fused = fused_by_key[k]
         weights = fused["modality_weights"]
+        stress_phase, stress_alert_message = _compute_stress_phase(
+            windows[k]["fused_probability"], windows[k]["fused_threshold"], baseline_mean, trend
+        )
         # fusion_en/{user}/{session}/{window} keeps its EXISTING field
         # names (StressApp/modules/fusion/screens/FusionSessionScreen.js
         # reads this path directly) -- only the VALUES now come from the
@@ -130,6 +167,16 @@ def poll_once(session_ref, session_meta_ref) -> dict:
             "fused_threshold": windows[k]["fused_threshold"],
             "fused_label": windows[k]["fused_label"],
             "stress_trend": trend,
+            # ADDITIVE -- fused_label/fused_probability/fused_threshold above
+            # are completely unchanged; see _compute_stress_phase()'s own
+            # docstring for why this is a separate, trend-aware signal.
+            # stress_alert_message=None here means RTDB's .update() DELETES
+            # the key outright (its standard null-clears-a-field semantic)
+            # -- an alert from an earlier window doesn't linger once trend
+            # stops being 'increasing', with no separate code needed to
+            # explicitly clear it.
+            "stress_phase": stress_phase,
+            "stress_alert_message": stress_alert_message,
             "eeg_weight": weights.get("eeg"),
             "hrv_gsr_weight": weights.get("hrv_gsr"),
             # 'concordant'/'discordant'/'insufficient_data' -- see
@@ -147,6 +194,14 @@ def poll_once(session_ref, session_meta_ref) -> dict:
             # a domain-shift-style artifact worth investigating, not a
             # silent exclusion.
             "implausible_modalities": fused["implausible_modalities"],
+            # Comparable-across-modalities/users alternative to fused_
+            # probability -- see compute_realtime_multimodal_fusion()'s own
+            # docstring for the normalization. 0 = exactly at this window's
+            # combined personal threshold, +1 = as elevated as the biggest
+            # shift either modality's own calibration considers meaningful.
+            # ADDITIVE -- fused_probability/fused_threshold/fused_label
+            # keep their exact existing values for every current consumer.
+            "fused_relative_index": fused["fused_relative_index"],
         }
 
         if "eeg" in fused["active_modalities"]:

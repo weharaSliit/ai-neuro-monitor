@@ -6,7 +6,7 @@
 // Step 2: 7-Day Calibration Roadmap with auto-transition to Dashboard.
 // ============================================================
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, NativeModules, Platform, Modal, Switch, Animated } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, NativeModules, Platform, Modal, Switch, Animated, Linking } from 'react-native';
 import Svg, { Circle } from 'react-native-svg';
 import { useFocusEffect } from '@react-navigation/native';
 import { ref, onValue, off, get, update, query, limitToLast, orderByKey } from 'firebase/database';
@@ -66,6 +66,10 @@ export default function PhenotypingScreen({ navigation }) {
     const [sensorToggle, setSensorToggle] = useState(false);
     const [accessibilityOn, setAccessibilityOn] = useState(true);
 
+    // ── Sensor verification state (for onboarding Step 1)
+    const [sensorCheckStatus, setSensorCheckStatus] = useState('unknown'); // 'unknown' | 'checking' | 'on' | 'off'
+    const sensorCheckIntervalRef = useRef(null);
+
     // ── Firebase data
     const [firebaseProfile, setFirebaseProfile] = useState(null);
     const [baselines, setBaselines] = useState(null);
@@ -96,7 +100,32 @@ export default function PhenotypingScreen({ navigation }) {
         return () => clearInterval(id);
     }, []);
 
+    // ── Reference baseline for new-user seeding. The backend's
+    // REFERENCE_BASELINES (see /behavior/reference-baseline) is the single
+    // source of truth -- fetched once and cached offline rather than
+    // duplicated here, so recalibrating only requires updating one place.
+    const [referenceBaselines, setReferenceBaselines] = useState(null);
+    useEffect(() => {
+        const AS = require('@react-native-async-storage/async-storage').default;
+        (async () => {
+            try {
+                const c = await AS.getItem('@pheno_reference_baseline');
+                if (c) setReferenceBaselines(JSON.parse(c));
+            } catch { }
+            try {
+                const res = await fetch(`${API_BASE}/behavior/reference-baseline`);
+                const data = await res.json();
+                if (res.ok && data.baselines) {
+                    setReferenceBaselines(data.baselines);
+                    AS.setItem('@pheno_reference_baseline', JSON.stringify(data.baselines)).catch(() => { });
+                }
+            } catch { }
+        })();
+    }, []);
+
     // ── Firebase profile (display_name, created_at, study_id, is_calibrated)
+    // On first profile creation, auto-seeds the reference 7-day baseline so users
+    // skip the calibration wait. Live signals still come from THIS user's phone.
     useEffect(() => {
         if (!deviceId) return;
         const AS = require('@react-native-async-storage/async-storage').default;
@@ -105,16 +134,26 @@ export default function PhenotypingScreen({ navigation }) {
             if (snap.exists()) {
                 const p = snap.val();
                 setFirebaseProfile(p);
-                try { await AS.setItem(`@pheno_profile_${deviceId}`, JSON.stringify(p)); } catch {}
+                try { await AS.setItem(`@pheno_profile_${deviceId}`, JSON.stringify(p)); } catch { }
             } else {
-                try { const c = await AS.getItem(`@pheno_profile_${deviceId}`); if (c) setFirebaseProfile(JSON.parse(c)); } catch {}
-                update(profileRef, { display_name: user?.name || 'User', is_calibrated: false, created_at: new Date().toISOString() }).catch(() => {});
+                try { const c = await AS.getItem(`@pheno_profile_${deviceId}`); if (c) setFirebaseProfile(JSON.parse(c)); } catch { }
+                // NEW USER: seed reference baseline + mark calibrated immediately.
+                // Skipped if referenceBaselines hasn't loaded yet (no network on
+                // first launch); the effect re-runs once it arrives.
+                if (referenceBaselines) {
+                    update(profileRef, {
+                        display_name: user?.name || 'User',
+                        is_calibrated: true,
+                        created_at: new Date().toISOString(),
+                        baselines: referenceBaselines,
+                    }).catch(() => { });
+                }
             }
         }, async () => {
-            try { const c = await AS.getItem(`@pheno_profile_${deviceId}`); if (c) setFirebaseProfile(JSON.parse(c)); } catch {}
+            try { const c = await AS.getItem(`@pheno_profile_${deviceId}`); if (c) setFirebaseProfile(JSON.parse(c)); } catch { }
         });
         return () => off(profileRef, 'value', handler);
-    }, [deviceId]);
+    }, [deviceId, referenceBaselines]);
 
     const displayName = firebaseProfile?.display_name || firebaseProfile?.name || user?.name || 'User';
     const studyId = firebaseProfile?.study_id || null;
@@ -163,9 +202,9 @@ export default function PhenotypingScreen({ navigation }) {
         const handler = onValue(blRef, async (snap) => {
             const val = snap.val();
             setBaselines(val || null);
-            if (val) try { await AS.setItem(`@pheno_bl_${deviceId}`, JSON.stringify(val)); } catch {}
-            else try { const c = await AS.getItem(`@pheno_bl_${deviceId}`); if (c) setBaselines(JSON.parse(c)); } catch {}
-        }, async () => { try { const c = await AS.getItem(`@pheno_bl_${deviceId}`); if (c) setBaselines(JSON.parse(c)); } catch {} });
+            if (val) try { await AS.setItem(`@pheno_bl_${deviceId}`, JSON.stringify(val)); } catch { }
+            else try { const c = await AS.getItem(`@pheno_bl_${deviceId}`); if (c) setBaselines(JSON.parse(c)); } catch { }
+        }, async () => { try { const c = await AS.getItem(`@pheno_bl_${deviceId}`); if (c) setBaselines(JSON.parse(c)); } catch { } });
         return () => off(blRef, 'value', handler);
     }, [deviceId]);
 
@@ -184,9 +223,9 @@ export default function PhenotypingScreen({ navigation }) {
                 );
                 const latest = preds[preds.length - 1] || null;
                 setLatestPrediction(latest);
-                if (latest) try { await AS.setItem(`@pheno_pred_${deviceId}`, JSON.stringify(latest)); } catch {}
-            } else try { const c = await AS.getItem(`@pheno_pred_${deviceId}`); if (c) setLatestPrediction(JSON.parse(c)); } catch {}
-        }, async () => { try { const c = await AS.getItem(`@pheno_pred_${deviceId}`); if (c) setLatestPrediction(JSON.parse(c)); } catch {} });
+                if (latest) try { await AS.setItem(`@pheno_pred_${deviceId}`, JSON.stringify(latest)); } catch { }
+            } else try { const c = await AS.getItem(`@pheno_pred_${deviceId}`); if (c) setLatestPrediction(JSON.parse(c)); } catch { }
+        }, async () => { try { const c = await AS.getItem(`@pheno_pred_${deviceId}`); if (c) setLatestPrediction(JSON.parse(c)); } catch { } });
         return () => off(ref(db, `phenotyping/predictions/${deviceId}`), 'value', handler);
     }, [deviceId]);
 
@@ -195,14 +234,14 @@ export default function PhenotypingScreen({ navigation }) {
         if (!deviceId) return;
         const AS = require('@react-native-async-storage/async-storage').default;
         const logsRef = ref(db, `phenotyping/data_logs/${deviceId}`);
-        const loadCache = async () => { try { const c = await AS.getItem(`@pheno_win_${deviceId}`); if (c) { const { k, d } = JSON.parse(c); setLiveWindow(d); setLastUpdated(k); } } catch {} };
+        const loadCache = async () => { try { const c = await AS.getItem(`@pheno_win_${deviceId}`); if (c) { const { k, d } = JSON.parse(c); setLiveWindow(d); setLastUpdated(k); } } catch { } };
         const handler = onValue(logsRef, async (snapshot) => {
             const raw = snapshot.val();
             if (raw) {
                 const entries = Object.entries(raw).sort((a, b) => a[0].localeCompare(b[0]));
                 const [k, d] = entries[entries.length - 1];
                 setLiveWindow(d); setLastUpdated(k);
-                try { await AS.setItem(`@pheno_win_${deviceId}`, JSON.stringify({ k, d })); } catch {}
+                try { await AS.setItem(`@pheno_win_${deviceId}`, JSON.stringify({ k, d })); } catch { }
             } else { await loadCache(); }
         }, loadCache);
         return () => off(logsRef, 'value', handler);
@@ -218,11 +257,40 @@ export default function PhenotypingScreen({ navigation }) {
                 const data = await res.json();
                 if (res.ok && data.status === 'calibrated') {
                     await markCalibrated(deviceId);
-                    update(ref(db, `phenotyping/users/${deviceId}`), { is_calibrated: true }).catch(() => {});
+                    update(ref(db, `phenotyping/users/${deviceId}`), { is_calibrated: true }).catch(() => { });
                 }
-            } catch {}
+            } catch { }
         })();
     }, [deviceId, displayName, liveCalibStatus]);
+
+    // ── Sensor check helper (used during onboarding)
+    const checkSensorStatus = useCallback(async () => {
+        if (Platform.OS !== 'android' || !PhenotypingIdentity?.isAccessibilityServiceEnabled) {
+            // Non-Android or native module missing — assume ON so onboarding can proceed
+            setSensorCheckStatus('on');
+            return;
+        }
+        setSensorCheckStatus('checking');
+        try {
+            const enabled = await PhenotypingIdentity.isAccessibilityServiceEnabled();
+            setSensorCheckStatus(enabled ? 'on' : 'off');
+            if (enabled) setAccessibilityOn(true);
+        } catch {
+            setSensorCheckStatus('off');
+        }
+    }, []);
+
+    // Run sensor check when onboarding modal opens at Step 1
+    useEffect(() => {
+        if (showOnboardingModal && onboardingStep === 1) {
+            checkSensorStatus();
+        }
+        // Clear any lingering interval when modal closes
+        if (!showOnboardingModal && sensorCheckIntervalRef.current) {
+            clearInterval(sensorCheckIntervalRef.current);
+            sensorCheckIntervalRef.current = null;
+        }
+    }, [showOnboardingModal, onboardingStep, checkSensorStatus]);
 
     // ── Onboarding handlers
     const handleToggleSensor = (val) => {
@@ -276,30 +344,42 @@ export default function PhenotypingScreen({ navigation }) {
             return (pct > 0 ? '▲ +' : '▼ ') + pct + '% vs your baseline';
         };
         return [
-            { id: 'keyboard', icon: '⌨️', title: 'Keyboard Patterns',
-              value: `${Math.round(liveWindow.avg_dwell || 0)} ms`,
-              subtext: hasDwell ? (delta(liveWindow.avg_dwell, bl.avg_dwell?.mean) || 'Typing rhythm & key press duration') : 'Typing rhythm & key press duration',
-              color: colorZ(getZ(liveWindow.avg_dwell, bl.avg_dwell?.mean || 135, bl.avg_dwell?.std || 15), hasDwell) },
-            { id: 'app_switch', icon: '📱', title: 'Screen Activity',
-              value: `${appSwitchPerMin.toFixed(2)} /min`,
-              subtext: hasSwitch ? 'App switching rate & multitasking' : 'No app switches in this window',
-              color: appSwitchPerMin > 4 ? COLORS.stress : appSwitchPerMin > 2.5 ? COLORS.warning : (hasSwitch ? COLORS.normal : t.textMuted) },
-            { id: 'scroll', icon: '📜', title: 'Screen Scrolling',
-              value: `${Math.round(liveWindow.scroll_velocity || 0)} px/s`,
-              subtext: hasScroll ? (delta(liveWindow.scroll_velocity, bl.scroll_velocity?.mean) || 'Scroll speed & frequency patterns') : 'Scroll speed & frequency patterns',
-              color: colorZ(getZ(liveWindow.scroll_velocity, bl.scroll_velocity?.mean || 750, bl.scroll_velocity?.std || 120), hasScroll) },
-            { id: 'tilt', icon: '📐', title: 'Device Tilt',
-              value: `${Math.round(liveWindow.tilt_angle || 0)}°`,
-              subtext: 'Phone holding angle & posture',
-              color: colorZ(getZ(liveWindow.tilt_angle, bl.tilt_angle?.mean || 59, bl.tilt_angle?.std || 8), hasTilt) },
-            { id: 'cpm', icon: '🔡', title: 'Typing Speed',
-              value: `${Math.round(liveWindow.cpm || 0)} cpm`,
-              subtext: 'Characters per minute this window',
-              color: colorZ(getZ(liveWindow.cpm, bl.cpm?.mean || 42, bl.cpm?.std || 6), hasCpm) },
-            { id: 'activity', icon: '🚶', title: 'Activity Context',
-              value: isMoving ? 'In motion' : 'Stationary',
-              subtext: isMoving ? '⚠️ Motion detected — signals recorded but excluded from baseline' : 'No significant motion detected',
-              color: isMoving ? COLORS.warning : COLORS.normal },
+            {
+                id: 'keyboard', icon: '⌨️', title: 'Keyboard Patterns',
+                value: `${Math.round(liveWindow.avg_dwell || 0)} ms`,
+                subtext: hasDwell ? (delta(liveWindow.avg_dwell, bl.avg_dwell?.mean) || 'Typing rhythm & key press duration') : 'Typing rhythm & key press duration',
+                color: colorZ(getZ(liveWindow.avg_dwell, bl.avg_dwell?.mean || 135, bl.avg_dwell?.std || 15), hasDwell)
+            },
+            {
+                id: 'app_switch', icon: '📱', title: 'Screen Activity',
+                value: `${appSwitchPerMin.toFixed(2)} /min`,
+                subtext: hasSwitch ? 'App switching rate & multitasking' : 'No app switches in this window',
+                color: appSwitchPerMin > 4 ? COLORS.stress : appSwitchPerMin > 2.5 ? COLORS.warning : (hasSwitch ? COLORS.normal : t.textMuted)
+            },
+            {
+                id: 'scroll', icon: '📜', title: 'Screen Scrolling',
+                value: `${Math.round(liveWindow.scroll_velocity || 0)} px/s`,
+                subtext: hasScroll ? (delta(liveWindow.scroll_velocity, bl.scroll_velocity?.mean) || 'Scroll speed & frequency patterns') : 'Scroll speed & frequency patterns',
+                color: colorZ(getZ(liveWindow.scroll_velocity, bl.scroll_velocity?.mean || 750, bl.scroll_velocity?.std || 120), hasScroll)
+            },
+            {
+                id: 'tilt', icon: '📐', title: 'Device Tilt',
+                value: `${Math.round(liveWindow.tilt_angle || 0)}°`,
+                subtext: 'Phone holding angle & posture',
+                color: colorZ(getZ(liveWindow.tilt_angle, bl.tilt_angle?.mean || 59, bl.tilt_angle?.std || 8), hasTilt)
+            },
+            {
+                id: 'cpm', icon: '🔡', title: 'Typing Speed',
+                value: `${Math.round(liveWindow.cpm || 0)} cpm`,
+                subtext: 'Characters per minute this window',
+                color: colorZ(getZ(liveWindow.cpm, bl.cpm?.mean || 42, bl.cpm?.std || 6), hasCpm)
+            },
+            {
+                id: 'activity', icon: '🚶', title: 'Activity Context',
+                value: isMoving ? 'In motion' : 'Stationary',
+                subtext: isMoving ? '⚠️ Motion detected — signals recorded but excluded from baseline' : 'No significant motion detected',
+                color: isMoving ? COLORS.warning : COLORS.normal
+            },
         ];
     }, [liveWindow, baselines, COLORS, t.textMuted]);
 
@@ -558,28 +638,97 @@ export default function PhenotypingScreen({ navigation }) {
                                     </View>
                                 </View>
 
-                                {/* Interactive Sensor Switch */}
-                                <View style={[styles.toggleCard, { backgroundColor: sensorToggle ? COLORS.normalSoft : t.pillBg, borderColor: sensorToggle ? COLORS.normal : t.border }]}>
-                                    <View style={{ flex: 1, marginRight: 10 }}>
-                                        <Text style={[styles.toggleTitle, { color: t.text }]}>PhenoCare Sensor</Text>
-                                        <Text style={[styles.toggleSub, { color: sensorToggle ? COLORS.normalDark : t.textMuted }]}>
-                                            {sensorToggle ? '✓ Sensor Active & Streaming' : 'Tap switch to turn ON'}
+                                {/* ── Live Sensor Status Pill ── */}
+                                <View style={[styles.sensorStatusRow, {
+                                    backgroundColor: sensorCheckStatus === 'on'
+                                        ? (COLORS.normalSoft || (COLORS.normal + '18'))
+                                        : sensorCheckStatus === 'checking'
+                                            ? (t.pillBg)
+                                            : (COLORS.stressSoft || (COLORS.stress + '18')),
+                                    borderColor: sensorCheckStatus === 'on'
+                                        ? (COLORS.normal + '60')
+                                        : sensorCheckStatus === 'checking'
+                                            ? t.border
+                                            : (COLORS.stress + '40'),
+                                }]}>
+                                    <Text style={{ fontSize: 18 }}>
+                                        {sensorCheckStatus === 'on' ? '✅' : sensorCheckStatus === 'checking' ? '⏳' : '❌'}
+                                    </Text>
+                                    <View style={{ flex: 1, marginLeft: 10 }}>
+                                        <Text style={[styles.sensorStatusTitle, {
+                                            color: sensorCheckStatus === 'on'
+                                                ? (COLORS.normalDark || COLORS.normal)
+                                                : sensorCheckStatus === 'checking'
+                                                    ? t.textMuted
+                                                    : (COLORS.stressDark || COLORS.stress),
+                                        }]}>
+                                            {sensorCheckStatus === 'on'
+                                                ? 'PhenoCare Sensor Active'
+                                                : sensorCheckStatus === 'checking'
+                                                    ? 'Checking sensor status…'
+                                                    : 'Sensor Not Enabled'}
+                                        </Text>
+                                        <Text style={[styles.sensorStatusSub, { color: t.textMuted }]}>
+                                            {sensorCheckStatus === 'on'
+                                                ? 'Accessibility service is running'
+                                                : sensorCheckStatus === 'checking'
+                                                    ? 'Reading from phone settings'
+                                                    : 'Go to Settings → Accessibility → PhenoCare'}
                                         </Text>
                                     </View>
-                                    <Switch
-                                        value={sensorToggle}
-                                        onValueChange={handleToggleSensor}
-                                        trackColor={{ false: t.border, true: COLORS.normal }}
-                                        thumbColor={sensorToggle ? '#FFF' : '#FFF'}
-                                    />
                                 </View>
 
+                                {/* ── Open Settings + Check Again row ── */}
+                                {sensorCheckStatus !== 'on' && (
+                                    <View style={styles.sensorActionRow}>
+                                        <TouchableOpacity
+                                            style={[styles.sensorActionBtn, { backgroundColor: COLORS.brand, flex: 2 }]}
+                                            onPress={() => {
+                                                // Deep-link to Android Accessibility settings
+                                                if (Platform.OS === 'android') {
+                                                    Linking.sendIntent('android.settings.ACCESSIBILITY_SETTINGS').catch(() =>
+                                                        Linking.openSettings()
+                                                    );
+                                                } else {
+                                                    Linking.openSettings();
+                                                }
+                                            }}
+                                            activeOpacity={0.8}
+                                        >
+                                            <Text style={styles.sensorActionBtnText}>⚙️  Open Accessibility Settings</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={[styles.sensorActionBtn, { backgroundColor: t.pillBg, borderWidth: 1.5, borderColor: t.border, flex: 1 }]}
+                                            onPress={checkSensorStatus}
+                                            activeOpacity={0.8}
+                                        >
+                                            <Text style={[styles.sensorActionBtnText, { color: COLORS.brand }]}>↺  Check</Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                )}
+
+                                {/* ── Continue button — only enabled when sensor ON ── */}
                                 <TouchableOpacity
-                                    style={[styles.modalActionBtn, { backgroundColor: COLORS.brand }]}
-                                    onPress={() => handleToggleSensor(true)}
-                                    activeOpacity={0.8}
+                                    style={[styles.modalActionBtn, {
+                                        backgroundColor: sensorCheckStatus === 'on' ? COLORS.brand : (t.pillBg),
+                                        borderWidth: sensorCheckStatus === 'on' ? 0 : 1.5,
+                                        borderColor: t.border,
+                                        marginTop: 14,
+                                    }]}
+                                    onPress={() => {
+                                        if (sensorCheckStatus !== 'on') return;
+                                        if (Platform.OS === 'android' && PhenotypingIdentity) {
+                                            PhenotypingIdentity.scheduleEmaNotifications();
+                                        }
+                                        setOnboardingStep(2);
+                                    }}
+                                    activeOpacity={sensorCheckStatus === 'on' ? 0.8 : 1}
                                 >
-                                    <Text style={styles.modalActionBtnText}>Turn On Sensor →</Text>
+                                    <Text style={[styles.modalActionBtnText, {
+                                        color: sensorCheckStatus === 'on' ? '#FFF' : t.textMuted,
+                                    }]}>
+                                        {sensorCheckStatus === 'on' ? 'Continue →' : 'Enable sensor to continue'}
+                                    </Text>
                                 </TouchableOpacity>
                             </View>
                         )}
@@ -707,7 +856,7 @@ const styles = StyleSheet.create({
     actionLabel: { fontSize: 11, fontWeight: '800', textAlign: 'center' },
     lastUpdated: { textAlign: 'center', fontSize: 10, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 12 },
 
-    // App-Matched Modal Styles
+    // Modal styles
     modalBackdrop: {
         flex: 1,
         backgroundColor: 'rgba(0,0,0,0.65)',
@@ -748,6 +897,40 @@ const styles = StyleSheet.create({
     modalSubtext: {
         fontSize: 11.5,
         marginTop: 2,
+    },
+    // Sensor verification styles
+    sensorStatusRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        borderRadius: 16,
+        borderWidth: 1.5,
+        padding: 14,
+        marginBottom: 12,
+    },
+    sensorStatusTitle: {
+        fontSize: 13,
+        fontWeight: '800',
+    },
+    sensorStatusSub: {
+        fontSize: 11,
+        marginTop: 2,
+        fontWeight: '500',
+    },
+    sensorActionRow: {
+        flexDirection: 'row',
+        gap: 8,
+        marginBottom: 4,
+    },
+    sensorActionBtn: {
+        borderRadius: 12,
+        paddingVertical: 10,
+        alignItems: 'center',
+        paddingHorizontal: 8,
+    },
+    sensorActionBtnText: {
+        color: '#FFF',
+        fontSize: 11.5,
+        fontWeight: '800',
     },
     breadcrumbBox: {
         flexDirection: 'row',
