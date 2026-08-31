@@ -6,10 +6,10 @@
 // Step 2: 7-Day Calibration Roadmap with auto-transition to Dashboard.
 // ============================================================
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, NativeModules, Platform, Modal, Switch, Animated, Linking } from 'react-native';
-import Svg, { Circle } from 'react-native-svg';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, NativeModules, Platform, Modal, Animated, Linking } from 'react-native';
+import Svg, { Circle as SvgCircle, Path as SvgPath } from 'react-native-svg';
 import { useFocusEffect } from '@react-navigation/native';
-import { ref, onValue, off, get, update, query, limitToLast, orderByKey } from 'firebase/database';
+import { ref, onValue, off, update, query, limitToLast, orderByKey } from 'firebase/database';
 import { db } from '../firebase';
 import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
@@ -25,18 +25,74 @@ import { usePhenotypingDeviceId } from '../utils/deviceIdentity';
 
 const { PhenotypingIdentity } = NativeModules;
 
-function SignalCard({ icon, title, value, subtext, color, t }) {
+// ── Micro sparkline using raw SVG ────────────────────────────────────
+function Sparkline({ values, color, width = 80, height = 32, baselineMean }) {
+    if (!values || values.length < 2) return <View style={{ width, height }} />;
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const span = max - min || 1;
+    const padX = 2; const padY = 4;
+    const w = width - padX * 2;
+    const h = height - padY * 2;
+    const toX = (i) => padX + (i / (values.length - 1)) * w;
+    const toY = (v) => padY + h - ((v - min) / span) * h;
+    // Build SVG path string from points
+    const pathD = values.map((v, i) => `${i === 0 ? 'M' : 'L'}${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ');
+    const blY = baselineMean != null
+        ? (padY + h - ((Math.min(max, Math.max(min, baselineMean)) - min) / span) * h).toFixed(1)
+        : null;
+    const lastX = toX(values.length - 1);
+    const lastY = toY(values[values.length - 1]);
     return (
-        <Card style={styles.signalCard} accentColor={color}>
-            <View style={styles.signalTop}>
-                <Text style={styles.signalIcon}>{icon}</Text>
-                <View style={{ flex: 1 }}>
-                    <Text style={[styles.signalTitle, { color: t.text }]}>{title}</Text>
-                    <Text style={[styles.signalSubtext, { color: t.textMuted }]}>{subtext}</Text>
+        <Svg width={width} height={height}>
+            {blY != null && (
+                <SvgPath
+                    d={`M${padX},${blY} L${(padX + w).toFixed(1)},${blY}`}
+                    stroke={color}
+                    strokeWidth={1}
+                    strokeDasharray="3,3"
+                    opacity={0.4}
+                    fill="none"
+                />
+            )}
+            <SvgPath d={pathD} fill="none" stroke={color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
+            <SvgCircle cx={lastX} cy={lastY} r={2.5} fill={color} />
+        </Svg>
+    );
+}
+
+// ── Deviation bar: shows how far current value is from baseline ─────────────
+function DeviationBar({ z, color, t }) {
+    const pct = Math.min(100, Math.round((Math.min(z, 3) / 3) * 100));
+    return (
+        <View style={{ height: 3, borderRadius: 2, backgroundColor: t.pillBg || '#eee', marginTop: 5, overflow: 'hidden' }}>
+            <View style={{ width: `${pct}%`, height: 3, borderRadius: 2, backgroundColor: color }} />
+        </View>
+    );
+}
+
+// ── Interactive signal card with sparkline ──────────────────────────────────
+function MiniSignalCard({ icon, title, subtext, value, deltaText, color, sparkValues, baselineMean, z, t, onPress }) {
+    return (
+        <TouchableOpacity onPress={onPress} activeOpacity={0.8}>
+            <Card style={styles.signalCard} accentColor={color}>
+                <View style={styles.signalRow}>
+                    <View style={{ flex: 1 }}>
+                        <View style={styles.signalTitleRow}>
+                            <Text style={styles.signalIcon}>{icon}</Text>
+                            <Text style={[styles.signalTitle, { color: t.text }]}>{title}</Text>
+                        </View>
+                        <Text style={[styles.signalSubtext, { color: t.textMuted }]} numberOfLines={1}>{subtext}</Text>
+                        <DeviationBar z={z || 0} color={color} t={t} />
+                    </View>
+                    <View style={styles.signalRight}>
+                        <Sparkline values={sparkValues} color={color} width={72} height={28} baselineMean={baselineMean} />
+                        <Text style={[styles.signalValue, { color }]}>{value}</Text>
+                        {deltaText ? <Text style={[styles.signalDelta, { color }]}>{deltaText}</Text> : null}
+                    </View>
                 </View>
-                <Text style={[styles.signalValue, { color }]}>{value}</Text>
-            </View>
-        </Card>
+            </Card>
+        </TouchableOpacity>
     );
 }
 
@@ -60,11 +116,11 @@ export default function PhenotypingScreen({ navigation }) {
     const deviceId = usePhenotypingDeviceId();
 
     // ── UI state
-    const [onboarded, setOnboarded] = useState(true);
+    const [onboarded, setOnboarded] = useState(false);  // starts false; set true after isPhenotypingOnboarded() resolves
     const [showOnboardingModal, setShowOnboardingModal] = useState(false);
     const [onboardingStep, setOnboardingStep] = useState(1);
     const [sensorToggle, setSensorToggle] = useState(false);
-    const [accessibilityOn, setAccessibilityOn] = useState(true);
+    const [accessibilityOn, setAccessibilityOn] = useState(false); // starts false; set true once check passes
 
     // ── Sensor verification state (for onboarding Step 1)
     const [sensorCheckStatus, setSensorCheckStatus] = useState('unknown'); // 'unknown' | 'checking' | 'on' | 'off'
@@ -76,6 +132,8 @@ export default function PhenotypingScreen({ navigation }) {
     const [latestPrediction, setLatestPrediction] = useState(null);
     const [liveWindow, setLiveWindow] = useState(null);
     const [lastUpdated, setLastUpdated] = useState(null);
+    // Rolling history for sparklines (last 20 windows)
+    const [windowHistory, setWindowHistory] = useState([]);
 
     // ── Motion detection (walking/running) animated alert
     const isUserMoving = liveWindow?.data_valid === false;
@@ -229,7 +287,7 @@ export default function PhenotypingScreen({ navigation }) {
         return () => off(ref(db, `phenotyping/predictions/${deviceId}`), 'value', handler);
     }, [deviceId]);
 
-    // ── Live behavioral window with offline cache
+    // ── Live behavioral window with offline cache + rolling history for sparklines
     useEffect(() => {
         if (!deviceId) return;
         const AS = require('@react-native-async-storage/async-storage').default;
@@ -241,6 +299,9 @@ export default function PhenotypingScreen({ navigation }) {
                 const entries = Object.entries(raw).sort((a, b) => a[0].localeCompare(b[0]));
                 const [k, d] = entries[entries.length - 1];
                 setLiveWindow(d); setLastUpdated(k);
+                // Keep last 20 windows for sparkline history
+                const hist = entries.slice(-20).map(([, v]) => v);
+                setWindowHistory(hist);
                 try { await AS.setItem(`@pheno_win_${deviceId}`, JSON.stringify({ k, d })); } catch { }
             } else { await loadCache(); }
         }, loadCache);
@@ -293,11 +354,18 @@ export default function PhenotypingScreen({ navigation }) {
     }, [showOnboardingModal, onboardingStep, checkSensorStatus]);
 
     // ── Onboarding handlers
-    const handleToggleSensor = (val) => {
+    const handleToggleSensor = async (val) => {
         setSensorToggle(val);
         if (val) {
             if (Platform.OS === 'android' && PhenotypingIdentity) {
-                PhenotypingIdentity.requestRuntimePermissions();
+                try {
+                    await PhenotypingIdentity.requestRuntimePermissions();
+                } catch (e) {
+                    // Permission request failed or was denied — sensor can still
+                    // run without ACTIVITY_RECOGNITION (motion gate just defaults
+                    // to data_valid=true) and without POST_NOTIFICATIONS (no EMA alerts).
+                    console.warn('PhenoCare: requestRuntimePermissions error', e);
+                }
                 PhenotypingIdentity.scheduleEmaNotifications();
             }
             setTimeout(() => setOnboardingStep(2), 450);
@@ -310,78 +378,70 @@ export default function PhenotypingScreen({ navigation }) {
         setOnboarded(true); setShowOnboardingModal(false);
     };
 
-    // ── Signal cards: context-aware — meaningful labels, not raw zeros
-    const digitalSignals = useMemo(() => {
-        if (!liveWindow) {
-            return [
-                { id: 'keyboard', icon: '⌨️', title: 'Keyboard Patterns', value: '— ms', subtext: 'Typing rhythm & key press duration' },
-                { id: 'app_switch', icon: '📱', title: 'Screen Activity', value: '— /min', subtext: 'App switching rate & multitasking' },
-                { id: 'scroll', icon: '📜', title: 'Screen Scrolling', value: '— px/s', subtext: 'Scroll speed & frequency patterns' },
-                { id: 'tilt', icon: '📐', title: 'Device Tilt', value: '— °', subtext: 'Phone holding angle from accelerometer' },
-                { id: 'cpm', icon: '🔡', title: 'Typing Speed', value: '— cpm', subtext: 'Characters per minute this window' },
-                { id: 'activity', icon: '🚶', title: 'Activity Context', value: '—', subtext: 'Physical activity detection & noise gate' },
-            ].map((s) => ({ ...s, color: t.textMuted }));
-        }
-        const bl = baselines || {};
-        const getZ = (val, mean, std) => (!mean || !std || !val) ? 0 : Math.abs((val - mean) / std);
-        const colorZ = (z, active) => {
-            if (!active) return t.textMuted;
-            return z > 2.0 ? COLORS.stress : z > 1.0 ? COLORS.warning : COLORS.normal;
+    // ── Compute Z-score helper
+    const getZ = (val, mean, std) => (!mean || !std || val == null) ? 0 : Math.abs((val - mean) / std);
+    const colorZ = (z) => z > 2.0 ? COLORS.stress : z > 1.0 ? COLORS.warning : COLORS.normal;
+
+    // ── Build sparkline history arrays per feature from windowHistory
+    const sparkHistories = useMemo(() => {
+        if (windowHistory.length === 0) return {};
+        return {
+            avg_dwell: windowHistory.map(w => w.avg_dwell || 0).filter(v => v > 0),
+            scroll_velocity: windowHistory.map(w => w.scroll_velocity || 0).filter(v => v > 0),
+            app_switch: windowHistory.map(w => (w.app_switch_rate || 0) * 60),
         };
-        // Convert /second → /min for display
+    }, [windowHistory]);
+
+    // ── Signal cards: only rendered when liveWindow exists (no fallback dashes)
+    const digitalSignals = useMemo(() => {
+        if (!liveWindow) return null; // hide entirely — no dashes
+        const bl = baselines || {};
         const appSwitchPerMin = Number(liveWindow.app_switch_rate || 0) * 60;
-        const hasDwell = liveWindow.avg_dwell > 0;
-        const hasScroll = liveWindow.scroll_velocity > 0;
-        const hasTilt = liveWindow.tilt_angle > 0;
-        const hasCpm = liveWindow.cpm > 0;
-        const hasSwitch = appSwitchPerMin > 0.001;
         const isMoving = liveWindow.data_valid === false;
-        // Baseline delta: shows "▲ +34% vs baseline"
         const delta = (val, mean) => {
             if (!mean || !val) return null;
             const pct = Math.round(((val - mean) / mean) * 100);
             if (Math.abs(pct) < 5) return null;
-            return (pct > 0 ? '▲ +' : '▼ ') + pct + '% vs your baseline';
+            return (pct > 0 ? '▲ +' : '▼ ') + pct + '% vs calm';
         };
+        const dwellZ = getZ(liveWindow.avg_dwell, bl.avg_dwell?.mean || 135, bl.avg_dwell?.std || 15);
+        const scrollZ = getZ(liveWindow.scroll_velocity, bl.scroll_velocity?.mean || 750, bl.scroll_velocity?.std || 120);
+        const switchZ = appSwitchPerMin > 4 ? 3 : appSwitchPerMin > 2.5 ? 1.5 : 0;
         return [
             {
-                id: 'keyboard', icon: '⌨️', title: 'Keyboard Patterns',
+                id: 'avg_dwell', icon: '⌨️', title: 'Keyboard Patterns',
                 value: `${Math.round(liveWindow.avg_dwell || 0)} ms`,
-                subtext: hasDwell ? (delta(liveWindow.avg_dwell, bl.avg_dwell?.mean) || 'Typing rhythm & key press duration') : 'Typing rhythm & key press duration',
-                color: colorZ(getZ(liveWindow.avg_dwell, bl.avg_dwell?.mean || 135, bl.avg_dwell?.std || 15), hasDwell)
+                subtext: delta(liveWindow.avg_dwell, bl.avg_dwell?.mean) || 'Typing rhythm & key press duration',
+                color: colorZ(dwellZ), z: dwellZ,
+                sparkValues: sparkHistories.avg_dwell,
+                baselineMean: bl.avg_dwell?.mean || 135,
+            },
+            {
+                id: 'scroll_velocity', icon: '📜', title: 'Screen Scrolling',
+                value: `${Math.round(liveWindow.scroll_velocity || 0)} px/s`,
+                subtext: delta(liveWindow.scroll_velocity, bl.scroll_velocity?.mean) || 'Scroll speed & frequency patterns',
+                color: colorZ(scrollZ), z: scrollZ,
+                sparkValues: sparkHistories.scroll_velocity,
+                baselineMean: bl.scroll_velocity?.mean || 750,
             },
             {
                 id: 'app_switch', icon: '📱', title: 'Screen Activity',
-                value: `${appSwitchPerMin.toFixed(2)} /min`,
-                subtext: hasSwitch ? 'App switching rate & multitasking' : 'No app switches in this window',
-                color: appSwitchPerMin > 4 ? COLORS.stress : appSwitchPerMin > 2.5 ? COLORS.warning : (hasSwitch ? COLORS.normal : t.textMuted)
-            },
-            {
-                id: 'scroll', icon: '📜', title: 'Screen Scrolling',
-                value: `${Math.round(liveWindow.scroll_velocity || 0)} px/s`,
-                subtext: hasScroll ? (delta(liveWindow.scroll_velocity, bl.scroll_velocity?.mean) || 'Scroll speed & frequency patterns') : 'Scroll speed & frequency patterns',
-                color: colorZ(getZ(liveWindow.scroll_velocity, bl.scroll_velocity?.mean || 750, bl.scroll_velocity?.std || 120), hasScroll)
-            },
-            {
-                id: 'tilt', icon: '📐', title: 'Device Tilt',
-                value: `${Math.round(liveWindow.tilt_angle || 0)}°`,
-                subtext: 'Phone holding angle & posture',
-                color: colorZ(getZ(liveWindow.tilt_angle, bl.tilt_angle?.mean || 59, bl.tilt_angle?.std || 8), hasTilt)
-            },
-            {
-                id: 'cpm', icon: '🔡', title: 'Typing Speed',
-                value: `${Math.round(liveWindow.cpm || 0)} cpm`,
-                subtext: 'Characters per minute this window',
-                color: colorZ(getZ(liveWindow.cpm, bl.cpm?.mean || 42, bl.cpm?.std || 6), hasCpm)
+                value: `${appSwitchPerMin.toFixed(1)} /min`,
+                subtext: appSwitchPerMin > 0.001 ? 'App switching rate active' : 'No app switches this window',
+                color: colorZ(switchZ), z: switchZ,
+                sparkValues: sparkHistories.app_switch,
+                baselineMean: 1.5,
             },
             {
                 id: 'activity', icon: '🚶', title: 'Activity Context',
-                value: isMoving ? 'In motion' : 'Stationary',
-                subtext: isMoving ? '⚠️ Motion detected — signals recorded but excluded from baseline' : 'No significant motion detected',
-                color: isMoving ? COLORS.warning : COLORS.normal
+                value: isMoving ? 'Moving' : 'Still',
+                subtext: isMoving ? 'Motion detected · baseline paused' : 'Stationary · signal valid',
+                color: isMoving ? COLORS.warning : COLORS.normal, z: isMoving ? 2.5 : 0,
+                sparkValues: [],
+                baselineMean: null,
             },
         ];
-    }, [liveWindow, baselines, COLORS, t.textMuted]);
+    }, [liveWindow, baselines, COLORS, sparkHistories]);
 
     // ── Gauge status: CALIBRATING (days 1-7) → CALM/PRE-STRESS/HIGH STRESS (day 7+)
     const { statusMainColor, statusLabel, statusEmoji } = useMemo(() => {
@@ -429,15 +489,9 @@ export default function PhenotypingScreen({ navigation }) {
             </View>
 
             <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-                {/* Page header with real user name */}
+                {/* Page header — no name/device text */}
                 <View style={{ marginHorizontal: 20, marginBottom: 12 }}>
-                    <Text style={[styles.plainTitle, { color: t.text, marginBottom: 2 }]}>Digital Phenotyping</Text>
-                    <Text style={{ fontSize: 12, fontWeight: '700', color: t.textMuted }}>
-                        {[
-                            displayName ? `👤 ${displayName}` : '',
-                            studyId ? `📋 ${studyId}` : '',
-                        ].filter(Boolean).join('  ·  ')}
-                    </Text>
+                    <Text style={[styles.plainTitle, { color: t.text }]}>Digital Phenotyping</Text>
                 </View>
 
                 {/* Unified Behavioral Sensor & Calibration Telemetry Card */}
@@ -456,18 +510,18 @@ export default function PhenotypingScreen({ navigation }) {
                         </View>
                     </View>
 
-                    <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 8, marginBottom: 10 }]}>
-                        {accessibilityOn
-                            ? `Recording since ${firebaseProfile?.created_at ? new Date(firebaseProfile.created_at).toLocaleDateString() : '...'} — Device: ${deviceId?.slice(0, 8) || '...'}...`
-                            : 'Sensor offline — enable in Settings → Accessibility.'}
-                    </Text>
+                    {!accessibilityOn && (
+                        <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 6, marginBottom: 8 }]}>
+                            Sensor offline — enable in Settings → Accessibility.
+                        </Text>
+                    )}
 
                     {/* Centered Large Circular Progress Gauge */}
                     <View style={styles.centerGaugeWrap}>
                         <View style={{ width: 154, height: 154, alignItems: 'center', justifyContent: 'center' }}>
                             <Svg width={154} height={154} style={StyleSheet.absoluteFill}>
                                 {/* Background Ring Track */}
-                                <Circle
+                                <SvgCircle
                                     cx={77}
                                     cy={77}
                                     r={70}
@@ -475,8 +529,8 @@ export default function PhenotypingScreen({ navigation }) {
                                     strokeWidth={10}
                                     fill="transparent"
                                 />
-                                {/* Dynamic Time-Progress Fill Outline (Day 1: 1hr to 24hr) */}
-                                <Circle
+                                {/* Dynamic Progress Fill */}
+                                <SvgCircle
                                     cx={77}
                                     cy={77}
                                     r={70}
@@ -498,14 +552,6 @@ export default function PhenotypingScreen({ navigation }) {
                                         <Text style={[styles.gaugeStatusLabel, { color: statusMainColor }]}>
                                             {statusLabel}
                                         </Text>
-                                        <Text style={[styles.gaugeSub, { color: statusMainColor, marginTop: 1 }]}>
-                                            {Math.round(Number(latestPrediction?.stress_score || 0) * 100)}% stress
-                                        </Text>
-                                        {latestPrediction?.timestamp ? (
-                                            <Text style={[{ fontSize: 9, color: t.textMuted, fontWeight: '700', marginTop: 2 }]}>
-                                                {new Date(latestPrediction.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                            </Text>
-                                        ) : null}
                                     </>
                                 ) : (
                                     <>
@@ -523,55 +569,51 @@ export default function PhenotypingScreen({ navigation }) {
                     </View>
                 </Card>
 
-                {/* Digital Signals Section */}
-                <View style={styles.section}>
-                    <Text style={[styles.sectionTitle, { color: t.text }]}>Passive Behavioral Signals</Text>
-                    <Text style={[styles.sectionSub, { color: t.textMuted }]}>
-                        Continuous non-intrusive smartphone usage patterns
-                    </Text>
-
-                    {/* 🚶 Motion Detection Animated Alert Banner */}
-                    {isUserMoving && (
-                        <View style={{
-                            flexDirection: 'row', alignItems: 'center',
-                            backgroundColor: isDark ? 'rgba(255,165,0,0.15)' : 'rgba(255,165,0,0.1)',
-                            borderRadius: 14, padding: 12, marginBottom: 10,
-                            borderWidth: 1, borderColor: isDark ? 'rgba(255,165,0,0.3)' : 'rgba(255,165,0,0.25)',
-                        }}>
-                            <Animated.Text style={{
-                                fontSize: 28,
-                                transform: [{ translateY: motionBounce }],
-                                marginRight: 10,
-                            }}>
-                                🏃
-                            </Animated.Text>
-                            <View style={{ flex: 1 }}>
-                                <Text style={{ fontWeight: '800', fontSize: 13, color: COLORS.warning }}>
-                                    Motion Detected!
-                                </Text>
-                                <Text style={{ fontSize: 11, color: t.textMuted, marginTop: 2 }}>
-                                    Walking or running detected — signals are still recorded but excluded from your baseline.
-                                </Text>
+                {/* Passive Behavioral Signals — only shown when live data exists */}
+                {digitalSignals && (
+                    <View style={styles.section}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                            <Text style={[styles.sectionTitle, { color: t.text }]}>Passive Behavioral Signals</Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                <StatusDot color={COLORS.normal} active size={7} />
+                                <Text style={{ fontSize: 10, fontWeight: '800', color: COLORS.normal }}>LIVE</Text>
                             </View>
-                            <Animated.Text style={{
-                                fontSize: 22,
-                                transform: [{ translateY: motionBounce }],
-                            }}>
-                                🚶
-                            </Animated.Text>
                         </View>
-                    )}
+                        <Text style={[styles.sectionSub, { color: t.textMuted }]}>
+                            Arrows compare this window against your own calm baseline.
+                        </Text>
 
-                    {digitalSignals.map((s, i) => (
-                        <TouchableOpacity
-                            key={i}
-                            activeOpacity={0.8}
-                            onPress={() => navigation.navigate('PhenotypingSignalHistory', { signalId: s.id })}
-                        >
-                            <SignalCard {...s} t={t} />
-                        </TouchableOpacity>
-                    ))}
-                </View>
+                        {/* Motion alert banner */}
+                        {isUserMoving && (
+                            <View style={{
+                                flexDirection: 'row', alignItems: 'center',
+                                backgroundColor: COLORS.warning + '18',
+                                borderRadius: 12, padding: 10, marginBottom: 8,
+                                borderWidth: 1, borderColor: COLORS.warning + '40',
+                            }}>
+                                <Animated.Text style={{ fontSize: 20, transform: [{ translateY: motionBounce }], marginRight: 8 }}>🏃</Animated.Text>
+                                <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.warning, flex: 1 }}>Motion detected — baseline excluded</Text>
+                            </View>
+                        )}
+
+                        {digitalSignals.map((s) => (
+                            <MiniSignalCard
+                                key={s.id}
+                                icon={s.icon}
+                                title={s.title}
+                                subtext={s.subtext}
+                                value={s.value}
+                                deltaText={null}
+                                color={s.color}
+                                sparkValues={s.sparkValues}
+                                baselineMean={s.baselineMean}
+                                z={s.z}
+                                t={t}
+                                onPress={() => navigation.navigate('PhenotypingSignalHistory', { signalId: s.id })}
+                            />
+                        ))}
+                    </View>
+                )}
 
                 {/* Quick Actions */}
                 <View style={styles.section}>
@@ -825,7 +867,7 @@ const styles = StyleSheet.create({
     emaHeaderBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12 },
     emaHeaderBtnText: { fontSize: 11, fontWeight: '800' },
     backRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-    plainTitle: { fontSize: 22, fontWeight: '900', letterSpacing: -0.2, marginHorizontal: 20, marginBottom: 14 },
+    plainTitle: { fontSize: 22, fontWeight: '900', letterSpacing: -0.2, marginBottom: 4 },
     hwCard: { marginHorizontal: 20, marginVertical: 8, padding: 18, borderRadius: 22 },
     rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
     rowGap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -833,7 +875,6 @@ const styles = StyleSheet.create({
     statusPillText: { fontSize: 11, fontWeight: '800' },
     cardTitle: { fontSize: 15, fontWeight: '800' },
     cardSub: { fontSize: 12 },
-    scoreCard: { marginHorizontal: 20, marginVertical: 8, padding: 22, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
     centerGaugeWrap: { alignItems: 'center', justifyContent: 'center', width: '100%', paddingVertical: 4 },
     centerAlign: { alignItems: 'center', justifyContent: 'center' },
     gaugeEmoji: { fontSize: 26, marginBottom: 2 },
@@ -842,14 +883,18 @@ const styles = StyleSheet.create({
     gaugeSub: { fontSize: 11, fontWeight: '800' },
     gaugeHourSub: { fontSize: 10, fontWeight: '900', letterSpacing: 0.3, marginTop: 3 },
     section: { marginHorizontal: 20, marginVertical: 10 },
-    sectionTitle: { fontSize: 15, fontWeight: '800', marginBottom: 2 },
-    sectionSub: { fontSize: 12, marginBottom: 12 },
-    signalCard: { borderRadius: 20, borderWidth: 1, padding: 16, marginBottom: 10 },
-    signalTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-    signalIcon: { fontSize: 22 },
-    signalTitle: { fontSize: 14, fontWeight: '800' },
-    signalSubtext: { fontSize: 11, marginTop: 2 },
-    signalValue: { fontSize: 14, fontWeight: '800' },
+    sectionTitle: { fontSize: 15, fontWeight: '800', marginBottom: 0 },
+    sectionSub: { fontSize: 11, marginBottom: 10, marginTop: 2 },
+    // ── New signal card with sparkline
+    signalCard: { borderRadius: 16, borderWidth: 1, padding: 12, marginBottom: 8 },
+    signalRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    signalTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 1 },
+    signalIcon: { fontSize: 16 },
+    signalTitle: { fontSize: 13, fontWeight: '800' },
+    signalSubtext: { fontSize: 10.5, marginTop: 0 },
+    signalRight: { alignItems: 'flex-end', gap: 2, minWidth: 80 },
+    signalValue: { fontSize: 15, fontWeight: '900', marginTop: 2 },
+    signalDelta: { fontSize: 9, fontWeight: '700', opacity: 0.85 },
     actionsRow: { flexDirection: 'row', gap: 10 },
     actionTile: { borderRadius: 18, borderWidth: 1, paddingVertical: 16, alignItems: 'center', gap: 6 },
     actionIcon: { fontSize: 20 },
