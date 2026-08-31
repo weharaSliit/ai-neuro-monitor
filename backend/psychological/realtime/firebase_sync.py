@@ -2,6 +2,7 @@ import time
 from pathlib import Path
 
 from backend.common.fusion import fusion_window_key
+from backend.psychological.sam40.decision import MAX_THRESHOLD_SHIFT
 
 TASK_STATE_LABEL_THRESHOLD = 0.5
 
@@ -221,7 +222,11 @@ def make_eeg_fusion_record(record: dict) -> dict:
         else ('high_task_state' if p >= threshold else 'low_task_state')
     )
     return {
-        'window': fusion_window_key(),
+        # This block's OWN real capture-end time, not a fresh time.time()
+        # read here -- see fusion_window_key()'s docstring for why bucketing
+        # by real capture time (rather than whatever moment this write
+        # happens to complete at) matters.
+        'window': fusion_window_key(record.get('timestamp_end')),
         'timestamp_eeg': record.get('timestamp_end'),
         'prob_eeg': p,
         'conf_eeg': None if p is None else record.get('model_confidence'),
@@ -229,4 +234,11 @@ def make_eeg_fusion_record(record: dict) -> dict:
         'signal_quality_eeg': record.get('eeg_quality_score'),
         'stress_label_eeg': stress_label_eeg,
         'threshold_eeg': threshold,
+        # How big a personalization shift EEG's own calibration considers
+        # meaningful (~0.11, derived from real SAM40 population spread --
+        # see sam40/decision.py) -- fusion_engin.py's fused_relative_index
+        # normalizes (prob - threshold) by this so "distance above/below
+        # threshold" is comparable to HRV/GSR's own equivalent, not raw
+        # probability points from two different classifiers.
+        'threshold_scale_eeg': MAX_THRESHOLD_SHIFT,
     }

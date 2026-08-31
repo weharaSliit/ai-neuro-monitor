@@ -3,6 +3,7 @@
 # All Firebase read/write operations
 # ============================================================
 
+import time
 import firebase_admin
 from firebase_admin import db
 import numpy as np
@@ -14,6 +15,7 @@ from backend.common.config import (
 )
 from backend.common.firebase_config import FUSION_EN_ROOT, init_firebase_app
 from backend.common.fusion import fusion_window_key
+from backend.physiological.predictor import PERSONAL_THRESHOLD_MIN_SEPARATION
 
 def _ref(path):
     """Return a Firebase reference under the configured namespace."""
@@ -307,7 +309,7 @@ def _hrv_gsr_fusion_fields(user_id, session_id, window_idx,
                            confidence, signal_quality,
                            prob_normal, prob_stress,
                            label, trending_toward_stress,
-                           feat_dict=None, threshold=None):
+                           feat_dict=None, threshold=None, capture_ts=None):
     """Field-mapping for the HRV/GSR side of the fusion schema, used by
     save_fusion_en_rtdb() (Realtime Database) below. `prob_stress`
     (not prob_normal) maps to prob_hrv_gsr, matching fusion_engin.py's
@@ -335,7 +337,15 @@ def _hrv_gsr_fusion_fields(user_id, session_id, window_idx,
     FEATURE_COLS) -- there is no separate RMSSD feature; SD1 is this
     pipeline's short-term HRV variability measure.
     """
-    now_iso = datetime.now(timezone.utc).isoformat()
+    # capture_ts (epoch float), when given, is the SAME real clock read
+    # save_fusion_en_rtdb() also passes to fusion_window_key() for this
+    # record's window key -- one clock read shared by both, not two
+    # independent time.time()/datetime.now() calls that could themselves
+    # drift apart by however long this function takes to run. Falls back to
+    # a fresh now() for any other/future caller that doesn't have a real
+    # capture timestamp to hand in.
+    now_iso = (datetime.fromtimestamp(capture_ts, tz=timezone.utc).isoformat()
+               if capture_ts is not None else datetime.now(timezone.utc).isoformat())
     feat_dict = feat_dict or {}
     return {
         'user_id':                 user_id,
@@ -355,6 +365,14 @@ def _hrv_gsr_fusion_fields(user_id, session_id, window_idx,
         # prediction). Consumed by fusion_engin.py's weighted-threshold
         # combination alongside threshold_eeg.
         'threshold_hrv_gsr':       float(threshold) if threshold is not None else None,
+        # How big a personalization shift Ring's own calibration considers
+        # meaningful (~0.10, hand-picked -- no equivalent calibrated
+        # population spread exists on this side, unlike EEG's MAX_
+        # THRESHOLD_SHIFT). fusion_engin.py's fused_relative_index
+        # normalizes (prob - threshold) by this so "distance above/below
+        # threshold" is comparable to EEG's own equivalent, not raw
+        # probability points from two different classifiers.
+        'threshold_scale_hrv_gsr': PERSONAL_THRESHOLD_MIN_SEPARATION,
         'features_hrv_gsr': {
             'avnn':     float(feat_dict.get('AVNN', 0)),
             'sd1':      float(feat_dict.get('SD1', 0)),
@@ -401,10 +419,16 @@ def save_fusion_en_rtdb(user_id, session_id, window_idx,
     to root_path='fusion_en') merges into the same child rather than
     clobbering it -- RTDB's analogue of Firestore's set(doc, merge=True).
     """
+    # One real clock read, reused for BOTH the window key and the record's
+    # own timestamp fields -- see fusion_window_key()'s docstring for why
+    # bucketing by a real capture time (rather than a write-completion
+    # moment that could land on either side of a bucket edge purely from
+    # per-request processing delay) matters.
+    capture_ts = time.time()
     fields = _hrv_gsr_fusion_fields(user_id, session_id, window_idx, confidence, signal_quality,
                                     prob_normal, prob_stress, label, trending_toward_stress, feat_dict,
-                                    threshold)
-    key = fusion_window_key()
+                                    threshold, capture_ts)
+    key = fusion_window_key(capture_ts)
     try:
         _global_ref(f'{FUSION_EN_ROOT}/{user_id}/{session_id}/{key}').update(fields)
     except Exception as e:  # noqa: BLE001 -- one failed write shouldn't break /predict

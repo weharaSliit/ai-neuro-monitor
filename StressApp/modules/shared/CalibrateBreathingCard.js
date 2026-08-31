@@ -176,6 +176,34 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
   const ringExpected = ringOnline;
   const eegExpected = eegOnline && !!eegSessionId;
 
+  // eegSessionId resolves from its own separate Firebase listener and can
+  // still be null at the exact instant start() runs -- most commonly right
+  // after a fresh registration, before that listener has caught up. When
+  // that happens start() skips EEG entirely and eegState.triggered is stuck
+  // at false forever, which also permanently blocks completion below (since
+  // eegDone requires triggered===true) -- the card just sits on "Waiting to
+  // start...". This re-checks reactively and fires EEG (or Ring, for the
+  // same reason) the moment it becomes expected while already running,
+  // instead of only ever checking once at the button press.
+  useEffect(() => {
+    if (stage !== 'running') return;
+    if (ringExpected && !ringState.triggered) {
+      setRingState((r) => ({ ...r, triggered: true }));
+      runRing(
+        () => physiologicalApi.post('/calibrate/start', {}),
+        () => physiologicalApi.get('/calibrate/status'),
+      );
+    }
+    if (eegExpected && !eegState.triggered) {
+      setEegState((e) => ({ ...e, triggered: true }));
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      runEeg(
+        () => eegClient.post('/calibrate/start', { session_id: eegSessionId }, { headers }),
+        () => eegClient.get('/calibrate/status', { headers }),
+      );
+    }
+  }, [stage, ringExpected, eegExpected, ringState.triggered, eegState.triggered, eegSessionId, token, runRing, runEeg]);
+
   useEffect(() => {
     if (stage !== 'running') return;
     if (!ringState.triggered && !eegState.triggered) return;
