@@ -13,7 +13,7 @@ import LineChart from '../../shared/LineChart';
 import { COLORS } from '../../physiological/config/theme';
 import api from '../../physiological/api/client';
 
-const TREND_CHART_WIDTH = Dimensions.get('window').width - 2 * 20 - 2 * 18;
+const TREND_CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
 
 export default function AdminSessionDetailScreen({ route }) {
   const { userId, sessionId } = route.params;

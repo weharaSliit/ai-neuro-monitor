@@ -58,19 +58,20 @@ from backend.physiological.firebase_service import (
 )
 
 # Task-calibration capture size, in WINDOW_SEC=60 windows. Was 1 (only
-# ~1 minute of task data) -- raised to 6 (6 minutes) to match
-# StressApp/modules/eeg/screens/EegThresholdTaskScreen.js's onboarding
-# task, now a ~6-minute sequence (serial subtraction -> maths quiz ->
-# dual n-back -> Stroop) chosen specifically because a single short
-# window's mean was coming out well below the population decision
-# threshold (~0.4 vs ~0.71) -- the model needs SUSTAINED elevated
-# load to register confidently, and a 1-2 minute task mostly just
-# captures physiological ramp-up (HRV/GSR response lags the stressor by
-# tens of seconds), not the sustained state itself. run_task_calibration_
-# capture() below now averages prob_stress across all N_TASK_WIN windows
-# (dropping individually-rejected ones) rather than using only the
-# first, so the extra windows actually get used, not just requested.
-N_TASK_WIN = 6
+# ~1 minute of task data), then 6 (6 minutes) -- now 8 (8 minutes) to
+# match StressApp/modules/eeg/screens/EegThresholdTaskScreen.js's
+# onboarding task, now a 5-activity sequence (serial subtraction -> maths
+# quiz -> sequence-recall puzzle -> ticking-clock sorter -> Stroop)
+# chosen specifically because a single short window's mean was coming out
+# well below the population decision threshold (~0.4 vs ~0.71) -- the
+# model needs SUSTAINED elevated load to register confidently, and a
+# 1-2 minute task mostly just captures physiological ramp-up (HRV/GSR
+# response lags the stressor by tens of seconds), not the sustained state
+# itself. run_task_calibration_capture() below now averages prob_stress
+# across all N_TASK_WIN windows (dropping individually-rejected ones)
+# rather than using only the first, so the extra windows actually get
+# used, not just requested.
+N_TASK_WIN = 8
 
 # Hard wall-clock ceiling on both capture loops below. Both are entirely
 # message-driven (close_window() only ever runs from inside on_message()),

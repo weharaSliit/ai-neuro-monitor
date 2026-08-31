@@ -32,7 +32,7 @@ import { eegClient } from '../../shared/eegApiClient';
 import { useAuth } from '../../../context/AuthContext';
 
 const CHART_POINTS = 120;
-const RAW_CHART_WIDTH = Dimensions.get('window').width - 2 * 20 - 2 * 18 - 60;
+const RAW_CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
 const RAW_CHART_HEIGHT = 260;
 const RAW_CHART_CLIP_HEIGHT = RAW_CHART_HEIGHT + 16;
 

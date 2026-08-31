@@ -27,7 +27,7 @@ import { API_BASE, DEVICE_ID, STRESS_DECISION_THRESHOLD_PERCENT } from '../confi
 import api from '../api/client';
 
 const POLL_INTERVAL_MS = 5000;
-const TREND_CHART_WIDTH = Dimensions.get('window').width - 2 * 20 - 2 * 18;
+const TREND_CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
 
 function DistBar({ label, value, total, color, muted }) {
   const pct = total > 0 ? (value / total) * 100 : 0;
@@ -388,9 +388,9 @@ const styles = StyleSheet.create({
   headerIconCircle: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
   title: { fontSize: 22, fontWeight: '900', letterSpacing: -0.2 },
   subtitle: { fontSize: 12, marginTop: 2 },
-  statusCard: { padding: 18, borderRadius: 22 },
-  readingCard: { padding: 20, borderRadius: 24 },
-  historyCard: { padding: 18, borderRadius: 22 },
+  statusCard: { marginHorizontal: 20, marginBottom: 14, padding: 18, borderRadius: 22 },
+  readingCard: { marginHorizontal: 20, marginBottom: 14, padding: 20, borderRadius: 24 },
+  historyCard: { marginHorizontal: 20, marginBottom: 14, padding: 18, borderRadius: 22 },
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   rowGap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   cardTitle: { fontSize: 15, fontWeight: '800' },
@@ -409,7 +409,7 @@ const styles = StyleSheet.create({
   distBarBg: { flex: 1, height: 8, borderRadius: 4, overflow: 'hidden' },
   distBarFill: { height: 8, borderRadius: 4 },
   distValue: { width: 22, fontSize: 13, fontWeight: '800', textAlign: 'right' },
-  distLabel: { width: 55, fontSize: 11, fontWeight: '600' },
+  distLabel: { minWidth: 55, fontSize: 11, fontWeight: '600' },
   activityRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1 },
   activityLabel: { fontSize: 13, fontWeight: '700' },
   activitySub: { fontSize: 11, marginTop: 1 },

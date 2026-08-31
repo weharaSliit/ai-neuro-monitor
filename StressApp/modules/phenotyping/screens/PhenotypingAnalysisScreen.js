@@ -22,7 +22,7 @@ import { useTheme } from '../../physiological/config/ThemeContext';
 import { usePhenotypingDeviceId } from '../utils/deviceIdentity';
 import { getCalibrationStatus } from '../utils/calibrationStatus';
 
-const CHART_WIDTH = Dimensions.get('window').width - 2 * 16 - 2 * 16;
+const CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
 const DRIFT_CONFIRM_TARGET = 3;
 
 function computeZ(val, mean, std) {
@@ -1052,7 +1052,7 @@ const styles = StyleSheet.create({
     rangeLabel: { fontSize: 9, fontWeight: '700', textTransform: 'uppercase' },
     rangeVal: { fontSize: 11, fontWeight: '800', marginTop: 1 },
     distRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 },
-    distLabel: { width: 90, fontSize: 11, fontWeight: '700' },
+    distLabel: { minWidth: 90, fontSize: 11, fontWeight: '700' },
     distBarBg: { flex: 1, height: 8, borderRadius: 4, overflow: 'hidden' },
     distBarFill: { height: 8, borderRadius: 4 },
     distVal: { fontSize: 11.5, fontWeight: '850', minWidth: 65, textAlign: 'right' },

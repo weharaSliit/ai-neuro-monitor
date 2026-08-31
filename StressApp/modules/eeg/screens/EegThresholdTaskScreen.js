@@ -11,31 +11,40 @@ import physiologicalApi from '../../physiological/api/client';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import { useAuth } from '../../../context/AuthContext';
 
-// Four back-to-back timed activities now (serial subtraction -> maths quiz
-// -> dual n-back -> Stroop), ~6 minutes total -- was 2 activities at 80s
-// total, which measured task-phase prob_stress landing around 0.4 against
-// a population decision threshold of ~0.71. Root cause (see backend/
-// physiological/calibration_capture.py's N_TASK_WIN comment): a short task
-// mostly just captures physiological ramp-up (HRV/GSR response lags the
-// stressor by tens of seconds), not a sustained elevated state, AND the
-// backend was only ever scoring its FIRST captured window regardless of
-// how long the frontend ran for. Both fixed together: this task is now
-// long enough to build a real sustained response, and N_TASK_WIN/
-// N_THRESHOLD_TASK_BLOCKS were raised so the backend actually captures
-// (and averages across) the whole thing instead of just the first minute.
+// Five back-to-back timed activities (serial subtraction -> maths quiz ->
+// sequence-recall puzzle -> ticking-clock sorter -> Stroop), 8 minutes
+// total. Extended from an earlier 2-activity/80s version because
+// task-phase prob_stress was landing around 0.4 against a population
+// decision threshold of ~0.71 -- a short task mostly just captures
+// physiological ramp-up, not a sustained elevated state (see backend/
+// physiological/calibration_capture.py's N_TASK_WIN comment). The maths
+// quiz and Stroop test were then further hardened -- unpredictable
+// question TYPES (not just escalating difficulty within one fixed
+// pattern) and a randomized per-trial task-switch on Stroop --
+// specifically so neither task can be learned/predicted and answered on
+// autopilot, which would undercut the sustained-effort point of
+// extending the duration in the first place. The n-back memory task was
+// replaced with a visuospatial sequence-recall puzzle (Corsi
+// block-tapping style) for the same reason in a more engaging,
+// puzzle-like form. The ticking-clock sorter was added as a fifth
+// activity to bring total duration to 8 minutes, deliberately built
+// around abrupt, punitive negative feedback (a harsh buzz + a real
+// speed setback on a miss, not just "try again") rather than pure
+// cognitive load, on top of the escalating-speed pressure itself.
 const SERIAL_SUB_DURATION_SEC = 150;
-const MATH_DURATION_SEC = 90;
-const NBACK_DURATION_SEC = 60;
-const STROOP_DURATION_SEC = 60;
-// Comfortably above the ~360s this task now takes end-to-end (backend
-// capture ceilings are far higher still -- 12min Ring, 7.5min EEG, see
-// calibration_capture.py/eeg_calibration_capture.py) but still tight
-// enough to flag a genuinely stuck capture during the review screen.
-const STUCK_WARNING_SEC = 400;
+const MATH_DURATION_SEC = 100;
+const PUZZLE_DURATION_SEC = 70;
+const SORTER_DURATION_SEC = 90;
+const STROOP_DURATION_SEC = 70;
+// Comfortably above the ~480s this task now takes end-to-end (backend
+// capture ceilings are far higher still, see calibration_capture.py/
+// eeg_calibration_capture.py) but still tight enough to flag a genuinely
+// stuck capture during the review screen.
+const STUCK_WARNING_SEC = 520;
 const POLL_INTERVAL_MS = 2000;
 const TICK_MS = 100;
 const IN_PROGRESS = ['capturing', 'saving'];
-const TASK_PHASES = ['serialSub', 'quiz', 'nback', 'stroop'];
+const TASK_PHASES = ['serialSub', 'quiz', 'puzzle', 'sorter', 'stroop'];
 
 function randomInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -55,30 +64,33 @@ function shuffle(arr) {
 // restarting from the ORIGINAL number on any mistake -- the restart (not
 // just "next question") is the deliberate part: losing all progress on a
 // single slip is what reliably produces real frustration/threat response
-// in the TSST literature, well beyond plain arithmetic difficulty. Escalating
-// urgency (screen pulse + vibration) in the final URGENCY_FRAC of the
-// phase adds a second, more autonomic (GSR/HRV-facing) pressure on top of
-// the purely cognitive load the other three activities create.
+// in the TSST literature. Escalating urgency (screen pulse + vibration)
+// in the final URGENCY_FRAC of the phase adds a second, more autonomic
+// (GSR/HRV-facing) pressure on top of the purely cognitive load the other
+// three activities create.
 const SERIAL_SUB_STEP = 13;
 const SERIAL_SUB_START_MIN = 800;
 const SERIAL_SUB_START_MAX = 1200;
 const SERIAL_URGENCY_FRAC = 0.2;
 const SERIAL_VIBRATE_INTERVAL_MS = 4000;
 
-// ── Maths quiz: escalating difficulty ────────────────────────────────
-// Level rises with an unbroken correct streak (resets on any wrong/timed-
-// out answer), each tier both toughening the arithmetic AND shortening the
-// per-question clock. Level 5 (three-step) was added on top of the
-// original 4 tiers per an explicit "make the sums long and complicated"
-// request -- a determined user reaching it is deep into a long correct
-// streak already, so the extra length compounds real, sustained pressure
-// rather than just being hard in isolation.
+// ── Maths quiz: unpredictable question types, not just escalating ────
+// difficulty ─────────────────────────────────────────────────────────
+// Level (unlocked by an unbroken correct streak, reset on any wrong/
+// timed-out answer) controls WHICH question types are in play and the
+// per-question clock -- but which of those types shows up next is
+// picked at random every single question, not in a fixed/learnable
+// order. Nine distinct question kinds total (plain arithmetic, missing-
+// operand equations, percentages, squares/roots, and multi-step chains)
+// so a long correct streak keeps genuinely varying, not just "the same
+// kind of sum but bigger numbers."
 const MATH_LEVELS = [
-  { ops: ['+', '-'], maxA: 40, maxB: 30, timeSec: 8 },
-  { ops: ['+', '-', '×'], maxA: 70, maxB: 12, timeSec: 6 },
-  { ops: ['+', '-', '×', '÷'], maxA: 90, maxB: 12, timeSec: 5 },
-  { ops: ['two-step'], maxA: 25, maxB: 12, timeSec: 4 },
-  { ops: ['three-step'], maxA: 30, maxB: 15, timeSec: 5 },
+  { types: ['add', 'sub'], maxA: 40, maxB: 30, timeSec: 8 },
+  { types: ['add', 'sub', 'mul'], maxA: 60, maxB: 12, timeSec: 7 },
+  { types: ['add', 'sub', 'mul', 'div', 'missing'], maxA: 70, maxB: 12, timeSec: 6 },
+  { types: ['mul', 'div', 'two-step', 'percent', 'missing', 'square'], maxA: 90, maxB: 12, timeSec: 5 },
+  { types: ['two-step', 'three-step', 'percent', 'square', 'root', 'missing'], maxA: 30, maxB: 14, timeSec: 4 },
+  { types: ['three-step', 'percent', 'square', 'root', 'missing', 'div'], maxA: 35, maxB: 16, timeSec: 3.5 },
 ];
 const LEVEL_UP_STREAK = 3;
 
@@ -91,12 +103,60 @@ function applyOp(a, op, b) {
 
 function generateMathProblem(levelIdx) {
   const level = MATH_LEVELS[levelIdx];
-  if (level.ops[0] === 'two-step' || level.ops[0] === 'three-step') {
+  const type = level.types[randomInt(0, level.types.length - 1)];
+
+  if (type === 'add') {
+    const a = randomInt(10, level.maxA);
+    const b = randomInt(10, level.maxA);
+    return { display: `${a} + ${b}`, answer: a + b };
+  }
+  if (type === 'sub') {
+    const a = randomInt(15, level.maxA);
+    const b = randomInt(5, a - 1);
+    return { display: `${a} - ${b}`, answer: a - b };
+  }
+  if (type === 'mul') {
+    const a = randomInt(3, level.maxB);
+    const b = randomInt(3, level.maxB);
+    return { display: `${a} × ${b}`, answer: a * b };
+  }
+  if (type === 'div') {
+    const divisor = randomInt(2, 12);
+    const quotient = randomInt(2, level.maxB);
+    return { display: `${divisor * quotient} ÷ ${divisor}`, answer: quotient };
+  }
+  if (type === 'missing') {
+    // Solve for a hidden operand -- randomly the first or second one, so
+    // "? + b = c" and "a + ? = c" are both in play, not just one shape.
+    const op = Math.random() < 0.5 ? '+' : '-';
+    const a = randomInt(10, level.maxA);
+    const b = randomInt(5, level.maxB);
+    const c = applyOp(a, op, b);
+    if (Math.random() < 0.5) {
+      return { display: `? ${op} ${b} = ${c}`, answer: a };
+    }
+    return { display: `${a} ${op} ? = ${c}`, answer: b };
+  }
+  if (type === 'percent') {
+    const percentOptions = [10, 20, 25, 50, 75];
+    const percent = percentOptions[randomInt(0, percentOptions.length - 1)];
+    const base = randomInt(1, 20) * 20; // multiple of 20 -- keeps every option above an integer result
+    return { display: `${percent}% of ${base}`, answer: (base * percent) / 100 };
+  }
+  if (type === 'square') {
+    const n = randomInt(4, 20);
+    return { display: `${n}²`, answer: n * n };
+  }
+  if (type === 'root') {
+    const n = randomInt(4, 20);
+    return { display: `√${n * n}`, answer: n };
+  }
+  if (type === 'two-step' || type === 'three-step') {
     const stepOps = ['+', '-', '×'];
-    const nSteps = level.ops[0] === 'three-step' ? 3 : 2;
+    const nSteps = type === 'three-step' ? 3 : 2;
     let a = randomInt(5, level.maxA);
-    let parts = [a];
-    let ops = [];
+    const parts = [a];
+    const ops = [];
     let acc = a;
     for (let i = 0; i < nSteps; i += 1) {
       const op = stepOps[randomInt(0, 2)];
@@ -110,48 +170,60 @@ function generateMathProblem(levelIdx) {
     const display = parts.reduce((str, val, i) => (i === 0 ? `${val}` : `${str} ${ops[i - 1]} ${val}`), '');
     return { display, answer: acc };
   }
-  const op = level.ops[randomInt(0, level.ops.length - 1)];
-  if (op === '+') {
-    const a = randomInt(10, level.maxA);
-    const b = randomInt(10, level.maxA);
-    return { display: `${a} + ${b}`, answer: a + b };
-  }
-  if (op === '-') {
-    const a = randomInt(15, level.maxA);
-    const b = randomInt(5, a - 1);
-    return { display: `${a} - ${b}`, answer: a - b };
-  }
-  if (op === '×') {
-    const a = randomInt(3, level.maxB);
-    const b = randomInt(3, level.maxB);
-    return { display: `${a} × ${b}`, answer: a * b };
-  }
-  const divisor = randomInt(2, 12);
-  const quotient = randomInt(2, level.maxB);
-  return { display: `${divisor * quotient} ÷ ${divisor}`, answer: quotient };
+  return { display: '1 + 1', answer: 2 };
 }
 
-// ── Dual n-back ───────────────────────────────────────────────────────
-// Classic working-memory stressor: a letter appears every NBACK_STIM_
-// INTERVAL_SEC, tap MATCH if it's the same letter shown N steps back.
-// N=1 for the first NBACK_EASY_SEC as an onramp, then N=2 for the rest --
-// N=2 is the standard difficulty used in the dual n-back research
-// literature. NBACK_MATCH_PROB biases stimulus generation so true matches
-// actually occur often enough to be worth watching for, not so rare the
-// task degenerates into "always tap nothing."
-const NBACK_STIMULI = ['C', 'H', 'K', 'L', 'Q', 'R', 'S', 'T'];
-const NBACK_STIM_INTERVAL_SEC = 2.2;
-const NBACK_EASY_SEC = 20;
-const NBACK_N_EASY = 1;
-const NBACK_N_HARD = 2;
-const NBACK_MATCH_PROB = 0.35;
-const NBACK_OUTCOME_KEY = { hit: 'hits', miss: 'misses', falseAlarm: 'falseAlarms', correctRejection: 'correctRejections' };
+// ── Sequence-recall puzzle (Corsi block-tapping style) ───────────────
+// Replaces a plain dual n-back: a random sequence of grid tiles lights
+// up one at a time, then the user must tap them back in the same order.
+// Any wrong tap fails the round (negative feedback, same length tried
+// again); a fully correct round grows the sequence by one tile AND
+// shrinks how long each tile stays lit (the flash duration), so both
+// working-memory load (longer sequence) and perceptual pressure (less
+// time to actually register each flash) escalate together the same
+// escalating-and-unpredictable spirit as the other activities, in a
+// genuinely puzzle-like (not just "watch a letter") form.
+const PUZZLE_GRID_SIZE = 9; // 3x3
+const PUZZLE_START_LEN = 3;
+const PUZZLE_MAX_LEN = 8;
+const PUZZLE_FLASH_MS_START = 500;
+const PUZZLE_FLASH_MS_MIN = 200;
+const PUZZLE_FLASH_MS_DECAY = 20; // per successful round
+const PUZZLE_GAP_MS = 250;
+const PUZZLE_TILE_COLORS = [
+  '#E53935', '#1E88E5', '#43A047', '#FDD835', '#8E24AA',
+  '#FB8C00', '#00897B', '#D81B60', '#3949AB',
+];
+
+// ── Ticking-clock sorter ─────────────────────────────────────────────
+// A two-digit number falls down the play area; tap EVEN or ODD before it
+// reaches the bottom. Correct -> the next item falls 10% faster.
+// Wrong OR untapped-in-time -> a harsh double-buzz (vibration) and the
+// fall speed is set back (not fully reset, but a real, felt penalty),
+// deliberately blunter/more punitive feedback than the other activities'
+// "wrong, try again" -- the abrupt buzzer-and-setback is the point, not
+// just more cognitive load.
+const SORTER_TRACK_HEIGHT = 170;
+const SORTER_DROP_MS_START = 3200;
+const SORTER_DROP_MS_MIN = 1100;
+const SORTER_DROP_SPEEDUP = 0.9; // multiply on a correct sort
+const SORTER_DROP_SETBACK = 1.4; // multiply on a miss
+const SORTER_BUZZ_PATTERN = [0, 120, 60, 120];
 
 // ── Stroop colour-word test ──────────────────────────────────────────
-// Deliberately NOT the common 4-colour, mostly-congruent version: 6
-// visually close colours, 85% incongruent trials (word says one colour,
-// ink is another), a shrinking per-trial clock, and shuffled answer-swatch
-// order every trial so the response can't become spatial-memory autopilot.
+// 10 visually distinct colours (not the common 4) and 92% incongruent
+// trials (word says one colour, ink is another -- almost every trial is
+// a genuine conflict trial now, not just most of them), PLUS a
+// randomized per-trial task switch: roughly half the trials ask for the
+// INK colour, the other half ask for what the WORD SAYS -- decided fresh
+// every trial and shown as the instruction the user must actively read
+// each time, rather than a fixed rule they can settle into. On top of
+// that cognitive-conflict difficulty, the last STROOP_URGENCY_FRAC of
+// EACH trial's own shrinking clock now pulses the screen and vibrates
+// the device -- the same escalating-urgency mechanic Serial Subtraction
+// uses, reused here so Stroop also carries a felt, autonomic (GSR/HRV-
+// facing) time-pressure cue on top of its purely cognitive conflict,
+// not just a background countdown.
 const STROOP_COLORS = [
   { name: 'Red', hex: '#E53935' },
   { name: 'Blue', hex: '#1E88E5' },
@@ -159,11 +231,17 @@ const STROOP_COLORS = [
   { name: 'Yellow', hex: '#FDD835' },
   { name: 'Purple', hex: '#8E24AA' },
   { name: 'Orange', hex: '#FB8C00' },
+  { name: 'Teal', hex: '#00897B' },
+  { name: 'Pink', hex: '#D81B60' },
+  { name: 'Cyan', hex: '#00ACC1' },
+  { name: 'Brown', hex: '#6D4C41' },
 ];
-const STROOP_INCONGRUENT_PROB = 0.85;
-const STROOP_TRIAL_SEC_BASE = 3.0;
-const STROOP_TRIAL_SEC_MIN = 1.2;
+const STROOP_INCONGRUENT_PROB = 0.92;
+const STROOP_TRIAL_SEC_BASE = 2.8;
+const STROOP_TRIAL_SEC_MIN = 1.0;
 const STROOP_TRIAL_SEC_STEP = 0.15;
+const STROOP_URGENCY_FRAC = 0.25;
+const STROOP_VIBRATE_INTERVAL_MS = 700;
 
 function generateStroopTrial() {
   const inkColor = STROOP_COLORS[randomInt(0, STROOP_COLORS.length - 1)];
@@ -171,7 +249,8 @@ function generateStroopTrial() {
   const labelColor = Math.random() < STROOP_INCONGRUENT_PROB
     ? others[randomInt(0, others.length - 1)]
     : inkColor;
-  return { inkColor, labelColor, options: shuffle(STROOP_COLORS) };
+  const askMode = Math.random() < 0.5 ? 'ink' : 'word';
+  return { inkColor, labelColor, askMode, options: shuffle(STROOP_COLORS) };
 }
 
 export default function EegThresholdTaskScreen({ navigation }) {
@@ -180,7 +259,7 @@ export default function EegThresholdTaskScreen({ navigation }) {
   const userId = user?.userId;
 
   const [sessionId, setSessionId] = useState(null);
-  const [phase, setPhase] = useState('intro'); // intro | serialSub | quiz | nback | stroop | review
+  const [phase, setPhase] = useState('intro'); // intro | serialSub | quiz | puzzle | stroop | review
   const [nowFine, setNowFine] = useState(Date.now());
 
   // Serial subtraction phase state
@@ -204,21 +283,32 @@ export default function EegThresholdTaskScreen({ navigation }) {
   const [mathFeedback, setMathFeedback] = useState(null); // { correct, correctAnswer, timeout }
   const mathFeedbackHandledRef = useRef(false);
 
-  // Dual n-back phase state
-  const [nbackDeadline, setNbackDeadline] = useState(null);
-  const [nbackCurrent, setNbackCurrent] = useState(null);
-  const [nbackStimDeadline, setNbackStimDeadline] = useState(null);
-  const [nbackScore, setNbackScore] = useState({ hits: 0, misses: 0, falseAlarms: 0, correctRejections: 0 });
-  const [nbackLastOutcome, setNbackLastOutcome] = useState(null);
-  const nbackHistoryRef = useRef([]);
-  const nbackPhaseStartRef = useRef(0);
-  const nbackIsMatchRef = useRef(false);
-  const nbackResolvedRef = useRef(true);
+  // Sequence-recall puzzle phase state
+  const [puzzleDeadline, setPuzzleDeadline] = useState(null);
+  const [puzzleLen, setPuzzleLen] = useState(PUZZLE_START_LEN);
+  const [puzzleFlashMs, setPuzzleFlashMs] = useState(PUZZLE_FLASH_MS_START);
+  const [puzzleSubPhase, setPuzzleSubPhase] = useState('idle'); // idle | showing | input
+  const [puzzleShowingIndex, setPuzzleShowingIndex] = useState(null);
+  const [puzzleInputIndex, setPuzzleInputIndex] = useState(0);
+  const [puzzleScore, setPuzzleScore] = useState({ correct: 0, misses: 0 });
+  const [puzzleFeedback, setPuzzleFeedback] = useState(null); // { correct }
+  const puzzleSeqRef = useRef([]);
+  const puzzleGenRef = useRef(0);
+
+  // Ticking-clock sorter phase state
+  const [sorterDeadline, setSorterDeadline] = useState(null);
+  const [sorterDropMs, setSorterDropMs] = useState(SORTER_DROP_MS_START);
+  const [sorterItemValue, setSorterItemValue] = useState(null);
+  const [sorterItemDeadline, setSorterItemDeadline] = useState(null);
+  const [sorterScore, setSorterScore] = useState({ correct: 0, misses: 0 });
+  const [sorterFeedback, setSorterFeedback] = useState(null); // { correct }
+  const sorterResolvedRef = useRef(true);
 
   // Stroop phase state
   const [stroopDeadline, setStroopDeadline] = useState(null);
   const [stroopTrial, setStroopTrial] = useState(null);
   const [stroopTrialDeadline, setStroopTrialDeadline] = useState(null);
+  const [stroopTrialTotalMs, setStroopTrialTotalMs] = useState(1);
   const [stroopScore, setStroopScore] = useState({ correct: 0, total: 0 });
   const [stroopStreak, setStroopStreak] = useState(0);
   const [stroopFeedback, setStroopFeedback] = useState(null); // { correct, correctName, timeout }
@@ -359,60 +449,119 @@ export default function EegThresholdTaskScreen({ navigation }) {
     return () => clearTimeout(id);
   }, [phase, serialFeedback]);
 
-  // ── Dual n-back phase ────────────────────────────────────────────────
-  const advanceNbackStimulus = useCallback(() => {
-    const level = (Date.now() - nbackPhaseStartRef.current) < NBACK_EASY_SEC * 1000 ? NBACK_N_EASY : NBACK_N_HARD;
-    const history = nbackHistoryRef.current;
-    const targetIdx = history.length - level;
-    let stim;
-    if (targetIdx >= 0 && Math.random() < NBACK_MATCH_PROB) {
-      stim = history[targetIdx];
-    } else {
-      stim = NBACK_STIMULI[randomInt(0, NBACK_STIMULI.length - 1)];
-    }
-    nbackIsMatchRef.current = targetIdx >= 0 && stim === history[targetIdx];
-    nbackHistoryRef.current = [...history, stim];
-    nbackResolvedRef.current = false;
-    setNbackCurrent(stim);
-    setNbackStimDeadline(Date.now() + NBACK_STIM_INTERVAL_SEC * 1000);
+  // ── Sequence-recall puzzle phase ────────────────────────────────────
+  const showPuzzleSequence = useCallback((seq, flashMs) => {
+    puzzleGenRef.current += 1;
+    const gen = puzzleGenRef.current;
+    let i = 0;
+    const step = () => {
+      if (gen !== puzzleGenRef.current) return; // superseded by a new round/phase change
+      if (i >= seq.length) {
+        setPuzzleShowingIndex(null);
+        setPuzzleSubPhase('input');
+        return;
+      }
+      setPuzzleShowingIndex(seq[i]);
+      setTimeout(() => {
+        if (gen !== puzzleGenRef.current) return;
+        setPuzzleShowingIndex(null);
+        i += 1;
+        setTimeout(step, PUZZLE_GAP_MS);
+      }, flashMs);
+    };
+    step();
   }, []);
 
-  const startNBack = useCallback(() => {
-    nbackHistoryRef.current = [];
-    nbackPhaseStartRef.current = Date.now();
-    setNbackScore({ hits: 0, misses: 0, falseAlarms: 0, correctRejections: 0 });
-    setNbackLastOutcome(null);
-    setNbackDeadline(Date.now() + NBACK_DURATION_SEC * 1000);
-    advanceNbackStimulus();
-    setPhase('nback');
-  }, [advanceNbackStimulus]);
+  const startPuzzleRound = useCallback((len, flashMs) => {
+    const seq = shuffle(Array.from({ length: PUZZLE_GRID_SIZE }, (_, i) => i)).slice(0, len);
+    puzzleSeqRef.current = seq;
+    setPuzzleInputIndex(0);
+    setPuzzleFeedback(null);
+    setPuzzleSubPhase('showing');
+    showPuzzleSequence(seq, flashMs);
+  }, [showPuzzleSequence]);
 
-  const resolveNbackTrial = useCallback((tapped) => {
-    if (nbackResolvedRef.current) return;
-    nbackResolvedRef.current = true;
-    const isMatch = nbackIsMatchRef.current;
-    const outcome = isMatch && tapped ? 'hit'
-      : isMatch && !tapped ? 'miss'
-        : !isMatch && tapped ? 'falseAlarm'
-          : 'correctRejection';
-    const key = NBACK_OUTCOME_KEY[outcome];
-    setNbackScore((s) => ({ ...s, [key]: s[key] + 1 }));
-    setNbackLastOutcome(outcome);
-    advanceNbackStimulus();
-  }, [advanceNbackStimulus]);
+  const startPuzzle = useCallback(() => {
+    setPuzzleLen(PUZZLE_START_LEN);
+    setPuzzleFlashMs(PUZZLE_FLASH_MS_START);
+    setPuzzleScore({ correct: 0, misses: 0 });
+    setPuzzleDeadline(Date.now() + PUZZLE_DURATION_SEC * 1000);
+    setPhase('puzzle');
+    startPuzzleRound(PUZZLE_START_LEN, PUZZLE_FLASH_MS_START);
+  }, [startPuzzleRound]);
 
-  const tapNbackMatch = useCallback(() => {
-    resolveNbackTrial(true);
-  }, [resolveNbackTrial]);
+  const tapPuzzleTile = useCallback((idx) => {
+    if (puzzleSubPhase !== 'input' || puzzleFeedback) return;
+    const seq = puzzleSeqRef.current;
+    const expected = seq[puzzleInputIndex];
+    if (idx === expected) {
+      const nextIdx = puzzleInputIndex + 1;
+      if (nextIdx >= seq.length) {
+        setPuzzleScore((s) => ({ ...s, correct: s.correct + 1 }));
+        setPuzzleLen((l) => Math.min(PUZZLE_MAX_LEN, l + 1));
+        setPuzzleFlashMs((f) => Math.max(PUZZLE_FLASH_MS_MIN, f - PUZZLE_FLASH_MS_DECAY));
+        setPuzzleFeedback({ correct: true });
+      } else {
+        setPuzzleInputIndex(nextIdx);
+      }
+    } else {
+      setPuzzleScore((s) => ({ ...s, misses: s.misses + 1 }));
+      setPuzzleFeedback({ correct: false });
+    }
+  }, [puzzleSubPhase, puzzleFeedback, puzzleInputIndex]);
 
-  const nbackLevel = phase === 'nback' && (nowFine - nbackPhaseStartRef.current) < NBACK_EASY_SEC * 1000
-    ? NBACK_N_EASY : NBACK_N_HARD;
+  useEffect(() => {
+    if (phase !== 'puzzle' || !puzzleFeedback) return undefined;
+    const id = setTimeout(() => {
+      startPuzzleRound(puzzleLen, puzzleFlashMs);
+    }, puzzleFeedback.correct ? 500 : 900);
+    return () => clearTimeout(id);
+  }, [phase, puzzleFeedback, puzzleLen, puzzleFlashMs, startPuzzleRound]);
+
+  // ── Ticking-clock sorter phase ──────────────────────────────────────
+  const spawnSorterItem = useCallback((dropMs) => {
+    sorterResolvedRef.current = false;
+    setSorterItemValue(randomInt(10, 99));
+    setSorterItemDeadline(Date.now() + dropMs);
+    setSorterFeedback(null);
+  }, []);
+
+  const startSorter = useCallback(() => {
+    setSorterDropMs(SORTER_DROP_MS_START);
+    setSorterScore({ correct: 0, misses: 0 });
+    setSorterDeadline(Date.now() + SORTER_DURATION_SEC * 1000);
+    setPhase('sorter');
+    spawnSorterItem(SORTER_DROP_MS_START);
+  }, [spawnSorterItem]);
+
+  const resolveSorterTap = useCallback((bin) => {
+    if (sorterResolvedRef.current || sorterItemValue == null) return;
+    sorterResolvedRef.current = true;
+    const isEven = sorterItemValue % 2 === 0;
+    const isCorrect = (bin === 'even') === isEven;
+    if (isCorrect) {
+      setSorterScore((s) => ({ ...s, correct: s.correct + 1 }));
+      setSorterDropMs((d) => Math.max(SORTER_DROP_MS_MIN, d * SORTER_DROP_SPEEDUP));
+    } else {
+      Vibration.vibrate(SORTER_BUZZ_PATTERN);
+      setSorterScore((s) => ({ ...s, misses: s.misses + 1 }));
+      setSorterDropMs((d) => Math.min(SORTER_DROP_MS_START, d * SORTER_DROP_SETBACK));
+    }
+    setSorterFeedback({ correct: isCorrect });
+  }, [sorterItemValue]);
+
+  useEffect(() => {
+    if (phase !== 'sorter' || !sorterFeedback) return undefined;
+    const id = setTimeout(() => spawnSorterItem(sorterDropMs), sorterFeedback.correct ? 250 : 500);
+    return () => clearTimeout(id);
+  }, [phase, sorterFeedback, sorterDropMs, spawnSorterItem]);
 
   // ── Stroop phase ─────────────────────────────────────────────────
   const nextStroopTrial = useCallback((streak) => {
     const trialSec = Math.max(STROOP_TRIAL_SEC_MIN, STROOP_TRIAL_SEC_BASE - streak * STROOP_TRIAL_SEC_STEP);
     setStroopTrial(generateStroopTrial());
     setStroopTrialDeadline(Date.now() + trialSec * 1000);
+    setStroopTrialTotalMs(trialSec * 1000);
     setStroopFeedback(null);
     stroopFeedbackHandledRef.current = false;
   }, []);
@@ -428,18 +577,20 @@ export default function EegThresholdTaskScreen({ navigation }) {
   const submitStroopAnswer = useCallback((colorName) => {
     if (!stroopTrial || stroopFeedback || stroopFeedbackHandledRef.current) return;
     stroopFeedbackHandledRef.current = true;
-    const isCorrect = colorName === stroopTrial.inkColor.name;
+    const correctName = stroopTrial.askMode === 'ink' ? stroopTrial.inkColor.name : stroopTrial.labelColor.name;
+    const isCorrect = colorName === correctName;
     setStroopScore((s) => ({ correct: s.correct + (isCorrect ? 1 : 0), total: s.total + 1 }));
     setStroopStreak((s) => (isCorrect ? s + 1 : 0));
-    setStroopFeedback({ correct: isCorrect, correctName: stroopTrial.inkColor.name, timeout: false });
+    setStroopFeedback({ correct: isCorrect, correctName, timeout: false });
   }, [stroopTrial, stroopFeedback]);
 
   const stroopTimeout = useCallback(() => {
     if (!stroopTrial || stroopFeedbackHandledRef.current) return;
     stroopFeedbackHandledRef.current = true;
+    const correctName = stroopTrial.askMode === 'ink' ? stroopTrial.inkColor.name : stroopTrial.labelColor.name;
     setStroopScore((s) => ({ correct: s.correct, total: s.total + 1 }));
     setStroopStreak(0);
-    setStroopFeedback({ correct: false, correctName: stroopTrial.inkColor.name, timeout: true });
+    setStroopFeedback({ correct: false, correctName, timeout: true });
   }, [stroopTrial]);
 
   // Single 100ms clock drives every phase's overall + per-item countdowns --
@@ -475,13 +626,13 @@ export default function EegThresholdTaskScreen({ navigation }) {
     if (phase !== 'quiz' || !mathDeadline) return;
     if (nowFine >= mathDeadline) {
       Keyboard.dismiss();
-      startNBack();
+      startPuzzle();
       return;
     }
     if (mathQuestionDeadline && nowFine >= mathQuestionDeadline && !mathFeedbackHandledRef.current) {
       mathTimeout();
     }
-  }, [phase, nowFine, mathDeadline, mathQuestionDeadline, mathTimeout, startNBack]);
+  }, [phase, nowFine, mathDeadline, mathQuestionDeadline, mathTimeout, startPuzzle]);
 
   useEffect(() => {
     if (phase !== 'quiz' || !mathFeedback) return undefined;
@@ -490,15 +641,30 @@ export default function EegThresholdTaskScreen({ navigation }) {
   }, [phase, mathFeedback, mathLevelIdx, nextMathProblem]);
 
   useEffect(() => {
-    if (phase !== 'nback' || !nbackDeadline) return;
-    if (nowFine >= nbackDeadline) {
+    if (phase !== 'puzzle' || !puzzleDeadline) return;
+    if (nowFine >= puzzleDeadline) {
+      puzzleGenRef.current += 1; // invalidate any in-flight playback timeouts
+      startSorter();
+    }
+  }, [phase, nowFine, puzzleDeadline, startSorter]);
+
+  useEffect(() => {
+    if (phase !== 'sorter' || !sorterDeadline) return;
+    if (nowFine >= sorterDeadline) {
       startStroop();
       return;
     }
-    if (nbackStimDeadline && nowFine >= nbackStimDeadline && !nbackResolvedRef.current) {
-      resolveNbackTrial(false);
+    if (sorterItemDeadline && nowFine >= sorterItemDeadline && !sorterResolvedRef.current) {
+      // Item reached the bottom unsorted -- same miss handling as a wrong
+      // tap (buzz + speed setback), just triggered by the clock instead
+      // of a tap.
+      sorterResolvedRef.current = true;
+      Vibration.vibrate(SORTER_BUZZ_PATTERN);
+      setSorterScore((s) => ({ ...s, misses: s.misses + 1 }));
+      setSorterDropMs((d) => Math.min(SORTER_DROP_MS_START, d * SORTER_DROP_SETBACK));
+      setSorterFeedback({ correct: false });
     }
-  }, [phase, nowFine, nbackDeadline, nbackStimDeadline, resolveNbackTrial, startStroop]);
+  }, [phase, nowFine, sorterDeadline, sorterItemDeadline, startStroop]);
 
   useEffect(() => {
     if (phase !== 'stroop' || !stroopDeadline) return;
@@ -594,8 +760,24 @@ export default function EegThresholdTaskScreen({ navigation }) {
   const mathQuestionFrac = mathQuestionDeadline && mathProblem
     ? Math.max(0, Math.min(1, (mathQuestionDeadline - nowFine) / (MATH_LEVELS[mathLevelIdx].timeSec * 1000)))
     : 1;
-  const nbackSecondsLeft = nbackDeadline ? Math.max(0, Math.ceil((nbackDeadline - nowFine) / 1000)) : NBACK_DURATION_SEC;
+  const puzzleSecondsLeft = puzzleDeadline ? Math.max(0, Math.ceil((puzzleDeadline - nowFine) / 1000)) : PUZZLE_DURATION_SEC;
+  const sorterSecondsLeft = sorterDeadline ? Math.max(0, Math.ceil((sorterDeadline - nowFine) / 1000)) : SORTER_DURATION_SEC;
+  const sorterFallFrac = sorterItemDeadline
+    ? Math.max(0, Math.min(1, 1 - (sorterItemDeadline - nowFine) / sorterDropMs))
+    : 0;
   const stroopSecondsLeft = stroopDeadline ? Math.max(0, Math.ceil((stroopDeadline - nowFine) / 1000)) : STROOP_DURATION_SEC;
+  const stroopTrialFrac = stroopTrialDeadline
+    ? Math.max(0, Math.min(1, (stroopTrialDeadline - nowFine) / stroopTrialTotalMs))
+    : 1;
+  const stroopUrgent = phase === 'stroop' && !stroopFeedback && stroopTrialFrac <= STROOP_URGENCY_FRAC;
+  const stroopPulseOn = stroopUrgent && Math.floor(nowFine / 300) % 2 === 0;
+
+  useEffect(() => {
+    if (!stroopUrgent) return undefined;
+    Vibration.vibrate(80);
+    const id = setInterval(() => Vibration.vibrate(80), STROOP_VIBRATE_INTERVAL_MS);
+    return () => { clearInterval(id); Vibration.cancel(); };
+  }, [stroopUrgent]);
 
   return (
     <ScreenBackground>
@@ -607,13 +789,14 @@ export default function EegThresholdTaskScreen({ navigation }) {
               <Text style={[styles.title, { color: t.text }]}>Personalize Your Threshold</Text>
             </View>
             <Text style={[styles.body, { color: t.textMuted }]}>
-              About 6 minutes, four rounds back to back -- serial subtraction (count down by 13,
-              any mistake restarts you), a speed maths quiz that gets harder the better you do, a
-              dual n-back memory task, then a color-word (Stroop) test. Deliberately sustained,
-              real pressure -- a short task barely registers before your body's response even
-              catches up, so this measures how YOUR signal moves between rest and a genuine
-              high-load state, for both your Ring and EEG, instead of relying on a population
-              average.
+              About 8 minutes, five rounds back to back -- serial subtraction (count down by 13,
+              any mistake restarts you), a speed maths quiz with unpredictable question types that
+              gets harder the better you do, a sequence-recall puzzle, a ticking-clock sorter that
+              punishes any miss with a buzz and a real speed setback, then a color-word (Stroop)
+              test that randomly switches what it's asking each round. Deliberately sustained, real
+              pressure -- a short task barely registers before your body's response even catches up
+              -- so this measures how YOUR signal moves between rest and a genuine high-load state,
+              for both your Ring and EEG, instead of relying on a population average.
             </Text>
             <Button label="Start Task" onPress={startSerialSub} disabled={!userId} variant="primary" style={{ marginTop: 16 }} />
             <TouchableOpacity onPress={finish} activeOpacity={0.7} style={styles.skipRow}>
@@ -705,37 +888,106 @@ export default function EegThresholdTaskScreen({ navigation }) {
           </Card>
         )}
 
-        {phase === 'nback' && nbackCurrent && (
+        {phase === 'puzzle' && (
           <Card elevated style={styles.card}>
             <View style={styles.headerRow}>
-              <Text style={[styles.timer, { color: COLORS.brand }]}>{nbackSecondsLeft}s</Text>
+              <Text style={[styles.timer, { color: COLORS.brand }]}>{puzzleSecondsLeft}s</Text>
               <Text style={[styles.scoreText, { color: t.textMuted }]}>
-                N={nbackLevel} · {nbackScore.hits} hits · {nbackScore.falseAlarms} false alarms
+                Length {puzzleLen} · {puzzleScore.correct} solved · {puzzleScore.misses} missed
               </Text>
             </View>
             <Text style={[styles.stroopInstruction, { color: t.textMuted }]}>
-              Tap MATCH if this letter is the same as {nbackLevel} step{nbackLevel === 1 ? '' : 's'} back.
+              {puzzleSubPhase === 'showing'
+                ? 'Watch the sequence…'
+                : `Your turn — tap them in order (${puzzleInputIndex}/${puzzleSeqRef.current.length})`}
             </Text>
-            <Text style={[
-              styles.nbackLetter,
-              { color: t.text, borderColor: nbackLastOutcome === 'hit' || nbackLastOutcome === 'correctRejection' ? COLORS.normal : nbackLastOutcome ? COLORS.stress : 'transparent' },
-            ]}>
-              {nbackCurrent}
+
+            {puzzleFeedback ? (
+              <View style={styles.feedbackWrap}>
+                <Text style={[styles.feedbackText, { color: puzzleFeedback.correct ? COLORS.normal : COLORS.stress }]}>
+                  {puzzleFeedback.correct ? '✓ Solved!' : '✗ Wrong order'}
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.puzzleGrid}>
+                {Array.from({ length: PUZZLE_GRID_SIZE }, (_, i) => i).map((i) => (
+                  <TouchableOpacity
+                    key={i}
+                    disabled={puzzleSubPhase !== 'input'}
+                    onPress={() => tapPuzzleTile(i)}
+                    style={[
+                      styles.puzzleTile,
+                      {
+                        backgroundColor: PUZZLE_TILE_COLORS[i],
+                        opacity: puzzleShowingIndex === i ? 1 : puzzleSubPhase === 'showing' ? 0.25 : 0.85,
+                        transform: [{ scale: puzzleShowingIndex === i ? 1.08 : 1 }],
+                      },
+                    ]}
+                  />
+                ))}
+              </View>
+            )}
+          </Card>
+        )}
+
+        {phase === 'sorter' && sorterItemValue != null && (
+          <Card elevated style={styles.card}>
+            <View style={styles.headerRow}>
+              <Text style={[styles.timer, { color: COLORS.brand }]}>{sorterSecondsLeft}s</Text>
+              <Text style={[styles.scoreText, { color: t.textMuted }]}>
+                {sorterScore.correct} sorted · {sorterScore.misses} missed
+              </Text>
+            </View>
+            <Text style={[styles.stroopInstruction, { color: t.textMuted }]}>
+              Tap EVEN or ODD before it hits the bottom.
             </Text>
-            <Button label="MATCH!" onPress={tapNbackMatch} variant="primary" style={{ marginTop: 8 }} />
+
+            {sorterFeedback ? (
+              <View style={styles.feedbackWrap}>
+                <Text style={[styles.feedbackText, { color: sorterFeedback.correct ? COLORS.normal : COLORS.stress }]}>
+                  {sorterFeedback.correct ? '✓ Sorted!' : '✗ Missed!'}
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.sorterTrack}>
+                <Text style={[styles.sorterItem, { color: t.text, top: sorterFallFrac * (SORTER_TRACK_HEIGHT - 44) }]}>
+                  {sorterItemValue}
+                </Text>
+              </View>
+            )}
+
+            <View style={styles.sorterBinRow}>
+              <TouchableOpacity
+                disabled={!!sorterFeedback}
+                onPress={() => resolveSorterTap('even')}
+                style={[styles.sorterBin, { backgroundColor: COLORS.brand, opacity: sorterFeedback ? 0.5 : 1 }]}
+              >
+                <Text style={styles.sorterBinText}>EVEN</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                disabled={!!sorterFeedback}
+                onPress={() => resolveSorterTap('odd')}
+                style={[styles.sorterBin, { backgroundColor: COLORS.stress, opacity: sorterFeedback ? 0.5 : 1 }]}
+              >
+                <Text style={styles.sorterBinText}>ODD</Text>
+              </TouchableOpacity>
+            </View>
           </Card>
         )}
 
         {phase === 'stroop' && stroopTrial && (
-          <Card elevated style={styles.card}>
+          <Card elevated style={[styles.card, stroopPulseOn && { borderColor: COLORS.stress, borderWidth: 2 }]}>
+            {stroopPulseOn && <View style={[styles.urgentOverlay, { backgroundColor: COLORS.stress }]} pointerEvents="none" />}
             <View style={styles.headerRow}>
-              <Text style={[styles.timer, { color: COLORS.brand }]}>{stroopSecondsLeft}s</Text>
+              <Text style={[styles.timer, { color: stroopUrgent ? COLORS.stress : COLORS.brand }]}>{stroopSecondsLeft}s</Text>
               <Text style={[styles.scoreText, { color: t.textMuted }]}>
                 Streak {stroopStreak} · {stroopScore.correct}/{stroopScore.total} correct
               </Text>
             </View>
-            <Text style={[styles.stroopInstruction, { color: t.textMuted }]}>
-              Tap the COLOR the word is printed in -- not what it says.
+            <Text style={[styles.stroopInstruction, { color: COLORS.brand }]}>
+              {stroopTrial.askMode === 'ink'
+                ? 'Tap the INK COLOR — ignore the word'
+                : "Tap the color the WORD SAYS — ignore the ink"}
             </Text>
 
             {stroopFeedback ? (
@@ -774,7 +1026,8 @@ export default function EegThresholdTaskScreen({ navigation }) {
             </View>
             <Text style={[styles.body, { color: t.textMuted }]}>
               Serial subtraction: best streak {serialBestStreak}, {serialRestarts} restart{serialRestarts === 1 ? '' : 's'}.
-              Maths: {mathScore.correct}/{mathScore.total} correct. N-back: {nbackScore.hits} hits, {nbackScore.falseAlarms} false alarms.
+              Maths: {mathScore.correct}/{mathScore.total} correct. Puzzle: {puzzleScore.correct} solved, {puzzleScore.misses} missed.
+              Sorter: {sorterScore.correct} sorted, {sorterScore.misses} missed.
               Stroop: {stroopScore.correct}/{stroopScore.total} correct.
               Each device reports independently below -- one taking longer doesn't hold up the other.
             </Text>
@@ -836,10 +1089,16 @@ const styles = StyleSheet.create({
   stroopWord: { fontSize: 34, fontWeight: '900', textAlign: 'center', marginVertical: 20 },
   stroopGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 12, marginTop: 8 },
   stroopSwatch: { width: 64, height: 64, borderRadius: 14 },
-  nbackLetter: {
-    fontSize: 56, fontWeight: '900', textAlign: 'center', marginVertical: 20,
-    borderWidth: 3, borderRadius: 20, paddingVertical: 10,
+  puzzleGrid: {
+    flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center',
+    width: 3 * 68 + 2 * 10, alignSelf: 'center', gap: 10, marginVertical: 12,
   },
+  puzzleTile: { width: 68, height: 68, borderRadius: 14 },
+  sorterTrack: { height: SORTER_TRACK_HEIGHT, marginVertical: 8 },
+  sorterItem: { position: 'absolute', alignSelf: 'center', fontSize: 34, fontWeight: '900' },
+  sorterBinRow: { flexDirection: 'row', gap: 12, marginTop: 8 },
+  sorterBin: { flex: 1, paddingVertical: 18, borderRadius: 16, alignItems: 'center' },
+  sorterBinText: { color: '#fff', fontSize: 16, fontWeight: '900', letterSpacing: 0.5 },
   urgentOverlay: { ...StyleSheet.absoluteFillObject, opacity: 0.08, borderRadius: 24 },
   resultRow: { paddingVertical: 10, marginTop: 6, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#ffffff22' },
   resultRowHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
