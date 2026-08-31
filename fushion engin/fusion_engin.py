@@ -145,6 +145,7 @@ def compute_realtime_multimodal_fusion(modalities_data: dict) -> dict:
     raw_weights = {}
     probs = {}
     thresholds = {}
+    threshold_scales = {}
 
     for m in MODALITIES:
         mod_info = modalities_data.get(m) or {}
@@ -153,6 +154,7 @@ def compute_realtime_multimodal_fusion(modalities_data: dict) -> dict:
             raw_weights[m] = 0.0
             probs[m] = 0.0
             thresholds[m] = None
+            threshold_scales[m] = None
             continue
 
         conf = normalize_to_unit(mod_info.get("confidence"), 1.0)
@@ -163,6 +165,7 @@ def compute_realtime_multimodal_fusion(modalities_data: dict) -> dict:
         raw_weights[m] = quality * conf * acc
         probs[m] = normalize_to_unit(prob, 1.0)
         thresholds[m] = mod_info.get("threshold")
+        threshold_scales[m] = mod_info.get("threshold_scale")
 
         # Plausibility gate -- see EXTREME_PROB_EPS's docstring. Zeroing the
         # WEIGHT (not probs[m] itself, which stays as reported for anyone
@@ -226,10 +229,54 @@ def compute_realtime_multimodal_fusion(modalities_data: dict) -> dict:
         if (modalities_data.get(m) or {}).get("prob") is not None and _is_implausibly_extreme(probs[m])
     ]
 
+    # fused_relative_index -- ADDITIVE, does not change fused_stress_
+    # probability/threshold/label above (those keep their exact existing
+    # values/meaning for every current consumer, e.g. relaxation_guide's
+    # get_latest_prediction()). fused_stress_label is ALREADY algebraically
+    # equivalent to a margin-based decision (fused_prob - fused_threshold
+    # ==  the weighted average of each modality's OWN (prob - threshold),
+    # since both use the same weights) -- so this isn't a different
+    # decision, it's a differently-SCALED number for anyone who needs a
+    # value that's comparable across modalities/users, which raw
+    # fused_stress_probability is not (EEG's and Ring's population
+    # thresholds differ by ~0.05-0.08, before personal calibration adds
+    # more per-user spread on top -- 0.5 has no fixed meaning on the raw
+    # scale, but 0 always means "exactly at this window's combined
+    # personal threshold" here).
+    #
+    # Each modality's margin (prob - threshold) is normalized by ITS OWN
+    # threshold_scale (EEG: MAX_THRESHOLD_SHIFT ~0.11, derived from real
+    # SAM40 population spread; Ring: PERSONAL_THRESHOLD_MIN_SEPARATION
+    # ~0.10, hand-picked -- see sam40/decision.py and physiological/
+    # predictor.py) BEFORE combining with the same reliability weights
+    # used above -- so "distance above/below threshold" is expressed in
+    # units of "how big a shift this modality's own calibration considers
+    # meaningful", not raw probability points, which aren't directly
+    # comparable between two different classifiers.
+    relative_capable = [
+        m for m in MODALITIES
+        if raw_weights[m] > 0 and thresholds[m] is not None
+        and threshold_scales[m] is not None and threshold_scales[m] > 0
+    ]
+    if relative_capable:
+        rw_total = sum(raw_weights[m] for m in relative_capable)
+        fused_relative_index = sum(
+            ((probs[m] - thresholds[m]) / threshold_scales[m]) * (raw_weights[m] / rw_total)
+            for m in relative_capable
+        )
+    else:
+        # Only reachable if every active, threshold-capable modality is
+        # missing its threshold_scale (a caller not yet passing it) --
+        # None here, not a guessed fallback, so a caller not supplying
+        # threshold_scale gets an honest "not computed" rather than a
+        # silently wrong number.
+        fused_relative_index = None
+
     return {
         "fused_stress_probability": fused_prob,
         "fused_stress_threshold": fused_threshold,
         "fused_stress_label": None if fused_prob is None else ("HIGH_STRESS" if fused_prob >= fused_threshold else "NORMAL"),
+        "fused_relative_index": fused_relative_index,
         "active_modalities": [m for m in MODALITIES if raw_weights[m] > 0],
         "modality_weights": norm_weights,
         "modality_concordance": modality_concordance,
