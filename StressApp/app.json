@@ -46,7 +46,8 @@
     "owner": "mindpulse-researchs-team",
     "plugins": [
       "expo-font",
-      "expo-asset"
+      "expo-asset",
+      "./plugins/withPhenocareAccessibilityService.js"
     ]
   }
 }

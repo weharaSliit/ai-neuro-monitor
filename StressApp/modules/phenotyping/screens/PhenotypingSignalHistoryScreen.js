@@ -58,6 +58,18 @@ const SIGNAL_DETAILS_CONFIG = {
     }
 };
 
+// The 5 real behavioral features the model actually tracks (see
+// predictor.py) -- used by "Today's Overview" below so that section always
+// shows a live cross-feature snapshot, regardless of which single signal
+// category (keyboard/scroll/tilt/...) the rest of this screen is focused on.
+const ALL_FEATURES = [
+    { id: 'avg_dwell', name: 'Dwell', unit: 'ms', icon: '⌨️', decimals: 0 },
+    { id: 'avg_flight', name: 'Flight', unit: 'ms', icon: '✈️', decimals: 0 },
+    { id: 'scroll_velocity', name: 'Scroll', unit: 'px/s', icon: '📜', decimals: 0 },
+    { id: 'tilt_angle', name: 'Tilt', unit: '°', icon: '📐', decimals: 1 },
+    { id: 'cpm', name: 'Typing', unit: 'cpm', icon: '🔡', decimals: 0 },
+];
+
 function parseDbKeyToDate(key) {
     try {
         const parts = key.split('_');
@@ -344,6 +356,22 @@ export default function PhenotypingSignalHistoryScreen({ navigation, route }) {
 
     const primaryMeasureData = measuresData[0];
 
+    // Live cross-feature snapshot for "Today's Overview" -- reads all 5 real
+    // fields directly off the most recent real data_logs entry for the
+    // selected day (chronologically last in activeDay.entries), instead of
+    // repeating just the 1-3 measures this particular signal page tracks.
+    const liveFeatureValues = useMemo(() => {
+        const latestEntry = activeDay.entries.length ? activeDay.entries[activeDay.entries.length - 1] : null;
+        return ALL_FEATURES.map((f) => {
+            const raw = latestEntry ? latestEntry[f.id] : null;
+            const val = typeof raw === 'number' ? raw : null;
+            return {
+                ...f,
+                displayVal: val !== null ? `${f.decimals === 0 ? Math.round(val) : val.toFixed(f.decimals)} ${f.unit}` : 'pending',
+            };
+        });
+    }, [activeDay]);
+
     const formattedBaseline = (key, unit, fallback) => {
         const mean = baselines?.[key]?.mean;
         if (mean != null && mean > 0) {
@@ -507,11 +535,11 @@ export default function PhenotypingSignalHistoryScreen({ navigation, route }) {
                         />
                     </View>
                     <View style={styles.todaySubrow}>
-                        {measuresData.map(({ measure, displayVal }) => (
-                            <View key={measure.id} style={[styles.todaySubCard, { backgroundColor: t.pillBg }]}>
-                                <Text style={[styles.todaySubLabel, { color: t.textMuted }]}>{measure.name.toUpperCase()}</Text>
+                        {liveFeatureValues.map((f) => (
+                            <View key={f.id} style={[styles.todaySubCard, { backgroundColor: t.pillBg }]}>
+                                <Text style={[styles.todaySubLabel, { color: t.textMuted }]}>{f.icon} {f.name}</Text>
                                 <Text style={[styles.todaySubVal, { color: t.text }]}>
-                                    {displayVal}
+                                    {f.displayVal}
                                 </Text>
                             </View>
                         ))}
@@ -629,10 +657,10 @@ const styles = StyleSheet.create({
     // Today Overview
     todayTitle: { fontSize: 15, fontWeight: '850' },
     todayChartWrap: { marginVertical: 12 },
-    todaySubrow: { flexDirection: 'row', gap: 10, marginTop: 14, marginBottom: 12 },
-    todaySubCard: { flex: 1, borderRadius: 14, padding: 12 },
-    todaySubLabel: { fontSize: 10, fontWeight: '800', textTransform: 'uppercase' },
-    todaySubVal: { fontSize: 14, fontWeight: '900', marginTop: 4 },
+    todaySubrow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 14, marginBottom: 12 },
+    todaySubCard: { flexBasis: '30%', flexGrow: 1, minWidth: 84, borderRadius: 14, padding: 10 },
+    todaySubLabel: { fontSize: 9.5, fontWeight: '800' },
+    todaySubVal: { fontSize: 13, fontWeight: '900', marginTop: 4 },
     todaySummaryText: { fontSize: 11, fontWeight: '600', marginTop: 2, textAlign: 'center' },
 
     // Collapsible Accordion

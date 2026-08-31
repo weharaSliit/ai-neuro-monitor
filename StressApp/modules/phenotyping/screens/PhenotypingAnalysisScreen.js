@@ -22,13 +22,36 @@ import { useTheme } from '../../physiological/config/ThemeContext';
 import { usePhenotypingDeviceId } from '../utils/deviceIdentity';
 import { computeCalibrationStatus } from '../utils/calibrationStatus';
 
-const CHART_WIDTH = Dimensions.get('window').width - 2 * 16 - 2 * 16;
 const CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
 const DRIFT_CONFIRM_TARGET = 3;
 
 function computeZ(val, mean, std) {
     if (val === undefined || val === null || mean === undefined || mean === null || !std || std === 0) return 0;
     return Math.min(Math.abs((val - mean) / std), 4.0);
+}
+
+// Groups a chronological array into `bucketCount` contiguous chunks so a
+// chart always renders a fixed, small number of points regardless of how
+// many thousand raw behavioral windows exist (e.g. 5,000+ windows over a
+// week collapse into ~24 hourly buckets instead of one point each).
+function bucketize(items, bucketCount) {
+    if (items.length <= bucketCount) return items.map((it) => [it]);
+    const buckets = [];
+    const chunkSize = items.length / bucketCount;
+    for (let b = 0; b < bucketCount; b++) {
+        const start = Math.floor(b * chunkSize);
+        const end = Math.floor((b + 1) * chunkSize);
+        buckets.push(items.slice(start, Math.max(start + 1, end)));
+    }
+    return buckets;
+}
+
+// Plain-language read of the current composite deviation stage, so the
+// primary message doesn't lean on a raw Z-score for a non-technical viewer.
+function stageCopy(stage) {
+    if (stage === 'stress') return 'Pre-stress pattern detected — well above your calm baseline.';
+    if (stage === 'drift') return "You're trending above your normal range.";
+    return "You're within your normal range right now.";
 }
 
 function buildWeeklyChart(predictions) {
@@ -137,6 +160,29 @@ const FEATURE_METADATA = {
     },
 };
 
+const FEATURE_ORDER = ['avg_dwell', 'avg_flight', 'scroll_velocity', 'tilt_angle', 'cpm'];
+
+// Maps a feature id to the signalId PhenotypingSignalHistoryScreen expects
+// (its SIGNAL_DETAILS_CONFIG groups dwell+flight together under 'keyboard').
+const FEATURE_TO_SIGNAL_ID = {
+    avg_dwell: 'keyboard',
+    avg_flight: 'keyboard',
+    scroll_velocity: 'scroll',
+    tilt_angle: 'tilt',
+    cpm: 'cpm',
+};
+
+// Reuses the Onboarding screen's "Step N badge + title + desc" roadmap-card
+// pattern to explain, in the same visual language, how 5 raw signals become
+// one classification decision -- placed right before the real-data section
+// it introduces.
+const CLASSIFICATION_STEPS = [
+    { title: '5 signals measured', desc: 'Dwell, flight, scroll speed, device tilt & typing speed captured every window.' },
+    { title: 'Each becomes a Z-score', desc: 'How far this window sits from YOUR personal calm baseline, not a population average.' },
+    { title: 'Averaged into one number', desc: 'Composite Z is the plain average of all 5 deviations — no hidden weighting.' },
+    { title: 'Confirmed by the anomaly model', desc: 'A One-Class SVM must independently agree before a Pre-Stress alert is raised.' },
+];
+
 export default function PhenotypingAnalysisScreen({ navigation, route }) {
     const { isDark, theme: t, COLORS } = useTheme();
     const ownDeviceId = usePhenotypingDeviceId();
@@ -162,6 +208,13 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
         }
         return filteredTabs[0]?.id || 'overview';
     });
+
+    // Measured on-screen width of the chart's card body (via onLayout below)
+    // instead of a Dimensions-minus-fixed-guess constant -- the guess doesn't
+    // account for the Card's actual padding on every device size, which left
+    // a visible dead gap between the chart and the card's right edge. Falls
+    // back to CHART_WIDTH only for the first frame before layout fires.
+    const [chartWidth, setChartWidth] = useState(CHART_WIDTH);
 
     const [timeRange, setTimeRange] = useState('7'); // '7' (7 days) or '28' (28 days)
     const [selectedFeature, setSelectedFeature] = useState('composite');
@@ -282,6 +335,19 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
         }));
     }, [allEntries, timeRange]);
 
+    // How many distinct calendar days of REAL data actually exist for this
+    // device. A brand-new account has the same handful of windows whether
+    // you ask for 7 or 28 days -- there's nothing further back to find, so
+    // both views legitimately render the same chart. Used below to say that
+    // honestly instead of silently presenting a 28-day view that's really
+    // just today's data relabeled.
+    const dataCoverageDays = useMemo(() => {
+        if (allEntries.length === 0) return 0;
+        const times = allEntries.map(([key, data]) => parseEntryDate(key, data).getTime());
+        const spanMs = Math.max(...times) - Math.min(...times);
+        return Math.max(1, Math.ceil(spanMs / (24 * 60 * 60 * 1000)) + 1);
+    }, [allEntries]);
+
     // 5 Feature Deviations Calculation — 100% derived from real user baselines
     const featureMetrics = useMemo(() => {
         const lw = latestWindow || {};
@@ -342,6 +408,18 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
         });
     }, [latestWindow, baselines, COLORS]);
 
+    // Which single feature's full detail panel is expanded below the tile
+    // row. When the composite view is selected, default to whichever real
+    // signal is currently deviating the most, so the detail panel is never
+    // just blank -- it surfaces the most relevant signal automatically.
+    const expandedFeature = useMemo(() => {
+        if (featureMetrics.length === 0) return null;
+        if (selectedFeature !== 'composite') {
+            return featureMetrics.find((f) => f.id === selectedFeature) || featureMetrics[0];
+        }
+        return [...featureMetrics].sort((a, b) => b.z - a.z)[0];
+    }, [selectedFeature, featureMetrics]);
+
     // Composite Z-score derived from real predictions or feature deviations
     const compositeZ = useMemo(() => {
         if (predictions && predictions.length > 0) {
@@ -372,26 +450,67 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
         return { normal, drift, stress, total: predictions.length };
     }, [predictions]);
 
-    // Telemetry LineChart Points from real user window data
+    // Per-feature classification breakdown — how often EACH of the 5 signals
+    // individually read as Normal/Drift/Stress, from the real per-feature
+    // z-scores the backend already persists on every prediction
+    // (z_dwell/z_flight/z_scroll/z_tilt/z_cpm in predictor.py). Answers
+    // "how does scrolling/typing/tilt etc. individually behave under stress."
+    const perFeatureDist = useMemo(() => {
+        const zKeyToFeature = {
+            z_dwell: 'avg_dwell',
+            z_flight: 'avg_flight',
+            z_scroll: 'scroll_velocity',
+            z_tilt: 'tilt_angle',
+            z_cpm: 'cpm',
+        };
+        const days = parseInt(timeRange, 10) || 7;
+        const cutoffTime = Date.now() - days * 24 * 60 * 60 * 1000;
+        const inRange = (predictions || []).filter((p) => p.timestamp && new Date(p.timestamp).getTime() > cutoffTime);
+        const source = inRange.length > 0 ? inRange : (predictions || []);
+
+        const result = {};
+        Object.entries(zKeyToFeature).forEach(([zKey, featureId]) => {
+            let normal = 0, drift = 0, stress = 0;
+            source.forEach((p) => {
+                const z = p[zKey];
+                if (typeof z !== 'number') return;
+                if (z > 2.0) stress++;
+                else if (z > 1.0) drift++;
+                else normal++;
+            });
+            result[featureId] = { normal, drift, stress, total: normal + drift + stress };
+        });
+        return result;
+    }, [predictions, timeRange]);
+
+    // Telemetry LineChart Points from real user window data — bucketed to a
+    // fixed cap so the chart always fits on screen instead of scaling
+    // linearly with however many thousand raw windows exist (see bucketize).
     const telemetryPoints = useMemo(() => {
         if (windowSlice.length === 0) return [];
         const bl = baselines || {};
+        const bucketCount = timeRange === '28' ? 28 : 24;
+        const buckets = bucketize(windowSlice, bucketCount);
 
         if (selectedFeature === 'composite') {
-            return windowSlice.map((w) => {
-                const d = w.data || {};
-                const zs = [
-                    computeZ(d.avg_dwell, bl.avg_dwell?.mean ?? 135, bl.avg_dwell?.std ?? 15),
-                    computeZ(d.avg_flight, bl.avg_flight?.mean ?? 215, bl.avg_flight?.std ?? 25),
-                    computeZ(d.scroll_velocity, bl.scroll_velocity?.mean ?? 750, bl.scroll_velocity?.std ?? 120),
-                    computeZ(d.tilt_angle, bl.tilt_angle?.mean ?? 59, bl.tilt_angle?.std ?? 8),
-                    computeZ(d.cpm, bl.cpm?.mean ?? 42, bl.cpm?.std ?? 6),
-                ];
-                const avgZ = zs.reduce((a, b) => a + b, 0) / zs.length;
+            return buckets.map((group) => {
+                const zAvgs = group.map((w) => {
+                    const d = w.data || {};
+                    const zs = [
+                        computeZ(d.avg_dwell, bl.avg_dwell?.mean ?? 135, bl.avg_dwell?.std ?? 15),
+                        computeZ(d.avg_flight, bl.avg_flight?.mean ?? 215, bl.avg_flight?.std ?? 25),
+                        computeZ(d.scroll_velocity, bl.scroll_velocity?.mean ?? 750, bl.scroll_velocity?.std ?? 120),
+                        computeZ(d.tilt_angle, bl.tilt_angle?.mean ?? 59, bl.tilt_angle?.std ?? 8),
+                        computeZ(d.cpm, bl.cpm?.mean ?? 42, bl.cpm?.std ?? 6),
+                    ];
+                    return zs.reduce((a, b) => a + b, 0) / zs.length;
+                });
+                const avgZ = zAvgs.reduce((a, b) => a + b, 0) / zAvgs.length;
                 const pct = Math.min(100, Math.round((avgZ / 3.0) * 100));
                 return {
                     value: pct,
-                    date: w.date,
+                    date: group[group.length - 1].date,
+                    windowCount: group.length,
                 };
             });
         }
@@ -400,17 +519,21 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
         const mean = bl[selectedFeature]?.mean ?? meta.fallbackMean;
         const std = bl[selectedFeature]?.std ?? meta.fallbackStd;
 
-        return windowSlice.map((w) => {
-            const val = w.data?.[selectedFeature];
-            const num = typeof val === 'number' ? val : mean;
-            const z = computeZ(num, mean, std);
-            const pct = Math.min(100, Math.round((z / 3.0) * 100));
+        return buckets.map((group) => {
+            const zs = group.map((w) => {
+                const val = w.data?.[selectedFeature];
+                const num = typeof val === 'number' ? val : mean;
+                return computeZ(num, mean, std);
+            });
+            const avgZ = zs.reduce((a, b) => a + b, 0) / zs.length;
+            const pct = Math.min(100, Math.round((avgZ / 3.0) * 100));
             return {
                 value: pct,
-                date: w.date,
+                date: group[group.length - 1].date,
+                windowCount: group.length,
             };
         });
-    }, [windowSlice, selectedFeature, baselines]);
+    }, [windowSlice, selectedFeature, baselines, timeRange]);
 
     // Weekly Overview stats derived dynamically from real predictions
     const { weeklyScores, avgScore, peakDay, calmDay, detectionStats } = useMemo(() => {
@@ -436,11 +559,33 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
 
         const days = parseInt(timeRange, 10) || 7;
         const cutoffTime = Date.now() - days * 24 * 60 * 60 * 1000;
-        const rangePreds = predictions.filter((p) => p.timestamp && new Date(p.timestamp).getTime() > cutoffTime);
-        const episodes = rangePreds.filter((p) => p.is_anomaly || (p.composite_z && p.composite_z > 2.0)).length;
+        const rangePreds = predictions
+            .filter((p) => p.timestamp && new Date(p.timestamp).getTime() > cutoffTime)
+            .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
         const total = rangePreds.length;
-        const normalCorrect = rangePreds.filter((p) => !p.is_anomaly && (p.stress_score || 0) < 0.4).length;
-        const confidence = total > 0 ? Math.round((normalCorrect / total) * 100) : '--';
+
+        // Real episode count: merge CONSECUTIVE flagged windows into one
+        // episode (rising-edge count) instead of counting every individually
+        // flagged window as its own "episode" -- the previous version showed
+        // 3,649 "episodes" out of 4,983 windows (73%!), which isn't what
+        // "episode" means to anyone reading it and made an otherwise calm
+        // week look like a near-constant crisis.
+        let episodes = 0;
+        let inEpisode = false;
+        rangePreds.forEach((p) => {
+            const flagged = p.is_anomaly || (typeof p.composite_z === 'number' && p.composite_z > 2.0);
+            if (flagged && !inEpisode) episodes++;
+            inEpisode = flagged;
+        });
+
+        // Real model confidence: average the `confidence` field the backend
+        // already computes per prediction (predictor.py) instead of the
+        // previous stand-in ("% of windows that were calm & non-anomalous",
+        // a completely different quantity mislabeled as "confidence").
+        const confidences = rangePreds.map((p) => p.confidence).filter((c) => typeof c === 'number');
+        const confidence = confidences.length > 0
+            ? Math.round((confidences.reduce((a, b) => a + b, 0) / confidences.length) * 100)
+            : '--';
 
         return {
             weeklyScores: ws,
@@ -647,17 +792,15 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                 <View style={{ flex: 1, marginRight: 8 }}>
                                     <Text style={[styles.cardTitle, { color: t.text }]}>
                                         {selectedFeature === 'composite'
-                                            ? (timeRange === '28'
-                                                ? `28-DAY BEHAVIORAL DRIFT (${windowSlice.length} WINDOWS)`
-                                                : `CALIBRATION DRIFT CURVE (${windowSlice.length} WINDOWS)`)
-                                            : `${FEATURE_METADATA[selectedFeature]?.name.toUpperCase()} DEVIATION CURVE`}
+                                            ? (timeRange === '28' ? 'Your Rhythm — Last 28 Days' : 'Your Rhythm This Week')
+                                            : `${FEATURE_METADATA[selectedFeature]?.name} Over Time`}
                                     </Text>
                                     <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 2 }]}>
-                                        {selectedFeature === 'composite'
-                                            ? (timeRange === '28'
-                                                ? 'Long-range baseline corridor with deviation highlights'
-                                                : 'Horizontal pan enabled · Tap points for exact timestamps & delta')
-                                            : FEATURE_METADATA[selectedFeature]?.description}
+                                        {dataCoverageDays > 0 && dataCoverageDays < parseInt(timeRange, 10)
+                                            ? `Showing all ${dataCoverageDays} day${dataCoverageDays === 1 ? '' : 's'} of data collected so far — same as the 7D/28D view will show until more history builds up.`
+                                            : selectedFeature === 'composite'
+                                                ? 'Tap a point on the line for that moment’s detail'
+                                                : FEATURE_METADATA[selectedFeature]?.description}
                                     </Text>
                                 </View>
                                 <View style={{ backgroundColor: timeRange === '28' ? COLORS.brand + '15' : COLORS.normalSoft, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 }}>
@@ -665,12 +808,29 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                 </View>
                             </View>
 
+                            {/* Plain-language hero status — the headline answer, Z-score is secondary */}
+                            {selectedFeature === 'composite' && (
+                                <View style={[styles.heroRow, { backgroundColor: overallStateColor + '12' }]}>
+                                    <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: overallStateColor }} />
+                                    <Text style={[styles.heroText, { color: overallStateColor }]} numberOfLines={2}>
+                                        {stageCopy(compositeZ > 2.0 ? 'stress' : compositeZ > 1.0 ? 'drift' : 'normal')}
+                                    </Text>
+                                    <Text style={[styles.heroZ, { color: overallStateColor }]}>Z {compositeZ.toFixed(2)}</Text>
+                                </View>
+                            )}
+
                             {telemetryPoints.length > 1 ? (
-                                <View style={{ marginTop: 14 }}>
+                                <View
+                                    style={{ marginTop: 14 }}
+                                    onLayout={(e) => {
+                                        const w = Math.round(e.nativeEvent.layout.width);
+                                        if (w > 0 && Math.abs(w - chartWidth) > 1) setChartWidth(w);
+                                    }}
+                                >
                                     <LineChart
                                         points={telemetryPoints}
                                         color={timeRange === '28' ? COLORS.brand : overallStateColor}
-                                        width={CHART_WIDTH}
+                                        width={chartWidth}
                                         height={timeRange === '28' ? 180 : 150}
                                         maxValue={100}
                                         hideValues
@@ -681,24 +841,8 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                         baseline2Label={timeRange === '28' ? 'Normal upper limit (Z>1.0)' : 'Drift threshold (Z>1.0)'}
                                         baseline2Color={COLORS.warning}
                                         colorZones
+                                        fitToWidth
                                     />
-                                    {/* 28D: Normal baseline band legend */}
-                                    {timeRange === '28' && (
-                                        <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 16, marginTop: 8 }}>
-                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                                <View style={{ width: 12, height: 3, borderRadius: 2, backgroundColor: COLORS.normal }} />
-                                                <Text style={{ fontSize: 9, fontWeight: '700', color: COLORS.normal }}>Normal Baseline</Text>
-                                            </View>
-                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                                <View style={{ width: 12, height: 3, borderRadius: 2, backgroundColor: COLORS.warning }} />
-                                                <Text style={{ fontSize: 9, fontWeight: '700', color: COLORS.warning }}>Drift Zone</Text>
-                                            </View>
-                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                                <View style={{ width: 12, height: 3, borderRadius: 2, backgroundColor: COLORS.stress }} />
-                                                <Text style={{ fontSize: 9, fontWeight: '700', color: COLORS.stress }}>Anomaly</Text>
-                                            </View>
-                                        </View>
-                                    )}
                                 </View>
                             ) : (
                                 <Text style={[styles.cardSub, { color: t.textMuted, textAlign: 'center', marginVertical: 32 }]}>
@@ -707,25 +851,41 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                             )}
                         </Card>
 
-                        {/* 5-Feature Baseline & Deviation Breakdown */}
+                        {/* Compact Feature Tiles + Single Expanded Detail */}
                         <Card elevated style={styles.card}>
-                            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 4 }]}>
-                                {timeRange === '28' ? '5-Feature Baseline & Deviation Map' : '5-Feature Baseline & Stage Ranges'}
-                            </Text>
-                            <Text style={[styles.cardSub, { color: t.textMuted, marginBottom: 14 }]}>
-                                {timeRange === '28'
-                                    ? 'Visual comparison of each biometric against personal baseline corridor'
-                                    : 'Tap any biometric feature below to plot its dedicated telemetry curve above.'}
+                            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 4 }]}>5 Signals At a Glance</Text>
+                            <Text style={[styles.cardSub, { color: t.textMuted, marginBottom: 12 }]}>
+                                Tap a signal to see its full baseline & range detail below.
                             </Text>
 
-                            {(timeRange === '7' && selectedFeature === 'composite'
-                                ? featureMetrics
-                                : timeRange === '7'
-                                    ? featureMetrics.filter((f) => f.id === selectedFeature)
-                                    : featureMetrics
-                            ).map((f) => {
-                                const isSelected = selectedFeature === f.id;
-                                // Visual bar calculation: position current value between normal and stress
+                            <View style={styles.tileGrid}>
+                                {featureMetrics.map((f) => {
+                                    const isExpanded = expandedFeature?.id === f.id;
+                                    return (
+                                        <TouchableOpacity
+                                            key={f.id}
+                                            activeOpacity={0.75}
+                                            onPress={() => setSelectedFeature(f.id)}
+                                            style={[
+                                                styles.featureTile,
+                                                {
+                                                    backgroundColor: isExpanded ? COLORS.brand + '10' : t.surface,
+                                                    borderColor: isExpanded ? COLORS.brand : t.border,
+                                                },
+                                            ]}
+                                        >
+                                            <Text style={{ fontSize: 16 }}>{f.icon}</Text>
+                                            <Text style={[styles.featureTileName, { color: t.text }]} numberOfLines={1}>{f.name}</Text>
+                                            <View style={[styles.miniBadge, { backgroundColor: f.stageColor + '20', marginTop: 4 }]}>
+                                                <Text style={[styles.miniBadgeText, { color: f.stageColor }]}>{f.stageLabel}</Text>
+                                            </View>
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                            </View>
+
+                            {expandedFeature && (() => {
+                                const f = expandedFeature;
                                 const normalMax = f.baselineMean + f.baselineStd;
                                 const stressThreshold = f.baselineMean + 2 * f.baselineStd;
                                 const rangeSpan = stressThreshold - (f.baselineMean - f.baselineStd);
@@ -733,54 +893,28 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                 const currentPct = f.rawVal !== null && rangeSpan > 0
                                     ? Math.min(100, Math.max(0, ((f.rawVal - (f.baselineMean - f.baselineStd)) / rangeSpan) * 100))
                                     : 0;
-
                                 return (
-                                    <TouchableOpacity
-                                        key={f.id}
-                                        activeOpacity={0.7}
-                                        onPress={() => setSelectedFeature(f.id)}
-                                        style={[
-                                            styles.featureCard,
-                                            {
-                                                backgroundColor: isSelected ? COLORS.brand + '10' : t.surface,
-                                                borderColor: isSelected ? COLORS.brand : t.border,
-                                            },
-                                        ]}
-                                    >
+                                    <View style={[styles.expandedPanel, { borderColor: t.border }]}>
                                         <View style={styles.rowBetween}>
-                                            <View style={styles.rowGap}>
-                                                <Text style={{ fontSize: 18 }}>{f.icon}</Text>
-                                                <View>
-                                                    <Text style={[styles.featureName, { color: t.text }]}>{f.name}</Text>
-                                                    <Text style={[styles.featureBaseline, { color: t.textMuted }]}>
-                                                        Baseline: {f.baselineStr}
-                                                    </Text>
-                                                </View>
+                                            <View>
+                                                <Text style={[styles.featureName, { color: t.text }]}>{f.icon} {f.name}</Text>
+                                                <Text style={[styles.featureBaseline, { color: t.textMuted }]}>Baseline: {f.baselineStr}</Text>
                                             </View>
                                             <View style={{ alignItems: 'flex-end' }}>
                                                 <Text style={[styles.featureValue, { color: f.stageColor }]}>{f.current}</Text>
-                                                <View style={[styles.miniBadge, { backgroundColor: f.stageColor + '20' }]}>
-                                                    <Text style={[styles.miniBadgeText, { color: f.stageColor }]}>
-                                                        Z = {f.z.toFixed(2)} · {f.stageLabel}
-                                                    </Text>
-                                                </View>
+                                                <Text style={{ fontSize: 9.5, fontWeight: '700', color: t.textMuted }}>Z = {f.z.toFixed(2)}</Text>
                                             </View>
                                         </View>
 
-                                        {/* Visual Bar: Normal vs Stress Range Comparison */}
                                         <View style={{ marginTop: 10 }}>
-                                            {/* Range Bar Track */}
                                             <View style={{ height: 22, borderRadius: 11, overflow: 'hidden', flexDirection: 'row', backgroundColor: t.pillBg }}>
-                                                {/* Normal Zone */}
                                                 <View style={{ width: `${normalPct}%`, backgroundColor: COLORS.normal + '30', justifyContent: 'center', alignItems: 'center' }}>
                                                     <Text style={{ fontSize: 8, fontWeight: '800', color: COLORS.normalDark }} numberOfLines={1}>NORMAL</Text>
                                                 </View>
-                                                {/* Drift Zone */}
                                                 <View style={{ width: `${Math.max(0, 100 - normalPct)}%`, backgroundColor: COLORS.stress + '20', justifyContent: 'center', alignItems: 'center' }}>
                                                     <Text style={{ fontSize: 8, fontWeight: '800', color: COLORS.stressDark }} numberOfLines={1}>STRESS</Text>
                                                 </View>
                                             </View>
-                                            {/* Current Value Indicator */}
                                             {f.rawVal !== null && (
                                                 <View style={{ position: 'relative', height: 14, marginTop: 2 }}>
                                                     <View style={{
@@ -802,15 +936,15 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                                     </Text>
                                                 </View>
                                             )}
-                                            {/* Range Labels */}
                                             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 2 }}>
                                                 <Text style={{ fontSize: 9, fontWeight: '700', color: COLORS.normal }}>{f.normalRange}</Text>
                                                 <Text style={{ fontSize: 9, fontWeight: '700', color: COLORS.stress }}>{f.stressRange}</Text>
                                             </View>
                                         </View>
-                                    </TouchableOpacity>
+                                        <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 8 }]}>{f.description}</Text>
+                                    </View>
                                 );
-                            })}
+                            })()}
                         </Card>
 
                         {/* State Distribution Card */}
@@ -840,6 +974,103 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                 />
                             </Card>
                         )}
+
+                        {/* How Classification Works — reuses the Onboarding roadmap-card language
+                            (badge + title + desc) so this reads as one connected explanation. */}
+                        <Card elevated style={styles.card}>
+                            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 4 }]}>How Classification Works</Text>
+                            <Text style={[styles.cardSub, { color: t.textMuted, marginBottom: 12 }]}>
+                                From 5 raw signals to one stress decision, in 4 steps.
+                            </Text>
+                            <View style={styles.stepGrid}>
+                                {CLASSIFICATION_STEPS.map((s, i) => (
+                                    <View key={s.title} style={[styles.stepCard, { backgroundColor: t.pillBg, borderColor: t.border }]}>
+                                        <View style={[styles.stepBadge, { backgroundColor: COLORS.brand + '20' }]}>
+                                            <Text style={[styles.stepBadgeText, { color: COLORS.brand }]}>STEP {i + 1}</Text>
+                                        </View>
+                                        <Text style={[styles.stepTitle, { color: t.text }]}>{s.title}</Text>
+                                        <Text style={[styles.stepDesc, { color: t.textMuted }]}>{s.desc}</Text>
+                                    </View>
+                                ))}
+                            </View>
+                        </Card>
+
+                        {/* How Your Signals Combine — per-feature classification + how they average into the composite decision */}
+                        <Card elevated style={styles.card}>
+                            <View style={styles.rowGap}>
+                                <Icon name={NAMES.eeg} size={16} color={COLORS.brand} />
+                                <Text style={[styles.cardTitle, { color: t.text, marginBottom: 0 }]}>How Your Signals Combine</Text>
+                            </View>
+                            <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 4, marginBottom: 14 }]}>
+                                How each signal reads on its own, and how all 5 combine into one stress decision. Tap a signal to
+                                see its full history.
+                            </Text>
+
+                            {FEATURE_ORDER.map((id) => {
+                                const meta = FEATURE_METADATA[id];
+                                const dist = perFeatureDist[id] || { normal: 0, drift: 0, stress: 0, total: 0 };
+                                const pct = (n) => (dist.total > 0 ? Math.round((n / dist.total) * 100) : 0);
+                                return (
+                                    <TouchableOpacity
+                                        key={id}
+                                        activeOpacity={0.75}
+                                        style={{ marginBottom: 12 }}
+                                        onPress={() => navigation.navigate('PhenotypingSignalHistory', { signalId: FEATURE_TO_SIGNAL_ID[id] })}
+                                    >
+                                        <View style={styles.rowBetween}>
+                                            <View style={styles.rowGap}>
+                                                <Text style={{ fontSize: 13 }}>{meta.icon}</Text>
+                                                <Text style={[styles.featureTileName, { color: t.text, fontSize: 12 }]}>{meta.name}</Text>
+                                            </View>
+                                            <Text style={{ fontSize: 9.5, fontWeight: '700', color: t.textMuted }}>{dist.total} windows</Text>
+                                        </View>
+                                        <View style={[styles.contribTrack, { backgroundColor: t.pillBg }]}>
+                                            {dist.total > 0 && (
+                                                <>
+                                                    <View style={{ width: `${pct(dist.normal)}%`, backgroundColor: COLORS.normal }} />
+                                                    <View style={{ width: `${pct(dist.drift)}%`, backgroundColor: COLORS.warning }} />
+                                                    <View style={{ width: `${pct(dist.stress)}%`, backgroundColor: COLORS.stress }} />
+                                                </>
+                                            )}
+                                        </View>
+                                        <View style={styles.rowBetween}>
+                                            <Text style={{ fontSize: 9, fontWeight: '700', color: COLORS.normal }}>{pct(dist.normal)}% Normal</Text>
+                                            <Text style={{ fontSize: 9, fontWeight: '700', color: COLORS.warning }}>{pct(dist.drift)}% Drift</Text>
+                                            <Text style={{ fontSize: 9, fontWeight: '700', color: COLORS.stress }}>{pct(dist.stress)}% Stress</Text>
+                                        </View>
+                                    </TouchableOpacity>
+                                );
+                            })}
+
+                            <View style={[styles.combineDivider, { borderColor: t.border }]}>
+                                <Text style={[styles.combineLabel, { color: t.textMuted }]}>RIGHT NOW → COMPOSITE</Text>
+                            </View>
+
+                            {featureMetrics.map((f) => (
+                                <View key={f.id} style={styles.combineRow}>
+                                    <Text style={{ width: 88, fontSize: 10, color: t.textMuted }} numberOfLines={1}>{f.icon} {f.name}</Text>
+                                    <View style={[styles.combineTrack, { backgroundColor: t.pillBg }]}>
+                                        <View style={{ width: `${Math.min(100, (f.z / 3) * 100)}%`, height: '100%', borderRadius: 4, backgroundColor: f.stageColor }} />
+                                    </View>
+                                    <Text style={{ width: 32, fontSize: 10, textAlign: 'right', color: f.stageColor, fontWeight: '800' }}>{f.z.toFixed(1)}</Text>
+                                </View>
+                            ))}
+
+                            <View style={styles.compositeBadgeRow}>
+                                <Text style={{ fontSize: 11, fontWeight: '700', color: t.textMuted }}>average →</Text>
+                                <View style={[styles.compositeBadge, { backgroundColor: overallStateColor + '20' }]}>
+                                    <Text style={{ fontSize: 12.5, fontWeight: '900', color: overallStateColor }}>
+                                        Composite Z {compositeZ.toFixed(2)} · {overallStateLabel}
+                                    </Text>
+                                </View>
+                            </View>
+
+                            <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 10, lineHeight: 16 }]}>
+                                Composite Z is the plain average of the 5 deviations above. A Pre-Stress alert also requires the
+                                anomaly model (One-Class SVM) to independently agree before it's confirmed — one elevated signal
+                                alone won't trigger it.
+                            </Text>
+                        </Card>
                     </>
                 )}
 
@@ -856,12 +1087,15 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                 </Text>
                             </View>
                             <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 4 }]}>
-                                Daily aggregated behavioral load computed across 30-minute windows
+                                Daily aggregated behavioral load computed across your recorded sensor windows
                             </Text>
 
                             <View style={styles.barChart}>
                                 {weeklyScores.map((s, i) => {
                                     const hPct = Math.max(Math.round(s.score * 100), 8);
+                                    const scoreNum = Math.round(s.score * 100);
+                                    const isPeak = !!(peakDay && s.hasData && s.day === peakDay.day && weeklyScores.filter((d) => d.hasData).length > 1);
+                                    const isCalm = !!(calmDay && s.hasData && s.day === calmDay.day && weeklyScores.filter((d) => d.hasData).length > 1 && !isPeak);
                                     const color = !s.hasData
                                         ? t.border
                                         : s.score >= 0.6
@@ -871,10 +1105,23 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                         : COLORS.normal;
                                     return (
                                         <View key={i} style={styles.barCol}>
+                                            {/* Numeric value above the bar -- when most days score similarly
+                                                high, bar HEIGHT alone can't distinguish them; the number can. */}
+                                            <Text style={[styles.barScoreLabel, { color: s.hasData ? color : t.textMuted }]}>
+                                                {s.hasData ? scoreNum : '--'}
+                                            </Text>
                                             <View style={[styles.barTrack, { backgroundColor: t.pillBg }]}>
                                                 <View style={[styles.barFill, { height: `${hPct}%`, backgroundColor: color }]} />
                                             </View>
-                                            <Text style={[styles.barLabel, { color: t.textMuted }]}>{s.day}</Text>
+                                            <Text
+                                                style={[
+                                                    styles.barLabel,
+                                                    { color: isPeak ? COLORS.warning : isCalm ? COLORS.normal : t.textMuted },
+                                                    (isPeak || isCalm) && { fontWeight: '900' },
+                                                ]}
+                                            >
+                                                {s.day}{isPeak ? ' 🔥' : isCalm ? ' 🍃' : ''}
+                                            </Text>
                                         </View>
                                     );
                                 })}
@@ -921,11 +1168,28 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                 </View>
                                 <View>
                                     <Text style={[styles.hint, { color: t.textMuted }]}>Model Confidence</Text>
-                                    <Text style={[styles.statValue, { color: COLORS.normal, fontSize: 18 }]}>
-                                        {detectionStats.confidence}%
+                                    <Text style={[
+                                        styles.statValue,
+                                        {
+                                            color: detectionStats.confidence === '--'
+                                                ? t.textMuted
+                                                : detectionStats.confidence >= 70
+                                                    ? COLORS.normal
+                                                    : detectionStats.confidence >= 40
+                                                        ? COLORS.warning
+                                                        : COLORS.stress,
+                                            fontSize: 18,
+                                        },
+                                    ]}>
+                                        {detectionStats.confidence}{detectionStats.confidence !== '--' ? '%' : ''}
                                     </Text>
                                 </View>
                             </View>
+                            <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 12, lineHeight: 16 }]}>
+                                An episode is a run of consecutive elevated windows counted once, not each window
+                                individually. Model Confidence is the anomaly model's own certainty in each prediction,
+                                averaged across this range.
+                            </Text>
                         </Card>
                     </>
                 )}
@@ -1139,6 +1403,7 @@ const styles = StyleSheet.create({
     distVal: { fontSize: 11.5, fontWeight: '850', minWidth: 65, textAlign: 'right' },
     barChart: { flexDirection: 'row', justifyContent: 'space-between', height: 120, marginTop: 14, alignItems: 'flex-end' },
     barCol: { flex: 1, alignItems: 'center' },
+    barScoreLabel: { fontSize: 9.5, fontWeight: '800', marginBottom: 3 },
     barTrack: { width: 18, height: 90, borderRadius: 8, overflow: 'hidden', justifyContent: 'flex-end' },
     barFill: { width: '100%', borderRadius: 8 },
     barLabel: { fontSize: 9.5, fontWeight: '700', marginTop: 6 },
@@ -1157,4 +1422,84 @@ const styles = StyleSheet.create({
         paddingVertical: 10,
         borderTopWidth: 1,
     },
+    // ── Hero status row (plain-language headline above the chart) ──
+    heroRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        borderRadius: 12,
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+        marginTop: 10,
+    },
+    heroText: { flex: 1, fontSize: 12.5, fontWeight: '800', lineHeight: 16 },
+    heroZ: { fontSize: 10, fontWeight: '700' },
+    // ── Compact feature tile grid (replaces 5 stacked full-width cards) ──
+    tileGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    featureTile: {
+        flexGrow: 1,
+        flexBasis: '28%',
+        minWidth: 90,
+        minHeight: 44,
+        borderRadius: 14,
+        borderWidth: 1,
+        paddingVertical: 10,
+        paddingHorizontal: 8,
+        alignItems: 'center',
+    },
+    featureTileName: { fontSize: 10.5, fontWeight: '800', marginTop: 4, textAlign: 'center' },
+    expandedPanel: {
+        marginTop: 14,
+        paddingTop: 14,
+        borderTopWidth: 1,
+    },
+    // ── Per-feature classification contribution bars ──
+    contribTrack: {
+        flexDirection: 'row',
+        height: 14,
+        borderRadius: 7,
+        overflow: 'hidden',
+        marginTop: 6,
+        marginBottom: 3,
+    },
+    combineDivider: {
+        borderTopWidth: 1,
+        marginTop: 4,
+        marginBottom: 12,
+        paddingTop: 12,
+    },
+    combineLabel: { fontSize: 9.5, fontWeight: '800', letterSpacing: 0.5, textAlign: 'center' },
+    combineRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 7 },
+    combineTrack: { flex: 1, height: 8, borderRadius: 4, overflow: 'hidden' },
+    compositeBadgeRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        marginTop: 6,
+    },
+    compositeBadge: {
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 12,
+    },
+    // ── "How Classification Works" 2x2 step grid (Onboarding roadmap-card style) ──
+    stepGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    stepCard: {
+        flexBasis: '47%',
+        flexGrow: 1,
+        borderRadius: 14,
+        borderWidth: 1,
+        padding: 10,
+    },
+    stepBadge: {
+        alignSelf: 'flex-start',
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 8,
+        marginBottom: 6,
+    },
+    stepBadgeText: { fontSize: 9, fontWeight: '900', letterSpacing: 0.3 },
+    stepTitle: { fontSize: 12, fontWeight: '800', marginBottom: 2 },
+    stepDesc: { fontSize: 10, lineHeight: 14 },
 });
