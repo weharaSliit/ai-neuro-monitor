@@ -16,16 +16,6 @@ const SUB_OPTION_META = {
     glow: '#059669',
     badge: '🏆 TOP PICK'
   },
-  vagus_humming: {
-    icon: '🧘‍♀️',
-    tag: 'Humming Relief',
-    vagal: 'ANS Calming',
-    mechanism: 'Resonant Sound Vibration',
-    accent: '#8B5CF6',
-    bg: 'rgba(139, 92, 246, 0.14)',
-    glow: '#7C3AED',
-    badge: '⚡ POPULAR'
-  },
   cosmic_nebula: {
     icon: '🌌',
     tag: 'Starlight Pacing (6 bpm)',
@@ -66,16 +56,6 @@ const SUB_OPTION_META = {
     glow: '#0284C7',
     badge: '🧊 BALANCED'
   },
-  soft_fascination: {
-    icon: '🌿',
-    tag: 'Nature Viewing',
-    vagal: 'Mental Reset',
-    mechanism: 'Restorative Nature Scenes',
-    accent: '#059669',
-    bg: 'rgba(5, 150, 105, 0.14)',
-    glow: '#047857',
-    badge: '🍃 RESTORATIVE'
-  },
   progressive_muscle: {
     icon: '💪',
     tag: 'Muscle Tension Release',
@@ -85,16 +65,6 @@ const SUB_OPTION_META = {
     bg: 'rgba(217, 119, 6, 0.14)',
     glow: '#B45309',
     badge: '💪 RELIEF'
-  },
-  guided_imagery: {
-    icon: '🌲',
-    tag: 'Forest Walk Imagery',
-    vagal: 'Mind Calming',
-    mechanism: 'Nature Imagery Walk',
-    accent: '#047857',
-    bg: 'rgba(4, 120, 87, 0.14)',
-    glow: '#065F46',
-    badge: '🌲 PEACEFUL'
   },
   pattern_alignment: {
     icon: '🧠',

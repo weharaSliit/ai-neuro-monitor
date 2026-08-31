@@ -45,7 +45,7 @@ const COLORS = {
   text: '#E9E4FF',
 };
 
-const ResonancePulseBreathing = ({ onStartSession, onDurationChange, initialScreen = 'session' }) => {
+const ResonancePulseBreathing = ({ onStartSession, onDurationChange, initialScreen = 'session', initialDurationMin }) => {
   const themeContext = React.useContext(ThemeContext);
   const theme = themeContext?.theme || {};
   const isDarkMode = themeContext?.isDarkMode ?? true;
@@ -55,9 +55,10 @@ const ResonancePulseBreathing = ({ onStartSession, onDurationChange, initialScre
   const mutedTextColor = isDarkMode ? 'rgba(233,228,255,0.45)' : (theme.textMuted || '#64748B');
   const containerBg = isDarkMode ? COLORS.backgroundDeep : (theme.bgPrimary || '#F8FAFC');
 
-  const [screen, setScreen] = useState(initialScreen); // 'setup' | 'session' | 'complete'
-  const [paceBpm, setPaceBpm] = useState(6.0);
-  const [durationMin, setDurationMin] = useState(1);
+  const [durationMin, setDurationMin] = useState(initialDurationMin || 3);
+  useEffect(() => {
+    if (initialDurationMin) setDurationMin(initialDurationMin);
+  }, [initialDurationMin]);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [breathCount, setBreathCount] = useState(0);
   const [breathDirection, setBreathDirection] = useState('in'); // 'in' | 'out'

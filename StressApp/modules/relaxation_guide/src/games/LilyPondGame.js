@@ -77,7 +77,10 @@ const LilyBreathingGame = ({
   const [screen, setScreen] = useState(initialScreen);
   const [patternId, setPatternId] = useState('extended');
   const [bpm, setBpm] = useState(initialBpm || PATTERNS.extended.defaultBpm);
-  const [durationMin, setDurationMin] = useState(initialDurationMin || 1);
+  const [durationMin, setDurationMin] = useState(initialDurationMin || 3);
+  useEffect(() => {
+    if (initialDurationMin) setDurationMin(initialDurationMin);
+  }, [initialDurationMin]);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [breathCount, setBreathCount] = useState(0);
   const [phase, setPhase] = useState('idle'); // 'idle' | 'inhale' | 'exhale'

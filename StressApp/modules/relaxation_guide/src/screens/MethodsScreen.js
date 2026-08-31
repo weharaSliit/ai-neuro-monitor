@@ -34,25 +34,18 @@ export const MethodsScreen = () => {
       color: '#10B981'
     },
     {
+      id: 'diaphragmatic_pace',
+      title: 'Deep Belly Pacing',
+      icon: '🫁',
+      description: 'Deep abdominal lower-lobe lung expansion for rapid pulse reduction.',
+      color: '#0284C7'
+    },
+    {
       id: 'box_meditation',
       title: 'Box Breathing',
       icon: '🧊',
       description: 'Equal 4s square breathing rhythm for tactical calm and focus.',
-      color: '#0284C7'
-    },
-    {
-      id: 'soft_fascination',
-      title: 'Nature Scenery',
-      icon: '🌿',
-      description: 'Restorative nature viewing to relieve brain fatigue and mind stress.',
-      color: '#059669'
-    },
-    {
-      id: 'guided_imagery',
-      title: 'Forest Walk',
-      icon: '🌲',
-      description: 'Guided forest trail imagery to shift attention away from worry.',
-      color: '#7C3AED'
+      color: '#38BDF8'
     },
     {
       id: 'pattern_alignment',
@@ -67,20 +60,6 @@ export const MethodsScreen = () => {
       icon: '🧘‍♂️',
       description: 'Systematic attentional sweep across body regions to drop tension.',
       color: '#3B82F6'
-    },
-    {
-      id: 'chakra_harmonizer',
-      title: 'Acoustic Harmonic 528Hz',
-      icon: '🔔',
-      description: '528Hz Solfeggio soundwave frequency resonance for inner calm.',
-      color: '#EC4899'
-    },
-    {
-      id: 'binaural_theta',
-      title: 'Binaural Theta 6Hz',
-      icon: '🎧',
-      description: '6Hz entrainment frequency for prefrontal brain theta synchronization.',
-      color: '#8B5CF6'
     },
     {
       id: 'autogenic_warmth',

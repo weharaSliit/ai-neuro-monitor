@@ -39,7 +39,19 @@ const TECHNIQUE_DETAILS = {
     meaningTitle: '🪷 Deep Exhale Vagal Reset',
     meaningDesc: 'Slow exhalations signal your nervous system to calm down, quickly lowering heart rate and body stress.',
     defaultBpm: 6,
-    suggestedMin: 1.5,
+    suggestedMin: 3,
+  },
+  diaphragmatic_pace: {
+    id: 'diaphragmatic_pace',
+    title: 'Deep Belly Pacing',
+    icon: '🫁',
+    color: '#0284C7',
+    bg: 'rgba(2, 132, 199, 0.12)',
+    rank: 'WESAD Score: 0.88',
+    meaningTitle: '🫁 Lower Lobe Abdominal Expansion',
+    meaningDesc: 'Expanding stomach outward on inhale and softening inward on exhale resets ANS balance.',
+    defaultBpm: 6,
+    suggestedMin: 4,
   },
   box_meditation: {
     id: 'box_meditation',
@@ -50,30 +62,6 @@ const TECHNIQUE_DETAILS = {
     rank: 'WESAD Score: 0.86',
     meaningTitle: '🧊 Balanced Square Breathing',
     meaningDesc: 'Equal 4s inhale, 4s hold, 4s exhale, and 4s pause restores calm and steady focus.',
-    defaultBpm: 6,
-    suggestedMin: 2,
-  },
-  soft_fascination: {
-    id: 'soft_fascination',
-    title: 'Nature Scenery',
-    icon: '🌿',
-    color: '#059669',
-    bg: 'rgba(5, 150, 105, 0.12)',
-    rank: 'WESAD Score: 0.84',
-    meaningTitle: '🌿 Restorative Nature Rest',
-    meaningDesc: 'Gentle nature scenes give your brain a break from intense focus and mental tiredness.',
-    defaultBpm: 6,
-    suggestedMin: 2,
-  },
-  guided_imagery: {
-    id: 'guided_imagery',
-    title: 'Forest Walk',
-    icon: '🌲',
-    color: '#7C3AED',
-    bg: 'rgba(124, 58, 237, 0.12)',
-    rank: 'WESAD Score: 0.80',
-    meaningTitle: '🌲 Peaceful Mind Imagery',
-    meaningDesc: 'Multisensory forest trail imagery redirects your thoughts away from worry and stress.',
     defaultBpm: 6,
     suggestedMin: 3,
   },
@@ -87,7 +75,7 @@ const TECHNIQUE_DETAILS = {
     meaningTitle: '🧩 Focus & Pattern Match',
     meaningDesc: 'A light visual matching puzzle shifts your active focus away from stressful thoughts.',
     defaultBpm: 6,
-    suggestedMin: 3,
+    suggestedMin: 2,
   },
   body_scan_mindful: {
     id: 'body_scan_mindful',
@@ -99,31 +87,7 @@ const TECHNIQUE_DETAILS = {
     meaningTitle: '🧘‍♂️ Attentional Body Sweep',
     meaningDesc: 'Systematic attentional sweep across body regions to release somatic hyperarousal.',
     defaultBpm: 6,
-    suggestedMin: 3,
-  },
-  chakra_harmonizer: {
-    id: 'chakra_harmonizer',
-    title: 'Acoustic Harmonic 528Hz',
-    icon: '🔔',
-    color: '#EC4899',
-    bg: 'rgba(236, 72, 153, 0.12)',
-    rank: 'WESAD Score: 0.70',
-    meaningTitle: '🔔 528Hz Resonance Waves',
-    meaningDesc: '528Hz Solfeggio soundwave frequency resonance to reduce sympathetic cardiac drive.',
-    defaultBpm: 6,
-    suggestedMin: 2,
-  },
-  binaural_theta: {
-    id: 'binaural_theta',
-    title: 'Binaural Theta 6Hz',
-    icon: '🎧',
-    color: '#8B5CF6',
-    bg: 'rgba(139, 92, 246, 0.12)',
-    rank: 'WESAD Score: 0.68',
-    meaningTitle: '🎧 Theta Brainwave Pacing',
-    meaningDesc: '6Hz entrainment frequency for prefrontal theta synchronization and deep mental calm.',
-    defaultBpm: 6,
-    suggestedMin: 3,
+    suggestedMin: 5,
   },
   autogenic_warmth: {
     id: 'autogenic_warmth',
@@ -135,7 +99,7 @@ const TECHNIQUE_DETAILS = {
     meaningTitle: '🔥 Somatosensory Thermal Warmth',
     meaningDesc: 'Somatosensory thermal focus for peripheral vasodilation and vascular relaxation.',
     defaultBpm: 6,
-    suggestedMin: 2.5,
+    suggestedMin: 4,
   },
   silent_zen_timer: {
     id: 'silent_zen_timer',
@@ -147,20 +111,17 @@ const TECHNIQUE_DETAILS = {
     meaningTitle: '⛩️ Mindful Zen Interval',
     meaningDesc: 'Unguided silent presence meditation with interval chimes to cultivate baseline calm.',
     defaultBpm: 6,
-    suggestedMin: 2,
+    suggestedMin: 3,
   },
 };
 
 const getTechKey = (id) => {
   const raw = (id || '').toLowerCase();
   if (raw === 'water_lily_pond' || raw === 'lily_pond') return 'water_lily_pond';
+  if (raw === 'diaphragmatic_pace' || raw === 'belly_pacing') return 'diaphragmatic_pace';
   if (raw === 'box_meditation' || raw === 'box') return 'box_meditation';
-  if (raw === 'soft_fascination' || raw === 'nature') return 'soft_fascination';
-  if (raw === 'guided_imagery' || raw === 'forest') return 'guided_imagery';
   if (raw === 'pattern_alignment' || raw === 'pattern') return 'pattern_alignment';
   if (raw === 'body_scan_mindful' || raw === 'body_scan') return 'body_scan_mindful';
-  if (raw === 'chakra_harmonizer' || raw === '528hz') return 'chakra_harmonizer';
-  if (raw === 'binaural_theta' || raw === 'binaural') return 'binaural_theta';
   if (raw === 'autogenic_warmth' || raw === 'autogenic') return 'autogenic_warmth';
   if (raw === 'silent_zen_timer' || raw === 'zen') return 'silent_zen_timer';
   return 'water_lily_pond';
@@ -245,15 +206,12 @@ export const GamePlayerScreen = () => {
         return <LilyPondGame initialScreen="session" initialDurationMin={selectedMin} initialBpm={paceBpm} onStartSession={handleStartSession} />;
 
       case 'box_meditation':
+      case 'diaphragmatic_pace':
       case 'body_scan_mindful':
-      case 'chakra_harmonizer':
       case 'silent_zen_timer':
         return <MeditationGame mode={techKey} initialMode={techKey} initialDurationMin={selectedMin} initialBpm={paceBpm} onStartSession={handleStartSession} />;
 
-      case 'soft_fascination':
-      case 'guided_imagery':
       case 'pattern_alignment':
-      case 'binaural_theta':
       case 'autogenic_warmth':
         return <CognitiveDeStressGame mode={techKey} subOptionId={techKey} initialScreen="session" initialDurationMin={selectedMin} onFinish={handleFinishGame} onStartSession={handleStartSession} />;
 
@@ -569,6 +527,8 @@ const styles = StyleSheet.create({
   canvasContainer: {
     flex: 1,
     width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
     overflow: 'hidden',
   },
   pausedOverlay: {

@@ -492,7 +492,7 @@ export const DashboardScreen = () => {
           <Text style={[s.sectionTitle, { color: theme.textPrimary }]}>Quick Actions</Text>
           <View style={s.actionGrid}>
             {[
-              { id: 'Methods', icon: '🧘', label: 'Techniques', sub: '10 Techniques', tint: 'rgba(56,189,248,0.14)', accent: '#38BDF8' },
+              { id: 'Methods', icon: '🧘', label: 'Techniques', sub: '7 Techniques', tint: 'rgba(56,189,248,0.14)', accent: '#38BDF8' },
               { id: 'PerformanceOverview', icon: '📊', label: 'Performance', sub: 'Analytics & Trends', tint: 'rgba(16,185,129,0.14)', accent: '#10B981' },
               { id: 'UserProfile', icon: '👤', label: 'User Profile', sub: 'Account & XP', tint: 'rgba(236,72,153,0.14)', accent: '#EC4899' },
               { id: 'CommonHome', icon: '🏠', label: 'Main Home', sub: 'Return to App', tint: 'rgba(59,130,246,0.14)', accent: '#3B82F6' },
