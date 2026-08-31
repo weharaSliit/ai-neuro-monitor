@@ -10,7 +10,7 @@ import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
 import Icon, { NAMES } from '../../shared/Icon';
 import LineChart from '../../shared/LineChart';
-import { useCalibrationSummary } from '../../shared/CalibrationGate';
+import { CalibrationBanner, useCalibrationSummary } from '../../shared/CalibrationGate';
 import CalibrateBreathingCard from '../../shared/CalibrateBreathingCard';
 import { useTheme } from '../config/ThemeContext';
 import { COLORS } from '../config/theme';
@@ -25,11 +25,10 @@ import api from '../api/client';
 // so a small (resized + compressed) image as a data URI avoids depending
 // on an unverified external service for a feature this central.
 const AVATAR_SIZE = 96;
-// navCard (styles below) has no outer marginHorizontal -- its Card renders
-// edge-to-edge, only its own `padding: 18` insets the content -- so the
-// chart just needs to subtract that padding from either side, not a
-// screen margin too.
-const DRIFT_CHART_WIDTH = Dimensions.get('window').width - 2 * 18;
+// navCard now has its own marginHorizontal (20, see styles below) on top
+// of its `padding: 18` -- both insets have to come off the screen width
+// or the chart overflows the card's own edges.
+const DRIFT_CHART_WIDTH = Dimensions.get('window').width - 2 * 20 - 2 * 18;
 
 // Deliberately lean -- this used to also fold in a full History section
 // (raw baseline numbers, session distribution, PSS-4 score list, recent
@@ -62,12 +61,13 @@ export default function ProfileScreen({ navigation }) {
   const { user, token, logout } = useAuth();
   const userId = user?.userId;
 
-  // Calibration itself (personal thresholds + the Ring/EEG "Calibrate --
-  // Calm Breathing" trigger) used to live inline on the Fusion page --
-  // moved here since Profile is where account/device setup actually
-  // belongs, and Fusion's own copy was pure duplication once this one
-  // existed. Reused, not re-fetched, from the same GET /baseline/{userId}
-  // + GET /calibration/status CalibrationBanner already calls elsewhere.
+  // Calibration itself (personal thresholds, the Ring/EEG "Calibrate --
+  // Calm Breathing" trigger, and the staleness/drift CalibrationBanner
+  // below) used to live inline on the Fusion page -- moved here since
+  // Profile is where account/device setup actually belongs, and Fusion's
+  // own copies were pure duplication once these existed here. Reused,
+  // not re-fetched, from the same GET /baseline/{userId} + GET
+  // /calibration/status CalibrationBanner (below) also calls.
   const { ring: ringCalibration, eeg: eegCalibration } = useCalibrationSummary(userId, token);
   const personalEegPct = eegCalibration?.personal_high_load_p != null
     ? Math.round(eegCalibration.personal_high_load_p * 100) : null;
@@ -179,6 +179,12 @@ export default function ProfileScreen({ navigation }) {
             <Text style={[styles.statLabel, { color: muted }]}>Ring Baseline</Text>
           </Card>
         </View>
+
+        {/* Staleness/drift warning -- moved here from Fusion so it's not
+            duplicated across screens; Profile is where the calibration
+            actions it points at (the breathing-calibration card and
+            Threshold Test below) actually live. */}
+        <CalibrationBanner userId={userId} token={token} db={db} />
 
         {/* Personalized thresholds: only rendered once at least one side
             has actually separated Rest from Task (the onboarding maths+
@@ -340,7 +346,7 @@ const styles = StyleSheet.create({
   statCard: { flex: 1, alignItems: 'center', padding: 16, borderRadius: 20 },
   statValue: { fontSize: 22, fontWeight: '900' },
   statLabel: { fontSize: 11, marginTop: 3, fontWeight: '600' },
-  navCard: { padding: 18, borderRadius: 22 },
+  navCard: { marginHorizontal: 20, marginBottom: 12, padding: 18, borderRadius: 22 },
   thresholdRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 6 },
   thresholdValue: { fontSize: 14, fontWeight: '900' },
   actionIconCircle: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },

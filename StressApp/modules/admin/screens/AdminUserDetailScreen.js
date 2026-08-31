@@ -24,7 +24,7 @@ import { API_BASE, DEVICE_ID, STRESS_DECISION_THRESHOLD_PERCENT } from '../../ph
 import api from '../../physiological/api/client';
 import { useAuth } from '../../../context/AuthContext';
 
-const TREND_CHART_WIDTH = Dimensions.get('window').width - 2 * 20 - 2 * 18;
+const TREND_CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
 const RING_POLL_MS = 5000; // same cadence the old Ringscreen.js used
 
 // Same Render-hosted, cold-start-tolerant pattern already used for EEG's
@@ -663,5 +663,5 @@ const styles = StyleSheet.create({
   distBarBg: { flex: 1, height: 8, borderRadius: 4, overflow: 'hidden' },
   distBarFill: { height: 8, borderRadius: 4 },
   distValue: { width: 24, fontSize: 13, fontWeight: '800', textAlign: 'right' },
-  distLabel: { width: 60, fontSize: 11 },
+  distLabel: { minWidth: 60, fontSize: 11 },
 });
