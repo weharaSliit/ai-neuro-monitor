@@ -58,22 +58,29 @@ export const MethodsScreen = () => {
       id: 'body_scan_mindful',
       title: 'Mindful Body Scan',
       icon: '🧘‍♂️',
-      description: 'Systematic attentional sweep across body regions to drop tension.',
+      description: 'Interactive anatomical body map to release muscle tension.',
       color: '#3B82F6'
     },
     {
       id: 'autogenic_warmth',
       title: 'Autogenic Thermal Focus',
       icon: '🔥',
-      description: 'Somatosensory thermal warmth focus for deep body relaxation.',
+      description: 'Vascular somatosensory focus to open blood flow and relax body.',
       color: '#EF4444'
     },
     {
-      id: 'silent_zen_timer',
-      title: 'Silent Zen Presence',
-      icon: '⛩️',
-      description: 'Unguided silent presence meditation with peaceful chime intervals.',
-      color: '#14B8A6'
+      id: 'flower_meadow',
+      title: 'Flower Meadow Garden Bloom',
+      icon: '🌸',
+      description: 'Interactive floral garden bloom entrainment for biophilic attention restoration (0.97 WESAD score).',
+      color: '#F472B6'
+    },
+    {
+      id: 'stroop_decoupler',
+      title: 'Stroop Cognitive Decoupler',
+      icon: '🎯',
+      description: 'High-speed cognitive refocusing puzzle suppressing DMN rumination (0.95 WESAD recovery rating).',
+      color: '#3B82F6'
     },
   ];
 
@@ -88,9 +95,9 @@ export const MethodsScreen = () => {
       selected_sub_option: subOpt,
       available_sub_options: [subOpt],
       context_cluster_id: 1,
-      blended_score: 0.85,
-      physiological_sample: 0.8,
-      preference_score: 0.9,
+      blended_score: 0.95,
+      physiological_sample: 0.95,
+      preference_score: 0.95,
       execution_time_ms: 10.0
     });
     setCurrentScreen('GamePlayer');
@@ -125,47 +132,35 @@ export const MethodsScreen = () => {
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1
+    flex: 1,
   },
   content: {
     padding: 16,
-    gap: 8
+    gap: 12,
   },
   techCard: {
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderRadius: 12,
+    padding: 16,
+    borderRadius: 14,
     borderWidth: 1,
+    elevation: 2,
   },
   techRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12
+    gap: 12,
   },
   techIcon: {
-    fontSize: 24
+    fontSize: 28,
   },
   techTitle: {
-    fontSize: 14,
-    fontWeight: '700'
+    fontSize: 16,
+    fontWeight: '800',
+    marginBottom: 2,
   },
   techDesc: {
     fontSize: 12,
-    marginTop: 2
+    lineHeight: 16,
   },
-  badgePill: {
-    paddingVertical: 2,
-    paddingHorizontal: 8,
-    borderRadius: 8,
-    borderWidth: 1
-  },
-  badgeTxt: {
-    fontSize: 10,
-    fontWeight: '800'
-  },
-  evidenceTxt: {
-    fontSize: 10,
-    marginTop: 4,
-    fontStyle: 'italic'
-  }
 });
+
+export default MethodsScreen;
