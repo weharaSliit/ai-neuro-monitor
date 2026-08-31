@@ -43,7 +43,7 @@ const FEATURE_TREND_CONFIG = [
     { key: 'theta_beta_ratio', label: 'θ/β ratio', color: '#d97706' },
     { key: 'spectral_entropy', label: 'Spectral entropy', color: '#0d9488' },
 ];
-const TREND_CHART_WIDTH = Dimensions.get('window').width - 2 * 20 - 2 * 18 - 20;
+const TREND_CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
 const TREND_CHART_HEIGHT = 70;
 
 function sortedWindows(windowsObj) {
@@ -133,8 +133,6 @@ export default function EegSummaryScreen() {
   const { eegOnline: hasSession, eegSessionId: currentSessionId } = useDeviceStatus(userId, db);
   const { eeg: eegCalibration } = useCalibrationSummary(userId, token);
 
-  const [currentSessionId, setCurrentSessionId] = useState(null);
-  const [hasSession, setHasSession] = useState(false);
   const [sessionWindows, setSessionWindows] = useState(null);
   const [recentSessions, setRecentSessions] = useState([]);
   const [sessionDist, setSessionDist] = useState({ normal: 0, stress: 0 });
@@ -396,7 +394,7 @@ const styles = StyleSheet.create({
   distBarFill: { height: 8, borderRadius: 4 },
   distVal: { fontSize: 12, fontWeight: '800', minWidth: 60, textAlign: 'right' },
   distValue: { width: 22, fontSize: 13, fontWeight: '800', textAlign: 'right' },
-  distLabel: { width: 65, fontSize: 11, fontWeight: '600' },
+  distLabel: { minWidth: 65, fontSize: 11, fontWeight: '600' },
   activityRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1 },
   activityLabel: { fontSize: 13, fontWeight: '700' },
   activitySub: { fontSize: 11, marginTop: 1 },

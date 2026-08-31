@@ -9,7 +9,7 @@ import StatusDot from '../../shared/StatusDot';
 import Icon, { NAMES } from '../../shared/Icon';
 import MoodBadge from '../../shared/MoodBadge';
 import AvatarButton from '../../shared/AvatarButton';
-import { CalibrationBanner, useCalibrationSummary, useDeviceStatus } from '../../shared/CalibrationGate';
+import { useCalibrationSummary, useDeviceStatus } from '../../shared/CalibrationGate';
 import LineChart from '../../shared/LineChart';
 import FreudHeroBanner from '../../shared/FreudHeroBanner';
 import { ref, onValue, off } from 'firebase/database';
@@ -21,7 +21,7 @@ import api from '../../physiological/api/client';
 import { STRESS_DECISION_THRESHOLD_PERCENT } from '../../physiological/config/config';
 import { FUSION_TREND_LABELS } from '../config/config';
 
-const CHART_WIDTH = Dimensions.get('window').width - 2 * 20 - 2 * 18 - 10;
+const CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
 
 function getGreeting() {
     const h = new Date().getHours();
@@ -80,13 +80,17 @@ export default function FusionSessionScreen({ navigation }) {
     const { user, token } = useAuth();
     const userId = user?.userId;
 
-    // Calibration itself (personal thresholds display + the Ring/EEG
-    // "Calibrate -- Calm Breathing" trigger) now lives on the Profile
-    // screen, not here -- Fusion only keeps CalibrationBanner's passive
-    // staleness/drift nudge below, which links there via its own
-    // `navigation` prop. New-user onboarding still runs through
-    // AccountSetupScreen.js -> ThresholdCalibration on its own, unrelated
-    // to this screen.
+    // Calibration itself (the "Calibrate -- Calm Breathing" trigger, the
+    // staleness/drift warning banner, and the Threshold Test retry) all
+    // live on the Profile screen now -- this screen keeps only a
+    // read-only summary of the personalized thresholds those produce,
+    // reused (not re-fetched) from the same GET /baseline/{userId} + GET
+    // /calibration/status Profile's own CalibrationBanner calls.
+    const { ring: ringCalibration, eeg: eegCalibration } = useCalibrationSummary(userId, token);
+    const personalEegPct = eegCalibration?.personal_high_load_p != null
+        ? Math.round(eegCalibration.personal_high_load_p * 100) : null;
+    const personalRingPct = ringCalibration?.personal_stress_threshold != null
+        ? Math.round(ringCalibration.personal_stress_threshold * 100) : null;
     const userName = user?.name || userId;
     const [sessionId, setSessionId] = useState('');
     const [watching, setWatching] = useState(false);
@@ -262,8 +266,6 @@ export default function FusionSessionScreen({ navigation }) {
                     </View>
                 )}
 
-                <CalibrationBanner userId={userId} token={token} db={db} />
-
                 {/* Personalized thresholds: only rendered once at least one
                     side has actually separated Rest from Task (see
                     _baseline_response()/get_calibration_status() above) --
@@ -288,56 +290,19 @@ export default function FusionSessionScreen({ navigation }) {
                     </Card>
                 )}
 
-                {/* fused_relative_index: only rendered once BOTH modalities
-                    have contributed a threshold this window (same gating
-                    fusion_engin.py itself uses -- null otherwise, not a
-                    guessed number). Comparable across users/sessions in a
-                    way the raw fused_probability chart above isn't. */}
-                {relativePct != null && (
-                    <Card style={styles.relativeCard} accentColor={relativeElevated ? COLORS.stress : COLORS.normal}>
-                        <Text style={[styles.cardTitle, { color: t.text }]}>Relative to Your Baseline</Text>
-                        <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 2, marginBottom: 8 }]}>
-                            How this reading compares to your own personal calibration, combined across both devices
-                        </Text>
-                        <Text style={[styles.relativeValue, { color: relativeElevated ? COLORS.stressDark : COLORS.normalDark }]}>
-                            {relativePct >= 0 ? '+' : ''}{relativePct}%
-                        </Text>
-                        <Text style={[styles.relativeCaption, { color: t.textMuted }]}>
-                            {relativeElevated
-                                ? 'above your combined personal threshold'
-                                : 'below your combined personal threshold'}
-                        </Text>
-                    </Card>
-                )}
-
-                {/* Calibrate -- Calm Breathing: always visible (not tucked
-                    behind a hidden button) -- a plain breathe-in/breathe-out
-                    visual while real Ring+EEG calibration runs in the
-                    background, right here on the Fusion page. */}
-                <Card style={styles.calibrateCard} accentColor={COLORS.brand}>
-                    <Text style={[styles.cardTitle, { color: t.text }]}>Calibrate — Calm Breathing</Text>
-                    <CalibrateBreathingCard
-                        userId={userId}
-                        token={token}
-                        eegDb={db}
-                        onComplete={goToThresholdCalibration}
-                    />
-                </Card>
-                <CalibrationBanner userId={userId} token={token} db={db} navigation={navigation} />
-
                 {/* Session Progression Line Chart */}
                 {fusedHistory.length > 1 && (
                     <Card elevated style={styles.chartCard}>
                         <View style={styles.chartHeader}>
-                            <View>
-                                <Text style={[styles.chartTitle, { color: t.text }]}>Real-Time Stress Progression</Text>
+                            <View style={styles.chartHeaderLeft}>
+                                <Text style={[styles.chartTitle, { color: t.text }]} numberOfLines={1}>Real-Time Stress Progression</Text>
                                 <Text style={[styles.chartSub, { color: t.textMuted }]}>
-                                    Live multi-modal fusion curve ({fusedHistory.length} readings)
+                                    {fusedHistory.length} live fusion readings
                                 </Text>
                             </View>
                             {trend && TREND_ICON[trend] && (
                                 <View style={[styles.trendChip, { backgroundColor: COLORS.light.pillBg }]}>
-                                    <Icon name={TREND_ICON[trend]} size={14} color={t.textSub} />
+                                    <Icon name={TREND_ICON[trend]} size={13} color={t.textSub} />
                                     <Text style={[styles.trendChipText, { color: t.textSub }]}>
                                         {FUSION_TREND_LABELS[trend] || trend}
                                     </Text>
@@ -359,15 +324,12 @@ export default function FusionSessionScreen({ navigation }) {
                     </Card>
                 )}
 
-                {/* Cognitive load (EEG) / autonomic arousal (HRV-GSR) / fused
-                    probability, all three on one shared timeline -- see
-                    multiSeriesPoints above for why no cross-series alignment
-                    is needed. */}
+                {/* Multi-modal physiological curve */}
                 {hasMultiSeriesData && (
                     <Card elevated style={styles.chartCard}>
-                        <Text style={[styles.chartTitle, { color: t.text }]}>Cognitive Load, Autonomic Arousal & Fused Probability</Text>
+                        <Text style={[styles.chartTitle, { color: t.text }]}>Multi-Modal Physiological Curve</Text>
                         <Text style={[styles.chartSub, { color: t.textMuted, marginBottom: 10 }]}>
-                            EEG cognitive-load trend, ring HRV/GSR autonomic-arousal trend, and the combined fused probability
+                            Synchronized cognitive load (EEG), autonomic arousal (HRV/GSR) & fused stress
                         </Text>
                         <LineChart
                             points={multiSeriesPoints}
@@ -388,7 +350,7 @@ export default function FusionSessionScreen({ navigation }) {
                 <Card style={styles.pss4Card} accentColor={COLORS.brand}>
                     <Text style={[styles.cardTitle, { color: t.text }]}>How are you feeling?</Text>
                     <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 4 }]}>
-                        Take 30 seconds for a quick self check-in.
+                        Take 30 seconds for a quick self check-in
                     </Text>
                     <TouchableOpacity onPress={() => navigation.navigate('PSS4')} activeOpacity={0.85} style={{ marginTop: 10 }}>
                         <View style={[styles.actionTile, { backgroundColor: COLORS.brandSoft, borderColor: COLORS.brand + '30' }]}>
@@ -449,16 +411,18 @@ const styles = StyleSheet.create({
         letterSpacing: -0.3,
     },
     chartCard: {
-        marginHorizontal: 20,
-        marginVertical: 10,
-        padding: 18,
-        borderRadius: 24,
+        marginVertical: 6,
     },
     chartHeader: {
         flexDirection: 'row',
         justifyContent: 'space-between',
-        alignItems: 'flex-start',
+        alignItems: 'center',
         marginBottom: 12,
+        gap: 8,
+    },
+    chartHeaderLeft: {
+        flex: 1,
+        marginRight: 6,
     },
     chartTitle: {
         fontSize: 15,
@@ -472,6 +436,7 @@ const styles = StyleSheet.create({
     trendChip: {
         flexDirection: 'row',
         alignItems: 'center',
+        flexShrink: 0,
         gap: 4,
         paddingHorizontal: 8,
         paddingVertical: 4,
@@ -486,12 +451,6 @@ const styles = StyleSheet.create({
         fontStyle: 'italic',
         textAlign: 'center',
         paddingVertical: 20,
-    },
-    calibrateCard: {
-        marginHorizontal: 20,
-        marginVertical: 10,
-        padding: 18,
-        borderRadius: 24,
     },
     alertBanner: {
         flexDirection: 'row',

@@ -32,7 +32,16 @@ EMPTY_BUFFER_WARN_INTERVAL_SEC = 5.0
 # module captures its own short-lived MQTT connection on demand (driven by
 # EegThresholdTaskScreen.js's POST /calibrate/threshold/start), independent
 # of whether this bridge process is even running.
-N_THRESHOLD_TASK_BLOCKS = 2
+#
+# Was 2 blocks (~50s), then 14 (~350s) -- now 19 (~475s, matching
+# StressApp/modules/eeg/screens/EegThresholdTaskScreen.js's onboarding
+# task now running 8 minutes: serial subtraction -> maths quiz ->
+# sequence-recall puzzle -> ticking-clock sorter -> Stroop).
+# finalize_personal_threshold() (realtime/pipeline.py) already averages
+# ALL scored blocks in self._task_scores, not just the first, so raising
+# this directly gives a sustained-load mean instead of one early,
+# ramp-up-diluted block -- same reasoning as physiological's N_TASK_WIN.
+N_THRESHOLD_TASK_BLOCKS = 19
 
 # A block already drained from the buffer is gone from it either way -- a
 # transient failure (Render cold start, a network blip) shouldn't mean it's
