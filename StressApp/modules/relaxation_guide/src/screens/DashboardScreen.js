@@ -121,12 +121,14 @@ const PulseDot = ({ color }) => {
 /* ────────────────────────────────────────────────────────
    STRESS STATE CONFIG HELPER
    ──────────────────────────────────────────────────────── */
-const getStateConfig = (stressState, stressProbability, theme, isCalibrated = true, hasLivePacket = true) => {
+const getStateConfig = (stressState, stressProbability, rawLabel, theme, isCalibrated = true, hasLivePacket = true) => {
   if (isCalibrated === false) {
     return {
       color: theme.warning,
       bgTint: 'rgba(245,158,11,0.14)',
       label: 'WAITING FOR CALIBRATION',
+      displayLabel: 'Waiting for Calibration',
+      rawLabel: 'Calibration Active',
       emoji: '⏳',
       tagline: 'Waiting for 2-minute baseline calibration... Real-time stress detection active after calibration',
       icon: '⏳',
@@ -140,6 +142,8 @@ const getStateConfig = (stressState, stressProbability, theme, isCalibrated = tr
       color: theme.warning,
       bgTint: 'rgba(245,158,11,0.14)',
       label: 'WAITING FOR LIVE STREAM',
+      displayLabel: 'Awaiting Telemetry',
+      rawLabel: 'Awaiting Live Stream',
       emoji: '📡',
       icon: '📡',
       pct: '--',
@@ -148,27 +152,61 @@ const getStateConfig = (stressState, stressProbability, theme, isCalibrated = tr
   }
 
   const normState = (stressState || '').toLowerCase();
+  const rawLower = (rawLabel || '').toLowerCase();
   const prob = typeof stressProbability === 'number' ? stressProbability : 0.15;
+  const pctVal = Math.min(99, Math.round(prob * 100));
 
-  // Binary Classification: STRESS (Red) vs NORMAL (Green)
-  const isStress = normState === 'stress' || normState === 'high_stress' || normState === 'high' || normState === 'acute' || normState === 'pre-stress' || normState === 'pre_stress' || normState === 'medium' || normState === 'moderate' || prob >= 0.50;
+  const isHighStress = normState.includes('high') || rawLower.includes('high confidence stress') || rawLower.includes('high stress');
+  const isLowStress = normState.includes('low') || rawLower.includes('low confidence stress') || rawLower.includes('low stress');
+  const isGenericStress = normState === 'stress' || normState === 'acute' || normState === 'pre-stress' || normState === 'pre_stress' || prob >= 0.50;
 
-  if (isStress) {
+  if (isHighStress || (isGenericStress && !isLowStress && prob >= 0.60)) {
+    return {
+      color: theme.danger,
+      bgTint: 'rgba(239,68,68,0.14)',
+      label: 'HIGH STRESS',
+      displayLabel: 'High Stress',
+      rawLabel: rawLabel || 'High Confidence Stress',
+      emoji: '🔴',
+      tagline: 'High confidence sympathetic stress detected — Immediate relaxation recommended',
+      icon: '🫀',
+      pct: pctVal,
+      breathDuration: 1200,
+    };
+  } else if (isLowStress) {
+    return {
+      color: '#F59E0B',
+      bgTint: 'rgba(245,158,11,0.14)',
+      label: 'LOW STRESS',
+      displayLabel: 'Low Stress',
+      rawLabel: rawLabel || 'Low Confidence Stress',
+      emoji: '🟡',
+      tagline: 'Low confidence stress / mild arousal detected — Light relaxation recommended',
+      icon: '⚡',
+      pct: pctVal,
+      breathDuration: 2000,
+    };
+  } else if (isGenericStress) {
     return {
       color: theme.danger,
       bgTint: 'rgba(239,68,68,0.14)',
       label: 'STRESS',
+      displayLabel: 'Stress State',
+      rawLabel: rawLabel || 'Stress Detected',
       emoji: '🔴',
-      tagline: 'Sympathetic arousal detected — Intervention recommended',
+      tagline: 'Sympathetic arousal detected — Relaxation recommended',
       icon: '🫀',
-      pct: Math.min(99, Math.round(prob * 100)),
-      breathDuration: 1200,
+      pct: pctVal,
+      breathDuration: 1400,
     };
   }
+
   return {
     color: theme.success,
     bgTint: 'rgba(16,185,129,0.14)',
     label: 'NORMAL',
+    displayLabel: 'Normal / Calm',
+    rawLabel: rawLabel || 'Normal State',
     emoji: '🟢',
     tagline: 'Autonomic nervous system at optimal resting state',
     icon: '🧘',
@@ -272,7 +310,7 @@ export const DashboardScreen = () => {
 
   const {
     userId, username, setCurrentScreen,
-    stressState, stressProbability,
+    stressState, stressProbability, rawLabel, activeSessionId, confidence,
     simMode, updateSimMode,
     isSafetyOverride, isAlertTriggered, telemetryMessage,
     isCalibrated, hasLivePacket,
@@ -344,7 +382,7 @@ export const DashboardScreen = () => {
     }
   };
 
-  const sc = getStateConfig(stressState, stressProbability, theme, isCalibrated, hasLivePacket);
+  const sc = getStateConfig(stressState, stressProbability, rawLabel, theme, isCalibrated, hasLivePacket);
   const greeting = currentTime.getHours() < 12 ? 'Good Morning' : currentTime.getHours() < 18 ? 'Good Afternoon' : 'Good Evening';
   const timeStr = currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -411,7 +449,7 @@ export const DashboardScreen = () => {
           {/* ═══════════ 3. STRESS STATE HERO (PHYSIOLOGICAL SENSORS) ═══════════ */}
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, paddingHorizontal: 4 }}>
             <Text style={{ fontSize: 13, fontWeight: '800', color: theme.accent, letterSpacing: 0.5 }}>🫀 PHYSIOLOGICAL STREAM (Smart Ring + Earbud)</Text>
-            <Text style={{ fontSize: 10, color: theme.textMuted }}>fusion_en_sessions</Text>
+            <Text style={{ fontSize: 10, color: theme.textMuted }}>{activeSessionId ? `fusion_engine/${userId}/${activeSessionId}` : 'fusion_engine'}</Text>
           </View>
           <View style={[s.stateHero, { borderColor: sc.color, backgroundColor: sc.bgTint }]}>
             {/* Breathing ring layer */}
@@ -427,7 +465,7 @@ export const DashboardScreen = () => {
                 </View>
                 <View>
                   <View style={[s.statePill, { backgroundColor: sc.color }]}>
-                    <Text style={s.statePillTxt}>{sc.emoji} {sc.label}</Text>
+                    <Text style={s.statePillTxt}>{sc.emoji} {sc.rawLabel || sc.label}</Text>
                   </View>
                   <Text style={[s.stateTagline, { color: theme.textSecondary }]}>{sc.tagline}</Text>
                 </View>
@@ -437,27 +475,27 @@ export const DashboardScreen = () => {
             {/* Metrics bar */}
             <View style={[s.metricsRow, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
               <View style={s.metricCol}>
-                <Text style={[s.metricValue, { color: sc.color }]}>{(isCalibrated && hasLivePacket) ? sc.label : (isCalibrated ? 'AWAITING...' : 'CALIBRATING')}</Text>
-                <Text style={[s.metricLabel, { color: theme.textMuted }]}>Current State</Text>
+                <Text style={[s.metricValue, { color: sc.color }]}>{(isCalibrated && hasLivePacket) ? sc.displayLabel : (isCalibrated ? 'AWAITING...' : 'CALIBRATING')}</Text>
+                <Text style={[s.metricLabel, { color: theme.textMuted }]}>Current Stress Score</Text>
               </View>
               <View style={[s.metricDivider, { backgroundColor: theme.border }]} />
               <View style={s.metricCol}>
                 <Text style={[s.metricValue, { color: theme.accent }]}>{(isCalibrated && hasLivePacket) ? (typeof sc.pct === 'number' ? `${sc.pct}%` : sc.pct) : 'WAITING...'}</Text>
-                <Text style={[s.metricLabel, { color: theme.textMuted }]}>Confidence</Text>
+                <Text style={[s.metricLabel, { color: theme.textMuted }]}>Stress Probability</Text>
               </View>
             </View>
 
             {/* Progress bar: Stress → Normal */}
             <View style={s.progressSection}>
               <View style={s.progressLabels}>
-                <Text style={[s.progressLbl, { color: theme.textMuted }]}>Stress</Text>
+                <Text style={[s.progressLbl, { color: theme.textMuted }]}>Low / Normal</Text>
                 <Text style={[s.progressLbl, { color: theme.textMuted }]}>Recovery Target →</Text>
-                <Text style={[s.progressLbl, { color: theme.textMuted }]}>Normal ✓</Text>
+                <Text style={[s.progressLbl, { color: theme.textMuted }]}>High Stress ⚡</Text>
               </View>
               <View style={[s.progressBg, { backgroundColor: theme.border }]}>
                 <Animated.View style={[s.progressFill, {
                   backgroundColor: sc.color,
-                  width: sc.label === 'NORMAL' ? '100%' : '18%'
+                  width: (isCalibrated && hasLivePacket) ? (sc.displayLabel.includes('Normal') ? '12%' : sc.displayLabel.includes('Low') ? '48%' : '90%') : '0%'
                 }]} />
               </View>
             </View>
@@ -472,7 +510,7 @@ export const DashboardScreen = () => {
           {/* ═══════════ 3b. LIVE PHENOTYPING STREAM HERO CARD ═══════════ */}
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, marginBottom: 6, paddingHorizontal: 4 }}>
             <Text style={{ fontSize: 13, fontWeight: '800', color: sc.color, letterSpacing: 0.5 }}>⌨️ LIVE PHENOTYPING STREAM (Behavioral & Smartphone)</Text>
-            <Text style={{ fontSize: 10, color: theme.textMuted }}>phenotyping_sessions</Text>
+            <Text style={{ fontSize: 10, color: theme.textMuted }}>{activeSessionId ? `fusion_engine/${userId}/${activeSessionId}` : 'fusion_engine'}</Text>
           </View>
           <View style={[s.stateHero, { borderColor: sc.color, backgroundColor: sc.bgTint }]}>
             <View style={s.stateHeroTop}>
@@ -482,9 +520,9 @@ export const DashboardScreen = () => {
                 </View>
                 <View>
                   <View style={[s.statePill, { backgroundColor: sc.color }]}>
-                    <Text style={s.statePillTxt}>⌨️ PHENOTYPING TELEMETRY</Text>
+                    <Text style={s.statePillTxt}>⌨️ PHENOTYPING: {sc.rawLabel || sc.label}</Text>
                   </View>
-                  <Text style={[s.stateTagline, { color: theme.textSecondary }]}>Typing Latency · Screen Touch Dynamics · Rumination Index</Text>
+                  <Text style={[s.stateTagline, { color: theme.textSecondary }]}>Typing Latency · Touch Dynamics · Confidence: {(isCalibrated && hasLivePacket) ? `${sc.pct}%` : '--'}</Text>
                 </View>
               </View>
             </View>
@@ -492,13 +530,13 @@ export const DashboardScreen = () => {
             {/* Phenotyping Metrics Bar */}
             <View style={[s.metricsRow, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
               <View style={s.metricCol}>
-                <Text style={[s.metricValue, { color: sc.color }]}>{(isCalibrated && hasLivePacket) ? sc.label : (isCalibrated ? 'AWAITING...' : 'CALIBRATING')}</Text>
-                <Text style={[s.metricLabel, { color: theme.textMuted }]}>Cognitive State</Text>
+                <Text style={[s.metricValue, { color: sc.color }]}>{(isCalibrated && hasLivePacket) ? sc.displayLabel : (isCalibrated ? 'AWAITING...' : 'CALIBRATING')}</Text>
+                <Text style={[s.metricLabel, { color: theme.textMuted }]}>Cognitive Stress Score</Text>
               </View>
               <View style={[s.metricDivider, { backgroundColor: theme.border }]} />
               <View style={s.metricCol}>
                 <Text style={[s.metricValue, { color: theme.accent }]}>{(isCalibrated && hasLivePacket) ? (typeof sc.pct === 'number' ? `${sc.pct}%` : sc.pct) : 'WAITING...'}</Text>
-                <Text style={[s.metricLabel, { color: theme.textMuted }]}>Pheno Confidence</Text>
+                <Text style={[s.metricLabel, { color: theme.textMuted }]}>Pheno Stress Probability</Text>
               </View>
             </View>
 
@@ -507,10 +545,10 @@ export const DashboardScreen = () => {
               <View style={s.progressLabels}>
                 <Text style={[s.progressLbl, { color: theme.textMuted }]}>Calm</Text>
                 <Text style={[s.progressLbl, { color: theme.textMuted }]}>Rumination Target →</Text>
-                <Text style={[s.progressLbl, { color: theme.textMuted }]}>Agitation ⚡</Text>
+                <Text style={[s.progressLbl, { color: theme.textMuted }]}>High Stress ⚡</Text>
               </View>
               <View style={[s.progressBg, { backgroundColor: theme.border }]}>
-                <View style={[s.progressFill, { backgroundColor: sc.color, width: (isCalibrated && hasLivePacket) ? (sc.label === 'NORMAL' ? '100%' : '18%') : '0%' }]} />
+                <View style={[s.progressFill, { backgroundColor: sc.color, width: (isCalibrated && hasLivePacket) ? (sc.displayLabel.includes('Normal') ? '12%' : sc.displayLabel.includes('Low') ? '48%' : '90%') : '0%' }]} />
               </View>
             </View>
           </View>
