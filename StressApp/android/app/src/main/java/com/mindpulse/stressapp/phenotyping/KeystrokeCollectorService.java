@@ -80,9 +80,18 @@ public class KeystrokeCollectorService extends AccessibilityService {
     // All data flows through Flask (/behavior/predict) which writes
     // to phenotyping/data_logs and phenotyping/predictions via firebase_service.py.
 
-    // Upload window — production value. 5 minutes matches what a real
-    // behavioral window is meant to represent.
-    private static final long UPLOAD_INTERVAL_MS = 5 * 60 * 1000L;
+    // Upload window. Was 5 minutes; shortened to 30s so the dashboard feels
+    // live -- interaction_rate/cpm/app_switch_rate are all per-minute RATES
+    // (count / elapsed-minutes, see flushWindow() below), not raw counts, so
+    // a shorter window doesn't change what they mean, just how many samples
+    // each estimate is averaged over (noisier per-window, same long-run
+    // behavior once EMA-smoothed server-side).
+    private static final long UPLOAD_INTERVAL_MS = 30 * 1000L;
+
+    // Safety cap while a snapshot is held for retry after a failed upload
+    // (see flushWindow()'s onFailure path) -- bounds memory during a
+    // prolonged backend/network outage instead of buffering forever.
+    private static final int MAX_RETRY_BUFFERED_SAMPLES = 1000;
 
     // -----------------------------------------------------------------------
     // T7-A: Activity Recognition — noise gate
@@ -526,7 +535,14 @@ public class KeystrokeCollectorService extends AccessibilityService {
         final List<Long> scrollSnapshot    = new ArrayList<>(scrollSpeeds);
         final int        unlockSnapshot    = unlockCount;
         final int        appSwitchSnapshot = appSwitchCount;
+        // Minutes since the LAST flush, not since the service started --
+        // previously this stayed anchored to service-start forever, so
+        // interaction_rate/cpm/app_switch_rate (all count / elapsed-minutes)
+        // silently decayed toward zero the longer the app stayed running,
+        // regardless of actual activity. Reset immediately after snapshotting
+        // so the next window measures its own duration.
         final long       elapsed           = Math.max(1, (System.currentTimeMillis() - sessionStartTime) / 60000L);
+        sessionStartTime = System.currentTimeMillis();
         final String     currentUserId     = currentUserIdCheck;
 
         final boolean windowMotionValid   = this.dataValid;
@@ -566,8 +582,8 @@ public class KeystrokeCollectorService extends AccessibilityService {
                 double appSwitchRate   = (double) appSwitchSnapshot / elapsed;
 
                 // ── CPM: characters typed per minute (Option 1 — 5th feature) ──────
-                // elapsed is in minutes (see line 481). dwellSnapshot.size() == keystrokes
-                // this window. Clamp to 0 if no typing happened.
+                // elapsed is in minutes (time since the last flush, see above).
+                // dwellSnapshot.size() == keystrokes this window. Clamp to 0 if no typing happened.
                 double cpm = (elapsed > 0 && !dwellSnapshot.isEmpty())
                     ? (double) dwellSnapshot.size() / elapsed
                     : 0.0;
@@ -615,13 +631,39 @@ public class KeystrokeCollectorService extends AccessibilityService {
                     // Flask handles all Firebase writes (phenotyping/data_logs + phenotyping/predictions).
                     // No direct Firebase push from Android needed.
                 } else {
-                    Log.w(TAG, "Flask unreachable -- data will be re-sent on next window. No direct Firebase fallback.");
+                    Log.w(TAG, "Flask unreachable -- restoring this window's samples so the next " +
+                        "flush retries them instead of losing them silently.");
+                    requeueFailedSnapshot(flightSnapshot, dwellSnapshot, scrollSnapshot, unlockSnapshot, appSwitchSnapshot);
                 }
 
             } catch (Exception e) {
                 Log.e(TAG, "Upload failed", e);
+                requeueFailedSnapshot(flightSnapshot, dwellSnapshot, scrollSnapshot, unlockSnapshot, appSwitchSnapshot);
             }
         }).start();
+    }
+
+    // Restores a snapshot that failed to upload back into the live buffers so
+    // the NEXT flush retries it (merged with whatever's been typed/scrolled
+    // since), instead of the data just disappearing -- see flushWindow()'s
+    // header comment. Posted to the main-thread handler since flightTimes/
+    // dwellTimes/scrollSpeeds/appSwitchCount/unlockCount are otherwise only
+    // ever touched from onAccessibilityEvent() and flushWindow(), both on the
+    // main looper; this keeps them that way instead of adding locking.
+    // MAX_RETRY_BUFFERED_SAMPLES caps growth during a prolonged outage.
+    private void requeueFailedSnapshot(List<Long> flightSnapshot, List<Long> dwellSnapshot,
+                                        List<Long> scrollSnapshot, int unlockSnapshot, int appSwitchSnapshot) {
+        handler.post(() -> {
+            flightTimes.addAll(0, flightSnapshot);
+            dwellTimes.addAll(0, dwellSnapshot);
+            scrollSpeeds.addAll(0, scrollSnapshot);
+            unlockCount    += unlockSnapshot;
+            appSwitchCount += appSwitchSnapshot;
+
+            while (flightTimes.size() > MAX_RETRY_BUFFERED_SAMPLES) flightTimes.remove(0);
+            while (dwellTimes.size() > MAX_RETRY_BUFFERED_SAMPLES) dwellTimes.remove(0);
+            while (scrollSpeeds.size() > MAX_RETRY_BUFFERED_SAMPLES) scrollSpeeds.remove(0);
+        });
     }
 
     // pushDashboardUpdate() and pushRawMetricsToFirebase() removed.

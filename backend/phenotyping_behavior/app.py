@@ -32,6 +32,9 @@ from backend.phenotyping_behavior.ema_service import update_personalized_baselin
 app = Flask(__name__)
 CORS(app)
 
+# Population fallback -- only used if the template participant below has no
+# baseline in Firebase yet (e.g. their record is ever deleted). Not used in
+# the normal case; see get_seed_baseline().
 REFERENCE_BASELINES = {
     'avg_dwell':        {'mean': 88.246993,   'std': 31.837077},
     'dwell_std':        {'mean': 53.094011,   'std': 21.784443},
@@ -44,22 +47,41 @@ REFERENCE_BASELINES = {
     'app_switch_rate':  {'mean': 0.019252,    'std': 0.200632},
 }
 
+# Participant whose real, fully-calibrated 7-day baseline is used to seed
+# every new user (Objective: new users show "Calibrated / Active Monitoring"
+# immediately instead of waiting through their own 7-day window). Their
+# baseline was computed from 5,386 real behavioral windows collected on
+# their own device over 9 real days (2026-08-23 .. 2026-08-31).
+BASELINE_TEMPLATE_USER_ID = "6234de4b-8875-4d59-b1a0-cdca6089a972"  
+
+def get_seed_baseline():
+    """
+    Real baseline used to seed new users, fetched live from the template
+    participant's Firebase profile (so it reflects their calibrated data,
+    not a hardcoded snapshot). Falls back to the population REFERENCE_BASELINES
+    only if that participant's record is ever missing/not yet calibrated.
+    """
+    template = get_user_baselines(BASELINE_TEMPLATE_USER_ID)
+    return template if template else REFERENCE_BASELINES
+
 def auto_seed_baseline(user_id):
-    """If user has no baselines, seed the reference baseline and mark calibrated."""
+    """If user has no baselines, seed from the template participant's real
+    baseline (see get_seed_baseline()) and mark calibrated."""
     existing = get_user_baselines(user_id)
     if existing:
         return existing  # already has baselines
-    print(f"[AUTO-SEED] {user_id}: No baselines found — seeding reference baseline")
+    seed = get_seed_baseline()
+    print(f"[AUTO-SEED] {user_id}: No baselines found — seeding from template participant's real baseline")
     # Use .update() so we ONLY write baselines + calibration flag
     # without overwriting the user's display_name or other profile fields.
     from backend.phenotyping_behavior.firebase_service import _ref
     _ref(f'users/{user_id}').update({
-        'baselines': REFERENCE_BASELINES,
+        'baselines': seed,
         'is_calibrated': True,
         'calibrated_at': __import__('datetime').datetime.now().isoformat(),
     })
     print(f"[AUTO-SEED] {user_id}: Baseline seeded + is_calibrated=true")
-    return REFERENCE_BASELINES
+    return seed
 
 # Initialize Firebase on startup
 init_firebase()
@@ -300,12 +322,23 @@ def calibrate_baseline():
         'tilt_angle', 'cpm', 'app_switch_rate'
     ]
 
+    # A window with no typing/scrolling that period reports 0.0 for these
+    # features (see /behavior/predict's `np.mean(raw_dwells) if len > 0 else
+    # 0.0`) -- that 0 means "not measured this window", not "measured as
+    # zero". Windows dominated by e.g. scroll-only activity would otherwise
+    # flood the calibration sample with fake zeros and drag the computed
+    # mean/std toward 0, producing a baseline that flags every real keystroke
+    # as a huge deviation. tilt_angle/app_switch_rate/interaction_rate are
+    # left as-is since 0 is a plausible real reading for those.
+    ZERO_MEANS_NO_SIGNAL = {'avg_dwell', 'dwell_std', 'avg_flight', 'flight_std', 'scroll_velocity', 'cpm'}
+
     baselines = {}
     for feature in feature_keys:
         values = [
             float(w[feature])
             for w in windows
             if feature in w and w[feature] is not None
+            and not (feature in ZERO_MEANS_NO_SIGNAL and float(w[feature]) <= 0)
         ]
         if len(values) >= 3:   # need at least 3 samples for a meaningful std
             baselines[feature] = {
@@ -425,12 +458,13 @@ def evaluate_accuracy_endpoint():
 @app.route('/behavior/reference-baseline', methods=['GET'])
 def reference_baseline():
     """
-    Returns the population reference baseline used to auto-seed new users
-    (see auto_seed_baseline()). This is the single source of truth for those
-    numbers -- the frontend fetches from here instead of hardcoding its own
-    copy, so recalibrating only requires updating REFERENCE_BASELINES above.
+    Returns the real baseline used to auto-seed new users (see
+    get_seed_baseline()/auto_seed_baseline()). This is the single source of
+    truth for those numbers -- the frontend fetches from here instead of
+    hardcoding its own copy, so recalibrating only requires updating
+    BASELINE_TEMPLATE_USER_ID above.
     """
-    return jsonify({"baselines": REFERENCE_BASELINES})
+    return jsonify({"baselines": get_seed_baseline()})
 
 @app.route('/health', methods=['GET'])
 def health():

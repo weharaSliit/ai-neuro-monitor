@@ -3,10 +3,10 @@
 Runs BEFORE a block is scored by the model: a 9-factor amplitude/spectral
 gate, an inter-channel PLI-vs-surrogate coupling check (real coupling
 should exceed phase-shuffled coupling), an Itakura spectral-distance
-artifact check against a stored clean baseline, and a lightweight
-self-calibrated KNN quality classifier. A block that fails is not fed to
-the model or into decision-state history -- see `RealtimeInference` in
-`pipeline.py`.
+artifact check against a stored clean baseline, and a lightweight quality
+check that measures a live epoch's distance from this session's own real
+calibration epochs. A block that fails is not fed to the model or into
+decision-state history -- see `RealtimeInference` in `pipeline.py`.
 
 Adapted from a standalone offline validator (originally tuned for an
 ADS1299/OpenBCI Cyton-style front end: VREF=4.5V, Gain=24) to this
@@ -18,13 +18,18 @@ verified constants so a raw-code CSV inspected standalone (see
 pipeline, which converts codes via `adc.code_to_microvolts` before this
 gate ever sees them.
 
-KNOWN LIMITATION carried over from the source: `MultiFeatureQualityClassifier`
-is not trained on external labeled data -- it self-calibrates a synthetic
-GOOD/MED/LOW boundary from perturbations of the very first epoch it sees.
-If that first epoch is itself atypical (e.g. captured before electrodes
-settle), its notion of "good" will be skewed for the rest of the session.
-Treat its output as a soft heuristic; the 9-factor gate score and the
-PLI-vs-surrogate check are the more trustworthy signals here.
+`MultiFeatureQualityClassifier` is NOT trained on external labeled data --
+it measures a live epoch's distance (in a 6-feature Hjorth+spectral space)
+from the mean/std of this session's OWN real, already-trusted calibration
+epochs (fed in via `add_baseline_epoch()`/`TrustedIoTEEGValidator
+.record_calibration_epoch()` -- see `pipeline.py`'s `calibrate_bipolar_block()`),
+not from fabricated/perturbed data. KNOWN LIMITATION: a calibration window
+built from very few blocks (this project's default, or a degraded
+single-block fallback) still gives a thinner reference than a real labeled
+dataset would, so its rating stays a soft diagnostic -- already NOT AND'd
+into `is_trusted` below (see `validate_epoch`/`validate_epoch_single`)
+rather than a hard rejection criterion. The 9-factor gate score and the
+PLI-vs-surrogate check remain the more trustworthy signals here.
 
 RE-ARCHITECTED to assess the SAME signal the model actually sees, not a
 separate re-derivation of it: `assess_epoch`/`validate_epoch` used to
@@ -48,7 +53,6 @@ signal directly -- no re-filtering here.
 import numpy as np
 from scipy import signal
 from scipy.stats import kurtosis, skew
-from sklearn.neighbors import KNeighborsClassifier
 
 from .adc import ADC_FULL_SCALE, GAIN, VREF_VOLTS
 
@@ -274,10 +278,32 @@ class ItakuraArtifactDetector:
 
 
 class MultiFeatureQualityClassifier:
+    """Flags a live epoch HIGH-Q/MED-Q/LOW-Q by its distance (in a 6-feature
+    Hjorth+spectral space, see `extract_domain_features`) from THIS
+    SESSION's own real, already-trusted calibration epochs -- not a model
+    "trained" on fabricated data. Call `add_baseline_epoch()` once per real
+    calibration block that passed the Step-0 gate (see `pipeline.py`'s
+    `calibrate_bipolar_block()`); `classify()` then measures how far a live
+    epoch's features sit from that real reference, in per-feature standard
+    deviations. See this module's docstring for why its output is a soft
+    diagnostic, not a rejection criterion.
+    """
+
+    # A single relative-std floor (not 6 per-feature tunings) so a baseline
+    # built from very few calibration blocks (as few as 1, in a degraded-
+    # calibration fallback -- see pipeline.py's finalize_calibration_bipolar())
+    # can't produce a near-zero std and blow ordinary block-to-block
+    # variation up into an extreme z-score.
+    MIN_REL_STD = 0.15
+    # Standard z-score conventions, not fit/tuned against any dataset --
+    # ~2 SD covers typical within-session variation under a roughly-
+    # Gaussian assumption, ~4 SD is a genuine outlier.
+    HIGH_Q_MAX_AVG_Z = 2.0
+    MED_Q_MAX_AVG_Z = 4.0
+
     def __init__(self, fs=250):
         self.fs = fs
-        self.knn = KNeighborsClassifier(n_neighbors=5, weights='distance')
-        self._is_trained = False
+        self._baseline_features: list[list[float]] = []
 
     def extract_domain_features(self, segment):
         seg = np.asarray(segment, dtype=float).flatten()
@@ -300,28 +326,33 @@ class MultiFeatureQualityClassifier:
 
         return [act, mob, comp, float(rel_alpha), float(rel_beta), float(spec_entropy)]
 
-    def train_adaptive_baseline(self, sample_segment):
-        np.random.seed(42)
-        base = self.extract_domain_features(sample_segment)
-        X, y = [], []
-        for _ in range(20):
-            X.append([b * np.random.uniform(0.85, 1.15) for b in base])
-            y.append("HIGH-Q")
-        for _ in range(20):
-            med_feat = [base[0] * 1.2, base[1] * 1.5, base[2] * 1.2, base[3] * 0.6, base[4] * 1.5, base[5] * 1.1]
-            X.append([f * np.random.uniform(0.9, 1.1) for f in med_feat])
-            y.append("MED-Q")
-        for _ in range(20):
-            low_feat = [base[0] * 2.5, base[1] * 4.0, base[2] * 0.2, base[3] * 0.05, base[4] * 3.0, base[5] * 1.8]
-            X.append([f * np.random.uniform(0.9, 1.1) for f in low_feat])
-            y.append("LOW-Q")
-        self.knn.fit(X, y)
-        self._is_trained = True
+    def add_baseline_epoch(self, segment):
+        """Feeds one real, already-trusted calibration epoch into this
+        session's reference set -- see `TrustedIoTEEGValidator
+        .record_calibration_epoch()`, the caller-facing entry point."""
+        self._baseline_features.append(self.extract_domain_features(segment))
 
     def classify(self, segment):
-        if not self._is_trained:
-            self.train_adaptive_baseline(segment)
-        return str(self.knn.predict([self.extract_domain_features(segment)])[0])
+        if not self._baseline_features:
+            # No real calibration reference recorded yet -- callers are expected to
+            # call add_baseline_epoch() during calibration before this is ever hit
+            # (see pipeline.py's calibrate_bipolar_block()/finalize_calibration_bipolar()).
+            # MED-Q is the neutral/non-blocking default rather than guessing HIGH or LOW
+            # with nothing real to compare against.
+            return "MED-Q"
+
+        base = np.array(self._baseline_features, dtype=float)
+        mean = base.mean(axis=0)
+        std_safe = np.maximum(np.maximum(base.std(axis=0), np.abs(mean) * self.MIN_REL_STD), 1e-9)
+
+        feats = np.array(self.extract_domain_features(segment), dtype=float)
+        avg_z = float(np.mean(np.abs(feats - mean) / std_safe))
+
+        if avg_z <= self.HIGH_Q_MAX_AVG_Z:
+            return "HIGH-Q"
+        if avg_z <= self.MED_Q_MAX_AVG_Z:
+            return "MED-Q"
+        return "LOW-Q"
 
 
 class TrustedIoTEEGValidator:
@@ -347,6 +378,15 @@ class TrustedIoTEEGValidator:
         self.conn_val = ConnectivityValidator()
         self.itakura_val = ItakuraArtifactDetector()
         self.ml_classifier = MultiFeatureQualityClassifier(fs=fs_filtered)
+
+    def record_calibration_epoch(self, ch1_filtered) -> None:
+        """Feeds one real, already-trusted calibration epoch (CH1/bipolar
+        signal -- see `ml_classifier`'s own docstring) into `ml_classifier`'s
+        real baseline reference, so its later `classify()` calls compare a
+        live epoch against actual captured signal instead of nothing. Call
+        once per accepted calibration block -- see `pipeline.py`'s
+        `calibrate_bipolar_block()`/`finalize_calibration_bipolar()`."""
+        self.ml_classifier.add_baseline_epoch(ch1_filtered)
 
     def assess_only(self, ch1_raw, ch2_raw, ch1_filtered, ch2_filtered) -> dict:
         """Step-0 gate only -- used for calibration blocks, before any clean
@@ -398,17 +438,18 @@ class TrustedIoTEEGValidator:
         itakura_d1 = self.itakura_val.compute_itakura_distance(ch1_filt, baseline_filtered_ch1)
         itakura_d2 = self.itakura_val.compute_itakura_distance(ch2_filt, baseline_filtered_ch2)
 
-        # ml_classifier stays CH1-only: it self-calibrates its GOOD/MED/LOW boundary from the
-        # first epoch it's ever given (see this class's KNOWN LIMITATION docstring above) --
-        # feeding it both channels through the same instance would mix two different signals
-        # into that one calibration rather than giving CH2 its own independent judgment.
+        # ml_classifier stays CH1-only: its real calibration reference (see
+        # add_baseline_epoch()) is built from CH1 epochs -- feeding it both channels
+        # through the same instance would mix two different signals into that one
+        # reference rather than giving CH2 its own independent judgment.
         #
-        # NOT used as a rejection criterion below, for the same reason PLI was demoted to
-        # diagnostic-only above: ml_rating is a soft heuristic self-calibrated from this
-        # session's own first epoch (see the KNOWN LIMITATION docstring) rather than trained
-        # on external labeled data, so an AND'd hard gate on it can reject known-good blocks
-        # purely because the very first epoch happened to be atypical -- still returned below
-        # so callers/logs can see it, just not load-bearing for is_trusted.
+        # NOT used as a rejection criterion below, same reasoning PLI was demoted to
+        # diagnostic-only above: even grounded in real calibration data, a handful of
+        # calibration blocks is a thinner reference than a labeled dataset would give,
+        # so an AND'd hard gate on it risked rejecting known-good blocks purely because
+        # this session's own calibration window happened to be atypical -- still
+        # returned below so callers/logs can see it, just not load-bearing for
+        # is_trusted.
         ml_rating = self.ml_classifier.classify(ch1_filt)
 
         is_trusted = bool(
