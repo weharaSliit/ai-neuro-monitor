@@ -269,7 +269,7 @@ def _extract_latest_packet(node: Any, target_uid_clean: str = "") -> Dict[str, A
 
     TARGET_KEYS = [
         'fused_stress_label', 'fused_stress_probability', 'fused_probability', 'fused_label',
-        'stress_label', 'probability', 'stress_probability', 'label', 'probability_vector'
+        'stress_label', 'probability', 'stress_probability', 'label', 'probability_vector', 'confidence'
     ]
 
     if any(k in node for k in TARGET_KEYS):
