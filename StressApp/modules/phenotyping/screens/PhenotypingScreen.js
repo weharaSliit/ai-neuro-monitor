@@ -235,6 +235,27 @@ export default function PhenotypingScreen({ navigation }) {
         return Math.min(1, Math.max(0.04, mins / 1440));
     }, [now]);
 
+    // ── Actual freshness of the last behavioral window, replacing a static
+    // "LIVE" badge that used to show regardless of how old the data really
+    // was. The sensor flushes every ~30s while there's activity, so "fresh"
+    // allows a little slack (90s) for a flush to land; past that it's
+    // either idle (normal) or something's actually stuck.
+    const signalFreshness = useMemo(() => {
+        if (!lastUpdated) return { ageMs: null, label: null, isFresh: false };
+        const s = lastUpdated;
+        const updatedAt = new Date(
+            +s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8),
+            +s.slice(9, 11), +s.slice(11, 13), +s.slice(13, 15)
+        );
+        const ageMs = now.getTime() - updatedAt.getTime();
+        const ageMin = Math.floor(ageMs / 60000);
+        let label;
+        if (ageMs < 45_000) label = 'just now';
+        else if (ageMin < 60) label = `${ageMin}m ago`;
+        else label = `${Math.floor(ageMin / 60)}h ago`;
+        return { ageMs, label, isFresh: ageMs >= 0 && ageMs < 90_000 };
+    }, [lastUpdated, now]);
+
     // ── Onboarding check
     useFocusEffect(useCallback(() => {
         if (!deviceId) return;
@@ -576,8 +597,10 @@ export default function PhenotypingScreen({ navigation }) {
                         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
                             <Text style={[styles.sectionTitle, { color: t.text }]}>Passive Behavioral Signals</Text>
                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                <StatusDot color={COLORS.normal} active size={7} />
-                                <Text style={{ fontSize: 10, fontWeight: '800', color: COLORS.normal }}>LIVE</Text>
+                                <StatusDot color={signalFreshness.isFresh ? COLORS.normal : t.textMuted} active={signalFreshness.isFresh} size={7} />
+                                <Text style={{ fontSize: 10, fontWeight: '800', color: signalFreshness.isFresh ? COLORS.normal : t.textMuted }}>
+                                    {signalFreshness.isFresh ? 'LIVE' : (signalFreshness.label ? signalFreshness.label.toUpperCase() : 'IDLE')}
+                                </Text>
                             </View>
                         </View>
                         <Text style={[styles.sectionSub, { color: t.textMuted }]}>
@@ -631,7 +654,7 @@ export default function PhenotypingScreen({ navigation }) {
 
                 <Text style={[styles.lastUpdated, { color: t.textMuted }]}>
                     {liveWindow
-                        ? `• live — updated ${lastUpdated ? lastUpdated.split('_')[1]?.slice(0, 2) + ':' + lastUpdated.split('_')[1]?.slice(2, 4) : 'recently'}`
+                        ? `• updated ${signalFreshness.label || 'recently'} (${lastUpdated ? lastUpdated.split('_')[1]?.slice(0, 2) + ':' + lastUpdated.split('_')[1]?.slice(2, 4) : '--:--'})`
                         : 'Waiting for first reading…'}
                 </Text>
             </ScrollView>

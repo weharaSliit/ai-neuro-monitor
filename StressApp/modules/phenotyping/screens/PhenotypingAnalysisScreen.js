@@ -854,7 +854,7 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                 </Text>
                             </View>
                             <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 4 }]}>
-                                Daily aggregated behavioral load computed across 30-minute windows
+                                Daily aggregated behavioral load computed across your recorded sensor windows
                             </Text>
 
                             <View style={styles.barChart}>
