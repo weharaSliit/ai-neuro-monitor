@@ -28,37 +28,13 @@ export const MethodsScreen = () => {
   const categories = [
     {
       id: "guided_meditation",
-      title: "Guided Meditation & Breathwork",
-      icon: "🧘",
+      title: "Breathwork & Meditation",
+      icon: "🧘‍♀️",
       sub_options: [
-        { id: "box_meditation", title: "Box Meditation", description: "Structured 4-4-4-4 visual pacing for rapid calm." },
-        { id: "zen_body_scan", title: "Zen Body Scan", description: "Mindful muscle relaxation with expanding aura visuals." },
-        { id: "chakra_meditation", title: "Chakra Harmonizer", description: "432Hz & 528Hz frequency alignment for mental focus." },
-        { id: "transcendental_mind", title: "Silent Zen Timer", description: "Minimalist meditation timer with periodic bells." },
-        { id: "sound_meditation", title: "Acoustic Meditation", description: "Resonant soundscape meditation for presence." }
-      ]
-    },
-    {
-      id: "focus_arcade",
-      title: "Focus & Flow Arcade",
-      icon: "🎮",
-      sub_options: [
-        { id: "resonance_circle", title: "Resonance Circle", description: "Visual biofeedback for heart rate variability training using paced resonance." },
-        { id: "mindful_sweep", title: "Mindful Sweep", description: "Gentle attention guidance through body awareness zones." },
-        { id: "aurora_flow", title: "Aurora Flow", description: "Paced color transition training for parasympathetic activation." },
-        { id: "serenity_spiral", title: "Serenity Spiral", description: "Calming spiral meditation for attention restoration therapy." },
-        { id: "stillness_dots", title: "Stillness Dots", description: "Visual anchoring technique for attention stabilization." }
-      ]
-    },
-    {
-      id: "adaptive_environment",
-      title: "Adaptive Ambient Soundscapes",
-      icon: "🌧️",
-      sub_options: [
-        { id: "gentle_rain", title: "Gentle Rain Acoustics", description: "Real-time synthesized raindrops." },
-        { id: "ocean_waves", title: "Ocean Tides", description: "Low frequency binaural wave rhythm." },
-        { id: "forest_stream", title: "Forest Stream", description: "Chirping acoustics and water soundscape." },
-        { id: "healing_tones", title: "432Hz Healing Tones", description: "Deep harmonic meditation frequency." }
+        { id: "water_lily_pond", title: "Lily Pond Breathing", description: "Deep breathing with water lilies." },
+        { id: "vagus_humming", title: "Humming Exhale", description: "Humming to lower stress quickly." },
+        { id: "diaphragmatic_pace", title: "Deep Belly Breathing", description: "Deep belly breathing for quick calm." },
+        { id: "box_meditation", title: "Box Breathing", description: "4-4-4-4 rhythm for balance." }
       ]
     },
     {
@@ -66,21 +42,19 @@ export const MethodsScreen = () => {
       title: "Breathing Garden",
       icon: "🌸",
       sub_options: [
-        { id: "flower_meadow", title: "Bloom Garden", description: "Guided 4-7-8 breath relaxation with living garden ecosystem." },
-        { id: "lotus_breath", title: "Lotus Cycle", description: "Rhythmic lotus petal breath syncing." },
-        { id: "zen_garden", title: "Zen Garden Rake", description: "Interactive sand rake breathing focus." }
+        { id: "cosmic_nebula", title: "Cosmic Nebula", description: "Starlight breathing rhythm." },
+        { id: "flower_meadow", title: "Flower Meadow", description: "4-7-8 breathing with flowers." }
       ]
     },
     {
       id: "cognitive_destress",
-      title: "Cognitive Destress & Fidget",
-      icon: "🧩",
+      title: "Quick Relief",
+      icon: "🌿",
       sub_options: [
-        { id: "bubble_pop", title: "Zen Bubble Pop", description: "Tactile bubble tension release." },
-        { id: "pattern_align", title: "Pattern Alignment", description: "Mindful geometric alignment." },
-        { id: "stress_shatter", title: "Stress Release Shatter", description: "Touch glass shatter physics." },
-        { id: "cloud_float", title: "Cloud Floating", description: "Drifting cloud steering." },
-        { id: "sand_drop", title: "Cascade Sand", description: "Flowing sand physics focus." }
+        { id: "soft_fascination", title: "Nature Scenery", description: "Calming nature scenery." },
+        { id: "progressive_muscle", title: "Muscle Release", description: "Release body muscle tension." },
+        { id: "guided_imagery", title: "Forest Walk", description: "Peaceful forest walk imagery." },
+        { id: "pattern_alignment", title: "Memory Match", description: "Fun pattern match for focus." }
       ]
     }
   ];
@@ -111,7 +85,7 @@ export const MethodsScreen = () => {
     setCurrentRecommendation({
       technique_id: cat.id,
       title: cat.title,
-      description: `Selected ${subOpt.title} from Relaxation Catalog`,
+      description: `Selected ${subOpt.title} from Catalog`,
       selected_sub_option: subOpt,
       available_sub_options: cat.sub_options,
       context_cluster_id: 1,
@@ -125,14 +99,14 @@ export const MethodsScreen = () => {
       title: `Launching ${subOpt.title} ${cat.icon}`,
       text: subOpt.description,
       icon: 'info',
-      confirmButtonText: 'Play Session ▶️',
+      confirmButtonText: 'Start Session ⚡',
       onConfirm: () => setCurrentScreen('GamePlayer')
     });
   };
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
-      <Header title="Relaxation Methods Catalog" showBack onBack={() => setCurrentScreen('Dashboard')} />
+      <Header title="Relaxation Catalog" showBack onBack={() => setCurrentScreen('Dashboard')} />
 
       <SuitabilityModal
         visible={modalVisible}
@@ -149,9 +123,9 @@ export const MethodsScreen = () => {
       />
 
       <ScrollView contentContainerStyle={styles.content}>
-        <Text style={[styles.heading, { color: theme.textPrimary }]}>All 15 Relaxation Techniques</Text>
+        <Text style={[styles.heading, { color: theme.textPrimary }]}>Relaxation Catalog</Text>
         <Text style={[styles.sub, { color: theme.textSecondary }]}>
-          Explore our full catalog. Calm AI checks your live physiological signals before launching to ensure optimal vagus recovery.
+          Choose an exercise to start relaxing.
         </Text>
 
         {categories.map((cat) => (
@@ -176,7 +150,7 @@ export const MethodsScreen = () => {
                   {loadingId === sub.id ? (
                     <ActivityIndicator size="small" color={theme.accentText} />
                   ) : (
-                    <Text style={[styles.tryBtnTxt, { color: theme.accentText }]}>Try →</Text>
+                    <Text style={[styles.tryBtnTxt, { color: theme.accentText }]}>Start →</Text>
                   )}
                 </TouchableOpacity>
               </View>

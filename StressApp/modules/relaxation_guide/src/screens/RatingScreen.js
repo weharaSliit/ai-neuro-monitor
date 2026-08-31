@@ -20,7 +20,7 @@ export const RatingScreen = () => {
   const {
     userId, currentRecommendation, selectedSubOption,
     preInterventionLabel, setPostInterventionLabel,
-    setLastValidationResult, setCurrentScreen
+    setLastValidationResult, setBaselineNotReachedModal, setCurrentScreen
   } = useContext(AppContext);
   const { theme } = useContext(ThemeContext);
 
@@ -81,18 +81,37 @@ export const RatingScreen = () => {
       const techId = currentRecommendation?.technique_id || 'breathing_garden';
       const subId  = selectedSubOption?.id || 'flower_meadow';
       await apiService.submitRating(userId, techId, subId, rating);
-      const postState = preInterventionLabel === 'stress' ? 'normal' : 'normal';
+      
+      let postState = 'normal';
+      if (rating <= 2) {
+        postState = preInterventionLabel || 'stress';
+      } else {
+        postState = 'normal';
+      }
+
       setPostInterventionLabel(postState);
       const clusterId = currentRecommendation?.context_cluster_id ?? 0;
-      const valRes = await apiService.validateIntervention(userId, techId, preInterventionLabel, postState, clusterId);
+      const valRes = await apiService.validateIntervention(userId, techId, preInterventionLabel, postState, clusterId, rating);
       setLastValidationResult(valRes);
-      showAlert({
-        title: `${rating === 5 ? '⭐ Outstanding!' : '⭐ Feedback Received!'}`,
-        text: `Your ${rating}-star feedback updated your personalized preference model.`,
-        icon: 'success',
-        timer: 1800,
-      });
-      setCurrentScreen('Recovery');
+
+      const isNormal = valRes?.is_normal_reached ?? valRes?.is_normal ?? (postState === 'normal');
+
+      if (!isNormal && (valRes?.alternative_recommendation || valRes?.closed_loop_status)) {
+        setBaselineNotReachedModal({
+          visible: true,
+          alternativeRecommendation: valRes.alternative_recommendation,
+          prob_stress: valRes.alternative_recommendation?.stress_probability || 0.60
+        });
+        setCurrentScreen('Recovery');
+      } else {
+        showAlert({
+          title: `${rating === 5 ? '⭐ Outstanding!' : '⭐ Feedback Received!'}`,
+          text: `Your ${rating}-star feedback updated your personalized preference model.`,
+          icon: 'success',
+          timer: 1800,
+        });
+        setCurrentScreen('Recovery');
+      }
     } catch (e) {
       showAlert({ title: 'Rating Saved', text: 'Moving to recovery analytics...', icon: 'info', timer: 1200 });
       setCurrentScreen('Recovery');

@@ -100,6 +100,8 @@ class ValidationResponse(BaseModel):
     total_xp: int = 0
     is_normal_reached: bool = False
     unlocked_badges: List[BadgeItem] = []
+    closed_loop_status: Optional[Dict[str, Any]] = None
+    alternative_recommendation: Optional[Dict[str, Any]] = None
 
 class RatingRequest(BaseModel):
     user_id: str

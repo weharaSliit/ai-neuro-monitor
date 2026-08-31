@@ -18,7 +18,7 @@ export const PrivacyPolicyScreen = () => {
       <Header
         title="Privacy & Data Ethics"
         showBack={isCalibrated}
-        onBack={() => setCurrentScreen('UserProfile')}
+        onBack={() => setCurrentScreen('Dashboard')}
       />
 
       <ScrollView contentContainerStyle={styles.content}>

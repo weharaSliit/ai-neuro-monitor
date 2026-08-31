@@ -3,11 +3,10 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   ActivityIndicator, Animated, Easing, Dimensions
 } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
 import { Header } from '../components/Header';
-import { MemberTelemetryCard } from '../components/MemberTelemetryCard';
-import { TelemetrySimulatorCard } from '../components/TelemetrySimulatorCard';
 import { apiService } from '../api/apiService';
 import { useSweetAlert } from '../context/SweetAlertContext';
 
@@ -122,42 +121,54 @@ const PulseDot = ({ color }) => {
 /* ────────────────────────────────────────────────────────
    STRESS STATE CONFIG HELPER
    ──────────────────────────────────────────────────────── */
-const getStateConfig = (stressState, stressProbability, theme) => {
+const getStateConfig = (stressState, stressProbability, theme, isCalibrated = true, hasLivePacket = true) => {
+  if (isCalibrated === false) {
+    return {
+      color: theme.warning,
+      bgTint: 'rgba(245,158,11,0.14)',
+      label: 'WAITING FOR CALIBRATION',
+      emoji: '⏳',
+      tagline: 'Waiting for 2-minute baseline calibration... Real-time stress detection active after calibration',
+      icon: '⏳',
+      pct: '--',
+      breathDuration: 2000,
+    };
+  }
+
+  if (hasLivePacket === false) {
+    return {
+      color: theme.warning,
+      bgTint: 'rgba(245,158,11,0.14)',
+      label: 'WAITING FOR LIVE STREAM',
+      emoji: '📡',
+      icon: '📡',
+      pct: '--',
+      breathDuration: 2000,
+    };
+  }
+
   const normState = (stressState || '').toLowerCase();
   const prob = typeof stressProbability === 'number' ? stressProbability : 0.15;
 
-  // Pipeline Color Synchronization:
-  // Red (>= 60% or high_stress) -> HIGH STRESS
-  // Orange (35% - 60% or pre-stress) -> PRE-STRESS
-  // Green (< 35% or normal) -> NORMAL BASELINE
-  if (normState === 'stress' || normState === 'high_stress' || normState === 'high' || normState === 'acute' || prob >= 0.60) {
+  // Binary Classification: STRESS (Red) vs NORMAL (Green)
+  const isStress = normState === 'stress' || normState === 'high_stress' || normState === 'high' || normState === 'acute' || normState === 'pre-stress' || normState === 'pre_stress' || normState === 'medium' || normState === 'moderate' || prob >= 0.50;
+
+  if (isStress) {
     return {
       color: theme.danger,
       bgTint: 'rgba(239,68,68,0.14)',
-      label: 'HIGH STRESS',
+      label: 'STRESS',
       emoji: '🔴',
-      tagline: 'High sympathetic activation detected — Intervention recommended',
+      tagline: 'Sympathetic arousal detected — Intervention recommended',
       icon: '🫀',
       pct: Math.min(99, Math.round(prob * 100)),
       breathDuration: 1200,
     };
   }
-  if (normState === 'pre-stress' || normState === 'pre_stress' || normState === 'medium' || normState === 'moderate' || prob >= 0.35) {
-    return {
-      color: theme.warning,
-      bgTint: 'rgba(245,158,11,0.14)',
-      label: 'PRE-STRESS',
-      emoji: '🟠',
-      tagline: 'Elevated arousal detected — Early intervention window open',
-      icon: '⚡',
-      pct: Math.min(99, Math.round(prob * 100)),
-      breathDuration: 2000,
-    };
-  }
   return {
     color: theme.success,
     bgTint: 'rgba(16,185,129,0.14)',
-    label: 'NORMAL BASELINE',
+    label: 'NORMAL',
     emoji: '🟢',
     tagline: 'Autonomic nervous system at optimal resting state',
     icon: '🧘',
@@ -203,24 +214,34 @@ const ActionCard = ({ item, theme, onPress }) => {
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
   const onPressIn = () =>
-    Animated.spring(scaleAnim, { toValue: 0.93, tension: 300, friction: 10, useNativeDriver: true }).start();
+    Animated.spring(scaleAnim, { toValue: 0.94, tension: 300, friction: 10, useNativeDriver: true }).start();
   const onPressOut = () =>
     Animated.spring(scaleAnim, { toValue: 1, tension: 300, friction: 10, useNativeDriver: true }).start();
 
   return (
     <TouchableOpacity
-      style={[s.actionCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}
+      style={[
+        s.actionCard,
+        {
+          backgroundColor: theme.bgSecondary,
+          borderColor: theme.border,
+          borderTopColor: item.accent,
+          borderTopWidth: 2,
+        }
+      ]}
       onPress={onPress}
       onPressIn={onPressIn}
       onPressOut={onPressOut}
-      activeOpacity={1}
+      activeOpacity={0.9}
     >
       <Animated.View style={{ alignItems: 'center', transform: [{ scale: scaleAnim }] }}>
         <View style={[s.actionIconWrap, { backgroundColor: item.tint }]}>
           <Text style={s.actionIcon}>{item.icon}</Text>
         </View>
-        <Text style={[s.actionLabel, { color: theme.textPrimary }]}>{item.label}</Text>
-        <Text style={[s.actionSub, { color: theme.textMuted }]}>{item.sub}</Text>
+        <Text style={[s.actionLabel, { color: theme.textPrimary }]} numberOfLines={1}>{item.label}</Text>
+        <View style={[s.subBadgePill, { backgroundColor: `${item.accent}1F` }]}>
+          <Text style={[s.actionSub, { color: item.accent }]}>{item.sub}</Text>
+        </View>
       </Animated.View>
     </TouchableOpacity>
   );
@@ -230,19 +251,40 @@ const ActionCard = ({ item, theme, onPress }) => {
    MAIN DASHBOARD SCREEN
    ════════════════════════════════════════════════════════ */
 export const DashboardScreen = () => {
+  const navigation = useNavigation();
   const { showAlert } = useSweetAlert();
+
+  const handleBackToMain = () => {
+    try {
+      if (navigation && navigation.canGoBack()) {
+        navigation.goBack();
+      } else if (navigation) {
+        navigation.navigate('Home');
+      }
+    } catch (e) {
+      try {
+        navigation.navigate('Main');
+      } catch (e2) {
+        // Fallback
+      }
+    }
+  };
+
   const {
     userId, username, setCurrentScreen,
     stressState, stressProbability,
     simMode, updateSimMode,
     isSafetyOverride, isAlertTriggered, telemetryMessage,
-    setCurrentRecommendation, setPreInterventionLabel,
-    onboardingRecommendation, hasShownOnboardingAlert, setHasShownOnboardingAlert
+    isCalibrated, hasLivePacket,
+    setCurrentRecommendation, setPreInterventionLabel
   } = useContext(AppContext);
 
   const { theme } = useContext(ThemeContext);
   const [loading, setLoading] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
+
+  const u = (userId || '').toLowerCase();
+  const isAdmin = u === 'ojani' || u.includes('ojani') || u === 'admin' || u.includes('admin');
 
   // Entrance animations
   const fadeIn = useRef(new Animated.Value(0)).current;
@@ -270,19 +312,6 @@ export const DashboardScreen = () => {
     return () => clearInterval(t);
   }, []);
 
-  // Onboarding recommendation alert
-  useEffect(() => {
-    if (onboardingRecommendation && !hasShownOnboardingAlert) {
-      setHasShownOnboardingAlert(true);
-      showAlert({
-        title: '🎯 Personal Relaxation Plan Ready!',
-        text: `Welcome ${username}!\n\nBased on your onboarding survey & 60-second baseline calibration:\n\n• Primary Recommended Technique: ${onboardingRecommendation.title}\n• Personalized Rationale: ${onboardingRecommendation.reason}`,
-        icon: 'success',
-        confirmButtonText: 'OK / Explore Dashboard 🚀'
-      });
-    }
-  }, [onboardingRecommendation, hasShownOnboardingAlert]);
-
   const triggerIntervention = async () => {
     setLoading(true);
     try {
@@ -297,7 +326,7 @@ export const DashboardScreen = () => {
       setCurrentRecommendation(recommendation);
       showAlert({
         title: 'Intervention Selected! 🎯',
-        text: `Based on your live signals (${stressState.toUpperCase()}), Calm AI selected: ${recommendation.title}.`,
+        text: `Based on your live signals (${stressState.toUpperCase()}), Relaxation Guide selected: ${recommendation.title}.`,
         icon: 'info',
         confirmButtonText: 'Start Session ▶️',
         onConfirm: () => setCurrentScreen('Intervention')
@@ -315,7 +344,7 @@ export const DashboardScreen = () => {
     }
   };
 
-  const sc = getStateConfig(stressState, stressProbability, theme);
+  const sc = getStateConfig(stressState, stressProbability, theme, isCalibrated, hasLivePacket);
   const greeting = currentTime.getHours() < 12 ? 'Good Morning' : currentTime.getHours() < 18 ? 'Good Afternoon' : 'Good Evening';
   const timeStr = currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -349,7 +378,11 @@ export const DashboardScreen = () => {
 
   return (
     <View style={[s.container, { backgroundColor: theme.bgPrimary }]}>
-      <Header title="Home" />
+      <Header
+        title="Welcome to Relaxation Guide"
+        showBack={true}
+        onBack={handleBackToMain}
+      />
 
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
         <Animated.View style={{ opacity: fadeIn, transform: [{ translateY: slideUp }] }}>
@@ -361,21 +394,25 @@ export const DashboardScreen = () => {
           <View style={[s.welcomeRow, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
             <View style={s.welcomeLeft}>
               <Text style={[s.greetingTxt, { color: theme.textMuted }]}>{greeting}</Text>
-              <Text style={[s.nameTxt, { color: theme.textPrimary }]}>{username}</Text>
+              <Text style={[s.nameTxt, { color: theme.textPrimary }]}>{isAdmin ? 'Ojani (Admin)' : username}</Text>
               <View style={s.liveChip}>
                 <PulseDot color={sc.color} />
-                <Text style={[s.liveChipTxt, { color: sc.color }]}>System Active</Text>
+                <Text style={[s.liveChipTxt, { color: sc.color }]}>{isCalibrated ? (hasLivePacket ? 'System Active' : 'Awaiting Live Stream') : 'Waiting for Calibration'}</Text>
               </View>
             </View>
             <View style={s.welcomeRight}>
               <Text style={[s.clockTxt, { color: theme.accent }]}>{timeStr}</Text>
               <View style={[s.idPill, { backgroundColor: theme.bgPrimary, borderColor: theme.border }]}>
-                <Text style={[s.idPillTxt, { color: theme.textMuted }]}>🔐 {userId}</Text>
+                <Text style={[s.idPillTxt, { color: theme.textMuted }]}>{isAdmin ? '🛡️ Admin (Ojani)' : `🆔 ${userId}`}</Text>
               </View>
             </View>
           </View>
 
-          {/* ═══════════ 3. STRESS STATE HERO ═══════════ */}
+          {/* ═══════════ 3. STRESS STATE HERO (PHYSIOLOGICAL SENSORS) ═══════════ */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, paddingHorizontal: 4 }}>
+            <Text style={{ fontSize: 13, fontWeight: '800', color: theme.accent, letterSpacing: 0.5 }}>🫀 PHYSIOLOGICAL STREAM (Smart Ring + Earbud)</Text>
+            <Text style={{ fontSize: 10, color: theme.textMuted }}>fusion_en_sessions</Text>
+          </View>
           <View style={[s.stateHero, { borderColor: sc.color, backgroundColor: sc.bgTint }]}>
             {/* Breathing ring layer */}
             <View style={s.breathRingWrap} pointerEvents="none">
@@ -400,17 +437,12 @@ export const DashboardScreen = () => {
             {/* Metrics bar */}
             <View style={[s.metricsRow, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
               <View style={s.metricCol}>
-                <Text style={[s.metricValue, { color: theme.textPrimary }]}>{(stressProbability * 100).toFixed(0)}%</Text>
-                <Text style={[s.metricLabel, { color: theme.textMuted }]}>P(Stress)</Text>
+                <Text style={[s.metricValue, { color: sc.color }]}>{(isCalibrated && hasLivePacket) ? sc.label : (isCalibrated ? 'AWAITING...' : 'CALIBRATING')}</Text>
+                <Text style={[s.metricLabel, { color: theme.textMuted }]}>Current State</Text>
               </View>
               <View style={[s.metricDivider, { backgroundColor: theme.border }]} />
               <View style={s.metricCol}>
-                <Text style={[s.metricValue, { color: sc.color }]}>{stressState.toUpperCase()}</Text>
-                <Text style={[s.metricLabel, { color: theme.textMuted }]}>Fused Label</Text>
-              </View>
-              <View style={[s.metricDivider, { backgroundColor: theme.border }]} />
-              <View style={s.metricCol}>
-                <Text style={[s.metricValue, { color: theme.accent }]}>{sc.pct}%</Text>
+                <Text style={[s.metricValue, { color: theme.accent }]}>{(isCalibrated && hasLivePacket) ? (typeof sc.pct === 'number' ? `${sc.pct}%` : sc.pct) : 'WAITING...'}</Text>
                 <Text style={[s.metricLabel, { color: theme.textMuted }]}>Confidence</Text>
               </View>
             </View>
@@ -425,45 +457,113 @@ export const DashboardScreen = () => {
               <View style={[s.progressBg, { backgroundColor: theme.border }]}>
                 <Animated.View style={[s.progressFill, {
                   backgroundColor: sc.color,
-                  width: stressState === 'normal' ? '100%' : stressState === 'pre-stress' ? '50%' : '18%'
+                  width: sc.label === 'NORMAL' ? '100%' : '18%'
                 }]} />
               </View>
             </View>
 
             {isSafetyOverride && (
               <View style={[s.overrideBar, { borderColor: theme.danger }]}>
-                <Text style={[s.overrideTxt, { color: theme.danger }]}>🚨 SAFETY OVERRIDE — P(stress) exceeds 0.75 threshold</Text>
+                <Text style={[s.overrideTxt, { color: theme.danger }]}>🚨 STRESS ALERT — Instant relaxation recommended</Text>
               </View>
             )}
           </View>
+
+          {/* ═══════════ 3b. LIVE PHENOTYPING STREAM HERO CARD ═══════════ */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, marginBottom: 6, paddingHorizontal: 4 }}>
+            <Text style={{ fontSize: 13, fontWeight: '800', color: sc.color, letterSpacing: 0.5 }}>⌨️ LIVE PHENOTYPING STREAM (Behavioral & Smartphone)</Text>
+            <Text style={{ fontSize: 10, color: theme.textMuted }}>phenotyping_sessions</Text>
+          </View>
+          <View style={[s.stateHero, { borderColor: sc.color, backgroundColor: sc.bgTint }]}>
+            <View style={s.stateHeroTop}>
+              <View style={s.stateLeft}>
+                <View style={[s.stateIconCircle, { backgroundColor: sc.color + '20' }]}>
+                  <Text style={s.stateEmoji}>📱</Text>
+                </View>
+                <View>
+                  <View style={[s.statePill, { backgroundColor: sc.color }]}>
+                    <Text style={s.statePillTxt}>⌨️ PHENOTYPING TELEMETRY</Text>
+                  </View>
+                  <Text style={[s.stateTagline, { color: theme.textSecondary }]}>Typing Latency · Screen Touch Dynamics · Rumination Index</Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Phenotyping Metrics Bar */}
+            <View style={[s.metricsRow, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
+              <View style={s.metricCol}>
+                <Text style={[s.metricValue, { color: sc.color }]}>{(isCalibrated && hasLivePacket) ? sc.label : (isCalibrated ? 'AWAITING...' : 'CALIBRATING')}</Text>
+                <Text style={[s.metricLabel, { color: theme.textMuted }]}>Cognitive State</Text>
+              </View>
+              <View style={[s.metricDivider, { backgroundColor: theme.border }]} />
+              <View style={s.metricCol}>
+                <Text style={[s.metricValue, { color: theme.accent }]}>{(isCalibrated && hasLivePacket) ? (typeof sc.pct === 'number' ? `${sc.pct}%` : sc.pct) : 'WAITING...'}</Text>
+                <Text style={[s.metricLabel, { color: theme.textMuted }]}>Pheno Confidence</Text>
+              </View>
+            </View>
+
+            {/* Phenotyping Progress Section */}
+            <View style={s.progressSection}>
+              <View style={s.progressLabels}>
+                <Text style={[s.progressLbl, { color: theme.textMuted }]}>Calm</Text>
+                <Text style={[s.progressLbl, { color: theme.textMuted }]}>Rumination Target →</Text>
+                <Text style={[s.progressLbl, { color: theme.textMuted }]}>Agitation ⚡</Text>
+              </View>
+              <View style={[s.progressBg, { backgroundColor: theme.border }]}>
+                <View style={[s.progressFill, { backgroundColor: sc.color, width: (isCalibrated && hasLivePacket) ? (sc.label === 'NORMAL' ? '100%' : '18%') : '0%' }]} />
+              </View>
+            </View>
+          </View>
+
+          {/* ═══════════ CALIBRATION STATUS BANNER ═══════════ */}
+          {!isCalibrated && (
+            <View style={[s.calibrationCard, { backgroundColor: 'rgba(245,158,11,0.12)', borderColor: '#F59E0B' }]}>
+              <View style={s.calibrationHeader}>
+                <ActivityIndicator size="small" color="#F59E0B" />
+                <Text style={[s.calibrationTitle, { color: '#F59E0B' }]}>⏳ Waiting for Baseline Calibration...</Text>
+              </View>
+              <Text style={[s.calibrationBody, { color: theme.textSecondary }]}>
+                The 2-minute baseline calibration is currently active. Real-time stress detection and adaptive relaxation recommendations will initialize automatically once baseline calibration completes.
+              </Text>
+            </View>
+          )}
 
           {/* ═══════════ 4. QUICK ACTION GRID ═══════════ */}
           <Text style={[s.sectionTitle, { color: theme.textPrimary }]}>Quick Actions</Text>
           <View style={s.actionGrid}>
             {[
-              { id: 'Intervention', icon: '🎮', label: 'Techniques', sub: '25 Games', tint: 'rgba(56,189,248,0.12)' },
-              { id: 'History', icon: '📊', label: 'History', sub: 'Sessions', tint: 'rgba(16,185,129,0.12)' },
-              { id: 'Chatbot', icon: '🤖', label: 'AI Guide', sub: 'Counselor', tint: 'rgba(139,92,246,0.12)' },
-              { id: 'UserProfile', icon: '👤', label: 'Profile', sub: 'Settings', tint: 'rgba(245,158,11,0.12)' }
+              { id: 'Methods', icon: '🧘', label: 'Techniques', sub: '10 Methods', tint: 'rgba(56,189,248,0.14)', accent: '#38BDF8' },
+              { id: 'PerformanceOverview', icon: '📊', label: 'Performance', sub: 'Analytics & Trends', tint: 'rgba(16,185,129,0.14)', accent: '#10B981' },
+              { id: 'UserProfile', icon: '👤', label: 'User Profile', sub: 'Account & XP', tint: 'rgba(236,72,153,0.14)', accent: '#EC4899' },
+              { id: 'CommonHome', icon: '🏠', label: 'Main Home', sub: 'Return to App', tint: 'rgba(59,130,246,0.14)', accent: '#3B82F6' },
+              ...(isAdmin ? [
+                { id: 'History', icon: '📈', label: 'History', sub: 'Recovery', tint: 'rgba(16,185,129,0.14)', accent: '#10B981' },
+                { id: 'FusionPipeline', icon: '📡', label: 'Pipeline', sub: 'Telemetry', tint: 'rgba(139,92,246,0.14)', accent: '#8B5CF6' }
+              ] : [])
             ].map(item => (
-              <ActionCard key={item.id} item={item} theme={theme} onPress={() => setCurrentScreen(item.id)} />
+              <ActionCard
+                key={item.id}
+                item={item}
+                theme={theme}
+                onPress={() => {
+                  if (item.id === 'CommonHome') {
+                    handleBackToMain();
+                  } else if (item.id === 'UserProfile') {
+                    try {
+                      navigation.navigate('Profile');
+                    } catch (e) {
+                      setCurrentScreen('UserProfile');
+                    }
+                  } else {
+                    setCurrentScreen(item.id);
+                  }
+                }}
+              />
             ))}
           </View>
 
           {/* ═══════════ 4b. DAILY TIP ═══════════ */}
           <DailyTipBanner theme={theme} />
-
-          {/* ═══════════ 5. MULTIMODAL FUSION ENGINE ═══════════ */}
-          <MemberTelemetryCard stressState={stressState} stressProbability={stressProbability} />
-
-          {/* ═══════════ 6. SIMULATOR ═══════════ */}
-          <TelemetrySimulatorCard
-            currentMode={simMode}
-            onModeChange={updateSimMode}
-            isOverride={isSafetyOverride}
-            isAlert={isAlertTriggered}
-            message={telemetryMessage}
-          />
 
           {/* ═══════════ 7. LAUNCH CTA ═══════════ */}
           <Animated.View style={{ transform: [{ scale: ctaScale }] }}>
@@ -477,8 +577,8 @@ export const DashboardScreen = () => {
                 <ActivityIndicator color={theme.accentText} size="small" />
               ) : (
                 <View style={s.ctaInner}>
-                  <Text style={[s.ctaMain, { color: theme.accentText }]}>🚀  Launch Personalized Intervention</Text>
-                  <Text style={[s.ctaSub, { color: theme.accentText }]}>Thompson Bandit selects the optimal technique for you</Text>
+                  <Text style={[s.ctaMain, { color: theme.accentText }]}>🚀  Start Relaxation Session</Text>
+                  <Text style={[s.ctaSub, { color: theme.accentText }]}>Smart AI selects the best exercise for your stress level</Text>
                 </View>
               )}
             </TouchableOpacity>
@@ -681,26 +781,38 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
-    marginBottom: 8
+    marginBottom: 16
   },
   actionCard: {
-    width: '48%',
-    flexGrow: 1,
-    flexBasis: '46%',
-    padding: 16,
+    flex: 1,
+    minWidth: '46%',
+    maxWidth: '48.5%',
+    paddingVertical: 14,
+    paddingHorizontal: 6,
     borderRadius: 18,
     borderWidth: 1,
-    alignItems: 'center'
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 3
   },
   actionIconWrap: {
-    width: 48, height: 48,
-    borderRadius: 16,
+    width: 44, height: 44,
+    borderRadius: 22,
     alignItems: 'center', justifyContent: 'center',
-    marginBottom: 10
+    marginBottom: 8
   },
-  actionIcon: { fontSize: 24 },
-  actionLabel: { fontSize: 13, fontWeight: '800' },
-  actionSub: { fontSize: 10, marginTop: 2, fontWeight: '600' },
+  actionIcon: { fontSize: 22 },
+  actionLabel: { fontSize: 13, fontWeight: '800', textAlign: 'center' },
+  subBadgePill: {
+    marginTop: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10
+  },
+  actionSub: { fontSize: 10, fontWeight: '800', letterSpacing: 0.3 },
 
   /* ── Daily Tip ── */
   tipBanner: {
@@ -745,5 +857,27 @@ const s = StyleSheet.create({
   },
   ctaInner: { alignItems: 'center' },
   ctaMain: { fontWeight: '900', fontSize: 15, letterSpacing: 0.2 },
-  ctaSub: { fontWeight: '600', fontSize: 10, marginTop: 4, opacity: 0.8 }
+  ctaSub: { fontSize: 11, opacity: 0.85, marginTop: 2, fontWeight: '600' },
+
+  /* ── Calibration Banner ── */
+  calibrationCard: {
+    borderRadius: 16,
+    borderWidth: 1.5,
+    padding: 14,
+    marginBottom: 16,
+  },
+  calibrationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+    gap: 8,
+  },
+  calibrationTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  calibrationBody: {
+    fontSize: 13,
+    lineHeight: 18,
+  }
 });
