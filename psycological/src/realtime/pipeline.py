@@ -308,6 +308,7 @@ class RealtimeInference:
         if self._itakura_baseline_filtered_ch1 is None:
             self._itakura_baseline_filtered_ch1 = filtered[0]
             self._itakura_baseline_filtered_ch2 = filtered[1]
+        self.quality_validator.record_calibration_epoch(filtered[0])
         return quality
 
     def finalize_calibration(self, allow_degraded: bool = False) -> dict:
@@ -330,6 +331,7 @@ class RealtimeInference:
             self.baseline.add(best_feats)
             self._itakura_baseline_filtered_ch1 = best_filtered_ch1
             self._itakura_baseline_filtered_ch2 = best_filtered_ch2
+            self.quality_validator.record_calibration_epoch(best_filtered_ch1)
             self.baseline_degraded = True
             self.baseline_degraded_score = best_score
             self.adaptive_baseline.initialize(self.baseline.mean())
