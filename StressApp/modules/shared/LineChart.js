@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
+import React, { useState, useRef, useEffect } from 'react';
+import { View, Text, ScrollView, StyleSheet, Dimensions } from 'react-native';
 import Svg, { Circle, Line as SvgLine } from 'react-native-svg';
 import { LineChart as GiftedLineChart } from 'react-native-gifted-charts';
 import { COLORS } from '../physiological/config/theme';
@@ -7,10 +7,18 @@ import { COLORS } from '../physiological/config/theme';
 function ReferenceLine({ value, label, color, height, maxValue, labelSide }) {
     if (value === undefined || value === null || !maxValue) return null;
     const top = height * (1 - Math.min(1, Math.max(0, value / maxValue)));
+    const labelBelow = top < 16;
     return (
         <View pointerEvents="none" style={[styles.baseline, { top, borderTopColor: color }]}>
             {label ? (
-                <Text style={[styles.baselineLabel, { color }, labelSide === 'left' ? { left: 0 } : { right: 0 }]}>
+                <Text
+                    style={[
+                        styles.baselineLabel,
+                        { color },
+                        labelBelow ? { top: 4 } : { top: -16 },
+                        labelSide === 'left' ? { left: 0 } : { right: 0 },
+                    ]}
+                >
                     {label}
                 </Text>
             ) : null}
@@ -21,7 +29,8 @@ function ReferenceLine({ value, label, color, height, maxValue, labelSide }) {
 const X_LABEL_HEIGHT = 16;
 const LEGEND_HEIGHT = 20;
 const DETAIL_HEIGHT = 18;
-const MIN_POINT_GAP = 30;
+const MIN_POINT_GAP = 28;
+const EDGE_PAD = 12;
 
 function LegendSwatch({ color, label }) {
     return (
@@ -39,25 +48,44 @@ function ZoneChart({
     zoneLowColor, zoneMidColor, zoneHighColor,
 }) {
     const [selectedIndex, setSelectedIndex] = useState(null);
-    const contentWidth = Math.max(width, MIN_POINT_GAP * Math.max(1, raw.length - 1) + 20);
+    const scrollRef = useRef(null);
+
+    // Calculate content width based on points count
+    const minContentWidth = raw.length > 1
+        ? Math.max(width, (raw.length - 1) * MIN_POINT_GAP + EDGE_PAD * 2)
+        : width;
+    const contentWidth = minContentWidth;
+    const isScrollable = contentWidth > width;
+
     const times = raw.map((p) => (p.date ? new Date(p.date).getTime() : null));
     const haveAllTimes = times.every((t) => t !== null && !Number.isNaN(t));
     const totalSpan = haveAllTimes ? times[times.length - 1] - times[0] : 0;
 
+    const plotUsableWidth = contentWidth - EDGE_PAD * 2;
     const xs = [];
     raw.forEach((_p, i) => {
-        if (i === 0) { xs.push(0); return; }
+        if (i === 0) { xs.push(EDGE_PAD); return; }
         let spacing;
         if (haveAllTimes && totalSpan > 0) {
             const frac = (times[i] - times[i - 1]) / totalSpan;
-            spacing = Math.max(MIN_POINT_GAP * 0.6, frac * contentWidth);
+            spacing = Math.max(MIN_POINT_GAP * 0.6, frac * plotUsableWidth);
         } else {
-            spacing = Math.max(MIN_POINT_GAP, contentWidth / (raw.length - 1));
+            spacing = Math.max(MIN_POINT_GAP, plotUsableWidth / (raw.length - 1));
         }
         xs.push(xs[i - 1] + spacing);
     });
 
-    const PAD_Y = 7;
+    // Auto-scroll to the latest reading (end) when new points arrive
+    useEffect(() => {
+        if (isScrollable && scrollRef.current) {
+            const t = setTimeout(() => {
+                scrollRef.current?.scrollToEnd({ animated: true });
+            }, 150);
+            return () => clearTimeout(t);
+        }
+    }, [raw.length, isScrollable]);
+
+    const PAD_Y = 8;
     const clamp01 = (v) => Math.min(1, Math.max(0, v));
     const valueToY = (v) => PAD_Y + (height - PAD_Y * 2) * (1 - clamp01(v / maxValue));
     const ys = raw.map((p) => valueToY(p.value));
@@ -69,7 +97,7 @@ function ZoneChart({
     const zoneLabelOf = (z) => (z === 'high' ? 'Stress' : z === 'mid' ? 'Trending' : 'Normal');
     const zones = raw.map((p) => zoneOf(p.value));
 
-    const targetLabelCount = Math.max(4, Math.round(contentWidth / 90));
+    const targetLabelCount = Math.max(4, Math.round(contentWidth / 85));
     const labelStep = Math.max(1, Math.ceil(raw.length / targetLabelCount));
 
     const baselineY = valueToY(baselineValue);
@@ -77,7 +105,16 @@ function ZoneChart({
 
     const selected = selectedIndex != null ? raw[selectedIndex] : null;
     let detailNode = (
-        <Text style={[styles.detailHint, { color: COLORS.light.textMuted }]}>Tap a point for details</Text>
+        <View style={styles.detailRow}>
+            <Text style={[styles.detailHint, { color: COLORS.light.textMuted }]}>
+                {isScrollable ? '← Swipe horizontally to view history · Tap point for details' : 'Tap a point for details'}
+            </Text>
+            {isScrollable && (
+                <View style={styles.scrollBadge}>
+                    <Text style={styles.scrollBadgeText}>Scrollable ⇄</Text>
+                </View>
+            )}
+        </View>
     );
     if (selected) {
         const zone = zones[selectedIndex];
@@ -89,27 +126,31 @@ function ZoneChart({
         if (baseline2Value != null) {
             const dev = Math.round(selected.value - baseline2Value);
             devText = dev === 0 ? ' · at your baseline'
-                : dev > 0 ? ` · ${dev} pts above your baseline`
-                    : ` · ${Math.abs(dev)} pts below your baseline`;
+                : dev > 0 ? ` · ${dev} pts above baseline`
+                    : ` · ${Math.abs(dev)} pts below baseline`;
         }
         detailNode = (
             <Text style={styles.detailText} numberOfLines={1}>
-                <Text style={{ color: dColor, fontWeight: '800' }}>{zoneLabelOf(zone)}</Text>
+                <Text style={{ color: dColor, fontWeight: '800' }}>{zoneLabelOf(zone)} ({selected.value}%)</Text>
                 <Text style={{ color: COLORS.light.textMuted }}>{devText} · {time}</Text>
             </Text>
         );
     }
 
     return (
-        <View style={{ width }}>
+        <View style={{ width, overflow: 'hidden' }}>
             <View style={styles.detailBar}>{detailNode}</View>
 
             <ScrollView
+                ref={scrollRef}
                 horizontal
-                showsHorizontalScrollIndicator={false}
+                showsHorizontalScrollIndicator={isScrollable}
                 style={{ width }}
-                nestedScrollEnabled
-                directionalLockEnabled
+                contentContainerStyle={{ width: contentWidth }}
+                nestedScrollEnabled={true}
+                overScrollMode="never"
+                bounces={false}
+                scrollEventThrottle={16}
             >
                 <View style={{ width: contentWidth, height: height + X_LABEL_HEIGHT }}>
                     <Svg width={contentWidth} height={height} style={{ position: 'absolute', top: 0, left: 0 }}>
@@ -147,34 +188,22 @@ function ZoneChart({
                         })}
 
                         {raw.map((_p, i) => (
-                            <Circle key={i} cx={xs[i]} cy={ys[i]} r={selectedIndex === i ? 5 : 3} fill={zoneColorOf(zones[i])}
-                                stroke={selectedIndex === i ? COLORS.light.card : undefined}
-                                strokeWidth={selectedIndex === i ? 1.5 : 0} />
+                            <React.Fragment key={i}>
+                                <Circle cx={xs[i]} cy={ys[i]} r={12} fill={zoneColorOf(zones[i])} fillOpacity={0.001}
+                                    onPress={() => setSelectedIndex(i)} />
+                                <Circle cx={xs[i]} cy={ys[i]} r={selectedIndex === i ? 5.5 : 3.5} fill={zoneColorOf(zones[i])}
+                                    stroke={selectedIndex === i ? COLORS.light.card : undefined}
+                                    strokeWidth={selectedIndex === i ? 2 : 0}
+                                    onPress={() => setSelectedIndex(i)} />
+                            </React.Fragment>
                         ))}
                     </Svg>
 
-                    {/* Real RN touch targets over each point -- an SVG shape's own
-                        onPress fights the surrounding horizontal ScrollView's pan
-                        responder on some devices and silently eats taps; a normal
-                        Touchable here negotiates with the scroll responder the same
-                        way any other RN touchable does, so taps land reliably. */}
-                    <View pointerEvents="box-none" style={{ position: 'absolute', top: 0, left: 0, width: contentWidth, height }}>
-                        {raw.map((_p, i) => (
-                            <TouchableOpacity
-                                key={`hit-${i}`}
-                                onPress={() => setSelectedIndex(i)}
-                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                                style={{ position: 'absolute', left: xs[i] - 12, top: ys[i] - 12, width: 24, height: 24 }}
-                            />
-                        ))}
-                    </View>
-
-                    {/* Timeline underneath -- orientation, not a stress number. */}
                     <View pointerEvents="none" style={{ position: 'absolute', top: height + 2, left: 0, width: contentWidth, height: X_LABEL_HEIGHT }}>
                         {haveAllTimes && raw.map((p, i) => {
                             if (!(i % labelStep === 0 || i === raw.length - 1)) return null;
                             return (
-                                <Text key={i} style={[styles.xLabel, { left: xs[i] - 18, color: COLORS.light.textMuted }]}>
+                                <Text key={i} style={[styles.xLabel, { left: Math.max(0, xs[i] - 26), color: COLORS.light.textMuted }]}>
                                     {new Date(p.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                 </Text>
                             );
@@ -183,62 +212,76 @@ function ZoneChart({
                 </View>
             </ScrollView>
 
-            {/* Zone legend -- what the line colors mean, always visible (not just on tap) */}
-            <View style={styles.legendRow}>
-                <LegendSwatch color={zoneLowColor} label="Normal" />
-                {baseline2Value != null && <LegendSwatch color={zoneMidColor} label="Trending" />}
-                <LegendSwatch color={zoneHighColor} label="Stress" />
-            </View>
             <View style={styles.legendRow}>
                 {baseline2Value != null && (
                     <LegendSwatch color={baseline2Color} label={baseline2Label || 'Your baseline'} />
                 )}
-                <LegendSwatch color={baselineColor} label={baselineLabel || 'Stress level'} />
+                <LegendSwatch color={baselineColor} label={baselineLabel || 'Stress threshold'} />
             </View>
         </View>
     );
 }
+
 function MultiLineChart({
     points, width, height, maxValue,
     seriesColors, seriesLabels,
     baselineValue, baselineLabel, baselineColor,
 }) {
-    const contentWidth = Math.max(width, MIN_POINT_GAP * Math.max(1, points.length - 1) + 20);
+    const scrollRef = useRef(null);
+    const minContentWidth = points.length > 1
+        ? Math.max(width, (points.length - 1) * MIN_POINT_GAP + EDGE_PAD * 2)
+        : width;
+    const contentWidth = minContentWidth;
+    const isScrollable = contentWidth > width;
 
     const times = points.map((p) => (p.date ? new Date(p.date).getTime() : null));
     const haveAllTimes = times.every((t) => t !== null && !Number.isNaN(t));
     const totalSpan = haveAllTimes ? times[times.length - 1] - times[0] : 0;
 
+    const plotUsableWidth = contentWidth - EDGE_PAD * 2;
     const xs = [];
     points.forEach((_p, i) => {
-        if (i === 0) { xs.push(0); return; }
+        if (i === 0) { xs.push(EDGE_PAD); return; }
         let spacing;
         if (haveAllTimes && totalSpan > 0) {
             const frac = (times[i] - times[i - 1]) / totalSpan;
-            spacing = Math.max(MIN_POINT_GAP * 0.6, frac * contentWidth);
+            spacing = Math.max(MIN_POINT_GAP * 0.6, frac * plotUsableWidth);
         } else {
-            spacing = Math.max(MIN_POINT_GAP, contentWidth / (points.length - 1));
+            spacing = Math.max(MIN_POINT_GAP, plotUsableWidth / (points.length - 1));
         }
         xs.push(xs[i - 1] + spacing);
     });
 
-    const PAD_Y = 7;
+    useEffect(() => {
+        if (isScrollable && scrollRef.current) {
+            const t = setTimeout(() => {
+                scrollRef.current?.scrollToEnd({ animated: true });
+            }, 150);
+            return () => clearTimeout(t);
+        }
+    }, [points.length, isScrollable]);
+
+    const PAD_Y = 8;
     const clamp01 = (v) => Math.min(1, Math.max(0, v));
     const valueToY = (v) => PAD_Y + (height - PAD_Y * 2) * (1 - clamp01(v / maxValue));
 
-    const targetLabelCount = Math.max(4, Math.round(contentWidth / 90));
+    const targetLabelCount = Math.max(4, Math.round(contentWidth / 85));
     const labelStep = Math.max(1, Math.ceil(points.length / targetLabelCount));
 
     const baselineY = baselineValue != null ? valueToY(baselineValue) : null;
 
     return (
-        <View style={{ width }}>
+        <View style={{ width, overflow: 'hidden' }}>
             <ScrollView
+                ref={scrollRef}
                 horizontal
-                showsHorizontalScrollIndicator={false}
+                showsHorizontalScrollIndicator={isScrollable}
                 style={{ width }}
-                nestedScrollEnabled
-                directionalLockEnabled
+                contentContainerStyle={{ width: contentWidth }}
+                nestedScrollEnabled={true}
+                overScrollMode="never"
+                bounces={false}
+                scrollEventThrottle={16}
             >
                 <View style={{ width: contentWidth, height: height + X_LABEL_HEIGHT }}>
                     <Svg width={contentWidth} height={height} style={{ position: 'absolute', top: 0, left: 0 }}>
@@ -288,7 +331,7 @@ function MultiLineChart({
                         {haveAllTimes && points.map((p, i) => {
                             if (!(i % labelStep === 0 || i === points.length - 1)) return null;
                             return (
-                                <Text key={i} style={[styles.xLabel, { left: xs[i] - 18, color: COLORS.light.textMuted }]}>
+                                <Text key={i} style={[styles.xLabel, { left: Math.max(0, xs[i] - 26), color: COLORS.light.textMuted }]}>
                                     {new Date(p.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                 </Text>
                             );
@@ -310,7 +353,7 @@ function MultiLineChart({
 }
 
 export default function LineChart({
-    points, color, width, height, fallback, maxValue, suffix, hideValues = false,
+    points, color, width: propWidth, height, fallback, maxValue, suffix, hideValues = false,
     baselineValue, baselineLabel, baselineColor = COLORS.stress,
     baseline2Value, baseline2Label, baseline2Color = COLORS.brand,
     colorZones = false,
@@ -318,6 +361,10 @@ export default function LineChart({
     multiLine = false, seriesColors, seriesLabels,
 }) {
     const raw = points || [];
+    const windowWidth = Dimensions.get('window').width;
+    const defaultWidth = Math.max(260, windowWidth - 80);
+    const width = propWidth || defaultWidth;
+
     if (raw.length === 0) {
         return fallback || null;
     }
@@ -348,7 +395,16 @@ export default function LineChart({
     const totalSpan = haveAllTimes ? times[times.length - 1] - times[0] : 0;
     const targetLabelCount = 4;
     const labelStep = Math.max(1, Math.ceil(raw.length / targetLabelCount));
-    const xPositions = [10];
+
+    // GiftedLineChart width constraint:
+    // Total rendered width = plotWidth + yAxisLabelWidth + initialSpacing + endSpacing
+    // We strictly calibrate plotWidth so total rendered width matches `width` exactly without spilling out of the card.
+    const yAxisLabelWidth = hideValues ? 0 : (suffix ? 40 : 34);
+    const initialSpacing = 8;
+    const endSpacing = 8;
+    const plotWidth = Math.max(60, width - yAxisLabelWidth - initialSpacing - endSpacing);
+
+    const xPositions = [initialSpacing];
     const data = raw.map((p, i) => {
         const point = { value: p.value };
         if (haveAllTimes && p.date && (i % labelStep === 0 || i === raw.length - 1)) {
@@ -358,9 +414,9 @@ export default function LineChart({
             let spacing;
             if (haveAllTimes && totalSpan > 0) {
                 const frac = (times[i] - times[i - 1]) / totalSpan;
-                spacing = Math.max(4, frac * width);
+                spacing = Math.max(4, frac * plotWidth);
             } else {
-                spacing = Math.max(2, width / (raw.length - 1));
+                spacing = Math.max(2, plotWidth / (raw.length - 1));
             }
             point.spacing = spacing;
             xPositions.push(xPositions[i - 1] + spacing);
@@ -369,13 +425,13 @@ export default function LineChart({
     });
 
     return (
-        <View style={{ width, height }}>
+        <View style={{ width, height, overflow: 'hidden' }}>
             {haveAllTimes && (
                 <Svg width={width} height={height} style={StyleSheet.absoluteFill} pointerEvents="none">
                     {raw.map((_p, i) => {
                         if (!(i % labelStep === 0 || i === raw.length - 1)) return null;
                         return (
-                            <SvgLine key={`grid-${i}`} x1={xPositions[i]} y1={0} x2={xPositions[i]} y2={height}
+                            <SvgLine key={`grid-${i}`} x1={xPositions[i] + yAxisLabelWidth} y1={0} x2={xPositions[i] + yAxisLabelWidth} y2={height}
                                 stroke={COLORS.light.borderSoft} strokeWidth={1} />
                         );
                     })}
@@ -383,18 +439,19 @@ export default function LineChart({
             )}
             <GiftedLineChart
                 data={data}
-                width={width}
+                width={plotWidth}
                 height={height}
                 color={color}
-                thickness={3}
+                thickness={2.5}
                 curved
                 areaChart
                 startFillColor={color}
                 endFillColor={color}
-                startOpacity={0.25}
+                startOpacity={0.22}
                 endOpacity={0.02}
                 dataPointsColor={color}
-                dataPointsRadius={raw.length <= 40 ? 3.5 : 0}
+                dataPointsRadius={raw.length <= 30 ? 3 : 0}
+                yAxisLabelWidth={yAxisLabelWidth}
                 yAxisTextStyle={{ fontSize: 9, color: COLORS.light.textMuted }}
                 xAxisLabelTextStyle={{ fontSize: 9, color: COLORS.light.textMuted }}
                 yAxisLabelSuffix={suffix || ''}
@@ -410,8 +467,8 @@ export default function LineChart({
                 rulesColor={COLORS.light.borderSoft}
                 rulesType="solid"
                 backgroundColor="transparent"
-                initialSpacing={10}
-                endSpacing={10}
+                initialSpacing={initialSpacing}
+                endSpacing={endSpacing}
             />
             <ReferenceLine value={baselineValue} label={baselineLabel} color={baselineColor}
                 height={height} maxValue={maxValue} labelSide="right" />
@@ -431,20 +488,24 @@ const styles = StyleSheet.create({
     },
     baselineLabel: {
         position: 'absolute',
-        top: -16,
         fontSize: 9,
         fontWeight: '700',
     },
     xLabel: {
         position: 'absolute',
-        width: 36,
+        width: 52,
         fontSize: 9,
         textAlign: 'center',
     },
     detailBar: {
         height: DETAIL_HEIGHT,
-        marginBottom: 4,
+        marginBottom: 6,
         justifyContent: 'center',
+    },
+    detailRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
     },
     detailHint: {
         fontSize: 10,
@@ -453,10 +514,23 @@ const styles = StyleSheet.create({
     detailText: {
         fontSize: 11,
     },
+    scrollBadge: {
+        backgroundColor: COLORS.brandSoft,
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 4,
+    },
+    scrollBadgeText: {
+        fontSize: 9,
+        color: COLORS.brandDark,
+        fontWeight: '700',
+    },
     legendRow: {
-        marginTop: LEGEND_HEIGHT - 14,
+        marginTop: LEGEND_HEIGHT - 12,
         flexDirection: 'row',
-        gap: 14,
+        flexWrap: 'wrap',
+        rowGap: 6,
+        columnGap: 14,
     },
     legendItem: {
         flexDirection: 'row',

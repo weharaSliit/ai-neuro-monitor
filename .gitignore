@@ -66,3 +66,13 @@ serviceAccountKey.json
 !physiological_signals/saved_models/best_model_obj1_v2.pkl
 !physiological_signals/saved_models/scaler_obj1_v2.pkl
 !physiological_signals/saved_models/feature_cols_obj1_v2.pkl
+
+# Android build cache & Gradle files (auto-generated, never commit)
+**/.gradle/
+**/android/build/
+**/android/.gradle/
+**/android/local.properties
+
+# Temporary files
+temp_check.txt
+*.tmp

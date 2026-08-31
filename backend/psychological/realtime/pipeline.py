@@ -473,6 +473,21 @@ class RealtimeInference:
             self.baseline_degraded = True
             self.baseline_degraded_score = best_score
             self.adaptive_baseline.initialize(self.baseline.mean())
+            # Give finalize_personal_threshold() (the onboarding arithmetic-
+            # task threshold, run right after calibration) at least ONE real
+            # resting probability to compare the task blocks against --
+            # without this, _calibration_scores stays permanently empty on
+            # every degraded calibration, so compute_personal_threshold()
+            # always hits its `len(resting_scores) < 1` early-return
+            # regardless of how good the task blocks were. best_score above
+            # is a 0-100 SIGNAL QUALITY score (see _calibration_attempts_
+            # bipolar's append site), not a model probability, so it can't
+            # be reused here -- best_feats (the same block already chosen
+            # as the baseline reference) is rescored through the model
+            # itself to get a real, comparable probability.
+            resting_score = self._score_calibration_bipolar_block(best_feats)
+            if resting_score is not None:
+                self._calibration_scores.append(resting_score)
             return {'status': 'degraded', 'baseline_degraded': True, 'score': best_score}
         return {'status': 'failed', 'baseline_degraded': None}
 
@@ -513,11 +528,13 @@ class RealtimeInference:
         quality['is_trusted'] = meets_bar
 
         # Deliberately scored regardless of meets_bar (unlike
-        # calibrate_bipolar_block()'s trusted/degraded split) -- with only
-        # N_THRESHOLD_TASK_BLOCKS=2 blocks total, dropping one to a quality
-        # gate would frequently leave finalize_personal_threshold() with
-        # too little data to ever compute a personal threshold at all. The
-        # real safety net here is compute_personal_threshold()'s own
+        # calibrate_bipolar_block()'s trusted/degraded split) -- even with
+        # N_THRESHOLD_TASK_BLOCKS=14 blocks total (raised from 2 -- see
+        # mqtt_bridge.py's comment), dropping every low-quality block to a
+        # quality gate would still needlessly shrink finalize_personal_
+        # threshold()'s sample when a noisy block still carries a usable
+        # score. The real safety net here is compute_personal_threshold()'s
+        # own
         # separation gate: a noisy/rejected block mostly adds variance to
         # task_mean, and if that variance means resting and task scores
         # aren't meaningfully separated, that gate already returns

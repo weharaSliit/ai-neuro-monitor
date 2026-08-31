@@ -23,6 +23,7 @@
 import os
 import re
 import threading
+import time
 from dataclasses import replace as replace_thresholds
 from pathlib import Path
 
@@ -36,6 +37,7 @@ from backend.psychological.firebase_service import (
     get_calibration_status,
     load_user_calibration_profile,
     save_user_calibration_profile,
+    compute_eeg_baseline_drift_history,
 )
 from backend.psychological.mqtt_bridge import N_CALIBRATION_BLOCKS, N_THRESHOLD_TASK_BLOCKS
 from backend.psychological.realtime.csv_logger import CsvLogger, RAW_FIELDS_BIPOLAR, log_raw_block_bipolar
@@ -166,6 +168,19 @@ def calibrate():
     firebase = EegFirebaseSession(session_id, g.user_id)
     csv_logger = CsvLogger(str(_raw_csv_path(session_id)), RAW_FIELDS_BIPOLAR)
 
+    # Immediate "device is alive, calibrating" signal -- written BEFORE block
+    # processing below, not after. useDeviceStatus() (CalibrationGate.js)
+    # used to only ever see the device as "online" once the first scored
+    # /predict block landed, so a user actively calibrating (mqtt_bridge.py
+    # already streaming this session's raw blocks for up to ~75s before this
+    # bundled POST even arrives) saw every EEG-related screen -- the
+    # Calibrate card, the EEG dashboard, Fusion's Hardware & Sensor Stream
+    # row -- show "Offline"/"Not connected" the entire time. This gets
+    # overwritten by the real outcome (below) once calibration actually
+    # finishes; see push_calibration_result()'s .set() semantics (a full
+    # overwrite, not a merge) for why that's safe.
+    firebase.push_calibration_result({"status": "capturing", "updated_at": time.time()})
+
     engine = RealtimeInference(MODEL_DIR, disable_quality_gate=DISABLE_QUALITY_GATE)
     for i, block in enumerate(blocks):
         try:
@@ -222,6 +237,12 @@ def calibrate():
                 save_user_calibration_profile(
                     g.user_id, engine.baseline_shift, engine.thresholds_personalized
                 )
+
+    # updated_at so useDeviceStatus() can treat a fresh calibration outcome
+    # (not just a fresh /predict window) as evidence the device is alive --
+    # same field name as the "capturing" stub above, so the frontend doesn't
+    # need to special-case which phase wrote it.
+    outcome["updated_at"] = time.time()
 
     # Written regardless of status (including "failed") -- BaselineCalibrationScreen.js
     # and EegSessionScreen.js have no other path to this outcome, since
@@ -353,6 +374,20 @@ def admin_calibration_status(user_id):
     return jsonify(get_calibration_status(user_id))
 
 
+# -- /calibration/<user_id>/drift-history -- weekly-bucketed drift trend, --
+# for EegSummaryScreen.js's chart. Separate from /calibration/status above
+# (which already carries the single current drift verdict for
+# CalibrationBanner) since this one does more work (scans up to 200 recent
+# sessions) and isn't needed on every poll the way the banner's check is.
+# Mirrors physiological's GET /baseline/<user_id>/drift-history exactly.
+@app.route("/calibration/<user_id>/drift-history", methods=["GET"])
+@require_auth
+def calibration_drift_history(user_id):
+    if user_id != g.user_id:
+        return jsonify({"error": "Forbidden — token does not match requested user"}), 403
+    return jsonify({"user_id": user_id, "weeks": compute_eeg_baseline_drift_history(user_id)})
+
+
 # -- /calibrate/threshold/start + /status -- on-demand personal-threshold -
 # task capture. Mirrors backend/physiological/app.py's
 # /calibrate/threshold/start + /calibrate/threshold/status exactly (same
@@ -465,6 +500,18 @@ def predict():
             "high_load_alert": record.get("high_load_alert"),
             "micro_break_recommended": record.get("micro_break_recommended"),
             "fatigue_warning": record.get("fatigue_warning"),
+            # Same effective value make_eeg_output_record() stored as
+            # 'effective_high_load_p' (personal if finalize_personal_threshold()
+            # succeeded for this user, else the population default) -- not
+            # previously echoed back to the caller, so mqtt_bridge.py's console
+            # log had no way to show what threshold a block was actually judged
+            # against.
+            "personal_threshold": state["engine"].thresholds.high_load_p,
+            # Extracted per-block signal features (band powers, Hjorth params,
+            # etc. -- see BIPOLAR_FEATURE_SUFFIXES, firebase_sync.py) that were
+            # already being pushed to Firebase for EegSummaryScreen.js's
+            # Feature Trends card, but never returned from this route itself.
+            "features_eeg": record.get("features_eeg"),
             # See /calibrate's identical field -- same session's Firebase
             # handle, so this can only ever match what /calibrate reported.
             "firebase_enabled": state["firebase"].enabled,

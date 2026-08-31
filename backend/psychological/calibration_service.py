@@ -36,6 +36,7 @@
 # ============================================================
 
 import re
+import time
 from dataclasses import replace as replace_thresholds
 from pathlib import Path
 
@@ -126,6 +127,15 @@ def run_eeg_calibration_from_blocks(user_id: str, session_id: str, blocks_sample
             outcome["skip_ahead_used"] = False
             if engine.thresholds_personalized:
                 save_user_calibration_profile(user_id, engine.baseline_shift, engine.thresholds_personalized)
+
+    # updated_at so useDeviceStatus() (CalibrationGate.js) can treat a fresh
+    # calibration outcome as evidence the device is alive, not just a fresh
+    # /predict window -- see run_eeg_calibration_capture()'s own earlier
+    # writes (eeg_calibration_capture.py) for the "still settling/capturing"
+    # signal that covers the real ~75s+ this function's caller spends
+    # gathering blocks_samples BEFORE this function (and this write) ever
+    # runs.
+    outcome["updated_at"] = time.time()
 
     # Written regardless of status (including "failed") -- see app.py's
     # original comment on push_calibration_result()'s docstring.

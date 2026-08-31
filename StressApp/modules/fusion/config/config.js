@@ -14,7 +14,7 @@ export {
 // ever emits 'increasing'/'decreasing'/'stable'. A correctly-keyed map,
 // not a superset/rename of the existing one.
 export const FUSION_TREND_LABELS = {
-    increasing: 'Trending toward stress',
+    increasing: 'Rising Stress',
     decreasing: 'Improving',
     stable:     'Stable',
 };

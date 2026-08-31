@@ -32,7 +32,7 @@ import { eegClient } from '../../shared/eegApiClient';
 import { useAuth } from '../../../context/AuthContext';
 
 const CHART_POINTS = 120;
-const RAW_CHART_WIDTH = Dimensions.get('window').width - 2 * 20 - 2 * 18 - 60;
+const RAW_CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
 const RAW_CHART_HEIGHT = 260;
 const RAW_CHART_CLIP_HEIGHT = RAW_CHART_HEIGHT + 16;
 
@@ -120,17 +120,16 @@ function SignalChart({ title, lastValue, points, min, max, color, t, last }) {
             </View>
             {points.length > 1 ? (
                 <>
-                    <View style={styles.signalChartClip}>
-                        <LineChart
-                            points={points}
-                            color={color}
-                            width={RAW_CHART_WIDTH}
-                            height={RAW_CHART_HEIGHT}
-                            fallback={<Text style={[styles.waiting, { color: t.textMuted }]}>Loading chart…</Text>}
-                        />
-                    </View>
+                    <LineChart
+                        points={points}
+                        color={color}
+                        width={RAW_CHART_WIDTH}
+                        height={160}
+                        hideValues={true}
+                        fallback={<Text style={[styles.waiting, { color: t.textMuted }]}>Loading chart…</Text>}
+                    />
                     <Text style={[styles.signalRange, { color: t.textMuted }]}>
-                        this block's range: {min.toFixed(1)} to {max.toFixed(1)} µV
+                        This block's range: {min.toFixed(1)} to {max.toFixed(1)} µV
                         {(max - min) < 1 ? ' — flat/railed (near-constant reading)' : ''}
                     </Text>
                 </>
@@ -263,12 +262,37 @@ export default function AdminEegLiveScreen({ route, navigation }) {
     const lastWave = waveUv?.[waveUv.length - 1];
     const signedLog = (v) => Math.sign(v) * Math.log10(1 + Math.abs(v));
     const bipolarFeatures = latest?.features_eeg?.bipolar;
-    const bipolarLinePoints = bipolarFeatures
-        ? BIPOLAR_FEATURES.map(({ key }, i) => ({
-              value: signedLog(bipolarFeatures[key] ?? 0),
-              date: new Date(i),
-          }))
-        : [];
+    // No `date` on these points -- each one is a DIFFERENT feature (delta
+    // power, spectral entropy, ...) at the same instant, not a time series,
+    // so a real per-point date doesn't exist. Omitting it (rather than the
+    // previous `new Date(i)` placeholder) keeps LineChart's haveAllTimes
+    // check false, so it doesn't render a nonsense x-axis of fake
+    // timestamps -- featureLabelRow below already carries the real
+    // per-feature labels, aligned to the same BIPOLAR_POINT_WIDTH spacing.
+    //
+    // p5-p95 clamped (+10% padding, same technique as chartRange() above
+    // and EegSummaryScreen.js's clampOutliers()) -- the 29 features span
+    // wildly different natural scales even after signedLog compression
+    // (e.g. total_power vs. a 0-1 ratio), so without clamping, one or two
+    // large-magnitude features stretch the shared y-axis enough to flatten
+    // every smaller-scale feature's real block-to-block variation into an
+    // indistinguishable line.
+    const bipolarRawValues = bipolarFeatures ? BIPOLAR_FEATURES.map(({ key }) => signedLog(bipolarFeatures[key] ?? 0)) : [];
+    const bipolarLinePoints = (() => {
+        if (!bipolarFeatures || bipolarRawValues.length < 2) return [];
+        const sorted = [...bipolarRawValues].sort((a, b) => a - b);
+        let lo = percentile(sorted, 0.05);
+        let hi = percentile(sorted, 0.95);
+        if (hi <= lo) {
+            const pad = Math.abs(lo) * 0.1 || 1;
+            lo -= pad;
+            hi += pad;
+        }
+        const pad = (hi - lo) * 0.1;
+        const clampLo = lo - pad;
+        const clampHi = hi + pad;
+        return bipolarRawValues.map((v) => ({ value: Math.min(clampHi, Math.max(clampLo, v)) }));
+    })();
 
     // Cognitive-load-vs-threshold trend: task_state_score (0-1) per block,
     // scaled to 0-100 to match LineChart's colorZones convention (Ring/
@@ -474,6 +498,7 @@ export default function AdminEegLiveScreen({ route, navigation }) {
                                         color={COLORS_FLAT.brand}
                                         width={bipolarLinePoints.length * BIPOLAR_POINT_WIDTH}
                                         height={FEATURE_CHART_HEIGHT}
+                                        hideValues={true}
                                         fallback={<Text style={[styles.waiting, { color: t.textMuted }]}>Loading chart…</Text>}
                                     />
                                 </View>
@@ -526,7 +551,6 @@ const styles = StyleSheet.create({
     signalHeaderRow:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
     signalTitle:      { fontSize: 12, fontWeight: '700' },
     signalValue:      { fontSize: 13, fontWeight: '800' },
-    signalChartClip:  { height: RAW_CHART_CLIP_HEIGHT, overflow: 'hidden' },
     signalRange:      { fontSize: 10, marginTop: 4 },
     featureLabelRow:   { flexDirection: 'row', marginTop: 8 },
     featureLabelItem:  { alignItems: 'center' },

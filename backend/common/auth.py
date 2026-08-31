@@ -6,8 +6,8 @@
 # claims/standard needed, which is all a JWT library would add here.
 #
 # One StressApp login covers every backend module — physiological/,
-# phenotyping_behavior/, psychological/, and relaxation_guide/'s FastAPI
-# service (see relaxation_guide/backend/app/shared_auth.py) all verify the
+# phenotyping_behavior/, psychological/, and backend/relaxation_guide's
+# service (see backend/relaxation_guide/shared_auth.py) all verify the
 # same token against the same SECRET_KEY here, so a user logs in once (via
 # physiological/'s /login, the only module with /register+/login) and the
 # resulting Bearer token is valid everywhere. generate_token/verify_token

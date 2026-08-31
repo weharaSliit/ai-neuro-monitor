@@ -12,6 +12,7 @@
 #   python -m backend.physiological.mqtt_bridge)
 # ============================================================
 
+import csv
 import math
 import json
 import os
@@ -99,6 +100,47 @@ SLIDE_INTERVAL_SEC = 20
 # key is ABSENT, not empty, so it would silently accept "" as a real session
 # id without this.
 SESSION_ID = os.environ.get("RING_SESSION_ID") or "wearable01_" + time.strftime("%Y%m%dT%H%M%S")
+
+# Optional local-only raw sample log -- OFF by default (RAW_LOG_PATH is
+# None, _raw_writer stays None, log_raw_sample() below is then a no-op).
+# Set RING_RAW_LOG_PATH to a local file path (only makes sense running
+# this bridge locally, not the deployed always-on Render instance, which
+# has no persistent/downloadable filesystem) to additionally write one
+# row per incoming MQTT message -- raw ir (PPG-ish), raw gsr ADC, raw
+# acc_x/y/z, and any IBI beats detected in that message -- for building a
+# WESAD-style raw multi-panel plot from this ring's own data. Deliberately
+# a LOCAL FILE ONLY: raw sensor samples are never written to Firebase
+# anywhere in this pipeline (only the derived per-window features are --
+# see extract_features.py's module docstring), and this doesn't change
+# that; it's a separate, opt-in, local-machine-only capture path.
+RAW_LOG_PATH = os.environ.get("RING_RAW_LOG_PATH") or None
+RAW_LOG_FIELDS = ['timestamp', 'ir', 'gsr_adc', 'acc_x', 'acc_y', 'acc_z', 'ibi_beats']
+_raw_log_file = open(RAW_LOG_PATH, 'w', newline='') if RAW_LOG_PATH else None
+_raw_writer = csv.DictWriter(_raw_log_file, fieldnames=RAW_LOG_FIELDS) if _raw_log_file else None
+if _raw_writer:
+    _raw_writer.writeheader()
+    _raw_log_file.flush()
+    print(f"[raw-log] Logging raw samples locally to {RAW_LOG_PATH} (never sent to Firebase)")
+
+
+def log_raw_sample(data: dict, now: float) -> None:
+    if not _raw_writer:
+        return
+    _raw_writer.writerow({
+        'timestamp': f'{now:.3f}',
+        'ir': data.get('ir', ''),
+        'gsr_adc': data.get('gsr', ''),
+        'acc_x': data.get('acc_x', ''),
+        'acc_y': data.get('acc_y', ''),
+        'acc_z': data.get('acc_z', ''),
+        # A message can carry zero or several beats detected since the
+        # last publish (PUBLISH_INTERVAL=200ms on the firmware) -- joined
+        # so this stays one row per message, matching gsr_adc/acc's own
+        # one-value-per-message rate; a plotting script can explode this
+        # back out with its own timestamps if it wants individual beats.
+        'ibi_beats': ';'.join(str(b) for b in data.get('ibi', [])),
+    })
+    _raw_log_file.flush()
 
 
 def _poll_session_pointer():
@@ -210,10 +252,11 @@ def on_message(client, userdata, msg):
         return
 
     device_id = data.get("device_id", "wearable01")
+    now = time.time()
+    log_raw_sample(data, now)
 
     # Throttled heartbeat — proves the device is alive right now,
     # independent of whether a window has been emitted yet.
-    now = time.time()
     if now - last_heartbeat_write >= HEARTBEAT_MIN_GAP_SEC:
         save_device_heartbeat(device_id, extra={
             'finger_detected': bool(data.get('finger', False))
