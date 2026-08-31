@@ -20,10 +20,9 @@ import MoodBadge from '../../shared/MoodBadge';
 import LineChart from '../../shared/LineChart';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import { usePhenotypingDeviceId } from '../utils/deviceIdentity';
-import { getCalibrationStatus } from '../utils/calibrationStatus';
+import { computeCalibrationStatus } from '../utils/calibrationStatus';
 
 const CHART_WIDTH = Dimensions.get('window').width - 2 * 16 - 2 * 16;
-const DRIFT_CONFIRM_TARGET = 3;
 
 function computeZ(val, mean, std) {
     if (val === undefined || val === null || mean === undefined || mean === null || !std || std === 0) return 0;
@@ -178,17 +177,24 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
         }
     }, [route?.params?.initialTab, filteredTabs]);
 
+    // Real user profile (display_name, created_at, is_calibrated) from
+    // Firebase -- the SINGLE source of truth for calibration status here.
+    // PREVIOUSLY calibStatus came from getCalibrationStatus(deviceId), which
+    // reads THIS device's own AsyncStorage cache. That's correct for the
+    // live user dashboard (PhenotypingScreen.js, offline-tolerant by
+    // design) but wrong here: when an admin opens another user's analysis,
+    // that deviceId's key was never written on the admin's phone, so it
+    // silently fabricated a fresh "Day 1, not calibrated" state instead of
+    // that patient's real calibration status. Firebase already has the
+    // real created_at/is_calibrated for every user (own or admin-viewed),
+    // so read it directly and reuse the same day-number/phase math.
     useEffect(() => {
         if (!deviceId) return;
-        getCalibrationStatus(deviceId).then(setCalibStatus);
-    }, [deviceId]);
-
-    // Listen to real user profile name from Firebase
-    useEffect(() => {
-        if (!deviceId) return;
-        const profileRef = ref(db, `phenotyping/users/${deviceId}/name`);
+        const profileRef = ref(db, `phenotyping/users/${deviceId}`);
         const handler = onValue(profileRef, (snap) => {
-            if (snap.exists()) setUserProfileName(snap.val());
+            const p = snap.val() || {};
+            if (p.display_name || p.name) setUserProfileName(p.display_name || p.name);
+            setCalibStatus(computeCalibrationStatus(p));
         });
         return () => off(profileRef, 'value', handler);
     }, [deviceId]);
@@ -347,35 +353,6 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
         return validZs.reduce((a, b) => a + b, 0) / validZs.length;
     }, [predictions, featureMetrics]);
 
-    // Temporal Drift Confirmation based on actual consecutive windows
-    const temporalDrift = useMemo(() => {
-        if (windowSlice.length === 0) return { confirmed: false, count: 0, target: DRIFT_CONFIRM_TARGET };
-        const bl = baselines || {};
-        let consecutiveEscalated = 0;
-        for (let i = windowSlice.length - 1; i >= 0; i--) {
-            const w = windowSlice[i].data;
-            if (!w) continue;
-            const zs = [
-                computeZ(w.avg_dwell, bl.avg_dwell?.mean ?? 135, bl.avg_dwell?.std ?? 15),
-                computeZ(w.avg_flight, bl.avg_flight?.mean ?? 215, bl.avg_flight?.std ?? 25),
-                computeZ(w.scroll_velocity, bl.scroll_velocity?.mean ?? 750, bl.scroll_velocity?.std ?? 120),
-                computeZ(w.tilt_angle, bl.tilt_angle?.mean ?? 59, bl.tilt_angle?.std ?? 8),
-                computeZ(w.cpm, bl.cpm?.mean ?? 42, bl.cpm?.std ?? 6),
-            ];
-            const avgZ = zs.reduce((a, b) => a + b, 0) / zs.length;
-            if (avgZ > 1.0 && avgZ <= 2.0) {
-                consecutiveEscalated++;
-            } else {
-                break;
-            }
-        }
-        return {
-            confirmed: consecutiveEscalated >= DRIFT_CONFIRM_TARGET,
-            count: Math.min(consecutiveEscalated, DRIFT_CONFIRM_TARGET),
-            target: DRIFT_CONFIRM_TARGET,
-        };
-    }, [windowSlice, baselines]);
-
     // Real Distribution across historical predictions
     const stageDist = useMemo(() => {
         if (!predictions || predictions.length === 0) {
@@ -472,16 +449,19 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
         };
     }, [predictions, timeRange]);
 
-    const displayName = userProfileName || (deviceId ? `Device ${deviceId.slice(0, 6)}` : 'User');
-
     const titleText = useMemo(() => {
-        if (mode === 'patterns') return `Pattern Charts: ${displayName}`;
-        if (mode === 'analysis') return `Behavioral Analysis: ${displayName}`;
-        return `Behavioral Telemetry: ${displayName}`;
-    }, [mode, displayName]);
+        if (mode === 'patterns') {
+            return timeRange === '28' ? 'Behavioral Pattern Analysis' : 'Pattern Charts';
+        }
+        if (mode === 'analysis') return 'Behavioral Analysis';
+        return 'Behavioral Telemetry';
+    }, [mode, timeRange]);
 
     const subTitleText = useMemo(() => {
-        if (mode === 'patterns') return `Live typing rhythm & 5-signal behavioral deviation (${timeRange}D view)`;
+        if (mode === 'patterns') {
+            if (timeRange === '28') return '28-day baseline deviation tracking with normal corridor & anomaly boundaries';
+            return '7-day calibration period · Live typing rhythm & 5-signal behavioral deviation';
+        }
         if (mode === 'analysis') return `Stress patterns, baseline drift & validation confidence (${timeRange}D view)`;
         return `Idiographic baseline drift, anomaly boundary & continuous telemetry (${timeRange}D view)`;
     }, [mode, timeRange]);
@@ -548,24 +528,83 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                 {/* ═════════════════════════════════════════════════════════════════ */}
                 {activeTab === 'patterns' && (
                     <>
-                        {/* Overall State Badge Card */}
-                        <Card accentColor={overallStateColor} elevated style={styles.card}>
-                            <View style={styles.rowBetween}>
-                                <View style={styles.rowGap}>
-                                    <Icon name={NAMES.brain} size={18} color={overallStateColor} />
-                                    <Text style={[styles.cardTitle, { color: t.text, marginBottom: 0 }]}>Behavioral Monitoring State</Text>
+                        {/* 7D: Calibration Period Card | 28D: Baseline & Deviation Summary */}
+                        {timeRange === '7' ? (
+                            <Card accentColor={calibStatus?.isCalibrated ? COLORS.normal : COLORS.brand} elevated style={styles.card}>
+                                <View style={styles.rowBetween}>
+                                    <View style={styles.rowGap}>
+                                        <Icon name={calibStatus?.isCalibrated ? NAMES.checkCircle : NAMES.trendUp} size={18} color={calibStatus?.isCalibrated ? COLORS.normal : COLORS.brand} />
+                                        <Text style={[styles.cardTitle, { color: t.text, marginBottom: 0 }]}>Normal Baseline Calibration Period</Text>
+                                    </View>
+                                    <View style={[styles.statusPill, { backgroundColor: calibStatus?.isCalibrated ? COLORS.normalSoft : COLORS.brand + '20' }]}>
+                                        <StatusDot color={calibStatus?.isCalibrated ? COLORS.normal : COLORS.brand} active size={8} />
+                                        <Text style={[styles.statusPillText, { color: calibStatus?.isCalibrated ? COLORS.normalDark : COLORS.brand }]}>
+                                            {calibStatus?.isCalibrated ? 'CALIBRATED' : 'LEARNING'}
+                                        </Text>
+                                    </View>
                                 </View>
-                                <View style={[styles.statusPill, { backgroundColor: overallStateColor + '20' }]}>
-                                    <StatusDot color={overallStateColor} active size={8} />
-                                    <Text style={[styles.statusPillText, { color: overallStateColor }]}>{overallStateLabel}</Text>
+                                <View style={{ marginTop: 10 }}>
+                                    <View style={[styles.progressTrack, { backgroundColor: t.pillBg, height: 6, borderRadius: 3 }]}>
+                                        <View style={[styles.progressFill, { width: `${calibStatus?.progressPct || 0}%`, backgroundColor: calibStatus?.isCalibrated ? COLORS.normal : COLORS.brand, height: 6, borderRadius: 3 }]} />
+                                    </View>
+                                    {!calibStatus?.isCalibrated && (
+                                        <View style={[styles.rowBetween, { marginTop: 4 }]}>
+                                            <Text style={{ fontSize: 10.5, fontWeight: '700', color: t.textMuted }}>{calibStatus?.displayDays || 'Day 1 of 7'}</Text>
+                                            <Text style={{ fontSize: 10.5, fontWeight: '700', color: t.textMuted }}>{calibStatus?.progressPct || 0}% complete</Text>
+                                        </View>
+                                    )}
                                 </View>
-                            </View>
-                            <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 8 }]}>
-                                {calibStatus?.isCalibrated
-                                    ? `Composite Drift Z = ${compositeZ.toFixed(2)} · Passive continuous HCI analytics active`
-                                    : `${calibStatus?.displayDays || 'Calibrating baseline'} · Comparing against population normative bounds`}
-                            </Text>
-                        </Card>
+                                <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 8 }]}>
+                                    {calibStatus?.isCalibrated
+                                        ? 'Your personal baseline fingerprint is established. Monitoring deviations from your unique rhythm.'
+                                        : 'Collecting your natural typing rhythm, scroll habits & device posture to build a personalized baseline.'}
+                                </Text>
+                            </Card>
+                        ) : (
+                            <Card accentColor={overallStateColor} elevated style={styles.card}>
+                                <View style={styles.rowBetween}>
+                                    <View style={styles.rowGap}>
+                                        <Icon name={NAMES.brain} size={18} color={overallStateColor} />
+                                        <Text style={[styles.cardTitle, { color: t.text, marginBottom: 0 }]}>28-Day Baseline & Deviation Summary</Text>
+                                    </View>
+                                    <View style={[styles.statusPill, { backgroundColor: overallStateColor + '20' }]}>
+                                        <StatusDot color={overallStateColor} active size={8} />
+                                        <Text style={[styles.statusPillText, { color: overallStateColor }]}>{overallStateLabel}</Text>
+                                    </View>
+                                </View>
+                                {/* Normal Baseline Corridor Visual */}
+                                <View style={{ marginTop: 10, backgroundColor: COLORS.normalSoft, borderRadius: 10, padding: 10 }}>
+                                    <View style={styles.rowBetween}>
+                                        <View style={styles.rowGap}>
+                                            <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: COLORS.normal }} />
+                                            <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.normalDark }}>Normal Baseline Corridor</Text>
+                                        </View>
+                                        <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.normalDark }}>Z {'<'} 1.0</Text>
+                                    </View>
+                                </View>
+                                <View style={{ marginTop: 6, backgroundColor: COLORS.warning + '15', borderRadius: 10, padding: 10 }}>
+                                    <View style={styles.rowBetween}>
+                                        <View style={styles.rowGap}>
+                                            <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: COLORS.warning }} />
+                                            <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.warning }}>Elevated Drift Zone</Text>
+                                        </View>
+                                        <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.warning }}>Z 1.0 – 2.0</Text>
+                                    </View>
+                                </View>
+                                <View style={{ marginTop: 6, backgroundColor: COLORS.stressSoft, borderRadius: 10, padding: 10 }}>
+                                    <View style={styles.rowBetween}>
+                                        <View style={styles.rowGap}>
+                                            <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: COLORS.stress }} />
+                                            <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.stressDark }}>Pre-Stress Anomaly</Text>
+                                        </View>
+                                        <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.stressDark }}>Z {'>'} 2.0</Text>
+                                    </View>
+                                </View>
+                                <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 8 }]}>
+                                    Composite Drift Z = {compositeZ.toFixed(2)} · Extended 28-day longitudinal behavioral tracking active
+                                </Text>
+                            </Card>
+                        )}
 
                         {/* Feature Switcher Pills */}
                         <View style={styles.featureChipsContainer}>
@@ -606,17 +645,21 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                 <View style={{ flex: 1, marginRight: 8 }}>
                                     <Text style={[styles.cardTitle, { color: t.text }]}>
                                         {selectedFeature === 'composite'
-                                            ? `BEHAVIORAL DRIFT CURVE (${windowSlice.length} WINDOWS)`
+                                            ? (timeRange === '28'
+                                                ? `28-DAY BEHAVIORAL DRIFT (${windowSlice.length} WINDOWS)`
+                                                : `CALIBRATION DRIFT CURVE (${windowSlice.length} WINDOWS)`)
                                             : `${FEATURE_METADATA[selectedFeature]?.name.toUpperCase()} DEVIATION CURVE`}
                                     </Text>
                                     <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 2 }]}>
                                         {selectedFeature === 'composite'
-                                            ? 'Horizontal pan enabled · Tap points for exact timestamps & delta'
+                                            ? (timeRange === '28'
+                                                ? 'Long-range baseline corridor with deviation highlights'
+                                                : 'Horizontal pan enabled · Tap points for exact timestamps & delta')
                                             : FEATURE_METADATA[selectedFeature]?.description}
                                     </Text>
                                 </View>
-                                <View style={{ backgroundColor: COLORS.normalSoft, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 }}>
-                                    <Text style={{ fontSize: 9, fontWeight: '900', color: COLORS.normalDark }}>LIVE HCI</Text>
+                                <View style={{ backgroundColor: timeRange === '28' ? COLORS.brand + '15' : COLORS.normalSoft, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 }}>
+                                    <Text style={{ fontSize: 9, fontWeight: '900', color: timeRange === '28' ? COLORS.brand : COLORS.normalDark }}>{timeRange === '28' ? '28D VIEW' : 'LIVE HCI'}</Text>
                                 </View>
                             </View>
 
@@ -624,19 +667,36 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                 <View style={{ marginTop: 14 }}>
                                     <LineChart
                                         points={telemetryPoints}
-                                        color={overallStateColor}
+                                        color={timeRange === '28' ? COLORS.brand : overallStateColor}
                                         width={CHART_WIDTH}
-                                        height={150}
+                                        height={timeRange === '28' ? 180 : 150}
                                         maxValue={100}
                                         hideValues
                                         baselineValue={65}
-                                        baselineLabel="Pre-stress boundary (Z>2.0)"
+                                        baselineLabel={timeRange === '28' ? 'Anomaly boundary (Z>2.0)' : 'Pre-stress boundary (Z>2.0)'}
                                         baselineColor={COLORS.stress}
                                         baseline2Value={35}
-                                        baseline2Label="Drift threshold (Z>1.0)"
+                                        baseline2Label={timeRange === '28' ? 'Normal upper limit (Z>1.0)' : 'Drift threshold (Z>1.0)'}
                                         baseline2Color={COLORS.warning}
                                         colorZones
                                     />
+                                    {/* 28D: Normal baseline band legend */}
+                                    {timeRange === '28' && (
+                                        <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 16, marginTop: 8 }}>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                                <View style={{ width: 12, height: 3, borderRadius: 2, backgroundColor: COLORS.normal }} />
+                                                <Text style={{ fontSize: 9, fontWeight: '700', color: COLORS.normal }}>Normal Baseline</Text>
+                                            </View>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                                <View style={{ width: 12, height: 3, borderRadius: 2, backgroundColor: COLORS.warning }} />
+                                                <Text style={{ fontSize: 9, fontWeight: '700', color: COLORS.warning }}>Drift Zone</Text>
+                                            </View>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                                <View style={{ width: 12, height: 3, borderRadius: 2, backgroundColor: COLORS.stress }} />
+                                                <Text style={{ fontSize: 9, fontWeight: '700', color: COLORS.stress }}>Anomaly</Text>
+                                            </View>
+                                        </View>
+                                    )}
                                 </View>
                             ) : (
                                 <Text style={[styles.cardSub, { color: t.textMuted, textAlign: 'center', marginVertical: 32 }]}>
@@ -645,44 +705,33 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                             )}
                         </Card>
 
-                        {/* Multi-Window Temporal Drift Confirmation Banner */}
-                        <Card elevated style={styles.card}>
-                            <View style={styles.rowBetween}>
-                                <Text style={[styles.cardTitle, { color: t.text }]}>Temporal Drift Confirmation</Text>
-                                <View
-                                    style={[
-                                        styles.statusPill,
-                                        { backgroundColor: temporalDrift.confirmed ? COLORS.stressSoft : COLORS.normalSoft },
-                                    ]}
-                                >
-                                    <Text
-                                        style={[
-                                            styles.statusPillText,
-                                            { color: temporalDrift.confirmed ? COLORS.stressDark : COLORS.normalDark },
-                                        ]}
-                                    >
-                                        {temporalDrift.confirmed ? 'Confirmed Episode' : `${temporalDrift.count}/${temporalDrift.target} Windows`}
-                                    </Text>
-                                </View>
-                            </View>
-                            <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 6, lineHeight: 17 }]}>
-                                {temporalDrift.confirmed
-                                    ? 'Pre-stress behavioral drift sustained across 3 consecutive windows. Recommended: take a brief mindfulness breathing break.'
-                                    : 'Transient single-window spikes are filtered out. 3 consecutive elevated windows are required before triggering a Pre-Stress alert.'}
-                            </Text>
-                        </Card>
-
                         {/* 5-Feature Baseline & Deviation Breakdown */}
                         <Card elevated style={styles.card}>
-                            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 12 }]}>
-                                5-Feature Baseline & Stage Ranges
+                            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 4 }]}>
+                                {timeRange === '28' ? '5-Feature Baseline & Deviation Map' : '5-Feature Baseline & Stage Ranges'}
                             </Text>
                             <Text style={[styles.cardSub, { color: t.textMuted, marginBottom: 14 }]}>
-                                Tap any biometric feature below to plot its dedicated telemetry curve above.
+                                {timeRange === '28'
+                                    ? 'Visual comparison of each biometric against personal baseline corridor'
+                                    : 'Tap any biometric feature below to plot its dedicated telemetry curve above.'}
                             </Text>
 
-                            {featureMetrics.map((f) => {
+                            {(timeRange === '7' && selectedFeature === 'composite'
+                                ? featureMetrics
+                                : timeRange === '7'
+                                    ? featureMetrics.filter((f) => f.id === selectedFeature)
+                                    : featureMetrics
+                            ).map((f) => {
                                 const isSelected = selectedFeature === f.id;
+                                // Visual bar calculation: position current value between normal and stress
+                                const normalMax = f.baselineMean + f.baselineStd;
+                                const stressThreshold = f.baselineMean + 2 * f.baselineStd;
+                                const rangeSpan = stressThreshold - (f.baselineMean - f.baselineStd);
+                                const normalPct = rangeSpan > 0 ? Math.min(100, Math.max(0, ((normalMax - (f.baselineMean - f.baselineStd)) / rangeSpan) * 100)) : 50;
+                                const currentPct = f.rawVal !== null && rangeSpan > 0
+                                    ? Math.min(100, Math.max(0, ((f.rawVal - (f.baselineMean - f.baselineStd)) / rangeSpan) * 100))
+                                    : 0;
+
                                 return (
                                     <TouchableOpacity
                                         key={f.id}
@@ -716,15 +765,45 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                             </View>
                                         </View>
 
-                                        {/* Normal vs Stress Stage Ranges */}
-                                        <View style={[styles.rangeBox, { backgroundColor: t.pillBg, borderColor: t.border }]}>
-                                            <View style={styles.rangeItem}>
-                                                <Text style={[styles.rangeLabel, { color: t.textMuted }]}>Normal Stage</Text>
-                                                <Text style={[styles.rangeVal, { color: COLORS.normal }]}>{f.normalRange}</Text>
+                                        {/* Visual Bar: Normal vs Stress Range Comparison */}
+                                        <View style={{ marginTop: 10 }}>
+                                            {/* Range Bar Track */}
+                                            <View style={{ height: 22, borderRadius: 11, overflow: 'hidden', flexDirection: 'row', backgroundColor: t.pillBg }}>
+                                                {/* Normal Zone */}
+                                                <View style={{ width: `${normalPct}%`, backgroundColor: COLORS.normal + '30', justifyContent: 'center', alignItems: 'center' }}>
+                                                    <Text style={{ fontSize: 8, fontWeight: '800', color: COLORS.normalDark }} numberOfLines={1}>NORMAL</Text>
+                                                </View>
+                                                {/* Drift Zone */}
+                                                <View style={{ width: `${Math.max(0, 100 - normalPct)}%`, backgroundColor: COLORS.stress + '20', justifyContent: 'center', alignItems: 'center' }}>
+                                                    <Text style={{ fontSize: 8, fontWeight: '800', color: COLORS.stressDark }} numberOfLines={1}>STRESS</Text>
+                                                </View>
                                             </View>
-                                            <View style={styles.rangeItem}>
-                                                <Text style={[styles.rangeLabel, { color: t.textMuted }]}>Stress Stage</Text>
-                                                <Text style={[styles.rangeVal, { color: COLORS.stress }]}>{f.stressRange}</Text>
+                                            {/* Current Value Indicator */}
+                                            {f.rawVal !== null && (
+                                                <View style={{ position: 'relative', height: 14, marginTop: 2 }}>
+                                                    <View style={{
+                                                        position: 'absolute',
+                                                        left: `${currentPct}%`,
+                                                        marginLeft: -6,
+                                                        width: 0,
+                                                        height: 0,
+                                                        borderLeftWidth: 6,
+                                                        borderRightWidth: 6,
+                                                        borderBottomWidth: 8,
+                                                        borderLeftColor: 'transparent',
+                                                        borderRightColor: 'transparent',
+                                                        borderBottomColor: f.stageColor,
+                                                        transform: [{ rotate: '180deg' }],
+                                                    }} />
+                                                    <Text style={{ position: 'absolute', left: `${currentPct}%`, marginLeft: -18, top: 7, fontSize: 8, fontWeight: '800', color: f.stageColor, width: 36, textAlign: 'center' }}>
+                                                        NOW
+                                                    </Text>
+                                                </View>
+                                            )}
+                                            {/* Range Labels */}
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 2 }}>
+                                                <Text style={{ fontSize: 9, fontWeight: '700', color: COLORS.normal }}>{f.normalRange}</Text>
+                                                <Text style={{ fontSize: 9, fontWeight: '700', color: COLORS.stress }}>{f.stressRange}</Text>
                                             </View>
                                         </View>
                                     </TouchableOpacity>

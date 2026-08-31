@@ -300,12 +300,23 @@ def calibrate_baseline():
         'tilt_angle', 'cpm', 'app_switch_rate'
     ]
 
+    # A window with no typing/scrolling that period reports 0.0 for these
+    # features (see /behavior/predict's `np.mean(raw_dwells) if len > 0 else
+    # 0.0`) -- that 0 means "not measured this window", not "measured as
+    # zero". Windows dominated by e.g. scroll-only activity would otherwise
+    # flood the calibration sample with fake zeros and drag the computed
+    # mean/std toward 0, producing a baseline that flags every real keystroke
+    # as a huge deviation. tilt_angle/app_switch_rate/interaction_rate are
+    # left as-is since 0 is a plausible real reading for those.
+    ZERO_MEANS_NO_SIGNAL = {'avg_dwell', 'dwell_std', 'avg_flight', 'flight_std', 'scroll_velocity', 'cpm'}
+
     baselines = {}
     for feature in feature_keys:
         values = [
             float(w[feature])
             for w in windows
             if feature in w and w[feature] is not None
+            and not (feature in ZERO_MEANS_NO_SIGNAL and float(w[feature]) <= 0)
         ]
         if len(values) >= 3:   # need at least 3 samples for a meaningful std
             baselines[feature] = {

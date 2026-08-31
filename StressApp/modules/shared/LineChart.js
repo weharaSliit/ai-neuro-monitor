@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, ScrollView, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
 import Svg, { Circle, Line as SvgLine } from 'react-native-svg';
 import { LineChart as GiftedLineChart } from 'react-native-gifted-charts';
 import { COLORS } from '../physiological/config/theme';
@@ -147,16 +147,27 @@ function ZoneChart({
                         })}
 
                         {raw.map((_p, i) => (
-                            <React.Fragment key={i}>
-                                <Circle cx={xs[i]} cy={ys[i]} r={8} fill={zoneColorOf(zones[i])} fillOpacity={0.001}
-                                    onPress={() => setSelectedIndex(i)} />
-                                <Circle cx={xs[i]} cy={ys[i]} r={selectedIndex === i ? 5 : 3} fill={zoneColorOf(zones[i])}
-                                    stroke={selectedIndex === i ? COLORS.light.card : undefined}
-                                    strokeWidth={selectedIndex === i ? 1.5 : 0}
-                                    onPress={() => setSelectedIndex(i)} />
-                            </React.Fragment>
+                            <Circle key={i} cx={xs[i]} cy={ys[i]} r={selectedIndex === i ? 5 : 3} fill={zoneColorOf(zones[i])}
+                                stroke={selectedIndex === i ? COLORS.light.card : undefined}
+                                strokeWidth={selectedIndex === i ? 1.5 : 0} />
                         ))}
                     </Svg>
+
+                    {/* Real RN touch targets over each point -- an SVG shape's own
+                        onPress fights the surrounding horizontal ScrollView's pan
+                        responder on some devices and silently eats taps; a normal
+                        Touchable here negotiates with the scroll responder the same
+                        way any other RN touchable does, so taps land reliably. */}
+                    <View pointerEvents="box-none" style={{ position: 'absolute', top: 0, left: 0, width: contentWidth, height }}>
+                        {raw.map((_p, i) => (
+                            <TouchableOpacity
+                                key={`hit-${i}`}
+                                onPress={() => setSelectedIndex(i)}
+                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                style={{ position: 'absolute', left: xs[i] - 12, top: ys[i] - 12, width: 24, height: 24 }}
+                            />
+                        ))}
+                    </View>
 
                     {/* Timeline underneath -- orientation, not a stress number. */}
                     <View pointerEvents="none" style={{ position: 'absolute', top: height + 2, left: 0, width: contentWidth, height: X_LABEL_HEIGHT }}>
@@ -172,6 +183,12 @@ function ZoneChart({
                 </View>
             </ScrollView>
 
+            {/* Zone legend -- what the line colors mean, always visible (not just on tap) */}
+            <View style={styles.legendRow}>
+                <LegendSwatch color={zoneLowColor} label="Normal" />
+                {baseline2Value != null && <LegendSwatch color={zoneMidColor} label="Trending" />}
+                <LegendSwatch color={zoneHighColor} label="Stress" />
+            </View>
             <View style={styles.legendRow}>
                 {baseline2Value != null && (
                     <LegendSwatch color={baseline2Color} label={baseline2Label || 'Your baseline'} />

@@ -17,7 +17,8 @@ const SIGNAL_DETAILS_CONFIG = {
         unit: 'ms',
         measures: [
             { id: 'avg_dwell', name: 'Dwell Time', unit: 'ms', baselineKey: 'avg_dwell', fallbackBaseline: 120, colorZone: 'keyboard', explanation: "Dwell time is how long you hold each key down when typing. When you're stressed, your fingers tend to press keys for longer because muscle tension increases and fine motor control becomes less precise." },
-            { id: 'avg_flight', name: 'Flight Time', unit: 'ms', baselineKey: 'avg_flight', fallbackBaseline: 195, colorZone: 'flight', explanation: "Flight time is the gap between releasing one key and pressing the next. Longer flight times suggest slower cognitive processing, often linked to distraction or mental fatigue." }
+            { id: 'avg_flight', name: 'Flight Time', unit: 'ms', baselineKey: 'avg_flight', fallbackBaseline: 195, colorZone: 'flight', explanation: "Flight time is the gap between releasing one key and pressing the next. Longer flight times suggest slower cognitive processing, often linked to distraction or mental fatigue." },
+            { id: 'cpm', name: 'Typing Speed', unit: 'cpm', baselineKey: 'cpm', fallbackBaseline: 39, colorZone: 'cpm', explanation: "How fast you type in this window. A significant drop in typing speed compared to your personal baseline can signal cognitive fatigue or mental overload, even before you consciously feel it." }
         ]
     },
     scroll: {
@@ -216,13 +217,11 @@ export default function PhenotypingSignalHistoryScreen({ navigation, route }) {
 
     // Selection states
     const [selectedWeeklyIdx, setSelectedWeeklyIdx] = useState(6); // default today
-    const [selectedPrimaryIdx, setSelectedPrimaryIdx] = useState(null);
-    const [selectedSecondaryIdx, setSelectedSecondaryIdx] = useState(null);
+    const [selectedIdxByMeasure, setSelectedIdxByMeasure] = useState({});
 
     // Reset selection indexes when selected day changes
     useEffect(() => {
-        setSelectedPrimaryIdx(null);
-        setSelectedSecondaryIdx(null);
+        setSelectedIdxByMeasure({});
     }, [selectedWeeklyIdx]);
 
     useEffect(() => {
@@ -266,8 +265,7 @@ export default function PhenotypingSignalHistoryScreen({ navigation, route }) {
                 min: null,
                 max: null,
                 status: 'pending',
-                primaryVals: [],
-                secondaryVals: [],
+                valsByMeasure: {},
             };
         });
 
@@ -282,14 +280,12 @@ export default function PhenotypingSignalHistoryScreen({ navigation, route }) {
         });
 
         const primaryId = config.measures[0].id;
-        const secondaryId = config.measures[1]?.id;
 
         days.forEach((day) => {
-            const dayPrimary = day.entries.map((e) => getLogValue(e, primaryId)).filter((v) => typeof v === 'number');
-            const daySecondary = secondaryId ? day.entries.map((e) => getLogValue(e, secondaryId)).filter((v) => typeof v === 'number') : [];
-            
-            day.primaryVals = dayPrimary;
-            day.secondaryVals = daySecondary;
+            config.measures.forEach((measure) => {
+                day.valsByMeasure[measure.id] = day.entries.map((e) => getLogValue(e, measure.id)).filter((v) => typeof v === 'number');
+            });
+            const dayPrimary = day.valsByMeasure[primaryId];
 
             if (dayPrimary.length > 0) {
                 day.avg = Math.round(dayPrimary.reduce((a, b) => a + b, 0) / dayPrimary.length);
@@ -326,55 +322,27 @@ export default function PhenotypingSignalHistoryScreen({ navigation, route }) {
 
     const activeDay = processedDays[selectedWeeklyIdx] || processedDays[6];
 
-    // Primary calculations for active day
-    const activePrimaryVals = activeDay.primaryVals;
-    const activePrimaryChartData = useMemo(() => {
-        return Array.from({ length: 12 }, (_, i) => {
-            const offset = 12 - activePrimaryVals.length;
-            return i >= offset ? activePrimaryVals[i - offset] : null;
+    // Per-measure calculations for the active day (chart data, selection, display value)
+    const measuresData = useMemo(() => {
+        return config.measures.map((measure) => {
+            const vals = activeDay.valsByMeasure[measure.id] || [];
+            const offset = 12 - vals.length;
+            const chartData = Array.from({ length: 12 }, (_, i) => (i >= offset ? vals[i - offset] : null));
+            const selectedIdx = selectedIdxByMeasure[measure.id];
+            const indexToUse = selectedIdx != null ? selectedIdx : (vals.length ? vals.length - 1 : null);
+            const chartSelectedIndex = indexToUse !== null ? indexToUse + offset : null;
+            const displayVal = indexToUse !== null ? `${Math.round(vals[indexToUse])} ${measure.unit}` : 'pending';
+            const handleSelect = (chartIdx) => {
+                const originalIdx = chartIdx - offset;
+                if (originalIdx >= 0 && originalIdx < vals.length) {
+                    setSelectedIdxByMeasure((prev) => ({ ...prev, [measure.id]: originalIdx }));
+                }
+            };
+            return { measure, vals, chartData, indexToUse, chartSelectedIndex, displayVal, handleSelect };
         });
-    }, [activePrimaryVals]);
+    }, [config, activeDay, selectedIdxByMeasure]);
 
-    const primaryIndexToUse = selectedPrimaryIdx !== null ? selectedPrimaryIdx : (activePrimaryVals.length ? activePrimaryVals.length - 1 : null);
-    const chartPrimarySelectedIndex = primaryIndexToUse !== null ? primaryIndexToUse + (12 - activePrimaryVals.length) : null;
-
-    const handlePrimarySelect = (chartIdx) => {
-        const offset = 12 - activePrimaryVals.length;
-        const originalIdx = chartIdx - offset;
-        if (originalIdx >= 0 && originalIdx < activePrimaryVals.length) {
-            setSelectedPrimaryIdx(originalIdx);
-        }
-    };
-
-    const displayPrimaryVal = useMemo(() => {
-        const selectedVal = primaryIndexToUse !== null ? activePrimaryVals[primaryIndexToUse] : null;
-        return selectedVal !== null ? `${Math.round(selectedVal)} ${config.measures[0].unit}` : 'pending';
-    }, [primaryIndexToUse, activePrimaryVals, config]);
-
-    // Secondary calculations for active day
-    const activeSecondaryVals = activeDay.secondaryVals;
-    const activeSecondaryChartData = useMemo(() => {
-        return Array.from({ length: 12 }, (_, i) => {
-            const offset = 12 - activeSecondaryVals.length;
-            return i >= offset ? activeSecondaryVals[i - offset] : null;
-        });
-    }, [activeSecondaryVals]);
-
-    const secondaryIndexToUse = selectedSecondaryIdx !== null ? selectedSecondaryIdx : (activeSecondaryVals.length ? activeSecondaryVals.length - 1 : null);
-    const chartSecondarySelectedIndex = secondaryIndexToUse !== null ? secondaryIndexToUse + (12 - activeSecondaryVals.length) : null;
-
-    const handleSecondarySelect = (chartIdx) => {
-        const offset = 12 - activeSecondaryVals.length;
-        const originalIdx = chartIdx - offset;
-        if (originalIdx >= 0 && originalIdx < activeSecondaryVals.length) {
-            setSelectedSecondaryIdx(originalIdx);
-        }
-    };
-
-    const displaySecondaryVal = useMemo(() => {
-        const selectedVal = secondaryIndexToUse !== null ? activeSecondaryVals[secondaryIndexToUse] : null;
-        return selectedVal !== null ? `${Math.round(selectedVal)} ${config.measures[1]?.unit || ''}` : 'pending';
-    }, [secondaryIndexToUse, activeSecondaryVals, config]);
+    const primaryMeasureData = measuresData[0];
 
     const formattedBaseline = (key, unit, fallback) => {
         const mean = baselines?.[key]?.mean;
@@ -478,26 +446,7 @@ export default function PhenotypingSignalHistoryScreen({ navigation, route }) {
                     DETAILED MEASURES <Text style={{ fontSize: 10, fontWeight: '400' }}>({config.measures.length} measure{hasSecondaryMeasure ? 's' : ''} tracked)</Text>
                 </Text>
 
-                {config.measures.map((measure, idx) => {
-                    const isPrimary = idx === 0;
-                    const vals = isPrimary ? activePrimaryVals : activeSecondaryVals;
-                    const chartData = isPrimary ? activePrimaryChartData : activeSecondaryChartData;
-                    
-                    const selectedIdx = isPrimary ? selectedPrimaryIdx : selectedSecondaryIdx;
-                    const indexToUse = selectedIdx !== null ? selectedIdx : (vals.length ? vals.length - 1 : null);
-                    const chartSelectedIndex = indexToUse !== null ? indexToUse + (12 - vals.length) : null;
-                    
-                    const handleSelect = (chartIdx) => {
-                        const offset = 12 - vals.length;
-                        const originalIdx = chartIdx - offset;
-                        if (originalIdx >= 0 && originalIdx < vals.length) {
-                            if (isPrimary) setSelectedPrimaryIdx(originalIdx);
-                            else setSelectedSecondaryIdx(originalIdx);
-                        }
-                    };
-
-                    const displayVal = isPrimary ? displayPrimaryVal : displaySecondaryVal;
-
+                {measuresData.map(({ measure, chartData, chartSelectedIndex, displayVal, handleSelect }) => {
                     return (
                         <View key={measure.id} style={[styles.card, { backgroundColor: t.surface, borderColor: t.border }]}>
                             <View style={styles.rowBetween}>
@@ -547,30 +496,25 @@ export default function PhenotypingSignalHistoryScreen({ navigation, route }) {
                     </View>
                     <View style={styles.todayChartWrap}>
                         <SparkChart
-                            data={activePrimaryChartData}
+                            data={primaryMeasureData.chartData}
                             color={COLORS.brandLight}
                             height={20}
-                            selectedIndex={chartPrimarySelectedIndex}
-                            onSelect={handlePrimarySelect}
+                            selectedIndex={primaryMeasureData.chartSelectedIndex}
+                            onSelect={primaryMeasureData.handleSelect}
                             signalType={config.measures[0].colorZone}
                             COLORS={COLORS}
                             t={t}
                         />
                     </View>
                     <View style={styles.todaySubrow}>
-                        {config.measures.map((measure, idx) => {
-                            const isPrimary = idx === 0;
-                            const displayVal = isPrimary ? displayPrimaryVal : displaySecondaryVal;
-
-                            return (
-                                <View key={measure.id} style={[styles.todaySubCard, { backgroundColor: t.pillBg }]}>
-                                    <Text style={[styles.todaySubLabel, { color: t.textMuted }]}>{measure.name.toUpperCase()}</Text>
-                                    <Text style={[styles.todaySubVal, { color: t.text }]}>
-                                        {displayVal.includes('pending') ? 'pending' : displayVal}
-                                    </Text>
-                                </View>
-                            );
-                        })}
+                        {measuresData.map(({ measure, displayVal }) => (
+                            <View key={measure.id} style={[styles.todaySubCard, { backgroundColor: t.pillBg }]}>
+                                <Text style={[styles.todaySubLabel, { color: t.textMuted }]}>{measure.name.toUpperCase()}</Text>
+                                <Text style={[styles.todaySubVal, { color: t.text }]}>
+                                    {displayVal}
+                                </Text>
+                            </View>
+                        ))}
                     </View>
                     <Text style={[styles.todaySummaryText, { color: t.textSub }]}>
                         Avg: <Text style={{ color: t.text, fontWeight: '800' }}>{activeDay.avg !== null ? `${activeDay.avg} ${config.unit}` : <Text style={{ color: t.textMuted, fontSize: 11 }}>pending</Text>}</Text>  •  Min: <Text style={{ color: t.text }}>{activeDay.min !== null ? activeDay.min : <Text style={{ color: t.textMuted, fontSize: 11 }}>pending</Text>}</Text>  •  Max: <Text style={{ color: t.text }}>{activeDay.max !== null ? activeDay.max : <Text style={{ color: t.textMuted, fontSize: 11 }}>pending</Text>}</Text>
@@ -600,7 +544,7 @@ export default function PhenotypingSignalHistoryScreen({ navigation, route }) {
                 {expanded && (
                     <View style={{ marginTop: 8 }}>
                         {processedDays.slice(0, 6).reverse().map((day, idx) => {
-                            const dayPrimary = day.primaryVals;
+                            const dayPrimary = day.valsByMeasure[config.measures[0].id] || [];
                             const dayChartData = Array.from({ length: 12 }, (_, i) => {
                                 const offset = 12 - dayPrimary.length;
                                 return i >= offset ? dayPrimary[i - offset] : null;
