@@ -39,12 +39,14 @@ import ProfileScreen from './modules/physiological/screens/ProfileScreen';
 import RingSummaryScreen from './modules/physiological/screens/RingSummaryScreen';
 import EegSummaryScreen from './modules/eeg/screens/EegSummaryScreen';
 import EegThresholdTaskScreen from './modules/eeg/screens/EegThresholdTaskScreen';
+import CalibrationTrendScreen from './modules/shared/CalibrationTrendScreen';
 import PhenotypingEmaScreen from './modules/phenotyping/screens/PhenotypingEmaScreen';
 import PhenotypingSignalDetailScreen from './modules/phenotyping/screens/PhenotypingSignalDetailScreen';
 import PhenotypingSignalHistoryScreen from './modules/phenotyping/screens/PhenotypingSignalHistoryScreen';
 import PhenotypingAlertDetailScreen from './modules/phenotyping/screens/PhenotypingAlertDetailScreen';
 import PhenotypingOnboardingScreen from './modules/phenotyping/screens/PhenotypingOnboardingScreen';
 import PhenotypingAnalysisScreen from './modules/phenotyping/screens/PhenotypingAnalysisScreen';
+import PhenotypingValidationScreen from './modules/phenotyping/screens/PhenotypingValidationScreen';
 import RelaxationGuideModule from './modules/relaxation_guide';
 import { AppContext } from './modules/physiological/screens/AppState';
 import { ThemeProvider, useTheme } from './modules/physiological/config/ThemeContext';
@@ -61,6 +63,7 @@ const linking = {
       Register: 'register',
       AccountSetup: 'account-setup',
       ThresholdCalibration: 'threshold-calibration',
+      CalibrationTrend: 'calibration-trend',
       Admin: 'admin',
       Physiological: {
         path: '',
@@ -81,6 +84,7 @@ const linking = {
       PhenotypingSignalHistory: 'phenotyping-signal-history',
       PhenotypingAlertDetail: 'phenotyping-alert',
       PhenotypingOnboarding: 'phenotyping-onboarding',
+      PhenotypingValidation: 'phenotyping-validation',
     },
   },
 };
@@ -148,6 +152,11 @@ function RootNavigator() {
           <Stack.Screen name="Admin" component={AdminNavigator} />
           <Stack.Screen name="AccountSetup" component={AccountSetupScreen} />
           <Stack.Screen name="ThresholdCalibration" component={EegThresholdTaskScreen} />
+          <Stack.Screen
+            name="CalibrationTrend"
+            component={CalibrationTrendScreen}
+            options={{ headerShown: true, title: 'Calibration Progress' }}
+          />
           <Stack.Screen name="Physiological" component={PhysiologicalNavigator} />
           <Stack.Screen
             name="Profile"
@@ -213,6 +222,11 @@ function RootNavigator() {
             name="PhenotypingAnalysis"
             component={PhenotypingAnalysisScreen}
             options={{ headerShown: false, title: 'Pattern Charts' }}
+          />
+          <Stack.Screen
+            name="PhenotypingValidation"
+            component={PhenotypingValidationScreen}
+            options={{ headerShown: false, title: 'Validation Report' }}
           />
         </>
       ) : (

@@ -100,6 +100,10 @@ export default function AccountSetupScreen({ navigation }) {
           />
         </Card>
 
+        <TouchableOpacity onPress={() => navigation.navigate('CalibrationTrend')} activeOpacity={0.7} style={styles.skipRow}>
+          <Text style={[styles.skipText, { color: COLORS.brand }]}>View calibration trend →</Text>
+        </TouchableOpacity>
+
         <TouchableOpacity onPress={finish} activeOpacity={0.7} style={styles.skipRow}>
           <Text style={[styles.skipText, { color: COLORS.light.textMuted }]}>Skip for now →</Text>
         </TouchableOpacity>

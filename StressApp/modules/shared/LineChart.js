@@ -46,16 +46,20 @@ function ZoneChart({
     baselineLabel, baselineColor,
     baselineValue, baseline2Value, baseline2Label, baseline2Color,
     zoneLowColor, zoneMidColor, zoneHighColor,
+    fitToWidth = false,
 }) {
     const [selectedIndex, setSelectedIndex] = useState(null);
     const scrollRef = useRef(null);
 
-    // Calculate content width based on points count
+    // Calculate content width based on points count. fitToWidth (used for
+    // aggregated/bucketed data) always compresses points into the given
+    // width instead of forcing a horizontal scroll -- avoids making the
+    // viewer swipe through thousands of raw windows to see a trend.
     const minContentWidth = raw.length > 1
         ? Math.max(width, (raw.length - 1) * MIN_POINT_GAP + EDGE_PAD * 2)
         : width;
-    const contentWidth = minContentWidth;
-    const isScrollable = contentWidth > width;
+    const contentWidth = fitToWidth ? width : minContentWidth;
+    const isScrollable = !fitToWidth && contentWidth > width;
 
     const times = raw.map((p) => (p.date ? new Date(p.date).getTime() : null));
     const haveAllTimes = times.every((t) => t !== null && !Number.isNaN(t));
@@ -66,7 +70,17 @@ function ZoneChart({
     raw.forEach((_p, i) => {
         if (i === 0) { xs.push(EDGE_PAD); return; }
         let spacing;
-        if (haveAllTimes && totalSpan > 0) {
+        if (fitToWidth) {
+            // Bucketed/aggregated data: each point represents a time SLOT,
+            // not a precise instant, so space evenly across the width
+            // instead of by raw elapsed time. Real windows are rarely
+            // evenly spread through the day (bursts of use, then hours of
+            // silence) -- proportional spacing on real gaps stretches those
+            // silent stretches into large dead zones and crowds everything
+            // else into a sliver. Even spacing keeps the chart compact and
+            // fully used regardless of how clustered the real activity was.
+            spacing = plotUsableWidth / (raw.length - 1);
+        } else if (haveAllTimes && totalSpan > 0) {
             const frac = (times[i] - times[i - 1]) / totalSpan;
             spacing = Math.max(MIN_POINT_GAP * 0.6, frac * plotUsableWidth);
         } else {
@@ -118,10 +132,11 @@ function ZoneChart({
                 : dev > 0 ? ` · +${dev}%`
                     : ` · -${Math.abs(dev)}%`;
         }
+        const windowText = selected.windowCount ? ` · avg of ${selected.windowCount} windows` : '';
         detailNode = (
             <Text style={styles.detailText} numberOfLines={1}>
                 <Text style={{ color: dColor, fontWeight: '800' }}>{zoneLabelOf(zone)} ({selected.value}%)</Text>
-                <Text style={{ color: COLORS.light.textMuted }}>{devText} · {time}</Text>
+                <Text style={{ color: COLORS.light.textMuted }}>{devText}{windowText} · {time}</Text>
             </Text>
         );
     } else if (isScrollable) {
@@ -144,6 +159,7 @@ function ZoneChart({
             <ScrollView
                 ref={scrollRef}
                 horizontal
+                scrollEnabled={isScrollable}
                 showsHorizontalScrollIndicator={isScrollable}
                 style={{ width }}
                 contentContainerStyle={{ width: contentWidth }}
@@ -359,6 +375,7 @@ export default function LineChart({
     colorZones = false,
     zoneLowColor = COLORS.normal, zoneMidColor = COLORS.warning, zoneHighColor = COLORS.stress,
     multiLine = false, seriesColors, seriesLabels,
+    fitToWidth = false,
 }) {
     const raw = points || [];
     const windowWidth = Dimensions.get('window').width;
@@ -386,6 +403,7 @@ export default function LineChart({
                 baselineValue={baselineValue} baselineLabel={baselineLabel} baselineColor={baselineColor}
                 baseline2Value={baseline2Value} baseline2Label={baseline2Label} baseline2Color={baseline2Color}
                 zoneLowColor={zoneLowColor} zoneMidColor={zoneMidColor} zoneHighColor={zoneHighColor}
+                fitToWidth={fitToWidth}
             />
         );
     }

@@ -22,22 +22,20 @@ async function writeState(deviceId, state) {
     await AsyncStorage.setItem(KEY_PREFIX + deviceId, JSON.stringify(state));
 }
 
-// Ensures a created_at timestamp exists for this device (first call ever
-// creates it), then returns the day-number/phase status exactly like the
-// original getCalibrationStatus().
-export async function getCalibrationStatus(deviceId) {
-    let state = await readState(deviceId);
-    if (!state) {
-        state = { created_at: new Date().toISOString(), is_calibrated: false };
-        await writeState(deviceId, state);
-    }
-
-    const created = new Date(state.created_at);
+// Pure day-number/phase calculation, shared by getCalibrationStatus() below
+// (this device's own AsyncStorage-cached state, offline-tolerant) and by
+// admin/cross-user screens that already have the real Firebase profile
+// ({ created_at, is_calibrated }) for a DIFFERENT device and must not read
+// this device's local AsyncStorage for it -- that would just fabricate a
+// fresh "Day 1, not calibrated" state for every user the admin looks at,
+// since this key was never written on the admin's own phone.
+export function computeCalibrationStatus({ created_at, is_calibrated }) {
+    const created = created_at ? new Date(created_at) : new Date();
     const now = new Date();
     const diffMs = Math.max(0, now.getTime() - created.getTime());
     const daysElapsed = Math.floor(diffMs / (1000 * 60 * 60 * 24));
     const dayNumber = Math.min(daysElapsed + 1, 99);
-    const isCalibrated = !!state.is_calibrated;
+    const isCalibrated = !!is_calibrated;
 
     if (isCalibrated) {
         return {
@@ -59,6 +57,18 @@ export async function getCalibrationStatus(deviceId) {
         dayNumber, displayDays: `Day ${dayNumber} — awaiting enough data`, phase: 'calibration',
         progressPct: 100, title: 'Waiting for enough usage to calibrate', isCalibrated: false,
     };
+}
+
+// Ensures a created_at timestamp exists for this device (first call ever
+// creates it), then returns the day-number/phase status exactly like the
+// original getCalibrationStatus().
+export async function getCalibrationStatus(deviceId) {
+    let state = await readState(deviceId);
+    if (!state) {
+        state = { created_at: new Date().toISOString(), is_calibrated: false };
+        await writeState(deviceId, state);
+    }
+    return computeCalibrationStatus(state);
 }
 
 // Call after a successful POST /behavior/calibrate response.

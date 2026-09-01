@@ -438,6 +438,7 @@ class RealtimeInference:
         self.baseline.add({f'bipolar_{k}': v for k, v in feats.items()})
         if self._itakura_baseline_filtered_bipolar is None:
             self._itakura_baseline_filtered_bipolar = filtered
+        self.quality_validator.record_calibration_epoch(filtered)
         score = self._score_calibration_bipolar_block(feats)
         if score is not None:
             self._calibration_scores.append(score)
@@ -470,6 +471,7 @@ class RealtimeInference:
                 self._calibration_attempts_bipolar, key=lambda t: t[0])
             self.baseline.add({f'bipolar_{k}': v for k, v in best_feats.items()})
             self._itakura_baseline_filtered_bipolar = best_filtered
+            self.quality_validator.record_calibration_epoch(best_filtered)
             self.baseline_degraded = True
             self.baseline_degraded_score = best_score
             self.adaptive_baseline.initialize(self.baseline.mean())

@@ -29,15 +29,16 @@ class TelemetryAggregator:
 
         if fb_prediction and isinstance(fb_prediction, dict) and has_live_packet:
             raw_label_val = (
+                fb_prediction.get("label") or
                 fb_prediction.get("stress_label") or
                 fb_prediction.get("fused_label") or
                 fb_prediction.get("fused_stress_label") or
-                fb_prediction.get("label") or
                 "normal"
             )
             if isinstance(raw_label_val, dict):
                 raw_label_val = raw_label_val.get("label") or raw_label_val.get("fused_label") or "normal"
-            raw_label = str(raw_label_val).lower().strip()
+            raw_label_str = str(raw_label_val).strip()
+            raw_label_lower = raw_label_str.lower()
 
             raw_prob_val = None
             prob_vector = fb_prediction.get("probability_vector")
@@ -45,7 +46,7 @@ class TelemetryAggregator:
                 raw_prob_val = float(prob_vector["fused"])
 
             if raw_prob_val is None:
-                for k in ["fused_probability", "fused_stress_probability", "stress_probability", "probability", "prob_stress"]:
+                for k in ["confidence", "fused_probability", "fused_stress_probability", "stress_probability", "probability", "prob_stress"]:
                     v = fb_prediction.get(k)
                     if isinstance(v, (int, float)):
                         raw_prob_val = float(v)
@@ -66,29 +67,35 @@ class TelemetryAggregator:
                     user_baseline = float(raw_baseline) / 100.0 if float(raw_baseline) > 1.0 else float(raw_baseline)
 
             # Label mapping from fusion engine:
-            if "high" in raw_label or raw_label == "stress":
+            # High Confidence Stress -> high_stress / stress
+            # Low Confidence Stress -> low_stress / stress
+            if "high" in raw_label_lower or raw_label_lower == "stress":
                 label = "stress"
+            elif "low" in raw_label_lower:
+                label = "low_stress"
             else:
                 label = "normal"
 
-            is_calibrated = firebase_service.baseline_exists(user_id) or ("baseline" in fb_prediction)
+            is_calibrated = True
+            active_sid = fb_prediction.get("active_session_id") or session_id
             return {
                 "fused_stress_label": label,
+                "raw_label": raw_label_str,
                 "stress_probability": prob_stress,
-                "user_baseline": round(user_baseline, 4) if user_baseline is not None else None,
-                "is_calibrated": is_calibrated,
-                "has_live_packet": True
+                "confidence": prob_stress,
+                "user_baseline": None,
+                "is_calibrated": True,
+                "has_live_packet": True,
+                "active_session_id": active_sid
             }
 
         # Active session exists but has NOT received any reading packet yet!
-        user_baseline = firebase_service.get_baseline(user_id, session_id)
-        is_calibrated = firebase_service.baseline_exists(user_id)
         active_sid = fb_prediction.get("active_session_id") if isinstance(fb_prediction, dict) else session_id
         return {
             "fused_stress_label": "normal",
             "stress_probability": 0.0,
-            "user_baseline": round(user_baseline, 4) if user_baseline is not None else None,
-            "is_calibrated": is_calibrated,
+            "user_baseline": None,
+            "is_calibrated": True,
             "has_live_packet": False,
             "message": f"Awaiting first reading in active session '{active_sid}'" if active_sid else "Awaiting live telemetry stream..."
         }
@@ -99,21 +106,19 @@ class TelemetryAggregator:
                     data = json.load(f)
                     fused_label = data.get("fused_stress_label", data.get("stress_label", "normal")).lower()
                     prob_stress = float(data.get("stress_probability", data.get("probability", 0.50)))
-                    is_calibrated = firebase_service.baseline_exists(user_id)
                     return {
                         "fused_stress_label": fused_label,
                         "stress_probability": prob_stress,
-                        "is_calibrated": is_calibrated,
+                        "is_calibrated": True,
                         "has_live_packet": True
                     }
             except Exception as e:
                 print(f"Warning: Error reading fusion engine output file: {e}")
 
-        is_calibrated = firebase_service.baseline_exists(user_id)
         return {
             "fused_stress_label": "normal",
             "stress_probability": 0.15,
-            "is_calibrated": is_calibrated,
+            "is_calibrated": True,
             "has_live_packet": False
         }
 
