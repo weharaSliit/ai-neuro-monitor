@@ -6,7 +6,7 @@
 // Step 2: 7-Day Calibration Roadmap with auto-transition to Dashboard.
 // ============================================================
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, NativeModules, Platform, Modal, Animated, Linking } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, NativeModules, Platform, Modal, Linking } from 'react-native';
 import Svg, { Circle as SvgCircle, Path as SvgPath } from 'react-native-svg';
 import { useFocusEffect } from '@react-navigation/native';
 import { ref, onValue, off, update, query, limitToLast, orderByKey } from 'firebase/database';
@@ -24,6 +24,17 @@ import { isPhenotypingOnboarded, markPhenotypingOnboarded } from './PhenotypingO
 import { usePhenotypingDeviceId } from '../utils/deviceIdentity';
 
 const { PhenotypingIdentity } = NativeModules;
+
+// digitalSignals' own ids (avg_dwell, scroll_velocity, ...) don't match
+// PhenotypingSignalHistoryScreen's SIGNAL_DETAILS_CONFIG keys (keyboard,
+// scroll, ...) -- passing them straight through as `signalId` silently fell
+// back to that screen's 'keyboard' default for any id it didn't recognize,
+// e.g. tapping "Screen Scrolling" opened Keyboard Patterns history instead.
+const SIGNAL_HISTORY_ID = {
+    avg_dwell: 'keyboard',
+    scroll_velocity: 'scroll',
+    app_switch: 'app_switch',
+};
 
 // ── Micro sparkline using raw SVG ────────────────────────────────────
 function Sparkline({ values, color, width = 80, height = 32, baselineMean }) {
@@ -72,23 +83,17 @@ function DeviationBar({ z, color, t }) {
 }
 
 // ── Interactive signal card with sparkline ──────────────────────────────────
-// iconBounce: an Animated.Value to bob the icon (used for Activity Context
-// so the walking emoji visibly animates the moment motion is detected,
-// instead of sitting static). onPress is optional -- omit it for cards
-// where a numeric 7-day history view wouldn't mean anything (Activity
-// Context is a Still/Moving state, not a continuous baseline-tracked value).
-function MiniSignalCard({ icon, title, subtext, value, deltaText, color, sparkValues, baselineMean, z, t, onPress, iconBounce }) {
+// onPress is optional -- omit it for cards where a numeric 7-day history
+// view wouldn't mean anything (Activity Context is a Still/Moving state,
+// not a continuous baseline-tracked value).
+function MiniSignalCard({ icon, title, subtext, value, deltaText, color, sparkValues, baselineMean, z, t, onPress }) {
     return (
         <TouchableOpacity onPress={onPress} activeOpacity={onPress ? 0.8 : 1} disabled={!onPress}>
             <Card style={styles.signalCard} accentColor={color}>
                 <View style={styles.signalRow}>
                     <View style={{ flex: 1 }}>
                         <View style={styles.signalTitleRow}>
-                            {iconBounce ? (
-                                <Animated.Text style={[styles.signalIcon, { transform: [{ translateY: iconBounce }] }]}>{icon}</Animated.Text>
-                            ) : (
-                                <Text style={styles.signalIcon}>{icon}</Text>
-                            )}
+                            <Text style={styles.signalIcon}>{icon}</Text>
                             <Text style={[styles.signalTitle, { color: t.text }]}>{title}</Text>
                         </View>
                         <Text style={[styles.signalSubtext, { color: t.textMuted }]} numberOfLines={1}>{subtext}</Text>
@@ -144,21 +149,9 @@ export default function PhenotypingScreen({ navigation }) {
     // Rolling history for sparklines (last 20 windows)
     const [windowHistory, setWindowHistory] = useState([]);
 
-    // ── Motion detection (walking/running) animated alert
+    // ── Motion detection (walking/running), from the real activity-recognition
+    // signal in liveWindow.data_valid -- see digitalSignals' "activity" entry below.
     const isUserMoving = liveWindow?.data_valid === false;
-    const motionBounce = useRef(new Animated.Value(0)).current;
-    useEffect(() => {
-        if (isUserMoving) {
-            Animated.loop(
-                Animated.sequence([
-                    Animated.timing(motionBounce, { toValue: -8, duration: 400, useNativeDriver: true }),
-                    Animated.timing(motionBounce, { toValue: 0, duration: 400, useNativeDriver: true }),
-                ])
-            ).start();
-        } else {
-            motionBounce.setValue(0);
-        }
-    }, [isUserMoving]);
 
     // ── 30-second live ticker
     const [now, setNow] = useState(() => new Date());
@@ -653,19 +646,6 @@ export default function PhenotypingScreen({ navigation }) {
                             Arrows compare this window against your own calm baseline.
                         </Text>
 
-                        {/* Motion alert banner */}
-                        {isUserMoving && (
-                            <View style={{
-                                flexDirection: 'row', alignItems: 'center',
-                                backgroundColor: COLORS.warning + '18',
-                                borderRadius: 12, padding: 10, marginBottom: 8,
-                                borderWidth: 1, borderColor: COLORS.warning + '40',
-                            }}>
-                                <Animated.Text style={{ fontSize: 20, transform: [{ translateY: motionBounce }], marginRight: 8 }}>🏃</Animated.Text>
-                                <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.warning, flex: 1 }}>Motion detected — baseline excluded</Text>
-                            </View>
-                        )}
-
                         {digitalSignals.map((s) => (
                             <MiniSignalCard
                                 key={s.id}
@@ -679,11 +659,10 @@ export default function PhenotypingScreen({ navigation }) {
                                 baselineMean={s.baselineMean}
                                 z={s.z}
                                 t={t}
-                                iconBounce={s.id === 'activity' && isUserMoving ? motionBounce : null}
                                 onPress={
                                     s.id === 'activity'
                                         ? undefined
-                                        : () => navigation.navigate('PhenotypingSignalHistory', { signalId: s.id })
+                                        : () => navigation.navigate('PhenotypingSignalHistory', { signalId: SIGNAL_HISTORY_ID[s.id] || s.id })
                                 }
                             />
                         ))}
