@@ -12,7 +12,7 @@ import AvatarButton from '../../shared/AvatarButton';
 import { useCalibrationSummary, useDeviceStatus } from '../../shared/CalibrationGate';
 import LineChart from '../../shared/LineChart';
 import FreudHeroBanner from '../../shared/FreudHeroBanner';
-import { ref, onValue, off } from 'firebase/database';
+import { ref, onValue, off, get } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import { COLORS } from '../../physiological/config/theme';
@@ -22,6 +22,12 @@ import { STRESS_DECISION_THRESHOLD_PERCENT } from '../../physiological/config/co
 import { FUSION_TREND_LABELS } from '../config/config';
 
 const CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
+// Same cross-session reasoning as RingSummaryScreen.js/EegSummaryScreen.js:
+// a session is one login-to-logout span, not "how far back these charts
+// should remember" -- backfills this many of the user's own PRIOR sessions
+// alongside whatever's currently live/last-known.
+const RECENT_SESSIONS_FOR_CHART = 4;
+const CHART_POINTS_MAX = 160;
 
 function getGreeting() {
     const h = new Date().getHours();
@@ -108,6 +114,7 @@ export default function FusionSessionScreen({ navigation }) {
     // whether it was actually streaming.
     const { ringOnline: ringConnected, eegOnline: eegConnected } = useDeviceStatus(userId, db);
     const [lastKnown, setLastKnown] = useState(null);
+    const [historicalWindows, setHistoricalWindows] = useState({});
     const listenerRef = useRef(null);
 
     const startWatching = useCallback((idOverride) => {
@@ -157,14 +164,45 @@ export default function FusionSessionScreen({ navigation }) {
         })();
     }, [userId]);
 
+    // One-time backfill of this user's own PRIOR fusion_en sessions, merged
+    // alongside whatever fusion_en_sessions/current_session_id is live right
+    // now -- so the charts below don't reset to empty every new session.
+    // fusion_window_key() (backend/common/fusion.py) buckets by ABSOLUTE
+    // epoch time, not session-relative index, so window keys from different
+    // sessions never collide and can just be merged directly, no
+    // renumbering needed. Re-runs when sessionId changes so a just-ended
+    // live session gets folded into history once a new one starts.
+    useEffect(() => {
+        if (!userId) return;
+        let cancelled = false;
+        get(ref(db, `fusion_en/${userId}`)).then((snapshot) => {
+            if (cancelled) return;
+            const all = snapshot.val() || {};
+            const sids = Object.keys(all)
+                .filter((k) => all[k] && typeof all[k] === 'object' && k !== sessionId)
+                .sort();
+            const priorSids = sids.slice(-RECENT_SESSIONS_FOR_CHART);
+            const merged = {};
+            priorSids.forEach((sid) => Object.assign(merged, all[sid]));
+            setHistoricalWindows(merged);
+        }).catch(() => {});
+        return () => { cancelled = true; };
+    }, [userId, sessionId]);
+
+    const combinedWindows = useMemo(
+        () => ({ ...historicalWindows, ...(windows || {}) }),
+        [historicalWindows, windows]
+    );
+
     const latest = useMemo(() => latestWindow(windows), [windows]);
     const fusedHistory = useMemo(() => {
-        const keys = sortedWindowKeys(windows);
+        const keys = sortedWindowKeys(combinedWindows);
         return keys
-            .map((k) => ({ v: windows[k]?.fused_probability, key: k }))
+            .map((k) => ({ v: combinedWindows[k]?.fused_probability, key: k }))
             .filter(({ v }) => v !== undefined && v !== null)
-            .map(({ v, key }) => ({ value: Math.round(v * 100), date: new Date(Number(key) * 60000) }));
-    }, [windows]);
+            .map(({ v, key }) => ({ value: Math.round(v * 100), date: new Date(Number(key) * 60000) }))
+            .slice(-CHART_POINTS_MAX);
+    }, [combinedWindows]);
 
     // Cognitive load (EEG), autonomic arousal (HRV/GSR), and the fused
     // probability -- all three already live on the SAME fusion_en/{window}
@@ -177,9 +215,9 @@ export default function FusionSessionScreen({ navigation }) {
     // modality reported that block) -- MultiLineChart breaks the line there
     // instead of interpolating across missing data.
     const multiSeriesPoints = useMemo(() => {
-        const keys = sortedWindowKeys(windows);
+        const keys = sortedWindowKeys(combinedWindows).slice(-CHART_POINTS_MAX);
         return keys.map((k) => {
-            const w = windows[k] || {};
+            const w = combinedWindows[k] || {};
             return {
                 date: new Date(Number(k) * 60000),
                 values: [
@@ -189,7 +227,7 @@ export default function FusionSessionScreen({ navigation }) {
                 ],
             };
         });
-    }, [windows]);
+    }, [combinedWindows]);
     const hasMultiSeriesData = multiSeriesPoints.filter((p) => p.values.some((v) => v != null)).length > 1;
 
     const label = latest?.fused_label;
@@ -297,7 +335,7 @@ export default function FusionSessionScreen({ navigation }) {
                             <View style={styles.chartHeaderLeft}>
                                 <Text style={[styles.chartTitle, { color: t.text }]} numberOfLines={1}>Real-Time Stress Progression</Text>
                                 <Text style={[styles.chartSub, { color: t.textMuted }]}>
-                                    {fusedHistory.length} live fusion readings
+                                    {fusedHistory.length} fusion readings, including previous sessions
                                 </Text>
                             </View>
                             {trend && TREND_ICON[trend] && (

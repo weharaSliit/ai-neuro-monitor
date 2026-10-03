@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "StressApp",
+    "name": "MindPulse",
     "slug": "mindpulse-research",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -33,7 +33,7 @@
         "com.google.android.gms.permission.ACTIVITY_RECOGNITION",
         "ACTIVITY_RECOGNITION"
       ],
-      "versionCode": 4
+      "versionCode": 5
     },
     "web": {
       "favicon": "./assets/favicon.png"

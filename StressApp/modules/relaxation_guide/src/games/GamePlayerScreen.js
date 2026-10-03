@@ -35,7 +35,6 @@ const TECHNIQUE_DETAILS = {
     icon: '🪷',
     color: '#10B981',
     bg: 'rgba(16, 185, 129, 0.12)',
-    rank: 'WESAD Score: 0.95',
     meaningTitle: '🪷 Deep Exhale Vagal Reset',
     meaningDesc: 'Slow exhalations signal your nervous system to calm down, quickly lowering heart rate and body stress.',
     defaultBpm: 6,
@@ -47,7 +46,6 @@ const TECHNIQUE_DETAILS = {
     icon: '🫁',
     color: '#0284C7',
     bg: 'rgba(2, 132, 199, 0.12)',
-    rank: 'WESAD Score: 0.88',
     meaningTitle: '🫁 Lower Lobe Abdominal Expansion',
     meaningDesc: 'Expanding stomach outward on inhale and softening inward on exhale resets ANS balance.',
     defaultBpm: 6,
@@ -59,7 +57,6 @@ const TECHNIQUE_DETAILS = {
     icon: '🧊',
     color: '#0284C7',
     bg: 'rgba(2, 132, 199, 0.12)',
-    rank: 'WESAD Score: 0.86',
     meaningTitle: '🧊 Balanced Square Breathing',
     meaningDesc: 'Equal 4s inhale, 4s hold, 4s exhale, and 4s pause restores calm and steady focus.',
     defaultBpm: 6,
@@ -71,7 +68,6 @@ const TECHNIQUE_DETAILS = {
     icon: '🧩',
     color: '#F59E0B',
     bg: 'rgba(245, 158, 11, 0.12)',
-    rank: 'WESAD Score: 0.77',
     meaningTitle: '🧩 Focus & Pattern Match',
     meaningDesc: 'A light visual matching puzzle shifts your active focus away from stressful thoughts.',
     defaultBpm: 6,
@@ -83,7 +79,6 @@ const TECHNIQUE_DETAILS = {
     icon: '🧘‍♂️',
     color: '#3B82F6',
     bg: 'rgba(59, 130, 246, 0.12)',
-    rank: 'WESAD Score: 0.74',
     meaningTitle: '🧘‍♂️ Attentional Body Sweep',
     meaningDesc: 'Systematic attentional sweep across body regions to release somatic hyperarousal.',
     defaultBpm: 6,
@@ -95,21 +90,30 @@ const TECHNIQUE_DETAILS = {
     icon: '🔥',
     color: '#EF4444',
     bg: 'rgba(239, 68, 68, 0.12)',
-    rank: 'WESAD Score: 0.62',
     meaningTitle: '🔥 Somatosensory Thermal Warmth',
     meaningDesc: 'Somatosensory thermal focus for peripheral vasodilation and vascular relaxation.',
     defaultBpm: 6,
     suggestedMin: 4,
   },
-  silent_zen_timer: {
-    id: 'silent_zen_timer',
-    title: 'Silent Zen Presence',
-    icon: '⛩️',
-    color: '#14B8A6',
-    bg: 'rgba(20, 184, 166, 0.12)',
-    rank: 'WESAD Score: 0.55',
-    meaningTitle: '⛩️ Mindful Zen Interval',
-    meaningDesc: 'Unguided silent presence meditation with interval chimes to cultivate baseline calm.',
+  flower_meadow: {
+    id: 'flower_meadow',
+    title: 'Flower Meadow Garden Bloom',
+    icon: '🌸',
+    color: '#F472B6',
+    bg: 'rgba(244, 114, 182, 0.12)',
+    meaningTitle: '🌸 Biophilic Attention Restoration & Garden Bloom',
+    meaningDesc: 'Interactive floral garden bloom entrainment for maximum biophilic WESAD recovery (0.97 score).',
+    defaultBpm: 6,
+    suggestedMin: 3,
+  },
+  stroop_decoupler: {
+    id: 'stroop_decoupler',
+    title: 'Stroop Cognitive Decoupler',
+    icon: '🎯',
+    color: '#3B82F6',
+    bg: 'rgba(59, 130, 246, 0.12)',
+    meaningTitle: '🎯 Prefrontal Executive Interference Task',
+    meaningDesc: 'High-speed cognitive refocusing puzzle suppressing DMN rumination for 0.95 WESAD recovery rating.',
     defaultBpm: 6,
     suggestedMin: 3,
   },
@@ -123,7 +127,8 @@ const getTechKey = (id) => {
   if (raw === 'pattern_alignment' || raw === 'pattern') return 'pattern_alignment';
   if (raw === 'body_scan_mindful' || raw === 'body_scan') return 'body_scan_mindful';
   if (raw === 'autogenic_warmth' || raw === 'autogenic') return 'autogenic_warmth';
-  if (raw === 'silent_zen_timer' || raw === 'zen') return 'silent_zen_timer';
+  if (raw === 'flower_meadow' || raw === 'meadow') return 'flower_meadow';
+  if (raw === 'stroop_decoupler' || raw === 'stroop') return 'stroop_decoupler';
   return 'water_lily_pond';
 };
 
@@ -202,41 +207,35 @@ export const GamePlayerScreen = () => {
 
   const renderGameCanvas = () => {
     switch (techKey) {
+      case 'flower_meadow':
+        return <FlowerMeadowGame initialScreen="session" initialDurationMin={selectedMin} initialBpm={paceBpm} onStartSession={handleStartSession} />;
+
       case 'water_lily_pond':
         return <LilyPondGame initialScreen="session" initialDurationMin={selectedMin} initialBpm={paceBpm} onStartSession={handleStartSession} />;
 
       case 'box_meditation':
       case 'diaphragmatic_pace':
       case 'body_scan_mindful':
-      case 'silent_zen_timer':
         return <MeditationGame mode={techKey} initialMode={techKey} initialDurationMin={selectedMin} initialBpm={paceBpm} onStartSession={handleStartSession} />;
 
       case 'pattern_alignment':
       case 'autogenic_warmth':
+      case 'stroop_decoupler':
         return <CognitiveDeStressGame mode={techKey} subOptionId={techKey} initialScreen="session" initialDurationMin={selectedMin} onFinish={handleFinishGame} onStartSession={handleStartSession} />;
 
       default:
-        return <LilyPondGame initialScreen="session" initialDurationMin={selectedMin} initialBpm={paceBpm} onStartSession={handleStartSession} />;
+        return <FlowerMeadowGame initialScreen="session" initialDurationMin={selectedMin} initialBpm={paceBpm} onStartSession={handleStartSession} />;
     }
   };
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // ACTIVE GAME CANVAS SCREEN
-  // ═══════════════════════════════════════════════════════════════════════════
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
-      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} backgroundColor={theme.bgSecondary} />
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
 
-      {/* Game Header */}
+      {/* Header Controls Bar */}
       <Animated.View style={[
-        styles.headerContainer,
-        {
-          backgroundColor: theme.bgSecondary,
-          borderBottomColor: theme.border,
-          borderBottomWidth: 1,
-          opacity: fadeAnim,
-          transform: [{ scale: scaleAnim }]
-        }
+        styles.topBar,
+        { backgroundColor: theme.bgSecondary, borderColor: theme.border, opacity: fadeAnim }
       ]}>
         <View style={styles.headerTop}>
           <TouchableOpacity
@@ -260,7 +259,7 @@ export const GamePlayerScreen = () => {
           </TouchableOpacity>
         </View>
 
-        <Text style={[styles.gameDescription, { color: theme.textMuted }]} numberOfLines={1}>{tech.rank} · {tech.meaningTitle}</Text>
+        <Text style={[styles.gameDescription, { color: theme.textMuted }]} numberOfLines={1}>{tech.meaningTitle}</Text>
       </Animated.View>
 
       {/* Timer & Stats Bar */}
@@ -321,14 +320,15 @@ export const GamePlayerScreen = () => {
         )}
       </Animated.View>
 
-      {/* Complete Activity & Proceed Footer Bar */}
-      <View style={[styles.completeFooterBar, { backgroundColor: theme.bgSecondary, borderTopColor: theme.border }]}>
+      {/* Bottom Completion Action Bar */}
+      <View style={[styles.bottomBarContainer, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
         <TouchableOpacity
-          style={[styles.completeBtn, { backgroundColor: tech.color || theme.accent || '#10B981' }]}
+          style={[styles.completeSessionBtn, { backgroundColor: '#10B981' }]}
           onPress={handleFinishGame}
           activeOpacity={0.85}
         >
-          <Text style={styles.completeBtnTxt}>✅  Complete Activity & Proceed  →</Text>
+          <Ionicons name="checkmark-circle" size={20} color="#FFFFFF" style={{ marginRight: 6 }} />
+          <Text style={styles.completeSessionBtnTxt}>Complete Session & View Results</Text>
         </TouchableOpacity>
       </View>
     </SafeAreaView>
@@ -338,246 +338,140 @@ export const GamePlayerScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0F172A',
   },
-  unifiedSetupScroll: {
-    padding: 20,
-    gap: 16,
-    paddingBottom: 40,
-  },
-  unifiedCardHeader: {
-    alignItems: 'center',
-    padding: 24,
-    borderRadius: 24,
-    borderWidth: 1.5,
-    gap: 12,
-  },
-  unifiedIconRing: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    borderWidth: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  unifiedIconTxt: {
-    fontSize: 36,
-  },
-  unifiedTitle: {
-    color: '#FFFFFF',
-    fontSize: 22,
-    fontWeight: '800',
-    textAlign: 'center',
-    letterSpacing: -0.3,
-  },
-  unifiedBadge: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 16,
-  },
-  unifiedBadgeTxt: {
-    color: '#0F172A',
-    fontWeight: '800',
-    fontSize: 12,
-    letterSpacing: 0.3,
-  },
-  meaningCard: {
-    padding: 18,
-    borderRadius: 20,
-    borderWidth: 1,
-    gap: 8,
-  },
-  meaningHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  meaningTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    letterSpacing: 0.2,
-  },
-  meaningBody: {
-    color: '#94A3B8',
-    fontSize: 13,
-    lineHeight: 20,
-  },
-  selectorSection: {
-    gap: 8,
-  },
-  selectorLabel: {
-    color: '#94A3B8',
-    fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 1,
-  },
-  chipRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  unifiedChip: {
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.15)',
-    borderRadius: 18,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    backgroundColor: 'rgba(30, 41, 59, 0.5)',
-  },
-  unifiedChipTxt: {
-    color: '#E2E8F0',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  unifiedChipLarge: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.15)',
-    borderRadius: 18,
-    paddingVertical: 12,
-    alignItems: 'center',
-    backgroundColor: 'rgba(30, 41, 59, 0.5)',
-  },
-  unifiedChipTxtLarge: {
-    color: '#E2E8F0',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  selectorHint: {
-    color: '#64748B',
-    fontSize: 11,
-  },
-  unifiedBeginBtn: {
-    paddingVertical: 16,
-    borderRadius: 20,
-    alignItems: 'center',
-    marginTop: 8,
-    elevation: 4,
-  },
-  unifiedBeginBtnTxt: {
-    color: '#0F172A',
-    fontSize: 16,
-    fontWeight: '900',
-    letterSpacing: 0.5,
-  },
-  headerContainer: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+  topBar: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 8,
     borderBottomWidth: 1,
   },
   headerTop: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 2,
+    marginBottom: 4,
   },
   backButton: {
     padding: 6,
+    borderRadius: 8,
   },
   gameTitle: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    flexShrink: 1,
+    gap: 8,
   },
   gameIcon: {
-    fontSize: 20,
+    fontSize: 22,
   },
   gameTitleText: {
-    fontSize: 16,
-    fontWeight: 'bold',
+    fontSize: 18,
+    fontWeight: '800',
   },
   pauseButton: {
     padding: 6,
+    borderRadius: 8,
   },
   gameDescription: {
-    fontSize: 11,
+    fontSize: 12,
+    fontWeight: '600',
     textAlign: 'center',
   },
   statsBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderBottomWidth: 1,
+    marginHorizontal: 16,
+    marginTop: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 14,
+    borderWidth: 1,
   },
   timerWrapper: {
-    flex: 1,
+    alignItems: 'flex-start',
   },
   statsWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 12,
   },
   statItem: {
     alignItems: 'center',
   },
   statLabel: {
-    fontSize: 9,
-    textTransform: 'uppercase',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
   statValue: {
     fontSize: 14,
-    fontWeight: 'bold',
+    fontWeight: '800',
+    marginTop: 2,
   },
   statDivider: {
     width: 1,
-    height: 16,
+    height: 20,
   },
   canvasContainer: {
     flex: 1,
-    width: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
+    marginHorizontal: 16,
+    marginVertical: 8,
+    borderRadius: 18,
     overflow: 'hidden',
   },
   pausedOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
+    flex: 1,
     alignItems: 'center',
-    zIndex: 99,
+    justifyContent: 'center',
   },
   pausedContent: {
+    paddingVertical: 24,
+    paddingHorizontal: 32,
+    borderRadius: 20,
     alignItems: 'center',
-    padding: 24,
-    borderRadius: 16,
-    borderWidth: 1,
+    gap: 12,
   },
   pausedIcon: {
-    fontSize: 36,
-    marginBottom: 12,
+    fontSize: 40,
   },
   pausedText: {
     fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 18,
+    fontWeight: '800',
   },
   resumeButton: {
-    paddingHorizontal: 20,
     paddingVertical: 10,
-    borderRadius: 8,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    marginTop: 4,
   },
   resumeButtonText: {
-    fontSize: 15,
-    fontWeight: 'bold',
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
   },
-  completeFooterBar: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+  bottomBarContainer: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
     borderTopWidth: 1,
-    width: '100%',
-  },
-  completeBtn: {
-    paddingVertical: 12,
-    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  completeSessionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    paddingVertical: 13,
+    paddingHorizontal: 20,
+    borderRadius: 14,
     elevation: 3,
   },
-  completeBtnTxt: {
+  completeSessionBtnTxt: {
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '800',
     letterSpacing: 0.3,
   },
 });
+
+export default GamePlayerScreen;

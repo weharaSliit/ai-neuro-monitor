@@ -14,18 +14,17 @@
 // this specific user happens to be the currently active global session
 // (psychological/current_session_id), since there's only one EEG headset.
 // ============================================================
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     View, Text, StyleSheet, Dimensions,
     TouchableOpacity, ScrollView,
 } from 'react-native';
 import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
-import Button from '../../shared/Button';
 import Icon, { NAMES } from '../../shared/Icon';
 import LineChart from '../../shared/LineChart';
 import Svg, { Path, Circle, Line as SvgLine } from 'react-native-svg';
-import { ref, onValue, off, query, orderByChild, limitToLast } from 'firebase/database';
+import { ref, onValue, off, get, query, orderByChild, limitToLast } from 'firebase/database';
 import { db } from '../../../firebase';
 import { COLORS } from '../../physiological/config/theme';
 import { STRESS_COLORS, STRESS_EMOJI, EEG_TREND_LABELS, TASK_STATE_LABELS } from '../../eeg/config/config';
@@ -94,6 +93,13 @@ function sortedWindowsList(windowsObj) {
 }
 
 const TREND_CHART_POINTS_LIMIT = 40; // ~40 blocks * 25s/block = ~16.7 min of live trend history
+// A "session" is one login-to-logout span, not "how far back the trend
+// chart should remember" -- see RingSummaryScreen.js/EegSummaryScreen.js's
+// identical reasoning. Backfills this many PRIOR sessions' own blocks
+// alongside whatever's currently live, so the charts don't go blank
+// between live sessions.
+const RECENT_SESSIONS_FOR_CHART = 4;
+const CHART_POINTS_MAX = 160; // TREND_CHART_POINTS_LIMIT(40) * RECENT_SESSIONS_FOR_CHART(4)
 
 function BipolarWaveformChart({ points, min, max, color, width, height = 150 }) {
     if (!points || points.length < 2) return null;
@@ -249,6 +255,7 @@ export default function AdminEegLiveScreen({ route, navigation }) {
     const [sessionId, setSessionId] = useState('');
     const [watching, setWatching] = useState(false);
     const [windowsList, setWindowsList] = useState([]);
+    const [historicalWindowsList, setHistoricalWindowsList] = useState([]);
     const [hasAnyWindow, setHasAnyWindow] = useState(false);
     const [calibrationResult, setCalibrationResult] = useState(null);
     const [thresholdResult, setThresholdResult] = useState(null);
@@ -315,12 +322,26 @@ export default function AdminEegLiveScreen({ route, navigation }) {
         setWatching(true);
     }, [sessionId, userId]);
 
-    const stopWatching = useCallback(() => {
-        if (listenerRef.current) { off(listenerRef.current); listenerRef.current = null; }
-        if (calibListenerRef.current) { off(calibListenerRef.current); calibListenerRef.current = null; }
-        if (thresholdListenerRef.current) { off(thresholdListenerRef.current); thresholdListenerRef.current = null; }
-        setWatching(false);
-    }, []);
+    // One-time backfill of this user's OWN prior sessions (not the live
+    // listener above) -- keys under psychological/{userId} are session
+    // IDs (mintSessionId()'s ISO-timestamp format), so they sort
+    // chronologically as strings. Re-runs when sessionId changes so a
+    // just-ended live session gets folded into history once a new one
+    // starts (or the pointer goes quiet).
+    useEffect(() => {
+        if (!userId) return;
+        let cancelled = false;
+        get(ref(db, `psychological/${userId}`)).then((snapshot) => {
+            if (cancelled) return;
+            const all = snapshot.val() || {};
+            const sids = Object.keys(all)
+                .filter((k) => all[k] && typeof all[k] === 'object' && k !== sessionId)
+                .sort();
+            const priorSids = sids.slice(-RECENT_SESSIONS_FOR_CHART);
+            setHistoricalWindowsList(priorSids.flatMap((sid) => sortedWindowsList(all[sid])));
+        }).catch(() => {});
+        return () => { cancelled = true; };
+    }, [userId, sessionId]);
 
     useEffect(() => {
         if (!userId) return;
@@ -339,7 +360,14 @@ export default function AdminEegLiveScreen({ route, navigation }) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [userId]);
 
-    const latest = windowsList.length > 0 ? windowsList[windowsList.length - 1] : null;
+    // Falls back to the most recent PRIOR session's last block when nobody
+    // is currently live for this user, so the waveform/features cards below
+    // still show something instead of going blank between live sessions --
+    // historicalWindowsList is already sorted oldest-to-newest across the
+    // last RECENT_SESSIONS_FOR_CHART sessions (see the backfill effect above).
+    const latest = windowsList.length > 0
+        ? windowsList[windowsList.length - 1]
+        : (historicalWindowsList.length > 0 ? historicalWindowsList[historicalWindowsList.length - 1] : null);
 
     const skipped = latest?.skipped;
     const label = latest?.task_state_label;
@@ -371,9 +399,13 @@ export default function AdminEegLiveScreen({ route, navigation }) {
     // available yet, falls back to the REAL population default fetched from
     // the backend (populationHighLoadP, above) -- not a hardcoded/duplicated
     // frontend constant.
-    const scoreTrendPoints = windowsList
-        .filter((w) => !w.skipped && w.task_state_score != null)
-        .map((w) => ({ value: w.task_state_score * 100, date: new Date((w.timestamp_end ?? Date.now() / 1000) * 1000) }));
+    const scoreTrendPoints = useMemo(() => {
+        const merged = [...historicalWindowsList, ...windowsList]
+            .filter((w) => !w.skipped && w.task_state_score != null)
+            .map((w) => ({ value: w.task_state_score * 100, date: new Date((w.timestamp_end ?? Date.now() / 1000) * 1000) }));
+        merged.sort((a, b) => a.date - b.date);
+        return merged.slice(-CHART_POINTS_MAX);
+    }, [historicalWindowsList, windowsList]);
     const personalHighLoadP = thresholdResult?.status === 'ok' ? thresholdResult.personal_high_load_p : null;
     const isPersonalized = personalHighLoadP != null;
     const highLoadThresholdPct = isPersonalized
@@ -405,10 +437,18 @@ export default function AdminEegLiveScreen({ route, navigation }) {
                     T7/T8 cognitive-load readings (wearable02)
                 </Text>
 
-                {!watching && (
+                {!watching && scoreTrendPoints.length === 0 && (
                     <Card>
                         <Text style={[styles.waiting, { color: t.textMuted }]}>
                             Waiting for a live session to begin…
+                        </Text>
+                    </Card>
+                )}
+
+                {!watching && scoreTrendPoints.length > 0 && (
+                    <Card>
+                        <Text style={[styles.waiting, { color: t.textMuted }]}>
+                            Not currently live — showing history from previous sessions below.
                         </Text>
                     </Card>
                 )}
@@ -485,11 +525,12 @@ export default function AdminEegLiveScreen({ route, navigation }) {
                     </Card>
                 )}
 
-                {watching && (
+                {(watching || hasWave) && (
                     <Card>
                         <Text style={[styles.label, { color: t.textSub, marginBottom: 4 }]}>Bipolar EEG Waveform (T7 − T8)</Text>
                         <Text style={[styles.hint, { color: t.textMuted, marginBottom: 12 }]}>
                             Preprocessed (filtered) signal, not raw ADC output. Updates every 25s block.
+                            {!watching && hasWave ? ' Showing the last block from a previous session (not live).' : ''}
                         </Text>
                         {!hasWave ? (
                             <Text style={[styles.waiting, { color: t.textMuted }]}>Waiting for first block…</Text>
@@ -499,11 +540,11 @@ export default function AdminEegLiveScreen({ route, navigation }) {
                     </Card>
                 )}
 
-                {watching && (
+                {(watching || scoreTrendPoints.length > 0) && (
                     <Card accentColor={highLoadThresholdPct != null ? stateColor : undefined}>
                         <Text style={[styles.label, { color: t.textSub, marginBottom: 4 }]}>Cognitive Load vs. Threshold</Text>
                         <Text style={[styles.hint, { color: t.textMuted, marginBottom: 8 }]}>
-                            task_state_score across this session's blocks, against this user's own calibrated thresholds.
+                            task_state_score across this and previous sessions, against this user's own calibrated thresholds.
                         </Text>
 
                         {highLoadThresholdPct == null ? (
@@ -552,11 +593,12 @@ export default function AdminEegLiveScreen({ route, navigation }) {
                     </Card>
                 )}
 
-                {watching && bipolarFeatures && (
+                {bipolarFeatures && (
                     <Card>
                         <Text style={[styles.label, { color: t.textSub, marginBottom: 4 }]}>Bipolar (T7 − T8) Differential Features</Text>
                         <Text style={[styles.hint, { color: t.textMuted, marginBottom: 12 }]}>
                             All 29 features from this block's T7−T8 differential signal. Updates every 25s block.
+                            {!watching ? ' Showing the last block from a previous session (not live).' : ''}
                         </Text>
                         <BipolarFeaturesChart
                             features={bipolarFeatures}
@@ -566,9 +608,6 @@ export default function AdminEegLiveScreen({ route, navigation }) {
                     </Card>
                 )}
 
-                {watching && (
-                    <Button label="Stop Watching" onPress={stopWatching} variant="danger" />
-                )}
             </ScrollView>
         </ScreenBackground>
     );

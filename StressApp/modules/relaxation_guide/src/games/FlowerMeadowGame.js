@@ -89,7 +89,7 @@ export const FlowerMeadowGame = () => {
   const isDarkMode = themeContext?.isDarkMode ?? true;
 
   // ── State ──────────────────────────────────────────
-  const [breathPhase, setBreathPhase] = useState('ready');
+  const [breathPhase, setBreathPhase] = useState('inhale');
   const [cycleCount, setCycleCount] = useState(0);
   const [score, setScore] = useState(0);
   const [combo, setCombo] = useState(0);
@@ -102,9 +102,9 @@ export const FlowerMeadowGame = () => {
   const [floatingTexts, setFloatingTexts] = useState([]);
   const [pollenDots, setPollenDots] = useState([]);
   const [stars, setStars] = useState([]);
-  const [sessionStarted, setSessionStarted] = useState(false);
+  const [sessionStarted, setSessionStarted] = useState(true);
   const [elapsedSec, setElapsedSec] = useState(0);
-  const [showTutorial, setShowTutorial] = useState(true);
+  const [showTutorial, setShowTutorial] = useState(false);
 
   // ── Animation refs ─────────────────────────────────
   const bloomScale      = useRef(new Animated.Value(0.6)).current;
@@ -115,7 +115,7 @@ export const FlowerMeadowGame = () => {
   const calmBarWidth    = useRef(new Animated.Value(0)).current;
   const skyHue          = useRef(new Animated.Value(0)).current;
   const groundGlow      = useRef(new Animated.Value(0)).current;
-  const tutorialOpacity = useRef(new Animated.Value(1)).current;
+  const tutorialOpacity = useRef(new Animated.Value(0)).current;
   const breathRingAnim  = useRef(new Animated.Value(0)).current;
   const phaseTextAnim   = useRef(new Animated.Value(0)).current;
 
@@ -953,55 +953,10 @@ export const FlowerMeadowGame = () => {
                 ]}>{combo}x</Text>
               </View>
             </View>
-
-            {/* Calm Meter */}
-            <View style={[styles.calmMeterContainer, { backgroundColor: palette.hudBg, borderColor: palette.hudBorder }]}>
-              <View style={styles.calmMeterHeader}>
-                <Text style={[styles.calmMeterTitle, { color: palette.white }]}>🧘 Calm Level</Text>
-                <Text style={[styles.calmMeterLevel, { color: calmColor }]}>{calmLevel}</Text>
-              </View>
-              <View style={styles.calmMeterTrack}>
-                <Animated.View style={[styles.calmMeterFill, {
-                  width: calmBarWidth.interpolate({
-                    inputRange: [0, 100],
-                    outputRange: ['0%', '100%'],
-                  }),
-                  backgroundColor: calmColor,
-                  shadowColor: calmColor,
-                }]} />
-                {/* Milestone markers */}
-                {[25, 50, 80].map(mark => (
-                  <View key={mark} style={[styles.calmMilestone, { left: `${mark}%` }]} />
-                ))}
-              </View>
-              <View style={styles.calmMeterLabels}>
-                <Text style={[styles.calmMeterLabel, { color: palette.textMuted }]}>Warming Up</Text>
-                <Text style={[styles.calmMeterLabel, { color: palette.textMuted }]}>Settling</Text>
-                <Text style={[styles.calmMeterLabel, { color: palette.textMuted }]}>Relaxing</Text>
-                <Text style={[styles.calmMeterLabel, { color: palette.textMuted }]}>Deep Calm</Text>
-              </View>
-            </View>
           </View>
         )}
 
-        {/* ═══════════════════════════════════════
-            GARDEN PROGRESS BAR
-            ═══════════════════════════════════════ */}
-        {sessionStarted && gardenFlowers.length > 0 && (
-          <View style={styles.gardenProgress}>
-            <Text style={styles.gardenProgressTitle}>🌿 Your Garden</Text>
-            <View style={styles.gardenProgressRow}>
-              {gardenFlowers.slice(-8).map(f => (
-                <View key={f.id} style={[styles.gardenProgressFlower, {
-                  opacity: 0.5 + f.growthStage * 0.5,
-                  transform: [{ scale: 0.5 + f.growthStage * 0.5 }],
-                }]}>
-                  <Text style={{ fontSize: 18 }}>{f.species.emoji}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-        )}
+
 
         {/* ═══════════════════════════════════════
             TUTORIAL OVERLAY

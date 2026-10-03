@@ -118,18 +118,7 @@ function ZoneChart({
     const baseline2Y = baseline2Value != null ? valueToY(baseline2Value) : null;
 
     const selected = selectedIndex != null ? raw[selectedIndex] : null;
-    let detailNode = (
-        <View style={styles.detailRow}>
-            <Text style={[styles.detailHint, { color: COLORS.light.textMuted }]}>
-                {isScrollable ? '← Swipe horizontally to view history · Tap point for details' : 'Tap a point for details'}
-            </Text>
-            {isScrollable && (
-                <View style={styles.scrollBadge}>
-                    <Text style={styles.scrollBadgeText}>Scrollable ⇄</Text>
-                </View>
-            )}
-        </View>
-    );
+    let detailNode = null;
     if (selected) {
         const zone = zones[selectedIndex];
         const dColor = zoneColorOf(zone);
@@ -139,9 +128,9 @@ function ZoneChart({
         let devText = '';
         if (baseline2Value != null) {
             const dev = Math.round(selected.value - baseline2Value);
-            devText = dev === 0 ? ' · at your baseline'
-                : dev > 0 ? ` · ${dev} pts above baseline`
-                    : ` · ${Math.abs(dev)} pts below baseline`;
+            devText = dev === 0 ? ' · at baseline'
+                : dev > 0 ? ` · +${dev}%`
+                    : ` · -${Math.abs(dev)}%`;
         }
         const windowText = selected.windowCount ? ` · avg of ${selected.windowCount} windows` : '';
         detailNode = (
@@ -150,11 +139,22 @@ function ZoneChart({
                 <Text style={{ color: COLORS.light.textMuted }}>{devText}{windowText} · {time}</Text>
             </Text>
         );
+    } else if (isScrollable) {
+        detailNode = (
+            <View style={styles.detailRow}>
+                <Text style={[styles.detailHint, { color: COLORS.light.textMuted }]}>
+                    ← Swipe horizontally to view history
+                </Text>
+                <View style={styles.scrollBadge}>
+                    <Text style={styles.scrollBadgeText}>Scrollable ⇄</Text>
+                </View>
+            </View>
+        );
     }
 
     return (
         <View style={{ width, overflow: 'hidden' }}>
-            <View style={styles.detailBar}>{detailNode}</View>
+            {detailNode && <View style={styles.detailBar}>{detailNode}</View>}
 
             <ScrollView
                 ref={scrollRef}
@@ -414,13 +414,14 @@ export default function LineChart({
     const targetLabelCount = 4;
     const labelStep = Math.max(1, Math.ceil(raw.length / targetLabelCount));
 
-    // GiftedLineChart width constraint:
+    // GiftedLineChart width & height constraint:
     // Total rendered width = plotWidth + yAxisLabelWidth + initialSpacing + endSpacing
     // We strictly calibrate plotWidth so total rendered width matches `width` exactly without spilling out of the card.
-    const yAxisLabelWidth = hideValues ? 0 : (suffix ? 40 : 34);
+    const yAxisLabelWidth = hideValues ? 0 : (suffix ? 52 : 38);
     const initialSpacing = 8;
     const endSpacing = 8;
     const plotWidth = Math.max(60, width - yAxisLabelWidth - initialSpacing - endSpacing);
+    const containerHeight = (haveAllTimes && !hideValues) ? height + 22 : height;
 
     const xPositions = [initialSpacing];
     const data = raw.map((p, i) => {
@@ -443,8 +444,8 @@ export default function LineChart({
     });
 
     return (
-        <View style={{ width, height, overflow: 'hidden' }}>
-            {haveAllTimes && (
+        <View style={{ width, height: containerHeight, overflow: 'hidden' }}>
+            {haveAllTimes && !hideValues && (
                 <Svg width={width} height={height} style={StyleSheet.absoluteFill} pointerEvents="none">
                     {raw.map((_p, i) => {
                         if (!(i % labelStep === 0 || i === raw.length - 1)) return null;
