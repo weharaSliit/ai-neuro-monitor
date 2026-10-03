@@ -34,6 +34,7 @@ public class PhenotypingIdentityModule extends ReactContextBaseJavaModule implem
 
     public static final String PREFS_NAME = "PhenotypingIdentityPrefs";
     public static final String USER_ID_KEY = "user_id";
+    public static final String SESSION_ID_KEY = "session_id";
 
     private static final int REQ_ACTIVITY_RECOGNITION = 9101;
     private static final int REQ_POST_NOTIFICATIONS   = 9102;
@@ -60,14 +61,42 @@ public class PhenotypingIdentityModule extends ReactContextBaseJavaModule implem
         prefs.edit().putString(USER_ID_KEY, userId).apply();
     }
 
-    /** Called on logout -- without this, a buffered window flushed after
-     * logout but before the next login would misattribute data to
-     * whoever logs in next. */
+    /** Sets the current multimodal session_id (e.g. session_YYYYMMDDTHHMMSS)
+     * so KeystrokeCollectorService can tag background telemetry windows. */
     @ReactMethod
-    public void clearUserId() {
+    public void setSessionId(String sessionId) {
         SharedPreferences prefs = getReactApplicationContext()
             .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        prefs.edit().remove(USER_ID_KEY).apply();
+        prefs.edit().putString(SESSION_ID_KEY, sessionId).apply();
+    }
+
+    /** Atomically sets both userId and sessionId. */
+    @ReactMethod
+    public void setIdentity(String userId, String sessionId) {
+        SharedPreferences prefs = getReactApplicationContext()
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        prefs.edit()
+            .putString(USER_ID_KEY, userId)
+            .putString(SESSION_ID_KEY, sessionId)
+            .apply();
+    }
+
+    /** Called on logout -- clears both userId and sessionId so buffered windows
+     * flushed after logout are not attributed to previous sessions. */
+    @ReactMethod
+    public void clearIdentity() {
+        SharedPreferences prefs = getReactApplicationContext()
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        prefs.edit()
+            .remove(USER_ID_KEY)
+            .remove(SESSION_ID_KEY)
+            .apply();
+    }
+
+    /** Backward-compatible alias for clearIdentity(). */
+    @ReactMethod
+    public void clearUserId() {
+        clearIdentity();
     }
 
     /** Schedules the daily SISS / weekly PSS-4 local notifications --

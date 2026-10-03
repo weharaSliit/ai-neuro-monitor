@@ -18,7 +18,7 @@ if __package__ is None:
 # Import your local services
 from backend.phenotyping_behavior.firebase_service import (
     init_firebase, save_behavioral_window, get_user_baselines,
-    save_stress_prediction, save_validation_label,
+    save_stress_prediction, save_validation_label, save_user_feedback,
     get_latest_stress_prediction,             # T7-B: neuroadaptive bridge
     get_calibration_windows,                  # Objective 2: 7-day baseline
     set_user_calibration_status, create_user_profile,
@@ -32,56 +32,77 @@ from backend.phenotyping_behavior.ema_service import update_personalized_baselin
 app = Flask(__name__)
 CORS(app)
 
-# Population fallback -- only used if the template participant below has no
-# baseline in Firebase yet (e.g. their record is ever deleted). Not used in
-# the normal case; see get_seed_baseline().
+# Realistic population reference baselines derived from mobile behavioral biometrics
+# Used for uncalibrated users (Day 1-7) and as fallback if a participant's template is corrupted/missing.
 REFERENCE_BASELINES = {
-    'avg_dwell':        {'mean': 88.246993,   'std': 31.837077},
-    'dwell_std':        {'mean': 53.094011,   'std': 21.784443},
-    'avg_flight':       {'mean': 220.281697,  'std': 79.034951},
-    'flight_std':       {'mean': 132.677431,  'std': 54.43413},
-    'interaction_rate': {'mean': 0.754617,    'std': 3.987897},
-    'scroll_velocity':  {'mean': 1425.401759, 'std': 6497.52037},
+    'avg_dwell':        {'mean': 135.0,       'std': 25.0},
+    'dwell_std':        {'mean': 20.0,        'std': 10.0},
+    'avg_flight':       {'mean': 220.0,       'std': 45.0},
+    'flight_std':       {'mean': 35.0,        'std': 15.0},
+    'interaction_rate': {'mean': 1.5,         'std': 1.0},
+    'scroll_velocity':  {'mean': 450.0,       'std': 200.0},
     'tilt_angle':       {'mean': 59.0,        'std': 15.0},
-    'cpm':              {'mean': 39.0,        'std': 12.0},
-    'app_switch_rate':  {'mean': 0.019252,    'std': 0.200632},
+    'cpm':              {'mean': 39.0,        'std': 15.0},
+    'app_switch_rate':  {'mean': 0.5,         'std': 0.5},
 }
 
-# Participant whose real, fully-calibrated 7-day baseline is used to seed
-# every new user (Objective: new users show "Calibrated / Active Monitoring"
-# immediately instead of waiting through their own 7-day window). Their
-# baseline was computed from 5,386 real behavioral windows collected on
-# their own device over 9 real days (2026-08-23 .. 2026-08-31).
-BASELINE_TEMPLATE_USER_ID = "6234de4b-8875-4d59-b1a0-cdca6089a972"  
+# Template participant profile in Firebase
+BASELINE_TEMPLATE_USER_ID = "6234de4b-8875-4d59-b1a0-cdca6089a972"
+
+def is_valid_baseline(bl):
+    """Verifies that a baseline profile has physically realistic mobile metrics."""
+    if not bl or not isinstance(bl, dict):
+        return False
+    dwell = bl.get('avg_dwell', {})
+    flight = bl.get('avg_flight', {})
+    dwell_m = float(dwell.get('mean', 0)) if isinstance(dwell, dict) else 0
+    flight_m = float(flight.get('mean', 0)) if isinstance(flight, dict) else 0
+    dwell_s = float(dwell.get('std', 0)) if isinstance(dwell, dict) else 0
+    flight_s = float(flight.get('std', 0)) if isinstance(flight, dict) else 0
+    # Dwell < 30ms or flight < 30ms indicates corrupted/microscopic zero-artifact values
+    # Standard deviation < 1.0 indicates near-zero std that causes explosive Z-scores
+    if dwell_m < 30.0 or flight_m < 30.0 or dwell_s < 1.0 or flight_s < 1.0:
+        return False
+    # Verify that all features in baseline have non-zero positive std
+    for feat_name, stats in bl.items():
+        if isinstance(stats, dict):
+            std_val = float(stats.get('std', 0))
+            if std_val < 0.01:
+                return False
+    return True
 
 def get_seed_baseline():
     """
     Real baseline used to seed new users, fetched live from the template
-    participant's Firebase profile (so it reflects their calibrated data,
-    not a hardcoded snapshot). Falls back to the population REFERENCE_BASELINES
-    only if that participant's record is ever missing/not yet calibrated.
+    participant's Firebase profile if valid. Falls back to the population
+    REFERENCE_BASELINES if the template record is missing or corrupted.
     """
-    template = get_user_baselines(BASELINE_TEMPLATE_USER_ID)
-    return template if template else REFERENCE_BASELINES
+    try:
+        template = get_user_baselines(BASELINE_TEMPLATE_USER_ID)
+        if is_valid_baseline(template):
+            return template
+    except Exception as e:
+        print(f"[WARN] Error loading template baseline: {e}")
+    return REFERENCE_BASELINES
 
-def auto_seed_baseline(user_id):
-    """If user has no baselines, seed from the template participant's real
-    baseline (see get_seed_baseline()) and mark calibrated."""
+def get_calibration_period_baseline(user_id):
+    """
+    Called during the 7-day calibration window when a user has no personal
+    baseline yet.  Returns the user's own baselines if they already exist
+    (i.e. calibration completed), otherwise returns the population reference
+    baseline IN MEMORY ONLY for this single prediction window.
+
+    IMPORTANT: Nothing is written to Firebase here.  is_calibrated and
+    baselines on the user profile remain untouched until /behavior/calibrate
+    runs after day 7 with the user's own collected data.
+    """
     existing = get_user_baselines(user_id)
-    if existing:
-        return existing  # already has baselines
-    seed = get_seed_baseline()
-    print(f"[AUTO-SEED] {user_id}: No baselines found — seeding from template participant's real baseline")
-    # Use .update() so we ONLY write baselines + calibration flag
-    # without overwriting the user's display_name or other profile fields.
-    from backend.phenotyping_behavior.firebase_service import _ref
-    _ref(f'users/{user_id}').update({
-        'baselines': seed,
-        'is_calibrated': True,
-        'calibrated_at': __import__('datetime').datetime.now().isoformat(),
-    })
-    print(f"[AUTO-SEED] {user_id}: Baseline seeded + is_calibrated=true")
-    return seed
+    if is_valid_baseline(existing):
+        return existing  # user already has their own calibrated baselines
+    # Still in calibration period: use reference values for this prediction
+    # only so the sensor can confirm it is running correctly.
+    print(f"[CALIB] {user_id}: Day 1-7 calibration period — using population reference for this window only (not saved to Firebase)")
+    return get_seed_baseline()
 
 # Initialize Firebase on startup
 init_firebase()
@@ -129,10 +150,11 @@ def predict_behavioral_stress():
     is_valid = data.get('data_valid', True)
 
     # 3. Get Personalized Baseline (Objective 2)
-    # Auto-seeds reference baseline for new users with no baselines
-    baselines = get_user_baselines(user_id)
-    if not baselines:
-        baselines = auto_seed_baseline(user_id)
+    # During the 7-day calibration window the user has no personal baseline.
+    # get_calibration_period_baseline() returns the population reference for
+    # in-memory prediction only — it does NOT write to Firebase.
+    # After day 7 /behavior/calibrate computes the user's own real baseline.
+    baselines = get_calibration_period_baseline(user_id)
 
     # 4. Perform Inference (Objective 1 Model)
     # user_id enables temporal drift confirmation (see predictor.py step 4b)
@@ -140,8 +162,10 @@ def predict_behavioral_stress():
 
     # 5. Save Results to Firebase
     window_data = {**window_features, 'data_valid': is_valid}
+    if session_id:
+        window_data['session_id'] = session_id
     save_behavioral_window(user_id, window_data)
-    save_stress_prediction(user_id, result)
+    save_stress_prediction(user_id, result, session_id=session_id)
 
     # 5b. Write to shared fusion_engine table (legacy path, kept running
     #     alongside 5c for whatever else may still read it)
@@ -184,6 +208,21 @@ def submit_label():
     
     save_validation_label(user_id, label_type, score)
     return jsonify({"status": "label saved"})
+
+
+@app.route('/behavior/feedback', methods=['POST'])
+def submit_feedback():
+    """
+    Endpoint for App Experience & Usability Feedback.
+    Receives participant survey responses, subscales, and comments from PhenotypingEmaScreen.
+    """
+    data = request.json or {}
+    user_id = data.get('user_id')
+    if not user_id:
+        return jsonify({"error": "user_id is required"}), 400
+
+    save_user_feedback(user_id, data)
+    return jsonify({"status": "success", "message": "Feedback saved successfully"})
  
  
 @app.route('/behavior/stress-summary', methods=['GET'])
@@ -340,14 +379,36 @@ def calibrate_baseline():
             if feature in w and w[feature] is not None
             and not (feature in ZERO_MEANS_NO_SIGNAL and float(w[feature]) <= 0)
         ]
-        if len(values) >= 3:   # need at least 3 samples for a meaningful std
+        ref_feat = REFERENCE_BASELINES.get(feature, {'mean': 50.0, 'std': 15.0})
+        # Require at least 10 active typing/interaction samples for a reliable idiographic baseline
+        if len(values) >= 10:
+            computed_mean = float(np.mean(values))
+            computed_std = float(np.std(values))
+
+            # Plausibility sanity checks for physiological bounds
+            if feature == 'avg_dwell' and (computed_mean < 30.0 or computed_mean > 1000.0):
+                computed_mean = float(ref_feat['mean'])
+            elif feature == 'avg_flight' and (computed_mean < 30.0 or computed_mean > 2000.0):
+                computed_mean = float(ref_feat['mean'])
+            elif feature == 'cpm' and (computed_mean < 5.0 or computed_mean > 300.0):
+                computed_mean = float(ref_feat['mean'])
+
+            # Floor std at 20% of population standard deviation to prevent micro-variance false alarms
+            min_allowed_std = max(0.05, float(ref_feat['std']) * 0.20)
+            safe_std = max(computed_std, min_allowed_std)
+
             baselines[feature] = {
-                'mean': round(float(np.mean(values)), 6),
-                'std':  round(float(max(np.std(values), 0.001)), 6)  # floor at 0.001
+                'mean': round(computed_mean, 6),
+                'std':  round(safe_std, 6)
             }
+            print(f"[CALIB] Feature {feature}: mean={round(computed_mean, 2)}, std={round(safe_std, 2)} (n={len(values)})")
         else:
-            # Feature rarely collected — use a safe population default
-            baselines[feature] = {'mean': 0.0, 'std': 1.0}
+            # Feature rarely collected (<10 samples) — safely use population default from REFERENCE_BASELINES
+            baselines[feature] = {
+                'mean': float(ref_feat['mean']),
+                'std':  float(ref_feat['std'])
+            }
+            print(f"[CALIB] Feature {feature}: fell back to reference baseline (only {len(values)} active samples, required 10)")
 
     # ── 3. Write the initial baseline profile & mark user as calibrated ────────
     create_user_profile(user_id, name, baselines)

@@ -7,21 +7,61 @@
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { NativeModules, Platform } from 'react-native';
 import { ref, update } from 'firebase/database';
 import { db } from '../firebase';
 import api, { setAuthToken, setUnauthorizedHandler } from '../modules/physiological/api/client';
 import { setAuthToken as setRelaxationAuthToken } from '../modules/relaxation_guide/src/api/apiService';
+import { cacheAuthUserId, clearCachedAuthUserId } from '../modules/phenotyping/utils/deviceIdentity';
 
-// NOTE: Digital Phenotyping does NOT hook into login/logout here anymore.
-// It tracks each device under its own randomly-generated id (created
-// lazily the first time someone opens Digital Phenotyping), independent
-// of which account is logged in -- see
-// modules/phenotyping/utils/deviceIdentity.js for why (the main app's
-// login intentionally uses the same credentials on every device, but
-// behavioral biometrics are inherently per-device).
+// Bridge: pushes / clears the real auth userId and sessionId in native SharedPreferences so
+// KeystrokeCollectorService (AccessibilityService) always uploads phenotyping
+// windows under the correct user and active live session, not a random per-device id or missing session.
+const { PhenotypingIdentity } = NativeModules;
+function syncPhenotypingIdentity(userId, sessionId) {
+  if (Platform.OS === 'android' && PhenotypingIdentity) {
+    if (PhenotypingIdentity.setIdentity) {
+      PhenotypingIdentity.setIdentity(userId, sessionId || '');
+    } else {
+      if (PhenotypingIdentity.setUserId) PhenotypingIdentity.setUserId(userId);
+      if (sessionId && PhenotypingIdentity.setSessionId) PhenotypingIdentity.setSessionId(sessionId);
+    }
+  }
+  // Also warm the JS-side AsyncStorage cache so usePhenotypingDeviceId()
+  // resolves instantly on the next render without a native round-trip.
+  cacheAuthUserId(userId).catch(() => { });
+}
 
-const TOKEN_KEY      = '@stressapp/authToken';
-const USER_KEY       = '@stressapp/authUser';
+function syncPhenotypingUserId(userId, sessionId) {
+  syncPhenotypingIdentity(userId, sessionId);
+}
+
+function clearPhenotypingIdentity() {
+  if (Platform.OS === 'android' && PhenotypingIdentity) {
+    if (PhenotypingIdentity.clearIdentity) {
+      PhenotypingIdentity.clearIdentity();
+    } else if (PhenotypingIdentity.clearUserId) {
+      PhenotypingIdentity.clearUserId();
+    }
+  }
+  clearCachedAuthUserId().catch(() => { });
+}
+
+function clearPhenotypingUserId() {
+  clearPhenotypingIdentity();
+}
+
+// Digital Phenotyping identity is now UNIFIED with the login userId.
+// On every successful login / session restore we call syncPhenotypingUserId()
+// so KeystrokeCollectorService always tags windows with the real username (userId)
+// (e.g. "alex_zen") instead of a random per-device "phn_..." string.
+// This enables proper multimodal fusion with the Physiological Ring and EEG
+// components, which both key their Firebase data by the same userId.
+// On logout, clearPhenotypingUserId() is called so any buffered window
+// flushed after logout is not misattributed to the next user.
+
+const TOKEN_KEY = '@stressapp/authToken';
+const USER_KEY = '@stressapp/authUser';
 const SESSION_ID_KEY = '@stressapp/sessionId';
 
 // A "session" is one login-to-logout span (not "however long the app
@@ -33,23 +73,23 @@ const SESSION_ID_KEY = '@stressapp/sessionId';
 // into all three roots at once so every backend/bridge polling any of them
 // sees the same session at the same time.
 const CURRENT_SESSION_ID_FIELD = 'current_session_id';
-const CURRENT_USER_ID_FIELD    = 'current_user_id';
+const CURRENT_USER_ID_FIELD = 'current_user_id';
 const CURRENT_SESSION_ID_ROOTS = ['psychological', 'fusion_en', 'fusion_en_sessions'];
 
 function mintSessionId() {
   const d = new Date();
   const pad = (n) => String(n).padStart(2, '0');
   return `session_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}T`
-      + `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+    + `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUser]           = useState(null); // { userId, name }
-  const [token, setToken]         = useState(null);
+  const [user, setUser] = useState(null); // { userId, name }
+  const [token, setToken] = useState(null);
   const [sessionId, setSessionId] = useState(null);
-  const [isLoading, setLoading]   = useState(true);
+  const [isLoading, setLoading] = useState(true);
 
   // Called once per real login (fresh login/register, or a restore that
   // finds a token but no session id from before this field existed) --
@@ -72,6 +112,9 @@ export function AuthProvider({ children }) {
     }
     await AsyncStorage.setItem(SESSION_ID_KEY, newSessionId);
     setSessionId(newSessionId);
+    // Push new sessionId to native phenotyping service immediately
+    syncPhenotypingIdentity(userId, newSessionId);
+    return newSessionId;
   };
 
   // Ends the CURRENT session (if any) and clears the live pointer so no
@@ -98,6 +141,9 @@ export function AuthProvider({ children }) {
 
   const logout = useCallback(async () => {
     await endLiveSession(user?.userId, sessionId);
+    // Clear native SharedPreferences so buffered phenotyping windows flushed
+    // after this point are not attributed to the user or session who just logged out.
+    clearPhenotypingIdentity();
     await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY, SESSION_ID_KEY]);
     setAuthToken(null);
     setRelaxationAuthToken(null);
@@ -119,16 +165,20 @@ export function AuthProvider({ children }) {
         const [storedToken, storedUser, storedSessionId] = await AsyncStorage.multiGet(
           [TOKEN_KEY, USER_KEY, SESSION_ID_KEY]
         );
-        const t  = storedToken?.[1];
-        const u  = storedUser?.[1] ? JSON.parse(storedUser[1]) : null;
+        const t = storedToken?.[1];
+        const u = storedUser?.[1] ? JSON.parse(storedUser[1]) : null;
         const sid = storedSessionId?.[1];
         if (t && u) {
           setAuthToken(t);
           setRelaxationAuthToken(t);
           setToken(t);
           setUser(u);
+          // Push real userId and sessionId into native SharedPreferences so the background
+          // AccessibilityService (KeystrokeCollectorService) uses the right identity & session
+          // even if it was already running before this JS restore completed.
           if (sid) {
             setSessionId(sid);
+            syncPhenotypingIdentity(u.userId, sid);
           } else {
             await startLiveSession(u.userId);
           }
@@ -153,7 +203,8 @@ export function AuthProvider({ children }) {
       [TOKEN_KEY, newToken],
       [USER_KEY, JSON.stringify(newUser)],
     ]);
-
+    // Unify Digital Phenotyping identity with the real login user id.
+    syncPhenotypingUserId(newUser.userId);
     await startLiveSession(newUser.userId);
   };
 
@@ -188,7 +239,7 @@ export function AuthProvider({ children }) {
     setUser((u) => {
       if (!u || !u.isNewUser) return u;
       const updated = { ...u, isNewUser: false };
-      AsyncStorage.setItem(USER_KEY, JSON.stringify(updated)).catch(() => {});
+      AsyncStorage.setItem(USER_KEY, JSON.stringify(updated)).catch(() => { });
       return updated;
     });
   }, []);

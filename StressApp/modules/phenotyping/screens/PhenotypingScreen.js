@@ -6,7 +6,7 @@
 // Step 2: 7-Day Calibration Roadmap with auto-transition to Dashboard.
 // ============================================================
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, NativeModules, Platform, Modal, Linking } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, NativeModules, Platform, Modal, Linking, AppState } from 'react-native';
 import Svg, { Circle as SvgCircle, Path as SvgPath } from 'react-native-svg';
 import { useFocusEffect } from '@react-navigation/native';
 import { ref, onValue, off, update, query, limitToLast, orderByKey } from 'firebase/database';
@@ -160,33 +160,12 @@ export default function PhenotypingScreen({ navigation }) {
         return () => clearInterval(id);
     }, []);
 
-    // ── Reference baseline for new-user seeding. The backend's
-    // get_seed_baseline() (see /behavior/reference-baseline) is the single
-    // source of truth -- it's the template participant's real, fully-
-    // calibrated 7-day baseline, fetched once and cached offline rather than
-    // duplicated here, so recalibrating only requires updating one place.
-    const [referenceBaselines, setReferenceBaselines] = useState(null);
-    useEffect(() => {
-        const AS = require('@react-native-async-storage/async-storage').default;
-        (async () => {
-            try {
-                const c = await AS.getItem('@pheno_reference_baseline');
-                if (c) setReferenceBaselines(JSON.parse(c));
-            } catch { }
-            try {
-                const res = await fetch(`${API_BASE}/behavior/reference-baseline`);
-                const data = await res.json();
-                if (res.ok && data.baselines) {
-                    setReferenceBaselines(data.baselines);
-                    AS.setItem('@pheno_reference_baseline', JSON.stringify(data.baselines)).catch(() => { });
-                }
-            } catch { }
-        })();
-    }, []);
 
     // ── Firebase profile (display_name, created_at, study_id, is_calibrated)
-    // On first profile creation, auto-seeds the reference 7-day baseline so users
-    // skip the calibration wait. Live signals still come from THIS user's phone.
+    // For new users we only write display_name + created_at + is_calibrated:false
+    // so the real 7-day countdown starts immediately.
+    // is_calibrated is set to true ONLY by the backend's /behavior/calibrate
+    // endpoint after the 7-day window completes with the user's own data.
     useEffect(() => {
         if (!deviceId) return;
         const AS = require('@react-native-async-storage/async-storage').default;
@@ -198,23 +177,20 @@ export default function PhenotypingScreen({ navigation }) {
                 try { await AS.setItem(`@pheno_profile_${deviceId}`, JSON.stringify(p)); } catch { }
             } else {
                 try { const c = await AS.getItem(`@pheno_profile_${deviceId}`); if (c) setFirebaseProfile(JSON.parse(c)); } catch { }
-                // NEW USER: seed reference baseline + mark calibrated immediately.
-                // Skipped if referenceBaselines hasn't loaded yet (no network on
-                // first launch); the effect re-runs once it arrives.
-                if (referenceBaselines) {
-                    update(profileRef, {
-                        display_name: user?.name || 'User',
-                        is_calibrated: true,
-                        created_at: new Date().toISOString(),
-                        baselines: referenceBaselines,
-                    }).catch(() => { });
-                }
+                // NEW USER: create a minimal profile so the 7-day countdown
+                // starts. Do NOT set is_calibrated:true or write any baselines
+                // here — those are set by /behavior/calibrate after day 7.
+                update(profileRef, {
+                    display_name: user?.name || 'User',
+                    is_calibrated: false,
+                    created_at: new Date().toISOString(),
+                }).catch(() => { });
             }
         }, async () => {
             try { const c = await AS.getItem(`@pheno_profile_${deviceId}`); if (c) setFirebaseProfile(JSON.parse(c)); } catch { }
         });
         return () => off(profileRef, 'value', handler);
-    }, [deviceId, referenceBaselines]);
+    }, [deviceId]);
 
     const displayName = firebaseProfile?.display_name || firebaseProfile?.name || user?.name || 'User';
     const studyId = firebaseProfile?.study_id || null;
@@ -386,10 +362,23 @@ export default function PhenotypingScreen({ navigation }) {
         }
     }, []);
 
-    // Run sensor check when onboarding modal opens at Step 1
+    // Run sensor check when onboarding modal opens at Step 1.
+    // Also subscribe to AppState so the check fires automatically when the
+    // user comes back from Android Accessibility Settings — without this,
+    // the modal keeps showing ❌ even after the sensor is turned on because
+    // a React Native <Modal> keeps the underlying screen in focus the whole
+    // time, so useFocusEffect never re-fires on return.
     useEffect(() => {
         if (showOnboardingModal && onboardingStep === 1) {
             checkSensorStatus();
+            // Re-check every time the app comes to the foreground (user
+            // returns from Settings after enabling the accessibility service).
+            const sub = AppState.addEventListener('change', (nextState) => {
+                if (nextState === 'active') {
+                    checkSensorStatus();
+                }
+            });
+            return () => sub.remove();
         }
         // Clear any lingering interval when modal closes
         if (!showOnboardingModal && sensorCheckIntervalRef.current) {
@@ -781,7 +770,10 @@ export default function PhenotypingScreen({ navigation }) {
                                     <View style={styles.sensorActionRow}>
                                         <TouchableOpacity
                                             style={[styles.sensorActionBtn, { backgroundColor: COLORS.brand, flex: 2 }]}
-                                            onPress={() => {
+                                            onPress={async () => {
+                                                if (Platform.OS === 'android' && PhenotypingIdentity) {
+                                                    try { await PhenotypingIdentity.requestRuntimePermissions(); } catch { }
+                                                }
                                                 // Deep-link to Android Accessibility settings
                                                 if (Platform.OS === 'android') {
                                                     Linking.sendIntent('android.settings.ACCESSIBILITY_SETTINGS').catch(() =>
@@ -813,9 +805,14 @@ export default function PhenotypingScreen({ navigation }) {
                                         borderColor: t.border,
                                         marginTop: 14,
                                     }]}
-                                    onPress={() => {
+                                    onPress={async () => {
                                         if (sensorCheckStatus !== 'on') return;
                                         if (Platform.OS === 'android' && PhenotypingIdentity) {
+                                            try {
+                                                await PhenotypingIdentity.requestRuntimePermissions();
+                                            } catch (e) {
+                                                console.warn('PhenoCare: requestRuntimePermissions error', e);
+                                            }
                                             PhenotypingIdentity.scheduleEmaNotifications();
                                         }
                                         setOnboardingStep(2);

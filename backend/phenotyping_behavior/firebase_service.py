@@ -16,7 +16,7 @@ from common.config import FIREBASE_CRED_FILE, FIREBASE_DB_URL, FIREBASE_CRED_DIC
 # FUSION_EN_ROOT/fusion_window_key: the newer fusion_en/ convention (see
 # save_fusion_en_rtdb() below) -- separate module from common.config above,
 # both coexist under backend/common/.
-from backend.common.firebase_config import FUSION_EN_ROOT
+from backend.common.firebase_config import FUSION_EN_ROOT, FUSION_EN_SESSIONS_ROOT, CURRENT_SESSION_ID_FIELD
 from backend.common.fusion import fusion_window_key
 
 # --- RESEARCH NAMESPACE ---
@@ -108,7 +108,7 @@ def save_behavioral_window(user_id, window_data):
 
 # --- STRESS PREDICTIONS & LABELS ---
 
-def save_stress_prediction(user_id, result):
+def save_stress_prediction(user_id, result, session_id=None):
     """
     Saves the model's decision: Normal, Pre-Stress, or High Stress.
     v4.1: Also persists all 5 z-score fields and composite_z so the
@@ -123,7 +123,7 @@ def save_stress_prediction(user_id, result):
     # (UTC+5:30) time, making every reading appear ~5.5 hours older than
     # it actually was (e.g. a reading from moments ago showing "5h ago").
     lk_tz = timezone(timedelta(hours=5, minutes=30))
-    ref.push({
+    pred_data = {
         'timestamp':   datetime.now(lk_tz).isoformat(),
         'label':       result['label'],
         'stress_score': result['score'],
@@ -142,7 +142,10 @@ def save_stress_prediction(user_id, result):
         'raw_tilt':    result.get('raw_tilt', 0),
         'raw_cpm':     result.get('raw_cpm', 0),
         'model_type':  result.get('model_type', 'global'),
-    })
+    }
+    if session_id:
+        pred_data['session_id'] = session_id
+    ref.push(pred_data)
 
 def get_latest_stress_prediction(user_id):
     """
@@ -267,6 +270,46 @@ def get_physiological_predictions(user_id):
     except Exception as e:
         print(f"[WARN] fusion_engine physiological read failed: {e}")
         return {}
+
+def save_controlled_experiment(user_id, experiment_type, calm_metrics, stress_metrics, metadata=None):
+    """
+    Method 3: Saves a controlled laboratory/in-app stress experiment.
+    Includes calm baseline metrics vs induced cognitive stress metrics.
+    """
+    lk_tz = timezone(timedelta(hours=5, minutes=30))
+    ref = _ref(f'controlled_experiments/{user_id}')
+    record = {
+        'experiment_type': experiment_type,
+        'timestamp': datetime.now(lk_tz).isoformat(),
+        'calm_metrics': calm_metrics,
+        'stress_metrics': stress_metrics,
+        'metadata': metadata or {}
+    }
+    ref.push(record)
+    return record
+
+def get_controlled_experiments(user_id):
+    """Retrieves all controlled stress induction tests for a user."""
+    raw = _ref(f'controlled_experiments/{user_id}').get()
+    return raw if isinstance(raw, dict) else {}
+
+def save_user_feedback(user_id, feedback_data):
+    """
+    Saves app usability and experience feedback from participants.
+    Path: phenotyping/feedback/{user_id}/{push-key}
+    """
+    lk_tz = timezone(timedelta(hours=5, minutes=30))
+    ref = _ref(f'feedback/{user_id}')
+    record = {
+        'timestamp': feedback_data.get('timestamp') or datetime.now(lk_tz).isoformat(),
+        'answers': feedback_data.get('answers', {}),
+        'subscales': feedback_data.get('subscales', {}),
+        'overall_score': float(feedback_data.get('overall_score', 0.0)),
+        'comment': str(feedback_data.get('comment', '')),
+        'user_id': user_id,
+    }
+    ref.push(record)
+    return record
 
 
 # --- FUSION ENGINE INTEGRATION ---
@@ -411,12 +454,22 @@ def save_fusion_en_rtdb(user_id, session_id, result, window_features, is_valid=T
     and fusion_live_session.py actually poll for the "behav" modality.
     update() (not set()), same reasoning as the HRV/GSR and EEG writers:
     another modality's write to this same window key must merge, not be
-    clobbered. No-ops (logs and returns) if session_id is missing -- this
-    endpoint currently isn't guaranteed to receive one from every caller,
-    see app.py's /behavior/predict.
+    clobbered. If session_id is missing from the payload, attempts fallback
+    lookup via RTDB active session pointers.
     """
+    if not session_id or not str(session_id).strip():
+        try:
+            ptr = db.reference(f'{FUSION_EN_ROOT}/{CURRENT_SESSION_ID_FIELD}').get()
+            if not ptr:
+                ptr = db.reference(f'{FUSION_EN_SESSIONS_ROOT}/{CURRENT_SESSION_ID_FIELD}').get()
+            if ptr and isinstance(ptr, str) and ptr.strip():
+                session_id = ptr.strip()
+                print(f"[fusion_en] session_id missing from payload; resolved via RTDB pointer: {session_id}")
+        except Exception as e:
+            print(f"[fusion_en] Pointer resolution failed: {e}")
+
     if not session_id:
-        print("[fusion_en] WARNING: no session_id provided -- skipping fusion_en write "
+        print("[fusion_en] WARNING: no session_id provided or discoverable in RTDB -- skipping fusion_en write "
               "(user_id={}); this window still reaches the legacy fusion_engine table "
               "via save_to_fusion_engine().".format(user_id))
         return

@@ -1,80 +1,113 @@
 // ============================================================
-// deviceIdentity.js -- generates and persists a per-device tracking id
-// for the Digital Phenotyping module, generated automatically the first
-// time anyone opens Digital Phenotyping on a given device.
+// deviceIdentity.js -- resolves the Digital Phenotyping user id
 //
-// StressApp's real login (context/AuthContext.js) deliberately uses the
-// SAME credentials across every device a person owns -- there's no
-// per-device login, and the main app can't support one. But Digital
-// Phenotyping's behavioral biometrics (typing rhythm, scroll velocity,
-// tilt angle) are inherently device-specific: the same person typing on
-// their phone vs. their tablet produces different baselines, so keying
-// phenotyping data by the shared login id would merge two distinct
-// behavioral profiles into one and corrupt both the 7-day calibration
-// and the OC-SVM anomaly baseline.
+// CHANGED (Solution 1): The phenotyping id is now the REAL login
+// userId (username, e.g. "alex_zen") shared by all three modalities
+// (Physiological Ring, EEG, Digital Phenotyping).
 //
-// This id is intentionally NOT derived from the login id at all -- it's
-// random, created once per device/app-install (lazily, on first access
-// to Digital Phenotyping), persisted locally, and reused forever after.
-// Logging out, logging back in, or even logging in as a different
-// account on the same device does not change it.
+// Previously this file generated a random per-device "phn_..." id
+// to handle the case where the same account is used on multiple
+// devices.  That caused a worse problem: phenotyping data was
+// keyed under a random id that didn't match Physiological / EEG
+// data (both keyed by userId), so the fusion engine could never
+// correlate the three streams.
+//
+// The real userId comes from AuthContext.js, which writes it into
+// native SharedPreferences (PhenotypingIdentity.setUserId) on
+// every login / session restore.  We read it back via AsyncStorage
+// cache so that:
+//  1. PhenotypingScreen can subscribe to Firebase paths like
+//     phenotyping/users/{userId} instead of phenotyping/users/{phn_...}
+//  2. KeystrokeCollectorService (AccessibilityService) uses the
+//     same key (it already reads SharedPreferences directly).
+//  3. The backend /behavior/calibrate endpoint receives the real
+//     userId, enabling cross-modal analysis.
+//
+// If the user is not logged in yet, getAuthUserId() returns null
+// and callers (PhenotypingScreen, PhenotypingOnboardingScreen)
+// gate their Firebase subscriptions on userId != null, so
+// nothing is written under a null or anonymous path.
 // ============================================================
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useState } from 'react';
 import { NativeModules, Platform } from 'react-native';
 
-const DEVICE_ID_KEY = '@phenotyping/deviceId';
+// Key we use to cache the userId locally so we don't need a round-trip to
+// native on every re-render (AsyncStorage is the JS-side persistent store;
+// native SharedPreferences is the write-side source of truth).
+const AUTH_USER_ID_CACHE_KEY = '@phenotyping/authUserId';
 
-function randomDeviceId() {
-    // Not cryptographically secure -- doesn't need to be, it only has to be
-    // unique per device. Same tier of rigor as AuthContext.js's own
-    // mintSessionId().
-    return 'phn_xxxxxxxxxxxxxxxxxxxxxxxx'.replace(/x/g, () =>
-        Math.floor(Math.random() * 16).toString(16)
-    );
-}
+const { PhenotypingIdentity } = NativeModules;
 
 let cachedId = null;
-let pending = null;
 
-// Resolves this device's Digital Phenotyping tracking id, creating and
-// persisting one on the very first call ever made on this device. Every
-// call after that (this session, or a future one) returns the same value.
-export async function getOrCreateDeviceId() {
+/**
+ * Returns the current auth user id for phenotyping, or null if the user
+ * is not logged in yet.  Reads from:
+ *   1. In-memory cache (instant after first successful resolution)
+ *   2. AsyncStorage cache (survives JS bundle restarts within the same session)
+ *   3. null (user not logged in, AuthContext has not called setUserId yet)
+ *
+ * AuthContext.js is the sole WRITER; this function is read-only.
+ */
+export async function getAuthUserId() {
     if (cachedId) return cachedId;
-    if (!pending) {
-        pending = (async () => {
-            let id = await AsyncStorage.getItem(DEVICE_ID_KEY);
-            if (!id) {
-                id = randomDeviceId();
-                await AsyncStorage.setItem(DEVICE_ID_KEY, id);
-            }
-            cachedId = id;
-
-            // Mirror into native SharedPreferences so KeystrokeCollectorService's
-            // background AccessibilityService -- which runs independently of
-            // whether any JS screen is open -- uploads windows under this same
-            // id. See PhenotypingIdentityModule.setUserId() and
-            // KeystrokeCollectorService.getUserId().
-            const { PhenotypingIdentity } = NativeModules;
-            if (Platform.OS === 'android' && PhenotypingIdentity) {
-                PhenotypingIdentity.setUserId(id);
-            }
-            return id;
-        })();
-    }
-    return pending;
+    try {
+        const stored = await AsyncStorage.getItem(AUTH_USER_ID_CACHE_KEY);
+        if (stored) {
+            cachedId = stored;
+            return cachedId;
+        }
+    } catch { }
+    return null;
 }
 
-// React hook wrapper -- resolves to null until the id has loaded (near-
-// instant after the very first call anywhere in the app, since it's then
-// cached in memory for the rest of the app's lifetime).
+/**
+ * Called by AuthContext.js after a successful login or session restore to
+ * keep our AsyncStorage cache in sync.  This makes getAuthUserId() fast
+ * even before the first explicit call in the current JS session.
+ */
+export async function cacheAuthUserId(userId) {
+    if (!userId) return;
+    cachedId = userId;
+    try {
+        await AsyncStorage.setItem(AUTH_USER_ID_CACHE_KEY, userId);
+    } catch { }
+    // Also mirror into native SharedPreferences so KeystrokeCollectorService
+    // picks it up even before AuthContext's own setUserId call has landed.
+    if (Platform.OS === 'android' && PhenotypingIdentity?.setUserId) {
+        PhenotypingIdentity.setUserId(userId);
+    }
+}
+
+/**
+ * Called on logout to flush the local cache so that the next open of
+ * PhenotypingScreen sees userId=null and does not subscribe to wrong paths.
+ */
+export async function clearCachedAuthUserId() {
+    cachedId = null;
+    try {
+        await AsyncStorage.removeItem(AUTH_USER_ID_CACHE_KEY);
+    } catch { }
+}
+
+// React hook (drop-in replacement for usePhenotypingDeviceId).
+// Resolves to null until the user is logged in; PhenotypingScreen gates all
+// its Firebase subscriptions on deviceId != null, so null is safe and correct.
 export function usePhenotypingDeviceId() {
-    const [deviceId, setDeviceId] = useState(cachedId);
+    const [userId, setUserId] = useState(cachedId);
     useEffect(() => {
         let cancelled = false;
-        getOrCreateDeviceId().then((id) => { if (!cancelled) setDeviceId(id); });
+        getAuthUserId().then((id) => {
+            if (!cancelled) setUserId(id || null);
+        });
         return () => { cancelled = true; };
     }, []);
-    return deviceId;
+    return userId;
+}
+
+// Legacy alias kept for any other module that imported getOrCreateDeviceId.
+// Returns the real auth userId (or null) -- does NOT create a random fallback.
+export async function getOrCreateDeviceId() {
+    return getAuthUserId();
 }
