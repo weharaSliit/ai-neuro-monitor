@@ -203,8 +203,10 @@ export function AuthProvider({ children }) {
       [TOKEN_KEY, newToken],
       [USER_KEY, JSON.stringify(newUser)],
     ]);
-    // Unify Digital Phenotyping identity with the real login user id.
-    syncPhenotypingUserId(newUser.userId);
+    // startLiveSession() calls syncPhenotypingIdentity(userId, newSessionId) as its
+    // last step — userId + sessionId are synced atomically there. Do NOT call
+    // syncPhenotypingUserId() here first (without a sessionId); that creates a brief
+    // window where the native service has userId but no sessionId.
     await startLiveSession(newUser.userId);
   };
 

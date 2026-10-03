@@ -704,10 +704,6 @@ public class KeystrokeCollectorService extends AccessibilityService {
         return httpRequest("POST", urlStr, jsonBody);
     }
 
-    private String httpPatch(String urlStr, String jsonBody) {
-        return httpRequest("PATCH", urlStr, jsonBody);
-    }
-
     private String httpRequest(String method, String urlStr, String jsonBody) {
         HttpURLConnection conn = null;
         try {

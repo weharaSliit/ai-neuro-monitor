@@ -76,11 +76,21 @@ def get_seed_baseline():
     Real baseline used to seed new users, fetched live from the template
     participant's Firebase profile if valid. Falls back to the population
     REFERENCE_BASELINES if the template record is missing or corrupted.
+    If the template is missing, a clear WARNING is printed so the fallback
+    is never silent — check server logs if new-user seeding seems off.
     """
     try:
         template = get_user_baselines(BASELINE_TEMPLATE_USER_ID)
+        if template is None:
+            print(f"[WARN] Template user '{BASELINE_TEMPLATE_USER_ID}' not found in Firebase "
+                  f"(phenotyping/users/{BASELINE_TEMPLATE_USER_ID}/baselines). "
+                  f"New users will be seeded with REFERENCE_BASELINES (population defaults). "
+                  f"Restore the template profile or update BASELINE_TEMPLATE_USER_ID in app.py.")
+            return REFERENCE_BASELINES
         if is_valid_baseline(template):
             return template
+        print(f"[WARN] Template user baseline for '{BASELINE_TEMPLATE_USER_ID}' failed validity check "
+              f"(dwell/flight too small or zero std). Falling back to REFERENCE_BASELINES.")
     except Exception as e:
         print(f"[WARN] Error loading template baseline: {e}")
     return REFERENCE_BASELINES

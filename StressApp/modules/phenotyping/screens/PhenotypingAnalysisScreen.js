@@ -10,7 +10,7 @@
 // ============================================================
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions } from 'react-native';
-import { ref, onValue, off, get } from 'firebase/database';
+import { ref, onValue, off, get, query, orderByKey, limitToLast } from 'firebase/database';
 import { db } from '../firebase';
 import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
@@ -131,8 +131,8 @@ const FEATURE_METADATA = {
         icon: '📜',
         unit: 'px/s',
         decimals: 0,
-        fallbackMean: 750,
-        fallbackStd: 120,
+        fallbackMean: 450,
+        fallbackStd: 200,
         stressDirection: 'high',
         description: 'Vertical swipe velocity. Rapid, erratic flicking indicates agitation and urgency.',
     },
@@ -266,6 +266,9 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
     }, [deviceId]);
 
     // Real Baselines & Data Logs Listener
+    // limitToLast(400): covers ~28 days of 30s windows (the maximum time range
+    // this screen supports). Without this, the entire data_logs subtree
+    // (10,000+ entries after 2+ weeks) would be downloaded on every screen open.
     useEffect(() => {
         if (!deviceId) return;
         const baselinesRef = ref(db, `phenotyping/users/${deviceId}/baselines`);
@@ -273,8 +276,8 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
             setBaselines(s.exists() ? s.val() : null);
         });
 
-        const logsRef = ref(db, `phenotyping/data_logs/${deviceId}`);
-        const logHandler = onValue(logsRef, (snapshot) => {
+        const logsQuery = query(ref(db, `phenotyping/data_logs/${deviceId}`), orderByKey(), limitToLast(400));
+        const logHandler = onValue(logsQuery, (snapshot) => {
             const raw = snapshot.val();
             if (raw) {
                 const entries = Object.entries(raw).sort((a, b) => a[0].localeCompare(b[0]));
@@ -290,7 +293,7 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
         });
         return () => {
             off(baselinesRef, 'value', blHandler);
-            off(logsRef, 'value', logHandler);
+            off(logsQuery, 'value', logHandler);
         };
     }, [deviceId]);
 

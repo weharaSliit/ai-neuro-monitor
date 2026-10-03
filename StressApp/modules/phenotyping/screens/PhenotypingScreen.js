@@ -309,24 +309,27 @@ export default function PhenotypingScreen({ navigation }) {
     }, [deviceId]);
 
     // ── Live behavioral window with offline cache + rolling history for sparklines
+    // limitToLast(20): we only need the last 20 windows for the sparkline history.
+    // Without this, the entire data_logs subtree (thousands of 30s windows after
+    // 7+ days) would be downloaded on every screen open and every new window write.
     useEffect(() => {
         if (!deviceId) return;
         const AS = require('@react-native-async-storage/async-storage').default;
-        const logsRef = ref(db, `phenotyping/data_logs/${deviceId}`);
+        const logsQuery = query(ref(db, `phenotyping/data_logs/${deviceId}`), orderByKey(), limitToLast(20));
         const loadCache = async () => { try { const c = await AS.getItem(`@pheno_win_${deviceId}`); if (c) { const { k, d } = JSON.parse(c); setLiveWindow(d); setLastUpdated(k); } } catch { } };
-        const handler = onValue(logsRef, async (snapshot) => {
+        const handler = onValue(logsQuery, async (snapshot) => {
             const raw = snapshot.val();
             if (raw) {
                 const entries = Object.entries(raw).sort((a, b) => a[0].localeCompare(b[0]));
                 const [k, d] = entries[entries.length - 1];
                 setLiveWindow(d); setLastUpdated(k);
-                // Keep last 20 windows for sparkline history
-                const hist = entries.slice(-20).map(([, v]) => v);
+                // All 20 windows for sparkline history
+                const hist = entries.map(([, v]) => v);
                 setWindowHistory(hist);
                 try { await AS.setItem(`@pheno_win_${deviceId}`, JSON.stringify({ k, d })); } catch { }
             } else { await loadCache(); }
         }, loadCache);
-        return () => off(logsRef, 'value', handler);
+        return () => off(logsQuery, 'value', handler);
     }, [deviceId]);
 
     // ── Auto-calibrate after 7+ days

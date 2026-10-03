@@ -94,14 +94,31 @@ export async function clearCachedAuthUserId() {
 // React hook (drop-in replacement for usePhenotypingDeviceId).
 // Resolves to null until the user is logged in; PhenotypingScreen gates all
 // its Firebase subscriptions on deviceId != null, so null is safe and correct.
+// Retries every 500ms until a userId is found (handles cold-start edge cases
+// where AuthContext.js may not have finished restoring the session before the
+// first render — previously the hook would stay null forever in that case).
 export function usePhenotypingDeviceId() {
     const [userId, setUserId] = useState(cachedId);
     useEffect(() => {
         let cancelled = false;
-        getAuthUserId().then((id) => {
-            if (!cancelled) setUserId(id || null);
-        });
-        return () => { cancelled = true; };
+        let retryTimeout;
+
+        const resolve = async () => {
+            const id = await getAuthUserId();
+            if (cancelled) return;
+            if (id) {
+                setUserId(id);
+            } else {
+                // No userId yet — auth restore may still be in progress. Retry.
+                retryTimeout = setTimeout(resolve, 500);
+            }
+        };
+
+        resolve();
+        return () => {
+            cancelled = true;
+            if (retryTimeout) clearTimeout(retryTimeout);
+        };
     }, []);
     return userId;
 }

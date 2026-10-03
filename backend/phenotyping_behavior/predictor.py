@@ -210,10 +210,33 @@ class StressPredictor:
         # were ALL in the escalation band (1.0 < composite_z <= 2.0) — a
         # single elevated window gets reported as "Normal" instead until it
         # persists. "High Confidence Stress" is never downgraded here.
+        # The buffer is persisted to Firebase (phenotyping/drift_state/{user_id})
+        # so it survives Render cold starts / deploys — preventing the confirmation
+        # counter from silently resetting to 0 mid-session.
         if user_id is not None:
             is_escalation_band = 1.0 < composite_z <= 2.0
-            buf = self._drift_buffers.setdefault(user_id, deque(maxlen=DRIFT_CONFIRM_WINDOWS))
+            if user_id not in self._drift_buffers:
+                # First time seeing this user this process — restore from Firebase
+                try:
+                    from firebase_admin import db as fb_db
+                    saved = fb_db.reference(f"phenotyping/drift_state/{user_id}").get()
+                    if saved and isinstance(saved, list):
+                        restored = deque(saved[-DRIFT_CONFIRM_WINDOWS:], maxlen=DRIFT_CONFIRM_WINDOWS)
+                        self._drift_buffers[user_id] = restored
+                        print(f"[drift] Restored buffer for {user_id}: {list(restored)}")
+                    else:
+                        self._drift_buffers[user_id] = deque(maxlen=DRIFT_CONFIRM_WINDOWS)
+                except Exception as e:
+                    print(f"[drift] Could not restore buffer for {user_id}: {e}")
+                    self._drift_buffers[user_id] = deque(maxlen=DRIFT_CONFIRM_WINDOWS)
+            buf = self._drift_buffers[user_id]
             buf.append(is_escalation_band)
+            # Persist updated buffer to Firebase (non-blocking best-effort)
+            try:
+                from firebase_admin import db as fb_db
+                fb_db.reference(f"phenotyping/drift_state/{user_id}").set(list(buf))
+            except Exception:
+                pass  # non-critical — in-memory buffer still works
             if label == "Pre-Stress (Digital Phenotype detected)":
                 if not (len(buf) == DRIFT_CONFIRM_WINDOWS and all(buf)):
                     label = "Normal"
