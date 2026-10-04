@@ -71,15 +71,20 @@ def is_valid_baseline(bl):
 
 def get_calibration_period_baseline(user_id):
     """
-    Returns the user's OWN baselines if calibration has completed, otherwise
-    None. No other user's data and no population values are ever substituted:
-    every user builds their baseline only from their own real windows, via
-    /behavior/calibrate after day 7.
+    Returns the user's OWN baselines ONLY if their calibration has completed
+    (is_calibrated == True in Firebase), otherwise None.
+    If is_calibrated is False (Days 1-7), the user is still in the calibration
+    window: caller stores the window into data_logs, and makes NO predictions.
     """
-    existing = get_user_baselines(user_id)
+    from backend.phenotyping_behavior.firebase_service import _ref
+    user_meta = _ref(f'users/{user_id}').get() or {}
+    if not user_meta.get('is_calibrated', False):
+        return None  # still calibrating: store window only, no prediction
+    existing = user_meta.get('baselines')
     if is_valid_baseline(existing):
         return existing  # user already has their own calibrated baselines
-    return None  # still calibrating: caller stores the window, no prediction
+    return None  # baselines invalid or missing
+
 
 # Initialize Firebase on startup
 init_firebase()
