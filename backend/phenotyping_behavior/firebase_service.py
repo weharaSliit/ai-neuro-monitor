@@ -45,17 +45,34 @@ def init_firebase():
 
 def create_user_profile(user_id, name, initial_baselines):
     """
-    Saves a new user and their 7-day calibration baseline.
-    initial_baselines: dict { 'avg_dwell': {'mean': 0.12, 'std': 0.02}, ... }
+    Saves a user's 7-day calibration baseline and marks them as calibrated.
+    Called ONLY from /behavior/calibrate after the real 7-day window completes
+    with >= 50 valid data windows. Sets is_calibrated:True at this point only.
+    Uses update() (not set()) so it does not overwrite display_name or
+    created_at that PhenotypingScreen.js wrote on first app open.
     """
     lk_tz = timezone(timedelta(hours=5, minutes=30))
     ref = _ref(f'users/{user_id}')
-    ref.set({
-        'name': name,
-        'created_at': datetime.now(lk_tz).isoformat(),
+    ref.update({
+        'display_name': name,   # matches key PhenotypingScreen.js reads
         'baselines': initial_baselines,
-        'is_calibrated': True
+        'is_calibrated': True,  # set True ONLY here, after real calibration
+        'calibrated_at': datetime.now(lk_tz).isoformat(),
     })
+
+def ensure_user_started(user_id):
+    """
+    Starts the user's 7-day calibration clock at the moment their first real
+    behavioral window arrives (i.e. the sensor is on and collecting), if the
+    app hasn't already written created_at. Never overwrites existing fields.
+    """
+    lk_tz = timezone(timedelta(hours=5, minutes=30))
+    ref = _ref(f'users/{user_id}')
+    if ref.child('created_at').get() is None:
+        ref.update({
+            'created_at': datetime.now(lk_tz).isoformat(),
+            'is_calibrated': False,
+        })
 
 def get_user_baselines(user_id):
     """Retrieves the personalized mean/std for a specific user."""

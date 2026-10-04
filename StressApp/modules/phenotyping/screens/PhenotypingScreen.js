@@ -177,14 +177,20 @@ export default function PhenotypingScreen({ navigation }) {
                 try { await AS.setItem(`@pheno_profile_${deviceId}`, JSON.stringify(p)); } catch { }
             } else {
                 try { const c = await AS.getItem(`@pheno_profile_${deviceId}`); if (c) setFirebaseProfile(JSON.parse(c)); } catch { }
-                // NEW USER: create a minimal profile so the 7-day countdown
-                // starts. Do NOT set is_calibrated:true or write any baselines
-                // here — those are set by /behavior/calibrate after day 7.
-                update(profileRef, {
-                    display_name: user?.name || 'User',
-                    is_calibrated: false,
-                    created_at: new Date().toISOString(),
-                }).catch(() => { });
+                // NEW USER: the 7-day clock starts when the sensor is enabled
+                // (onboarding completed), NOT when this screen is first opened.
+                // Only create the profile here if onboarding is already done;
+                // handleCompleteOnboarding() covers the first-time path.
+                // Do NOT set is_calibrated:true or write any baselines —
+                // those are set by /behavior/calibrate after day 7.
+                isPhenotypingOnboarded(deviceId).then((ok) => {
+                    if (!ok) return;
+                    update(profileRef, {
+                        display_name: user?.name || 'User',
+                        is_calibrated: false,
+                        created_at: new Date().toISOString(),
+                    }).catch(() => { });
+                });
             }
         }, async () => {
             try { const c = await AS.getItem(`@pheno_profile_${deviceId}`); if (c) setFirebaseProfile(JSON.parse(c)); } catch { }
@@ -255,7 +261,9 @@ export default function PhenotypingScreen({ navigation }) {
         return { ageMs, label, isFresh: ageMs >= 0 && ageMs < 90_000 };
     }, [latestPrediction, now]);
 
-    // ── Onboarding check
+    // ── Onboarding check — runs in useFocusEffect (re-fires when screen is focused)
+    // AND in a separate useEffect on deviceId change (handles the case where deviceId
+    // was null when useFocusEffect first fired, so the onboarding modal never showed).
     useFocusEffect(useCallback(() => {
         if (!deviceId) return;
         isPhenotypingOnboarded(deviceId).then((ok) => {
@@ -263,6 +271,16 @@ export default function PhenotypingScreen({ navigation }) {
             if (!ok) { setShowOnboardingModal(true); setOnboardingStep(1); setSensorToggle(false); }
         });
     }, [deviceId]));
+
+    // Safety net: also check when deviceId first resolves (catches the case where
+    // useFocusEffect fired while deviceId was still null and returned early).
+    useEffect(() => {
+        if (!deviceId) return;
+        isPhenotypingOnboarded(deviceId).then((ok) => {
+            setOnboarded(ok);
+            if (!ok) { setShowOnboardingModal(true); setOnboardingStep(1); setSensorToggle(false); }
+        });
+    }, [deviceId]);
 
     // ── Accessibility sensor check
     useFocusEffect(useCallback(() => {
@@ -332,9 +350,9 @@ export default function PhenotypingScreen({ navigation }) {
         return () => off(logsQuery, 'value', handler);
     }, [deviceId]);
 
-    // ── Auto-calibrate after 7+ days
+    // ── Auto-calibrate once a FULL 7 days have elapsed (dayNumber 8 = day 7 finished)
     useEffect(() => {
-        if (!deviceId || !liveCalibStatus || liveCalibStatus.isCalibrated || liveCalibStatus.dayNumber < 7) return;
+        if (!deviceId || !liveCalibStatus || liveCalibStatus.isCalibrated || liveCalibStatus.dayNumber < 8) return;
         (async () => {
             if (!(await shouldAttemptCalibrateToday(deviceId))) return;
             try {
@@ -412,6 +430,16 @@ export default function PhenotypingScreen({ navigation }) {
     const handleCompleteOnboarding = async () => {
         if (!deviceId) return;
         await markPhenotypingOnboarded(deviceId, { sensorEnabled: true });
+        // Sensor is verified ON at this point -> Day 1 starts now. If the
+        // backend already started the clock from an earlier window, keep that
+        // created_at and only fill in the display name.
+        const profileRef = ref(db, `phenotyping/users/${deviceId}`);
+        const fields = { display_name: firebaseProfile?.display_name || user?.name || 'User' };
+        if (!firebaseProfile?.created_at) {
+            fields.created_at = new Date().toISOString();
+            fields.is_calibrated = false;
+        }
+        update(profileRef, fields).catch(() => { });
         setOnboarded(true); setShowOnboardingModal(false);
     };
 
@@ -441,9 +469,16 @@ export default function PhenotypingScreen({ navigation }) {
             if (Math.abs(pct) < 5) return null;
             return (pct > 0 ? '▲ +' : '▼ ') + pct + '% vs calm';
         };
-        const dwellZ = getZ(liveWindow.avg_dwell, bl.avg_dwell?.mean || 135, bl.avg_dwell?.std || 15);
-        const scrollZ = getZ(liveWindow.scroll_velocity, bl.scroll_velocity?.mean || 750, bl.scroll_velocity?.std || 120);
-        const switchZ = appSwitchPerMin > 4 ? 3 : appSwitchPerMin > 2.5 ? 1.5 : 0;
+        // No personal baseline yet (days 1-7): nothing to deviate from, so
+        // signals stay neutral instead of being colored against population defaults.
+        const calibrating = !liveCalibStatus?.isCalibrated;
+        const dwellZ = calibrating ? 0 : getZ(liveWindow.avg_dwell, bl.avg_dwell?.mean || 135, bl.avg_dwell?.std || 15);
+        const scrollZ = calibrating ? 0 : getZ(liveWindow.scroll_velocity, bl.scroll_velocity?.mean || 450, bl.scroll_velocity?.std || 200);
+        // app_switch_rate from service is per-second; cap at 10/min for display.
+        // Values > 10/min indicate a partial or spurious window (e.g. first window
+        // after boot) and should not drive a stress zone.
+        const appSwitchPerMinCapped = Math.min(appSwitchPerMin, 10);
+        const switchZ = appSwitchPerMinCapped > 4 ? 3 : appSwitchPerMinCapped > 2.5 ? 1.5 : 0;
         return [
             {
                 id: 'avg_dwell', icon: '⌨️', title: 'Keyboard Patterns',
@@ -459,11 +494,11 @@ export default function PhenotypingScreen({ navigation }) {
                 subtext: delta(liveWindow.scroll_velocity, bl.scroll_velocity?.mean) || 'Scroll speed & frequency patterns',
                 color: colorZ(scrollZ), z: scrollZ,
                 sparkValues: sparkHistories.scroll_velocity,
-                baselineMean: bl.scroll_velocity?.mean || 750,
+                baselineMean: bl.scroll_velocity?.mean || 450,
             },
             {
                 id: 'app_switch', icon: '📱', title: 'Screen Activity',
-                value: `${appSwitchPerMin.toFixed(1)} /min`,
+                value: `${Math.min(appSwitchPerMin, 10).toFixed(1)} /min`,
                 subtext: appSwitchPerMin > 0.001 ? 'App switching rate active' : 'No app switches this window',
                 color: colorZ(switchZ), z: switchZ,
                 sparkValues: sparkHistories.app_switch,
@@ -478,7 +513,7 @@ export default function PhenotypingScreen({ navigation }) {
                 baselineMean: null,
             },
         ];
-    }, [liveWindow, baselines, COLORS, sparkHistories]);
+    }, [liveWindow, baselines, COLORS, sparkHistories, liveCalibStatus]);
 
     // ── Gauge status: CALIBRATING (days 1-7) → CALM/PRE-STRESS/HIGH STRESS (day 7+)
     const { statusMainColor, statusLabel, statusEmoji } = useMemo(() => {
@@ -593,9 +628,11 @@ export default function PhenotypingScreen({ navigation }) {
                                 ) : (
                                     <>
                                         <Text style={[styles.gaugeDay, { color: statusMainColor }]}>
-                                            Day {liveCalibStatus?.dayNumber || (firebaseProfile ? 1 : '...')}
+                                            Day {liveCalibStatus ? Math.min(liveCalibStatus.dayNumber, 7) : (firebaseProfile ? 1 : '...')}
                                         </Text>
-                                        <Text style={[styles.gaugeSub, { color: t.textMuted }]}>of 7</Text>
+                                        <Text style={[styles.gaugeSub, { color: t.textMuted }]}>
+                                            {liveCalibStatus?.phase === 'awaiting' ? 'finalizing baseline' : 'of 7'}
+                                        </Text>
                                         <Text style={[styles.gaugeHourSub, { color: statusMainColor }]}>
                                             {Math.max(1, Math.round(dayProgress * 24))}h / 24h
                                         </Text>

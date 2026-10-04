@@ -502,7 +502,7 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                     const zs = [
                         computeZ(d.avg_dwell, bl.avg_dwell?.mean ?? 135, bl.avg_dwell?.std ?? 15),
                         computeZ(d.avg_flight, bl.avg_flight?.mean ?? 215, bl.avg_flight?.std ?? 25),
-                        computeZ(d.scroll_velocity, bl.scroll_velocity?.mean ?? 750, bl.scroll_velocity?.std ?? 120),
+                        computeZ(d.scroll_velocity, bl.scroll_velocity?.mean ?? 450, bl.scroll_velocity?.std ?? 200),
                         computeZ(d.tilt_angle, bl.tilt_angle?.mean ?? 59, bl.tilt_angle?.std ?? 8),
                         computeZ(d.cpm, bl.cpm?.mean ?? 42, bl.cpm?.std ?? 6),
                     ];

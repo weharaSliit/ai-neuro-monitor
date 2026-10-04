@@ -122,7 +122,7 @@ class StressPredictor:
         # Tilt baseline (needed here, ahead of the other baselines below, as
         # the fallback value for a not-yet-available reading -- see tilt_angle).
         mean_tilt = user_baselines.get('tilt_angle', {}).get('mean', 59.09)
-        std_tilt  = user_baselines.get('tilt_angle', {}).get('std',  38.81)
+        std_tilt  = user_baselines.get('tilt_angle', {}).get('std',   8.0)
 
         # tilt_angle is JSON null when KeystrokeCollectorService.java's
         # accelerometer gravity filter hasn't warmed up yet (common right
@@ -136,7 +136,34 @@ class StressPredictor:
         tilt_raw   = firebase_metrics.get('tilt_angle')
         tilt_angle = float(tilt_raw) if tilt_raw is not None else mean_tilt
 
-        feat_array = np.array([[dwell_time, flight_time, scroll_velocity, tilt_angle, cpm]])
+        # Pre-fetch keystroke baselines needed both for OC-SVM zero-substitution
+        # (step 1b) and for Z-score validation (step 3).
+        mean_dwell  = user_baselines.get('avg_dwell',       {}).get('mean', 145)
+        std_dwell   = user_baselines.get('avg_dwell',       {}).get('std',   30)
+        mean_flight = user_baselines.get('avg_flight',      {}).get('mean', 225)
+        std_flight  = user_baselines.get('avg_flight',      {}).get('std',   45)
+        mean_scroll = user_baselines.get('scroll_velocity', {}).get('mean', 450)
+        std_scroll  = user_baselines.get('scroll_velocity', {}).get('std',  200)
+        mean_cpm    = user_baselines.get('cpm',             {}).get('mean', 39.40)
+        std_cpm     = user_baselines.get('cpm',             {}).get('std',   9.0)
+
+        # 1b. Zero-signal substitution for OC-SVM input.
+        # PROBLEM: The AccessibilityService records dwell/flight/cpm as 0 in
+        # scroll-only windows (the user scrolled but didn't type). Feeding 0 into
+        # the OC-SVM produces a scaled value of (0 - 145) / 30 = -4.8 for dwell,
+        # which lands far outside the normal cloud -> guaranteed anomaly -> false
+        # "High Confidence Stress" from every non-typing window.
+        # FIX: substitute the user's personal baseline mean when a feature is 0
+        # (meaning "no signal", not "abnormally fast"). This gives z ~ 0 for that
+        # feature in the OC-SVM, which is the correct interpretation.
+        # The REAL zero-signal detection for Z-score computation is done in step 3
+        # by simply excluding missing features from the composite.
+        dwell_for_svm  = dwell_time  if dwell_time  > 0 else mean_dwell
+        flight_for_svm = flight_time if flight_time > 0 else mean_flight
+        scroll_for_svm = scroll_velocity if scroll_velocity > 0 else mean_scroll
+        cpm_for_svm    = cpm         if cpm         > 0 else mean_cpm
+
+        feat_array = np.array([[dwell_for_svm, flight_for_svm, scroll_for_svm, tilt_angle, cpm_for_svm]])
 
         # 2. Anomaly Detection (Objective 1 Winner)
         # Scale features BEFORE prediction so the OC-SVM sees the same
@@ -151,38 +178,35 @@ class StressPredictor:
         is_anomaly = bool(model_prediction == -1)
 
         # 3. Z-Score Validation — Multi-Feature Composite (Idiographic Baseline)
-        # v4.1: Now averages across all 5 feature deviations for higher sensitivity.
+        # v4.2: Only include features that have a real signal (non-zero).
+        # A scroll-only window has dwell=0, flight=0, cpm=0 — including those
+        # features in the composite would compute z = (0-145)/30 = -4.8 for each,
+        # inflating composite_z and triggering false Pre-Stress/High Confidence Stress.
+        # Calibration and the baseline updater already filter out zero-signal
+        # windows; the predictor must apply the same logic here.
+        #
+        # Tilt is always present (substituted with baseline mean when null, z ~ 0).
+        z_scores = {'tilt': abs(calculate_z_score(tilt_angle, mean_tilt, std_tilt))}
 
-        # Dwell deviation from personal baseline
-        # Default = typical mobile typing mean (145ms) and std (15ms) for uncalibrated users (Day 1-7)
-        mean_dwell = user_baselines.get('avg_dwell', {}).get('mean', 145)
-        std_dwell  = user_baselines.get('avg_dwell', {}).get('std',   15)
-        z_dwell    = abs(calculate_z_score(dwell_time, mean_dwell, std_dwell))
+        if dwell_time > 0:
+            z_scores['dwell'] = abs(calculate_z_score(dwell_time, mean_dwell, std_dwell))
+        if flight_time > 0:
+            z_scores['flight'] = abs(calculate_z_score(flight_time, mean_flight, std_flight))
+        if scroll_velocity > 0:
+            z_scores['scroll'] = abs(calculate_z_score(scroll_velocity, mean_scroll, std_scroll))
+        if cpm > 0:
+            z_scores['cpm'] = abs(calculate_z_score(cpm, mean_cpm, std_cpm))
 
-        # Flight time deviation from personal baseline
-        # Default = typical mobile typing mean (230ms) and std (25ms) for uncalibrated users (Day 1-7)
-        mean_flight = user_baselines.get('avg_flight', {}).get('mean', 230)
-        std_flight  = user_baselines.get('avg_flight', {}).get('std',   25)
-        z_flight    = abs(calculate_z_score(flight_time, mean_flight, std_flight))
+        # Composite Z-score: average over present features only
+        composite_z = round(sum(z_scores.values()) / len(z_scores), 4)
 
-        # Scroll velocity deviation from personal baseline
-        # Default = mobile empirical mean (45 px/sec, std 12) for uncalibrated users (Day 1-7)
-        mean_scroll = user_baselines.get('scroll_velocity', {}).get('mean', 45)
-        std_scroll  = user_baselines.get('scroll_velocity', {}).get('std',  12)
-        z_scroll    = abs(calculate_z_score(scroll_velocity, mean_scroll, std_scroll))
+        # Expose individual z-scores for debugging/logging (0.0 when feature absent)
+        z_dwell  = z_scores.get('dwell',  0.0)
+        z_flight = z_scores.get('flight', 0.0)
+        z_scroll = z_scores.get('scroll', 0.0)
+        z_tilt   = z_scores.get('tilt',   0.0)
+        z_cpm    = z_scores.get('cpm',    0.0)
 
-        # Tilt angle deviation from personal baseline (mean_tilt/std_tilt
-        # computed above, ahead of tilt_angle's None fallback)
-        z_tilt = abs(calculate_z_score(tilt_angle, mean_tilt, std_tilt))
-
-        # Typing speed (CPM) deviation from personal baseline
-        # Default = Kaggle population mean (39.40 cpm, std 30.36) for uncalibrated users
-        mean_cpm = user_baselines.get('cpm', {}).get('mean', 39.40)
-        std_cpm  = user_baselines.get('cpm', {}).get('std',  30.36)
-        z_cpm    = abs(calculate_z_score(cpm, mean_cpm, std_cpm))
-
-        # Composite Z-score: average of all 5 feature deviations
-        composite_z = round((z_dwell + z_flight + z_scroll + z_tilt + z_cpm) / 5.0, 4)
 
         # 4. Final Stress Label (Dual-Layer Gate) — explainable, rule-based
         # v3.0 FIX: Changed from OR to AND for Pre-Stress.
