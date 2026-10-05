@@ -5,6 +5,7 @@ import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
 import { Header } from '../components/Header';
 import { apiService } from '../api/apiService';
+import { AmbientBackground } from '../components/AmbientBackground';
 
 export const UserProfileScreen = () => {
   const { userId, username, hostExit, setCurrentScreen } = useContext(AppContext);
@@ -40,6 +41,7 @@ export const UserProfileScreen = () => {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
+      <AmbientBackground />
       <Header title="User Profile" showBack onBack={() => setCurrentScreen('Dashboard')} />
 
       {loading ? (
@@ -97,6 +99,16 @@ export const UserProfileScreen = () => {
 
           {/* Setup & Preferences */}
           <Text style={[styles.secTitle, { color: theme.textPrimary }]}>Setup & Preferences</Text>
+          <TouchableOpacity
+            style={[styles.settingCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}
+            onPress={() => setCurrentScreen('PerformanceOverview')}
+          >
+            <View style={styles.settingText}>
+              <Text style={[styles.settingTitle, { color: theme.textPrimary }]}>🏆 Awards & Recovery Analytics</Text>
+              <Text style={[styles.settingSub, { color: theme.textMuted }]}>View top techniques, achievements & recovery times.</Text>
+            </View>
+          </TouchableOpacity>
+
           <TouchableOpacity
             style={[styles.settingCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}
             onPress={() => navigation.navigate('Physiological')}

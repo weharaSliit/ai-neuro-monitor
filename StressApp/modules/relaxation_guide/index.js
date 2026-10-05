@@ -41,12 +41,12 @@ const MainNavigator = () => {
   const u = (userId || '').toLowerCase();
   const isAdmin = u === 'ojani' || u.includes('ojani') || u === 'admin' || u.includes('admin');
 
-  // Reset to Relaxation Guide's Home Page (Dashboard) EVERY TIME screen comes into focus
-  useFocusEffect(
-    React.useCallback(() => {
+  // Ensure initial screen is set if empty
+  React.useEffect(() => {
+    if (!currentScreen) {
       setCurrentScreen('Dashboard');
-    }, [setCurrentScreen])
-  );
+    }
+  }, []);
 
   const renderScreen = () => {
     if (!identityChecked) {

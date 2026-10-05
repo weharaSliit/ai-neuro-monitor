@@ -3,6 +3,7 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   ActivityIndicator, Animated, Easing, Dimensions, Modal
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation } from '@react-navigation/native';
 import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
@@ -11,6 +12,43 @@ import { apiService } from '../api/apiService';
 import { useSweetAlert } from '../context/SweetAlertContext';
 
 const { width: SCREEN_W } = Dimensions.get('window');
+
+/* ────────────────────────────────────────────────────────
+   AMBIENT DRIFTING LIGHT ORBS (SERENE BACKDROP)
+   ──────────────────────────────────────────────────────── */
+const AmbientOrb = ({ size, color, top, left, duration, dx, dy }) => {
+  const t = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(t, { toValue: 1, duration, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(t, { toValue: 0, duration, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [t, duration]);
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        top,
+        left,
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        backgroundColor: color,
+        opacity: 0.22,
+        transform: [
+          { translateX: t.interpolate({ inputRange: [0, 1], outputRange: [0, dx] }) },
+          { translateY: t.interpolate({ inputRange: [0, 1], outputRange: [0, dy] }) },
+        ],
+      }}
+    />
+  );
+};
 
 const DAILY_TIPS = [
   { tip: 'Box breathing (4-4-4-4) lowers cortisol within 90 seconds.', icon: '🌬️' },
@@ -35,58 +73,6 @@ const QUOTES = [
   { quote: "Feelings come and go like clouds in a windy sky. Conscious breathing is my anchor.", author: "Thich Nhat Hanh", icon: "☁️" },
   { quote: "When you own your breath, nobody can steal your peace.", author: "Zen Proverb", icon: "🕊️" }
 ];
-
-/* ────────────────────────────────────────────────────────
-   LIVE QUOTES BANNER - Auto-rotating with crossfade
-   ──────────────────────────────────────────────────────── */
-const LiveQuotesBanner = ({ theme }) => {
-  const [index, setIndex] = useState(Math.floor(Math.random() * QUOTES.length));
-  const fadeAnim = useRef(new Animated.Value(1)).current;
-  const slideAnim = useRef(new Animated.Value(0)).current;
-
-  const cycleQuote = useCallback(() => {
-    // Fade out + slide up
-    Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 0, duration: 400, useNativeDriver: true }),
-      Animated.timing(slideAnim, { toValue: -12, duration: 400, useNativeDriver: true })
-    ]).start(() => {
-      setIndex(prev => (prev + 1) % QUOTES.length);
-      slideAnim.setValue(12);
-      // Fade in + slide down into place
-      Animated.parallel([
-        Animated.timing(fadeAnim, { toValue: 1, duration: 500, useNativeDriver: true }),
-        Animated.spring(slideAnim, { toValue: 0, tension: 80, friction: 10, useNativeDriver: true })
-      ]).start();
-    });
-  }, []);
-
-  useEffect(() => {
-    const timer = setInterval(cycleQuote, 8000);
-    return () => clearInterval(timer);
-  }, [cycleQuote]);
-
-  const q = QUOTES[index];
-
-  return (
-    <View style={[s.quoteCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
-      {/* Decorative accent line */}
-      <View style={[s.quoteAccentLine, { backgroundColor: theme.accent }]} />
-
-      <Animated.View style={[s.quoteInner, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
-        <Text style={s.quoteIcon}>{q.icon}</Text>
-        <Text style={[s.quoteText, { color: theme.textPrimary }]}>"{q.quote}"</Text>
-        <Text style={[s.quoteAuthor, { color: theme.accent }]}>— {q.author}</Text>
-      </Animated.View>
-
-      {/* Dot indicators */}
-      <View style={s.dotRow}>
-        {QUOTES.map((_, i) => (
-          <View key={i} style={[s.dot, { backgroundColor: i === index ? theme.accent : theme.border }]} />
-        ))}
-      </View>
-    </View>
-  );
-};
 
 /* ────────────────────────────────────────────────────────
    PULSING LIVE DOT
@@ -124,7 +110,7 @@ const PulseDot = ({ color }) => {
 const getStateConfig = (stressState, stressProbability, rawLabel, theme, isCalibrated = true, hasLivePacket = true) => {
   if (hasLivePacket === false) {
     return {
-      color: theme.warning,
+      color: theme.warning || '#F59E0B',
       bgTint: 'rgba(245,158,11,0.14)',
       label: 'WAITING FOR LIVE STREAM',
       displayLabel: 'Awaiting Telemetry',
@@ -148,7 +134,7 @@ const getStateConfig = (stressState, stressProbability, rawLabel, theme, isCalib
 
   if (isHighStress || (isGenericStress && !isLowStress && prob >= 0.60)) {
     return {
-      color: theme.danger,
+      color: theme.danger || '#EF4444',
       bgTint: 'rgba(239,68,68,0.14)',
       label: 'HIGH STRESS',
       displayLabel: 'High Stress',
@@ -174,7 +160,7 @@ const getStateConfig = (stressState, stressProbability, rawLabel, theme, isCalib
     };
   } else if (isGenericStress) {
     return {
-      color: theme.danger,
+      color: theme.danger || '#EF4444',
       bgTint: 'rgba(239,68,68,0.14)',
       label: 'STRESS',
       displayLabel: 'Stress State',
@@ -188,7 +174,7 @@ const getStateConfig = (stressState, stressProbability, rawLabel, theme, isCalib
   }
 
   return {
-    color: theme.success,
+    color: theme.success || '#10B981',
     bgTint: 'rgba(16,185,129,0.14)',
     label: 'NORMAL',
     displayLabel: 'Normal / Calm',
@@ -199,36 +185,6 @@ const getStateConfig = (stressState, stressProbability, rawLabel, theme, isCalib
     pct: Math.min(99, Math.round((1 - prob) * 100)),
     breathDuration: 3200,
   };
-};
-
-/* ────────────────────────────────────────────────────────
-   DAILY TIP BANNER
-   ──────────────────────────────────────────────────────── */
-const DailyTipBanner = ({ theme }) => {
-  const [tipIdx, setTipIdx] = useState(Math.floor(Math.random() * DAILY_TIPS.length));
-  const fadeAnim = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    const t = setInterval(() => {
-      Animated.sequence([
-        Animated.timing(fadeAnim, { toValue: 0, duration: 300, useNativeDriver: true }),
-        Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }),
-      ]).start();
-      setTipIdx(p => (p + 1) % DAILY_TIPS.length);
-    }, 9000);
-    return () => clearInterval(t);
-  }, []);
-
-  const tip = DAILY_TIPS[tipIdx];
-  return (
-    <Animated.View style={[s.tipBanner, { backgroundColor: theme.bgSecondary, borderColor: theme.border, opacity: fadeAnim }]}>
-      <Text style={s.tipIcon}>{tip.icon}</Text>
-      <Text style={[s.tipTxt, { color: theme.textSecondary }]}>
-        <Text style={{ color: theme.accent, fontWeight: '800' }}>Daily Tip  </Text>
-        {tip.tip}
-      </Text>
-    </Animated.View>
-  );
 };
 
 /* ────────────────────────────────────────────────────────
@@ -298,10 +254,11 @@ export const DashboardScreen = () => {
     currentRecommendation, setCurrentRecommendation, setPreInterventionLabel, setSelectedSubOption
   } = useContext(AppContext);
 
-  const { theme } = useContext(ThemeContext);
+  const { theme, isDarkMode } = useContext(ThemeContext);
   const [loading, setLoading] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
 
+  const isDark = isDarkMode ?? theme?.isDark ?? true;
   const u = (userId || '').toLowerCase();
   const isAdmin = u === 'ojani' || u.includes('ojani') || u === 'admin' || u.includes('admin');
 
@@ -316,7 +273,6 @@ export const DashboardScreen = () => {
       Animated.spring(slideUp, { toValue: 0, tension: 40, friction: 7, useNativeDriver: true })
     ]).start();
 
-    // Subtle CTA breathing
     Animated.loop(
       Animated.sequence([
         Animated.timing(ctaScale, { toValue: 1.015, duration: 2000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
@@ -366,36 +322,17 @@ export const DashboardScreen = () => {
   const greeting = currentTime.getHours() < 12 ? 'Good Morning' : currentTime.getHours() < 18 ? 'Good Afternoon' : 'Good Evening';
   const timeStr = currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-  // Breathing ring behind stress card
-  const breathRing1 = useRef(new Animated.Value(1)).current;
-  const breathRing1O = useRef(new Animated.Value(0.4)).current;
-  const breathRing2 = useRef(new Animated.Value(1)).current;
-  const breathRing2O = useRef(new Animated.Value(0.2)).current;
-
-  useEffect(() => {
-    const dur = sc.breathDuration;
-    const runRing = (scaleAnim, opacityAnim, delay, maxScale) => {
-      setTimeout(() => {
-        Animated.loop(
-          Animated.sequence([
-            Animated.parallel([
-              Animated.timing(scaleAnim, { toValue: maxScale, duration: dur, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-              Animated.timing(opacityAnim, { toValue: 0, duration: dur, useNativeDriver: true }),
-            ]),
-            Animated.parallel([
-              Animated.timing(scaleAnim, { toValue: 1, duration: 0, useNativeDriver: true }),
-              Animated.timing(opacityAnim, { toValue: 0.3, duration: 0, useNativeDriver: true }),
-            ]),
-          ])
-        ).start();
-      }, delay);
-    };
-    runRing(breathRing1, breathRing1O, 0, 1.35);
-    runRing(breathRing2, breathRing2O, dur / 2, 1.35);
-  }, [stressState]);
-
   return (
     <View style={[s.container, { backgroundColor: theme.bgPrimary }]}>
+      {/* Innovative Drifting Ambient Background */}
+      <LinearGradient
+        colors={isDark ? ['#0F172A', '#131C35', '#162544'] : ['#F0F9FF', '#E8F1FB', '#F7EEF8']}
+        style={StyleSheet.absoluteFill}
+      />
+      <AmbientOrb size={260} color={isDark ? '#38BDF8' : '#7DD3FC'} top={-60} left={-80} duration={9000} dx={50} dy={40} />
+      <AmbientOrb size={200} color={isDark ? '#818CF8' : '#F9A8D4'} top={360} left={SCREEN_W - 140} duration={11000} dx={-40} dy={-50} />
+      <AmbientOrb size={180} color={isDark ? '#10B981' : '#6EE7B7'} top={640} left={-60} duration={13000} dx={60} dy={-30} />
+
       <Header
         title="Welcome to Relaxation Guide"
         showBack={true}
@@ -434,7 +371,7 @@ export const DashboardScreen = () => {
               justifyContent: 'space-between',
               paddingHorizontal: 14,
               paddingVertical: 12,
-              borderRadius: 12,
+              borderRadius: 14,
               backgroundColor: theme.bgSecondary,
               borderWidth: 1,
               borderColor: theme.border,
@@ -456,14 +393,14 @@ export const DashboardScreen = () => {
               </View>
             </View>
 
-            {/* ⌨️ Phenotyping Stream */}
+            {/* 📱 Phenotyping Stream */}
             <View style={{
               flexDirection: 'row',
               alignItems: 'center',
               justifyContent: 'space-between',
               paddingHorizontal: 14,
               paddingVertical: 12,
-              borderRadius: 12,
+              borderRadius: 14,
               backgroundColor: theme.bgSecondary,
               borderWidth: 1,
               borderColor: theme.border,
@@ -486,9 +423,7 @@ export const DashboardScreen = () => {
             </View>
           </View>
 
-
-
-          {/* ═══════════ 4. QUICK ACTION GRID ═══════════ */}
+          {/* ═══════════ QUICK ACTION GRID ═══════════ */}
           <Text style={[s.sectionTitle, { color: theme.textPrimary }]}>Quick Actions</Text>
           <View style={s.actionGrid}>
             {[
@@ -522,24 +457,29 @@ export const DashboardScreen = () => {
             ))}
           </View>
 
-
-
-          {/* ═══════════ 7. LAUNCH CTA ═══════════ */}
+          {/* ═══════════ LAUNCH CTA ═══════════ */}
           <Animated.View style={{ transform: [{ scale: ctaScale }] }}>
             <TouchableOpacity
-              style={[s.ctaBtn, { backgroundColor: theme.accent }, loading && { opacity: 0.5 }]}
               onPress={triggerIntervention}
               disabled={loading}
               activeOpacity={0.85}
+              style={s.ctaBtnWrapper}
             >
-              {loading ? (
-                <ActivityIndicator color={theme.accentText} size="small" />
-              ) : (
-                <View style={s.ctaInner}>
-                  <Text style={[s.ctaMain, { color: theme.accentText }]}>🚀  Start Relaxation Session</Text>
-                  <Text style={[s.ctaSub, { color: theme.accentText }]}>Smart AI selects the best exercise for your stress level</Text>
-                </View>
-              )}
+              <LinearGradient
+                colors={['#7C3AED', '#3B82F6']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={s.ctaBtnGradient}
+              >
+                {loading ? (
+                  <ActivityIndicator color="#FFFFFF" size="small" />
+                ) : (
+                  <View style={s.ctaInner}>
+                    <Text style={s.ctaMain}>🚀  Start Relaxation Session</Text>
+                    <Text style={s.ctaSub}>Smart AI selects the best exercise for your stress level</Text>
+                  </View>
+                )}
+              </LinearGradient>
             </TouchableOpacity>
           </Animated.View>
 
@@ -600,66 +540,19 @@ export const DashboardScreen = () => {
    STYLES
    ════════════════════════════════════════════════════════ */
 const s = StyleSheet.create({
-  container: { flex: 1 },
+  container: { flex: 1, position: 'relative' },
   scroll: { padding: 16, paddingBottom: 32 },
-
-  /* ── Live Quotes Banner ── */
-  quoteCard: {
-    borderRadius: 20,
-    borderWidth: 1,
-    marginBottom: 14,
-    overflow: 'hidden'
-  },
-  quoteAccentLine: {
-    height: 3,
-    width: '100%'
-  },
-  quoteInner: {
-    paddingHorizontal: 20,
-    paddingTop: 18,
-    paddingBottom: 8,
-    alignItems: 'center'
-  },
-  quoteIcon: {
-    fontSize: 28,
-    marginBottom: 10
-  },
-  quoteText: {
-    fontSize: 14,
-    fontWeight: '600',
-    textAlign: 'center',
-    lineHeight: 22,
-    fontStyle: 'italic',
-    letterSpacing: 0.2
-  },
-  quoteAuthor: {
-    fontSize: 11,
-    fontWeight: '800',
-    marginTop: 10,
-    letterSpacing: 0.3
-  },
-  dotRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 5,
-    paddingBottom: 14,
-    paddingTop: 6
-  },
-  dot: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5
-  },
 
   /* ── Welcome Row ── */
   welcomeRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    borderRadius: 18,
+    borderRadius: 20,
     borderWidth: 1,
     padding: 16,
-    marginBottom: 14
+    marginBottom: 14,
+    elevation: 3,
   },
   welcomeLeft: { flex: 1 },
   greetingTxt: { fontSize: 12, fontWeight: '600' },
@@ -691,88 +584,6 @@ const s = StyleSheet.create({
     width: 8, height: 8, borderRadius: 4
   },
 
-  /* ── Stress State Hero ── */
-  stateHero: {
-    borderRadius: 20,
-    borderWidth: 1.5,
-    padding: 16,
-    marginBottom: 16
-  },
-  stateHeroTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12
-  },
-  stateLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1
-  },
-  stateIconCircle: {
-    width: 48, height: 48, borderRadius: 16,
-    alignItems: 'center', justifyContent: 'center',
-    marginRight: 12
-  },
-  stateEmoji: { fontSize: 24 },
-  statePill: {
-    paddingVertical: 4,
-    paddingHorizontal: 14,
-    borderRadius: 12,
-    alignSelf: 'flex-start'
-  },
-  statePillTxt: {
-    color: '#FFF',
-    fontWeight: '900',
-    fontSize: 11,
-    letterSpacing: 0.6
-  },
-  stateTagline: {
-    fontSize: 11,
-    marginTop: 4,
-    lineHeight: 16,
-    maxWidth: SCREEN_W * 0.55
-  },
-  metricsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderRadius: 14,
-    borderWidth: 1,
-    marginBottom: 12
-  },
-  metricCol: { alignItems: 'center', flex: 1 },
-  metricValue: { fontSize: 16, fontWeight: '900' },
-  metricLabel: { fontSize: 9, fontWeight: '600', marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.4 },
-  metricDivider: { width: 1, height: 30 },
-
-  progressSection: { marginTop: 2 },
-  progressLabels: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 6
-  },
-  progressLbl: { fontSize: 9, fontWeight: '600' },
-  progressBg: {
-    height: 7,
-    borderRadius: 4,
-    overflow: 'hidden'
-  },
-  progressFill: {
-    height: '100%',
-    borderRadius: 4
-  },
-
-  overrideBar: {
-    marginTop: 10,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    backgroundColor: 'rgba(239,68,68,0.06)'
-  },
-  overrideTxt: { fontSize: 10, fontWeight: '800', textAlign: 'center' },
-
   /* ── Section Title ── */
   sectionTitle: {
     fontSize: 16,
@@ -792,114 +603,81 @@ const s = StyleSheet.create({
     flex: 1,
     minWidth: '46%',
     maxWidth: '48.5%',
-    paddingVertical: 10,
+    paddingVertical: 12,
     paddingHorizontal: 12,
-    borderRadius: 12,
+    borderRadius: 16,
     borderWidth: 1,
     elevation: 2
   },
   actionIconWrap: {
-    width: 32, height: 32,
-    borderRadius: 16,
-    alignItems: 'center', justifyContent: 'center'
-  },
-  actionIcon: { fontSize: 16 },
-  actionLabel: { fontSize: 12, fontWeight: '700' },
-
-  /* ── Daily Tip ── */
-  tipBanner: {
-    flexDirection: 'row',
+    width: 38,
+    height: 38,
+    borderRadius: 12,
     alignItems: 'center',
-    gap: 10,
-    borderRadius: 16,
-    borderWidth: 1,
-    padding: 14,
-    marginBottom: 4,
+    justifyContent: 'center'
   },
-  tipIcon: { fontSize: 22 },
-  tipTxt: { flex: 1, fontSize: 12, lineHeight: 18 },
+  actionIcon: {
+    fontSize: 20
+  },
+  actionLabel: {
+    fontSize: 13,
+    fontWeight: '800',
+    flex: 1
+  },
 
-  /* ── Breathing ring ── */
-  breathRingWrap: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
+  /* ── Launch CTA Button ── */
+  ctaBtnWrapper: {
+    borderRadius: 20,
+    elevation: 6,
+  },
+  ctaBtnGradient: {
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  breathRingBase: {
-    position: 'absolute',
-    width: '80%',
-    aspectRatio: 1,
-    borderRadius: 999,
-    borderWidth: 1,
-  },
-
-  /* ── CTA Button ── */
-  ctaBtn: {
-    paddingVertical: 18,
-    borderRadius: 18,
-    alignItems: 'center',
-    marginTop: 8,
-    elevation: 5,
-    shadowColor: '#38BDF8',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.3,
-    shadowRadius: 14
-  },
-  ctaInner: { alignItems: 'center' },
-  ctaMain: { fontWeight: '900', fontSize: 15, letterSpacing: 0.2 },
-  ctaSub: { fontSize: 11, opacity: 0.85, marginTop: 2, fontWeight: '600' },
-
-  /* ── Calibration Banner ── */
-  calibrationCard: {
-    borderRadius: 16,
     borderWidth: 1.5,
-    padding: 14,
-    marginBottom: 16,
+    borderColor: '#FFFFFF',
   },
-  calibrationHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 6,
-    gap: 8,
+  ctaInner: {
+    alignItems: 'center'
   },
-  calibrationTitle: {
-    fontSize: 15,
-    fontWeight: '800',
+  ctaMain: {
+    color: '#FFFFFF',
+    fontSize: 17,
+    fontWeight: '900',
+    letterSpacing: 0.3
   },
-  calibrationBody: {
-    fontSize: 13,
-    lineHeight: 18,
+  ctaSub: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 4,
+    opacity: 0.9,
+    textAlign: 'center'
   },
 
-  /* ── Intervention Modal Styles ── */
+  /* ── Modal Overlay ── */
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    backgroundColor: 'rgba(10, 15, 30, 0.85)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20
   },
   modalCard: {
     width: '100%',
-    maxWidth: 380,
+    maxWidth: 400,
     borderRadius: 24,
     borderWidth: 1,
     padding: 22,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.35,
-    shadowRadius: 16,
     elevation: 12
   },
   modalHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 14,
-    width: '100%',
-    marginBottom: 14
+    marginBottom: 12
   },
   modalIconRing: {
     width: 56,
@@ -911,21 +689,19 @@ const s = StyleSheet.create({
   },
   modalTitle: {
     fontSize: 18,
-    fontWeight: '800'
+    fontWeight: '900'
   },
   modalBadgeTxt: {
-    fontSize: 12,
-    fontWeight: '700',
+    fontSize: 11,
+    fontWeight: '800',
     marginTop: 2
   },
   modalDesc: {
     fontSize: 13,
     lineHeight: 19,
-    textAlign: 'center',
-    marginBottom: 20
+    marginBottom: 18
   },
   modalLaunchBtn: {
-    width: '100%',
     paddingVertical: 14,
     borderRadius: 16,
     alignItems: 'center',
@@ -935,15 +711,16 @@ const s = StyleSheet.create({
   modalLaunchBtnTxt: {
     color: '#FFFFFF',
     fontSize: 15,
-    fontWeight: '800',
-    letterSpacing: 0.5
+    fontWeight: '900'
   },
   modalCloseBtn: {
     paddingVertical: 8,
-    paddingHorizontal: 16
+    alignItems: 'center'
   },
   modalCloseBtnTxt: {
     fontSize: 13,
-    fontWeight: '600'
+    fontWeight: '700'
   }
 });
+
+export default DashboardScreen;

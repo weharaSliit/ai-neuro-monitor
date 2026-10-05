@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useContext } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   Animated,
   Dimensions,
   Easing,
@@ -14,566 +15,717 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { ThemeContext } from '../context/ThemeContext';
 
-const { width } = Dimensions.get('window');
+const { width: SCREEN_W } = Dimensions.get('window');
+const BOARD = Math.min(SCREEN_W - 64, 300);
 
-// ---------------------------------------------------------------------------
-// Healthcare Relaxation Techniques Catalog definitions
-// ---------------------------------------------------------------------------
+/* ------------------------------------------------------------------ */
+/*  Techniques (same ids / routing as before)                          */
+/* ------------------------------------------------------------------ */
 const TECHNIQUES = {
   autogenic_warmth: {
     id: 'autogenic_warmth',
-    name: '🔥 Autogenic Thermal Focus',
-    subtitle: 'Vascular Somatosensory Focus',
-    description: 'Somatosensory thermal focus promoting peripheral vasodilation and vascular relaxation.',
+    name: 'Warmth Flow',
+    subtitle: 'Hold the glow and let warmth spread',
     emoji: '🔥',
-    color: '#0D9488',
-    bgDark: ['#061D1A', '#0B2925'],
-    bgLight: ['#FFFFFF', '#F1F5F9'],
+    color: '#F59E0B',
   },
   pattern_alignment: {
     id: 'pattern_alignment',
-    name: '🧠 Neural Color Matrix Alignment',
-    subtitle: 'Visuospatial Working Memory Task',
-    description: 'A structured neural alignment task that shifts cognitive bandwidth away from intrusive anxiety thoughts.',
+    name: 'Color Match',
+    subtitle: 'Settle each tile into place, no rush',
     emoji: '🧩',
-    color: '#0D9488',
-    bgDark: ['#061D1A', '#0B2925'],
-    bgLight: ['#FFFFFF', '#F1F5F9'],
+    color: '#A78BFA',
   },
   stroop_decoupler: {
     id: 'stroop_decoupler',
-    name: '🎯 Stroop Cognitive Decoupler',
-    subtitle: 'Prefrontal Executive Interference Task',
-    description: 'High-speed cognitive refocusing puzzle suppressing Default Mode Network rumination (0.95 WESAD score).',
+    name: 'Color Clash',
+    subtitle: 'Pop worry bubbles by the color of their ink',
     emoji: '🎯',
-    color: '#0D9488',
-    bgDark: ['#061D1A', '#0B2925'],
-    bgLight: ['#FFFFFF', '#F1F5F9'],
+    color: '#38BDF8',
   },
 };
 
-// ===========================================================================
-// 1. Autogenic Thermal Focus Activity (Interactive Bio-Thermal Vasodilation)
-// ===========================================================================
-const THERMAL_STAGES = [
-  {
-    id: 'hands_arms',
-    name: 'Hands & Arms',
-    emoji: '🤲',
-    cue: 'My hands and arms feel heavy and pleasantly warm.',
-    effect: 'Relaxes peripheral blood vessels, opening blood flow.',
-    color: '#EF4444',
-  },
-  {
-    id: 'solar_plexus',
-    name: 'Solar Plexus',
-    emoji: '☀️',
-    cue: 'My solar plexus abdomen feels radiating warmth.',
-    clinicalNote: 'Calms stomach nerve center and digestive tension.',
-    color: '#F59E0B',
-  },
-  {
-    id: 'cardiac_pulse',
-    name: 'Cardiac Pulse',
-    emoji: '🫀',
-    cue: 'My heartbeat is calm, steady, and warm.',
-    clinicalNote: 'Slowing pulse rate lowers autonomic blood pressure.',
-    color: '#10B981',
-  },
-  {
-    id: 'forehead_cool',
-    name: 'Forehead Cool',
-    emoji: '❄️',
-    cue: 'My forehead feels comfortably cool and calm.',
-    clinicalNote: 'Clears mental tension and calms racing thoughts.',
-    color: '#06B6D4',
-  },
-];
+const vibrate = (ms) => {
+  if (Platform.OS !== 'web') {
+    try { Vibration.vibrate(ms); } catch (e) { }
+  }
+};
 
-const AutogenicWarmthActivity = ({ isDarkMode, onTally }) => {
-  const [activeZone, setActiveZone] = useState(0);
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-
+/* ------------------------------------------------------------------ */
+/*  Ambient background: three slow, drifting light orbs                */
+/* ------------------------------------------------------------------ */
+const DriftOrb = ({ size, color, top, left, duration, dx, dy }) => {
+  const t = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    Animated.loop(
+    const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(pulseAnim, { toValue: 1.25, duration: 1500, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        Animated.timing(pulseAnim, { toValue: 1.0, duration: 1500, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(t, { toValue: 1, duration, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(t, { toValue: 0, duration, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
       ])
-    ).start();
-  }, []);
-
-  const zone = THERMAL_STAGES[activeZone];
-  const primaryColor = zone.color;
-  const textColor = isDarkMode ? '#FFFFFF' : '#0F172A';
-  const subTextColor = isDarkMode ? 'rgba(255,255,255,0.7)' : '#475569';
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [t, duration]);
 
   return (
-    <View style={styles.activityCanvasContainer}>
-      <View style={styles.thermalDeckRow}>
-        <View style={[styles.thermalAuraCard, { backgroundColor: isDarkMode ? 'rgba(15, 23, 42, 0.6)' : '#FFFFFF', borderColor: primaryColor }]}>
-          <Animated.View style={[styles.thermalPulseRing, { borderColor: primaryColor, transform: [{ scale: pulseAnim }] }]}>
-            <Text style={styles.thermalBigIcon}>{zone.emoji}</Text>
-          </Animated.View>
-          <Text style={[styles.thermalStageBadge, { color: primaryColor }]}>{zone.name}</Text>
-        </View>
+    <Animated.View
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        top,
+        left,
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        backgroundColor: color,
+        opacity: 0.22,
+        transform: [
+          { translateX: t.interpolate({ inputRange: [0, 1], outputRange: [0, dx] }) },
+          { translateY: t.interpolate({ inputRange: [0, 1], outputRange: [0, dy] }) },
+        ],
+      }}
+    />
+  );
+};
 
-        <View style={styles.thermalInfoCol}>
-          <View style={[styles.thermalInstructionBox, { backgroundColor: isDarkMode ? 'rgba(239, 68, 68, 0.15)' : '#FEF2F2', borderColor: primaryColor }]}>
-            <Text style={[styles.thermalGuideLabel, { color: primaryColor }]}>📢 HOW TO DO THIS:</Text>
-            <Text style={[styles.thermalGuideTxt, { color: textColor }]}>"{zone.cue}"</Text>
-            <View style={[styles.thermalEffectBox, { backgroundColor: isDarkMode ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.7)' }]}>
-              <Text style={[styles.thermalEffectTxt, { color: subTextColor }]}>
-                💡 <Text style={{ fontWeight: '800', color: primaryColor }}>Effect: </Text>
-                {zone.effect || zone.clinicalNote}
-              </Text>
-            </View>
-          </View>
-        </View>
+const AmbientBackground = ({ isDarkMode, accent }) => (
+  <View style={StyleSheet.absoluteFill} pointerEvents="none">
+    <LinearGradient
+      colors={isDarkMode ? ['#0A1020', '#111B33', '#162544'] : ['#F3F8FF', '#E8F1FB', '#F7EEF8']}
+      style={StyleSheet.absoluteFill}
+    />
+    <DriftOrb size={260} color={accent} top={-60} left={-80} duration={9000} dx={50} dy={40} />
+    <DriftOrb size={200} color={isDarkMode ? '#2DD4BF' : '#7DD3FC'} top={380} left={SCREEN_W - 150} duration={11000} dx={-40} dy={-50} />
+    <DriftOrb size={180} color={isDarkMode ? '#818CF8' : '#F9A8D4'} top={620} left={-60} duration={13000} dx={60} dy={-30} />
+  </View>
+);
+
+/* ------------------------------------------------------------------ */
+/*  Breath pacer: a quiet ring that breathes in 4s and out 6s          */
+/*  Every activity sits under it so the whole screen has one rhythm.   */
+/* ------------------------------------------------------------------ */
+const BreathPacer = ({ color, isDarkMode }) => {
+  const scale = useRef(new Animated.Value(0.7)).current;
+  const [phase, setPhase] = useState('in');
+
+  useEffect(() => {
+    let timer;
+    let alive = true;
+    const run = (p) => {
+      if (!alive) return;
+      setPhase(p);
+      const inhale = p === 'in';
+      Animated.timing(scale, {
+        toValue: inhale ? 1 : 0.7,
+        duration: inhale ? 4000 : 6000,
+        easing: Easing.inOut(Easing.sin),
+        useNativeDriver: true,
+      }).start();
+      timer = setTimeout(() => run(inhale ? 'out' : 'in'), inhale ? 4000 : 6000);
+    };
+    run('in');
+    return () => { alive = false; clearTimeout(timer); };
+  }, [scale]);
+
+  return (
+    <View style={styles.pacerRow}>
+      <View style={styles.pacerRingWrap}>
+        <Animated.View style={[styles.pacerHalo, { backgroundColor: color, transform: [{ scale }] }]} />
+        <Animated.View style={[styles.pacerCore, { borderColor: color, transform: [{ scale }] }]} />
       </View>
+      <Text style={[styles.pacerText, { color: isDarkMode ? '#CBD5E1' : '#475569' }]}>
+        {phase === 'in' ? 'Breathe in slowly' : 'Let it out, longer'}
+      </Text>
+    </View>
+  );
+};
 
-      <View style={styles.thermalZonePillRow}>
-        {THERMAL_STAGES.map((stg, idx) => {
-          const isActive = activeZone === idx;
+/* ------------------------------------------------------------------ */
+/*  Gentle feedback: expanding ring + soft word (replaces XP popups)   */
+/* ------------------------------------------------------------------ */
+const SoftRipple = ({ ripple }) => {
+  const ringScale = ripple.anim.interpolate({ inputRange: [0, 1], outputRange: [0.3, 2.4] });
+  const ringOpacity = ripple.anim.interpolate({ inputRange: [0, 0.2, 1], outputRange: [0, 0.6, 0] });
+  const wordY = ripple.anim.interpolate({ inputRange: [0, 1], outputRange: [0, -26] });
+  const wordOpacity = ripple.anim.interpolate({ inputRange: [0, 0.3, 0.8, 1], outputRange: [0, 1, 1, 0] });
+
+  return (
+    <View pointerEvents="none" style={[styles.rippleAnchor, { left: ripple.x, top: ripple.y }]}>
+      <Animated.View
+        style={[
+          styles.rippleRing,
+          { borderColor: ripple.color, opacity: ringOpacity, transform: [{ scale: ringScale }] },
+        ]}
+      />
+      {!!ripple.text && (
+        <Animated.Text
+          style={[styles.rippleWord, { color: ripple.color, opacity: wordOpacity, transform: [{ translateY: wordY }] }]}
+        >
+          {ripple.text}
+        </Animated.Text>
+      )}
+    </View>
+  );
+};
+
+/* ------------------------------------------------------------------ */
+/*  1. Warmth Flow: press and hold the ember to carry warmth onward    */
+/* ------------------------------------------------------------------ */
+const THERMAL_STAGES = [
+  { id: 'hands_arms', name: 'Hands & Arms', emoji: '🤲', cue: 'My hands and arms feel heavy and pleasantly warm.', color: '#FB7185' },
+  { id: 'solar_plexus', name: 'Solar Plexus', emoji: '☀️', cue: 'My abdomen feels radiating soothing warmth.', color: '#FBBF24' },
+  { id: 'cardiac_pulse', name: 'Cardiac Pulse', emoji: '🫀', cue: 'My heartbeat is calm, steady, and warm.', color: '#34D399' },
+  { id: 'forehead_cool', name: 'Forehead Cool', emoji: '❄️', cue: 'My forehead feels comfortably cool and calm.', color: '#22D3EE' },
+];
+const HOLD_MS = 3500;
+
+const AutogenicWarmthActivity = ({ isDarkMode, onTally, ripple }) => {
+  const [activeZone, setActiveZone] = useState(0);
+  const [done, setDone] = useState([]);
+  const [holding, setHolding] = useState(false);
+
+  const progress = useRef(new Animated.Value(0)).current; // JS-driven (ring fill)
+  const glow = useRef(new Animated.Value(0)).current; // native (orb scale/halo)
+  const idle = useRef(new Animated.Value(0)).current; // native (idle breathing)
+  const cueFade = useRef(new Animated.Value(1)).current;
+  const holdAnim = useRef(null);
+
+  const stage = THERMAL_STAGES[activeZone] || THERMAL_STAGES[0];
+  const ink = isDarkMode ? '#F1F5F9' : '#0F172A';
+  const muted = isDarkMode ? '#94A3B8' : '#64748B';
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(idle, { toValue: 1, duration: 2600, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(idle, { toValue: 0, duration: 2600, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [idle]);
+
+  const completeStage = (event) => {
+    vibrate(40);
+    setDone((d) => (d.includes(activeZone) ? d : [...d, activeZone]));
+    if (onTally) onTally();
+    const next = (activeZone + 1) % THERMAL_STAGES.length;
+    ripple(stage.color, next === 0 ? 'Whole body warm' : 'Warmth carried on', event);
+
+    Animated.timing(cueFade, { toValue: 0, duration: 250, useNativeDriver: true }).start(() => {
+      setActiveZone(next);
+      if (next === 0) setDone([]);
+      progress.setValue(0);
+      Animated.timing(cueFade, { toValue: 1, duration: 700, useNativeDriver: true }).start();
+    });
+  };
+
+  const onPressIn = (e) => {
+    setHolding(true);
+    const evt = e?.nativeEvent ? { nativeEvent: { ...e.nativeEvent } } : null;
+    Animated.timing(glow, { toValue: 1, duration: 600, useNativeDriver: true }).start();
+    holdAnim.current = Animated.timing(progress, {
+      toValue: 1,
+      duration: HOLD_MS * (1 - (progress.__getValue ? progress.__getValue() : 0)),
+      easing: Easing.linear,
+      useNativeDriver: false,
+    });
+    holdAnim.current.start(({ finished }) => {
+      if (finished) {
+        setHolding(false);
+        Animated.timing(glow, { toValue: 0, duration: 800, useNativeDriver: true }).start();
+        completeStage(evt);
+      }
+    });
+  };
+
+  const onPressOut = () => {
+    setHolding(false);
+    if (holdAnim.current) holdAnim.current.stop();
+    Animated.timing(glow, { toValue: 0, duration: 900, useNativeDriver: true }).start();
+    Animated.timing(progress, { toValue: 0, duration: 1400, easing: Easing.out(Easing.quad), useNativeDriver: false }).start();
+  };
+
+  const orbScale = Animated.multiply(
+    idle.interpolate({ inputRange: [0, 1], outputRange: [1, 1.05] }),
+    glow.interpolate({ inputRange: [0, 1], outputRange: [1, 1.22] })
+  );
+  const haloOpacity = glow.interpolate({ inputRange: [0, 1], outputRange: [0.18, 0.55] });
+  const haloScale = glow.interpolate({ inputRange: [0, 1], outputRange: [1, 1.7] });
+  const fillWidth = progress.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });
+
+  return (
+    <View style={styles.activityContainer}>
+      {/* Body path: warmth travels downward through four places */}
+      <View style={styles.pathRow}>
+        {THERMAL_STAGES.map((s, i) => {
+          const isActive = i === activeZone;
+          const isDone = done.includes(i);
           return (
-            <TouchableOpacity
-              key={stg.id}
-              activeOpacity={0.8}
-              style={[
-                styles.thermalZonePill,
-                { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.06)' : '#FFFFFF', borderColor: isDarkMode ? 'rgba(255,255,255,0.1)' : '#CBD5E1' },
-                isActive && { backgroundColor: stg.color, borderColor: stg.color },
-              ]}
-              onPress={() => {
-                setActiveZone(idx);
-                if (onTally) onTally();
-              }}
-            >
-              <Text style={styles.zonePillEmoji}>{stg.emoji}</Text>
-              <Text style={[styles.zonePillLabel, { color: isActive ? '#FFFFFF' : textColor }]}>{stg.name.split(' ')[0]}</Text>
-            </TouchableOpacity>
+            <View key={s.id} style={styles.pathItem}>
+              <View
+                style={[
+                  styles.pathDot,
+                  {
+                    borderColor: s.color,
+                    backgroundColor: isDone ? s.color : isActive ? `${s.color}33` : 'transparent',
+                    transform: [{ scale: isActive ? 1.15 : 1 }],
+                  },
+                ]}
+              >
+                <Text style={styles.pathEmoji}>{s.emoji}</Text>
+              </View>
+              {i < THERMAL_STAGES.length - 1 && (
+                <View style={[styles.pathLine, { backgroundColor: isDone ? s.color : isDarkMode ? '#334155' : '#CBD5E1' }]} />
+              )}
+            </View>
           );
         })}
       </View>
 
-      <View style={[styles.clinicalValidationBadge, { backgroundColor: isDarkMode ? 'rgba(13, 148, 136, 0.2)' : '#F0FDFA', borderColor: '#0D9488' }]}>
-        <Text style={[styles.clinicalValidationTxt, { color: textColor }]}>
-          🏥 <Text style={{ fontWeight: '800', color: '#0D9488' }}>Clinical Protocol: </Text>
-          Schultz Autogenic Thermal Focus (Vascular Vasodilation)
-        </Text>
+      {/* Ember orb */}
+      <View style={styles.emberStage}>
+        <Animated.View
+          pointerEvents="none"
+          style={[styles.emberHalo, { backgroundColor: stage.color, opacity: haloOpacity, transform: [{ scale: haloScale }] }]}
+        />
+        <TouchableWithoutFeedback onPressIn={onPressIn} onPressOut={onPressOut}>
+          <Animated.View style={[styles.emberOrbWrap, { transform: [{ scale: orbScale }] }]}>
+            <LinearGradient
+              colors={[`${stage.color}`, `${stage.color}99`]}
+              start={{ x: 0.2, y: 0 }}
+              end={{ x: 0.8, y: 1 }}
+              style={styles.emberOrb}
+            >
+              <Text style={styles.emberEmoji}>{stage.emoji}</Text>
+              <Text style={styles.emberHint}>{holding ? 'Keep holding' : 'Press and hold'}</Text>
+            </LinearGradient>
+          </Animated.View>
+        </TouchableWithoutFeedback>
       </View>
+
+      {/* Hold progress */}
+      <View style={[styles.holdTrack, { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(15,23,42,0.08)' }]}>
+        <Animated.View style={[styles.holdFill, { width: fillWidth, backgroundColor: stage.color }]} />
+      </View>
+
+      {/* Cue */}
+      <Animated.View style={[styles.cueCard, { opacity: cueFade, borderColor: `${stage.color}66`, backgroundColor: isDarkMode ? 'rgba(15,23,42,0.55)' : 'rgba(255,255,255,0.7)' }]}>
+        <Text style={[styles.cueName, { color: stage.color }]}>{stage.name}</Text>
+        <Text style={[styles.cueText, { color: ink }]}>{stage.cue}</Text>
+        <Text style={[styles.cueFoot, { color: muted }]}>Repeat the phrase quietly while you hold.</Text>
+      </Animated.View>
     </View>
   );
 };
 
-// ===========================================================================
-// 2. Neural Color Matrix Alignment Activity (Pure 100% Solid Colors)
-// ===========================================================================
-const SOLID_COLOR_PALETTE = ['#EF4444', '#F59E0B', '#10B981', '#06B6D4', '#8B5CF6'];
+/* ------------------------------------------------------------------ */
+/*  2. Color Match: soft tiles that bloom when they settle in place    */
+/* ------------------------------------------------------------------ */
+const COLOR_PALETTE = ['#FDA4AF', '#FCD34D', '#86EFAC', '#7DD3FC', '#C4B5FD'];
+const TILE = Math.floor((BOARD - 2 * 10) / 3);
 
-const PatternAlignActivity = ({ isDarkMode, onTally }) => {
+const BloomTile = ({ color, matched, onPress }) => {
+  const bloom = useRef(new Animated.Value(matched ? 1 : 0)).current;
+  const squish = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.spring(bloom, { toValue: matched ? 1 : 0, friction: 5, tension: 60, useNativeDriver: true }).start();
+  }, [matched, bloom]);
+
+  const press = (e) => {
+    Animated.sequence([
+      Animated.timing(squish, { toValue: 0.92, duration: 90, useNativeDriver: true }),
+      Animated.spring(squish, { toValue: 1, friction: 4, useNativeDriver: true }),
+    ]).start();
+    onPress(e);
+  };
+
+  return (
+    <TouchableOpacity activeOpacity={0.9} onPress={press}>
+      <Animated.View style={{ transform: [{ scale: squish }] }}>
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.tileGlow,
+            { backgroundColor: color, opacity: bloom.interpolate({ inputRange: [0, 1], outputRange: [0, 0.45] }), transform: [{ scale: bloom.interpolate({ inputRange: [0, 1], outputRange: [0.8, 1.25] }) }] },
+          ]}
+        />
+        <View style={[styles.tile, { backgroundColor: color }]}>
+          <Animated.View
+            style={[styles.tileDot, { opacity: bloom, transform: [{ scale: bloom }] }]}
+          />
+        </View>
+      </Animated.View>
+    </TouchableOpacity>
+  );
+};
+
+const PatternAlignActivity = ({ isDarkMode, theme, onTally, ripple }) => {
   const [blueprint, setBlueprint] = useState([]);
   const [grid, setGrid] = useState([]);
   const [matches, setMatches] = useState(0);
+  const [combos, setCombos] = useState(0);
+  const sceneFade = useRef(new Animated.Value(1)).current;
+
+  const ink = theme?.textPrimary || (isDarkMode ? '#F1F5F9' : '#0F172A');
+  const muted = theme?.textMuted || (isDarkMode ? '#94A3B8' : '#64748B');
 
   const generateLevel = useCallback(() => {
-    const nextBP = Array.from({ length: 9 }, () => SOLID_COLOR_PALETTE[Math.floor(Math.random() * SOLID_COLOR_PALETTE.length)]);
-    const nextGrid = Array.from({ length: 9 }, () => SOLID_COLOR_PALETTE[Math.floor(Math.random() * SOLID_COLOR_PALETTE.length)]);
-    setBlueprint(nextBP);
-    setGrid(nextGrid);
+    const pick = () => COLOR_PALETTE[Math.floor(Math.random() * COLOR_PALETTE.length)];
+    setBlueprint(Array.from({ length: 9 }, pick));
+    setGrid(Array.from({ length: 9 }, pick));
+    setMatches(0);
   }, []);
 
   useEffect(() => { generateLevel(); }, [generateLevel]);
 
-  const handleTilePress = (index) => {
-    if (Platform.OS !== 'web') Vibration.vibrate(15);
+  const handleTilePress = (index, event) => {
+    vibrate(15);
     const newGrid = [...grid];
-    const currentColor = newGrid[index];
-    const colorIdx = SOLID_COLOR_PALETTE.indexOf(currentColor);
-    const nextColor = SOLID_COLOR_PALETTE[(colorIdx + 1) % SOLID_COLOR_PALETTE.length];
-    newGrid[index] = nextColor;
+    const colorIdx = COLOR_PALETTE.indexOf(newGrid[index]);
+    newGrid[index] = COLOR_PALETTE[(colorIdx + 1) % COLOR_PALETTE.length];
     setGrid(newGrid);
 
     let matchCount = 0;
-    for (let i = 0; i < 9; i++) {
-      if (newGrid[i] === blueprint[i]) matchCount++;
-    }
+    for (let i = 0; i < 9; i++) if (newGrid[i] === blueprint[i]) matchCount++;
     setMatches(matchCount);
 
+    if (newGrid[index] === blueprint[index]) ripple(newGrid[index], 'Settled', event);
+
     if (matchCount === 9) {
+      setCombos((c) => c + 1);
       if (onTally) onTally();
-      setTimeout(() => generateLevel(), 400);
+      ripple('#C4B5FD', 'Harmony', event);
+      setTimeout(() => {
+        Animated.timing(sceneFade, { toValue: 0, duration: 500, useNativeDriver: true }).start(() => {
+          generateLevel();
+          Animated.timing(sceneFade, { toValue: 1, duration: 700, useNativeDriver: true }).start();
+        });
+      }, 700);
     }
   };
 
-  const textColor = isDarkMode ? '#FFFFFF' : '#0F172A';
-
   return (
-    <View style={styles.neuralCanvasContainer}>
-      <View style={[styles.neuralHudCard, { backgroundColor: isDarkMode ? 'rgba(15,23,42,0.6)' : '#FFFFFF', borderColor: isDarkMode ? 'rgba(255,255,255,0.1)' : '#CBD5E1' }]}>
-        <View style={styles.hudStatItem}>
-          <Text style={styles.hudStatLabel}>ALIGNMENT</Text>
-          <Text style={[styles.hudStatValue, { color: '#0D9488' }]}>{Math.round((matches / 9) * 100)}%</Text>
-        </View>
-        <View style={styles.hudStatDivider} />
-        <View style={styles.hudStatItem}>
-          <Text style={styles.hudStatLabel}>MATCHED</Text>
-          <Text style={[styles.hudStatValue, { color: textColor }]}>{matches} / 9</Text>
+    <View style={styles.activityContainer}>
+      {/* Target: a small "memory" strip, kept quiet */}
+      <View style={styles.targetStrip}>
+        <Text style={[styles.targetLabel, { color: muted }]}>Match this pattern</Text>
+        <View style={styles.targetMini}>
+          {blueprint.map((c, i) => (
+            <View key={`bp-${i}`} style={[styles.targetCell, { backgroundColor: c }]} />
+          ))}
         </View>
       </View>
 
-      <View style={styles.dualArenaRow}>
-        <View style={[styles.arenaSideCard, { backgroundColor: isDarkMode ? 'rgba(15,23,42,0.4)' : '#FFFFFF', borderColor: isDarkMode ? 'rgba(255,255,255,0.08)' : '#E2E8F0' }]}>
-          <Text style={[styles.arenaCardHeader, { color: '#0D9488' }]}>🎯 TARGET</Text>
-          <View style={styles.miniBlueprintGrid}>
-            {blueprint.map((color, idx) => (
-              <View key={`bp-${idx}`} style={[styles.miniBlueprintTile, { backgroundColor: color }]} />
-            ))}
-          </View>
+      <Animated.View style={[styles.boardCard, { opacity: sceneFade, backgroundColor: isDarkMode ? 'rgba(15,23,42,0.5)' : 'rgba(255,255,255,0.65)', borderColor: isDarkMode ? 'rgba(167,139,250,0.35)' : 'rgba(139,92,246,0.25)' }]}>
+        <View style={styles.boardGrid}>
+          {grid.map((color, idx) => (
+            <BloomTile
+              key={`tile-${idx}`}
+              color={color}
+              matched={color === blueprint[idx]}
+              onPress={(e) => handleTilePress(idx, e)}
+            />
+          ))}
         </View>
+      </Animated.View>
 
-        <View style={[styles.arenaSideCard, { backgroundColor: isDarkMode ? 'rgba(15,23,42,0.4)' : '#FFFFFF', borderColor: '#0D9488' }]}>
-          <Text style={[styles.arenaCardHeader, { color: textColor }]}>👇 TAP TILE</Text>
-          <View style={styles.interactiveGameGrid}>
-            {grid.map((color, idx) => {
-              const isMatched = color === blueprint[idx];
-              return (
-                <TouchableOpacity
-                  key={`tile-${idx}`}
-                  activeOpacity={0.7}
-                  style={[styles.gameMatrixCardTile, { backgroundColor: color }, isMatched && styles.gameMatrixCardMatched]}
-                  onPress={() => handleTilePress(idx)}
-                >
-                  {isMatched && (
-                    <View style={styles.gameMatchedCheck}>
-                      <Text style={styles.gameCheckIcon}>✓</Text>
-                    </View>
-                  )}
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
+      {/* Progress as nine small beads, not a score */}
+      <View style={styles.beadRow}>
+        {Array.from({ length: 9 }).map((_, i) => (
+          <View
+            key={i}
+            style={[styles.bead, { backgroundColor: i < matches ? '#A78BFA' : isDarkMode ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)' }]}
+          />
+        ))}
       </View>
+      <Text style={[styles.softStat, { color: ink }]}>
+        {matches} of 9 settled{combos > 0 ? `  ·  ${combos} ${combos === 1 ? 'harmony' : 'harmonies'}` : ''}
+      </Text>
     </View>
   );
 };
 
-// ===========================================================================
-// 3. Stroop Cognitive Decoupler Activity (PREMIUM ARCADE STROOP INTERFERENCE GAME)
-// ===========================================================================
-const STROOP_COLORS = [
-  { name: 'RED', color: '#EF4444', icon: '🔴' },
-  { name: 'BLUE', color: '#3B82F6', icon: '🔵' },
-  { name: 'GREEN', color: '#10B981', icon: '🟢' },
-  { name: 'YELLOW', color: '#F59E0B', icon: '🟡' },
+/* ------------------------------------------------------------------ */
+/*  3. Color Clash: worry bubbles that pop by naming the ink color     */
+/* ------------------------------------------------------------------ */
+const STROOP_ITEMS = [
+  { word: 'RED', colorName: 'BLUE', colorCode: '#3B82F6' },
+  { word: 'GREEN', colorName: 'RED', colorCode: '#EF4444' },
+  { word: 'YELLOW', colorName: 'GREEN', colorCode: '#10B981' },
+  { word: 'BLUE', colorName: 'YELLOW', colorCode: '#F59E0B' },
+  { word: 'PURPLE', colorName: 'RED', colorCode: '#EF4444' },
 ];
 
-const StroopDecouplerActivity = ({ isDarkMode, onTally }) => {
-  const [wordItem, setWordItem] = useState(STROOP_COLORS[0]);
-  const [colorItem, setColorItem] = useState(STROOP_COLORS[1]);
-  const [score, setScore] = useState(0);
-  const [combo, setCombo] = useState(0);
+const COLOR_BUTTONS = [
+  { name: 'RED', code: '#EF4444' },
+  { name: 'BLUE', code: '#3B82F6' },
+  { name: 'GREEN', code: '#10B981' },
+  { name: 'YELLOW', code: '#F59E0B' },
+];
 
-  const wordPopAnim = useRef(new Animated.Value(1)).current;
+const StroopDecouplerActivity = ({ isDarkMode, onTally, ripple }) => {
+  const [currentIdx, setCurrentIdx] = useState(0);
+  const [streak, setStreak] = useState(0);
+  const [hint, setHint] = useState('');
 
-  const generateNextChallenge = useCallback(() => {
-    const w = STROOP_COLORS[Math.floor(Math.random() * STROOP_COLORS.length)];
-    let c = STROOP_COLORS[Math.floor(Math.random() * STROOP_COLORS.length)];
-    while (c.name === w.name) {
-      c = STROOP_COLORS[Math.floor(Math.random() * STROOP_COLORS.length)];
-    }
-    setWordItem(w);
-    setColorItem(c);
+  const float = useRef(new Animated.Value(0)).current;
+  const pop = useRef(new Animated.Value(1)).current; // 1 = visible, 0 = popped
+  const shake = useRef(new Animated.Value(0)).current;
 
-    wordPopAnim.setValue(0.85);
-    Animated.spring(wordPopAnim, { toValue: 1, friction: 4, tension: 120, useNativeDriver: true }).start();
-  }, []);
+  const currentItem = STROOP_ITEMS[currentIdx] || STROOP_ITEMS[0];
+  const ink = isDarkMode ? '#F1F5F9' : '#0F172A';
+  const muted = isDarkMode ? '#94A3B8' : '#64748B';
 
-  useEffect(() => { generateNextChallenge(); }, [generateNextChallenge]);
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(float, { toValue: 1, duration: 2400, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(float, { toValue: 0, duration: 2400, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [float]);
 
-  const handleColorChoice = (chosenColorObj) => {
-    if (Platform.OS !== 'web') Vibration.vibrate(15);
-    if (chosenColorObj.name === colorItem.name) {
-      setScore(s => s + 10);
-      setCombo(c => c + 1);
-      if (onTally) onTally();
-    } else {
-      setCombo(0);
-    }
-    generateNextChallenge();
+  const nextBubble = () => {
+    setCurrentIdx((prev) => (prev + 1) % STROOP_ITEMS.length);
+    pop.setValue(0);
+    Animated.spring(pop, { toValue: 1, friction: 6, tension: 50, useNativeDriver: true }).start();
   };
 
-  const textColor = isDarkMode ? '#FFFFFF' : '#0F172A';
+  const handleColorPress = (btnName, event) => {
+    vibrate(20);
+    if (btnName === currentItem.colorName) {
+      setStreak((s) => s + 1);
+      setHint('');
+      if (onTally) onTally();
+      ripple(currentItem.colorCode, 'Popped', event);
+      Animated.timing(pop, { toValue: 0, duration: 220, easing: Easing.out(Easing.quad), useNativeDriver: true }).start(nextBubble);
+    } else {
+      setStreak(0);
+      setHint('Look at the ink color, not the letters.');
+      Animated.sequence([
+        Animated.timing(shake, { toValue: 1, duration: 90, useNativeDriver: true }),
+        Animated.timing(shake, { toValue: -1, duration: 90, useNativeDriver: true }),
+        Animated.timing(shake, { toValue: 0, duration: 90, useNativeDriver: true }),
+      ]).start();
+    }
+  };
+
+  const bubbleScale = pop.interpolate({ inputRange: [0, 1], outputRange: [1.35, 1] });
 
   return (
-    <View style={styles.stroopGameArenaContainer}>
-      {/* High-Tech HUD Bar */}
-      <View style={[styles.neuralHudCard, { backgroundColor: isDarkMode ? 'rgba(15,23,42,0.7)' : '#FFFFFF', borderColor: isDarkMode ? 'rgba(255,255,255,0.1)' : '#CBD5E1' }]}>
-        <View style={styles.hudStatItem}>
-          <Text style={styles.hudStatLabel}>WESAD SCORE</Text>
-          <Text style={[styles.hudStatValue, { color: '#0D9488' }]}>0.95</Text>
-        </View>
-        <View style={styles.hudStatDivider} />
-        <View style={styles.hudStatItem}>
-          <Text style={styles.hudStatLabel}>SCORE</Text>
-          <Text style={[styles.hudStatValue, { color: '#F59E0B' }]}>{score}</Text>
-        </View>
-        <View style={styles.hudStatDivider} />
-        <View style={styles.hudStatItem}>
-          <Text style={styles.hudStatLabel}>COMBO</Text>
-          <Text style={[styles.hudStatValue, { color: '#EF4444' }]}>🔥 {combo}x</Text>
-        </View>
+    <View style={styles.activityContainer}>
+      <View style={styles.bubbleSky}>
+        <Animated.View
+          style={[
+            styles.bubble,
+            {
+              borderColor: `${currentItem.colorCode}88`,
+              backgroundColor: isDarkMode ? 'rgba(148,163,184,0.10)' : 'rgba(255,255,255,0.55)',
+              opacity: pop,
+              transform: [
+                { translateY: float.interpolate({ inputRange: [0, 1], outputRange: [8, -8] }) },
+                { translateX: shake.interpolate({ inputRange: [-1, 1], outputRange: [-8, 8] }) },
+                { scale: bubbleScale },
+              ],
+            },
+          ]}
+        >
+          <View style={[styles.bubbleShine, { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.9)' }]} />
+          <Text style={[styles.stroopWord, { color: currentItem.colorCode }]}>{currentItem.word}</Text>
+        </Animated.View>
       </View>
 
-      {/* Center Arcade Target Display Card */}
-      <View style={[styles.stroopTargetCard, { backgroundColor: isDarkMode ? 'rgba(15,23,42,0.85)' : '#FFFFFF', borderColor: '#0D9488' }]}>
-        <View style={[styles.stroopRuleBadge, { backgroundColor: isDarkMode ? 'rgba(13, 148, 136, 0.2)' : '#E0F2FE' }]}>
-          <Text style={[styles.stroopRuleTxt, { color: '#0284C7' }]}>💡 RULE: TAP TEXT FONT COLOR (NOT THE WORD!)</Text>
-        </View>
+      <Text style={[styles.hintLine, { color: hint ? '#38BDF8' : muted }]}>
+        {hint || 'Which color is the word written in?'}
+      </Text>
 
-        <Animated.Text style={[styles.stroopTargetWordTxt, { color: colorItem.color, transform: [{ scale: wordPopAnim }] }]}>
-          {wordItem.name}
-        </Animated.Text>
-      </View>
-
-      {/* 2x2 Arcade Color Button Grid */}
-      <View style={styles.stroop2x2Grid}>
-        {STROOP_COLORS.map((btnColor) => (
-          <TouchableOpacity
-            key={btnColor.name}
-            activeOpacity={0.8}
-            style={[styles.stroopGridButton, { backgroundColor: btnColor.color }]}
-            onPress={() => handleColorChoice(btnColor)}
-          >
-            <Text style={styles.stroopBtnIcon}>{btnColor.icon}</Text>
-            <Text style={styles.stroopBtnTxt}>{btnColor.name}</Text>
+      <View style={styles.orbRow}>
+        {COLOR_BUTTONS.map((btn) => (
+          <TouchableOpacity key={btn.name} activeOpacity={0.8} onPress={(e) => handleColorPress(btn.name, e)} style={styles.orbBtnWrap}>
+            <View style={[styles.orbBtnGlow, { backgroundColor: btn.code }]} />
+            <LinearGradient colors={[btn.code, `${btn.code}CC`]} style={styles.orbBtn}>
+              <Text style={styles.orbBtnTxt}>{btn.name}</Text>
+            </LinearGradient>
           </TouchableOpacity>
         ))}
       </View>
 
-      {/* Clinical Protocol Validation Banner */}
-      <View style={[styles.clinicalValidationBadge, { backgroundColor: isDarkMode ? 'rgba(13, 148, 136, 0.2)' : '#F0FDFA', borderColor: '#0D9488' }]}>
-        <Text style={[styles.clinicalValidationTxt, { color: textColor }]}>
-          🏥 <Text style={{ fontWeight: '800', color: '#0D9488' }}>Clinical Protocol: </Text>
-          Prefrontal Attentional Shifting (0.95 WESAD Recovery Rating)
-        </Text>
-      </View>
+      <Text style={[styles.softStat, { color: ink }]}>
+        {streak > 0 ? `${streak} in a row` : 'Take your time'}
+      </Text>
     </View>
   );
 };
 
-// ===========================================================================
-// Core Activity Canvas Container & Router
-// ===========================================================================
-export const CognitiveDeStressGame = (props) => {
-  const {
-    activeMode: rawActiveMode,
-    mode,
-    initialMode,
-    subOptionId,
-    onFinish,
-    isPaused = false,
-    setIsPaused = () => {},
-  } = props;
+/* ------------------------------------------------------------------ */
+/*  Container (props and technique routing unchanged)                  */
+/* ------------------------------------------------------------------ */
+export const CognitiveDeStressGame = ({
+  mode = 'pattern_alignment',
+  onTally,
+  onFinish,
+  subOptionId,
+  onStartSession,
+  initialDurationMin = 3,
+}) => {
+  const themeCtx = useContext(ThemeContext) || {};
+  const theme = themeCtx.theme || {};
+  const isDarkMode = themeCtx.isDarkMode ?? true;
 
-  const rawMode = mode || initialMode || subOptionId || rawActiveMode || 'autogenic_warmth';
-  const techniqueId = TECHNIQUES[rawMode] ? rawMode : 'autogenic_warmth';
+  const [ripples, setRipples] = useState([]);
+  const rootRef = useRef(null);
+  const rootOffset = useRef({ x: 0, y: 0 });
 
-  const themeContext = React.useContext(ThemeContext);
-  const theme = themeContext?.theme || {};
-  const isDarkMode = themeContext?.isDarkMode === true || theme.mode === 'dark' || theme.isDark === true;
-
-  const [screen, setScreen] = useState('session');
-  const [tallyCount, setTallyCount] = useState(0);
-
-  const tech = TECHNIQUES[techniqueId] || TECHNIQUES.autogenic_warmth;
-  const primaryTextColor = isDarkMode ? '#FFFFFF' : '#0F172A';
-  const secondaryTextColor = isDarkMode ? 'rgba(255,255,255,0.7)' : '#475569';
-
-  const handleTally = () => {
-    setTallyCount(c => c + 1);
+  const extractString = (val) => {
+    if (!val) return '';
+    if (typeof val === 'string') return val;
+    if (typeof val === 'object') return val.id || val.mode || val.technique_id || val.key || val.title || '';
+    return String(val);
   };
 
-  if (screen === 'session') {
-    return (
-      <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false} bounces={false}>
-        <LinearGradient colors={isDarkMode ? tech.bgDark : tech.bgLight} style={styles.sessionGradientWrapper}>
-          {/* Header Card */}
-          <View style={[styles.techHeaderCard, { backgroundColor: isDarkMode ? 'rgba(13, 148, 136, 0.15)' : '#FFFFFF', borderColor: isDarkMode ? 'rgba(13, 148, 136, 0.35)' : '#CBD5E1' }]}>
-            <View style={[styles.techHeaderIconRing, { backgroundColor: 'rgba(13, 148, 136, 0.2)' }]}>
-              <Text style={styles.techHeaderIcon}>{tech.emoji}</Text>
-            </View>
-            <View style={styles.techHeaderTextWrap}>
-              <Text style={[styles.techHeaderTitle, { color: primaryTextColor }]}>{tech.name}</Text>
-              <Text style={[styles.techHeaderBadge, { color: '#0D9488' }]}>{tech.subtitle}</Text>
-            </View>
-            <View style={[styles.timeBadge, { backgroundColor: '#0D9488' }]}>
-              <Text style={styles.timeBadgeTxt}>{tallyCount} Actions</Text>
-            </View>
-          </View>
+  const rawKey = (extractString(subOptionId) || extractString(mode) || 'pattern_alignment').toLowerCase();
+  let key = 'pattern_alignment';
+  if (rawKey.includes('warmth') || rawKey.includes('autogenic') || rawKey.includes('warm')) key = 'autogenic_warmth';
+  else if (rawKey.includes('stroop') || rawKey.includes('clash') || rawKey.includes('decoupler')) key = 'stroop_decoupler';
+  else if (rawKey.includes('pattern') || rawKey.includes('match') || rawKey.includes('alignment')) key = 'pattern_alignment';
 
-          {/* Activity Canvas Router */}
-          <View style={styles.canvasWrapper}>
-            {techniqueId === 'autogenic_warmth' && <AutogenicWarmthActivity isDarkMode={isDarkMode} onTally={handleTally} />}
-            {techniqueId === 'pattern_alignment' && <PatternAlignActivity isDarkMode={isDarkMode} onTally={handleTally} />}
-            {techniqueId === 'stroop_decoupler' && <StroopDecouplerActivity isDarkMode={isDarkMode} onTally={handleTally} />}
-          </View>
+  const tech = TECHNIQUES[key] || TECHNIQUES.pattern_alignment;
 
-          {/* Session Controls */}
-          <TouchableOpacity
-            style={[styles.sessionControlBtn, { backgroundColor: '#0D9488' }]}
-            onPress={() => setIsPaused(p => !p)}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.sessionControlBtnTxt}>{isPaused ? '▶  Resume Session' : '⏸  Pause Session'}</Text>
-          </TouchableOpacity>
-        </LinearGradient>
+  const hasStartedRef = useRef(false);
+  useEffect(() => {
+    if (onStartSession && initialDurationMin && !hasStartedRef.current) {
+      hasStartedRef.current = true;
+      onStartSession(initialDurationMin * 60);
+    }
+  }, [initialDurationMin, onStartSession]);
+
+  const measureRoot = () => {
+    if (rootRef.current && rootRef.current.measureInWindow) {
+      rootRef.current.measureInWindow((x, y) => {
+        rootOffset.current = { x: x || 0, y: y || 0 };
+      });
+    }
+  };
+
+  const ripple = useCallback((color, text, event) => {
+    const ne = event?.nativeEvent;
+    if (!ne) return;
+    const id = Date.now() + Math.random();
+    const anim = new Animated.Value(0);
+    const x = (ne.pageX ?? 0) - rootOffset.current.x;
+    const y = (ne.pageY ?? 0) - rootOffset.current.y;
+    setRipples((prev) => [...prev, { id, color, text, x, y, anim }]);
+    Animated.timing(anim, { toValue: 1, duration: 1600, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start(() => {
+      setRipples((prev) => prev.filter((r) => r.id !== id));
+    });
+  }, []);
+
+  const ink = theme?.textPrimary || (isDarkMode ? '#F1F5F9' : '#0F172A');
+
+  return (
+    <View ref={rootRef} style={styles.root} onLayout={measureRoot} collapsable={false}>
+      <AmbientBackground isDarkMode={isDarkMode} accent={tech.color} />
+
+      <ScrollView
+        contentContainerStyle={styles.container}
+        showsVerticalScrollIndicator={false}
+        onScrollEndDrag={measureRoot}
+      >
+        <View style={styles.header}>
+          <Text style={styles.headerEmoji}>{tech.emoji}</Text>
+          <Text style={[styles.headerTitle, { color: ink }]}>{tech.name}</Text>
+          <Text style={[styles.headerSub, { color: isDarkMode ? '#94A3B8' : '#64748B' }]}>{tech.subtitle}</Text>
+        </View>
+
+        <BreathPacer color={tech.color} isDarkMode={isDarkMode} />
+
+        {key === 'autogenic_warmth' && <AutogenicWarmthActivity isDarkMode={isDarkMode} onTally={onTally} ripple={ripple} />}
+        {key === 'pattern_alignment' && <PatternAlignActivity isDarkMode={isDarkMode} theme={theme} onTally={onTally} ripple={ripple} />}
+        {key === 'stroop_decoupler' && <StroopDecouplerActivity isDarkMode={isDarkMode} onTally={onTally} ripple={ripple} />}
       </ScrollView>
-    );
-  }
 
-  return null;
+      {/* Feedback layer */}
+      {ripples.map((r) => (
+        <SoftRipple key={r.id} ripple={r} />
+      ))}
+    </View>
+  );
 };
 
+/* ------------------------------------------------------------------ */
+/*  Styles                                                             */
+/* ------------------------------------------------------------------ */
 const styles = StyleSheet.create({
-  scrollContainer: { flexGrow: 1 },
-  sessionGradientWrapper: {
-    flex: 1,
-    paddingTop: 10,
-    paddingBottom: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 480,
-  },
-  techHeaderCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    width: width * 0.92,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 16,
-    borderWidth: 1.5,
-    marginBottom: 4,
-    elevation: 3,
-    gap: 10,
-  },
-  techHeaderIconRing: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
-  techHeaderIcon: { fontSize: 22 },
-  techHeaderTextWrap: { flex: 1 },
-  techHeaderTitle: { fontSize: 15, fontWeight: '800', letterSpacing: -0.3 },
-  techHeaderBadge: { fontSize: 10, fontWeight: '700', marginTop: 1 },
-  timeBadge: { paddingVertical: 4, paddingHorizontal: 10, borderRadius: 12 },
-  timeBadgeTxt: { color: '#FFFFFF', fontSize: 11, fontWeight: '800' },
+  root: { flex: 1, overflow: 'hidden' },
+  container: { paddingHorizontal: 20, paddingTop: 24, paddingBottom: 40, flexGrow: 1 },
 
-  canvasWrapper: { width: width * 0.92, height: Math.min(width * 0.78, 300), alignItems: 'center', justifyContent: 'center', marginVertical: 4 },
-  activityCanvasContainer: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  header: { alignItems: 'center', marginBottom: 6 },
+  headerEmoji: { fontSize: 30 },
+  headerTitle: { fontSize: 26, fontWeight: '300', letterSpacing: 0.4, marginTop: 4 },
+  headerSub: { fontSize: 14, marginTop: 4, textAlign: 'center' },
 
-  // Autogenic Thermal Layout
-  thermalDeckRow: { flexDirection: 'row', width: '100%', gap: 10, flex: 1, marginVertical: 4 },
-  thermalAuraCard: {
-    width: 120,
-    paddingVertical: 10,
-    borderRadius: 18,
-    borderWidth: 1.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  thermalPulseRing: { width: 74, height: 74, borderRadius: 37, borderWidth: 3, alignItems: 'center', justifyContent: 'center', marginBottom: 6, position: 'relative' },
-  rhythmRippleRing: { position: 'absolute', borderWidth: 2.5 },
-  thermalBigIcon: { fontSize: 32 },
-  thermalStageBadge: { fontSize: 9, fontWeight: '900', letterSpacing: 0.5 },
+  // Breath pacer
+  pacerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, marginVertical: 16 },
+  pacerRingWrap: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  pacerHalo: { position: 'absolute', width: 44, height: 44, borderRadius: 22, opacity: 0.22 },
+  pacerCore: { width: 30, height: 30, borderRadius: 15, borderWidth: 2 },
+  pacerText: { fontSize: 14, fontWeight: '500', minWidth: 150 },
 
-  thermalInfoCol: { flex: 1, justifyContent: 'center' },
-  thermalInstructionBox: { padding: 12, borderRadius: 16, borderWidth: 1.5, flex: 1, justifyContent: 'center' },
-  thermalGuideLabel: { fontSize: 9, fontWeight: '900', letterSpacing: 0.6, marginBottom: 3 },
-  thermalGuideTxt: { fontSize: 12, fontWeight: '700', lineHeight: 16, marginBottom: 6 },
-  thermalEffectBox: { padding: 8, borderRadius: 10 },
-  thermalEffectTxt: { fontSize: 10, lineHeight: 14 },
+  // Ripple feedback
+  rippleAnchor: { position: 'absolute', zIndex: 999, width: 0, height: 0, alignItems: 'center', justifyContent: 'center' },
+  rippleRing: { position: 'absolute', width: 60, height: 60, borderRadius: 30, borderWidth: 2 },
+  rippleWord: { position: 'absolute', width: 160, textAlign: 'center', fontSize: 15, fontWeight: '600', top: -44 },
 
-  thermalZonePillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, width: '100%', marginVertical: 4 },
-  thermalZonePill: {
-    flex: 1,
-    minWidth: 70,
-    paddingVertical: 6,
-    paddingHorizontal: 8,
-    borderRadius: 10,
-    borderWidth: 1.5,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    elevation: 1,
-  },
-  zonePillEmoji: { fontSize: 12 },
-  zonePillLabel: { fontSize: 9, fontWeight: '900' },
+  activityContainer: { alignItems: 'center', gap: 16 },
 
-  activeZoneDetailCard: { padding: 12, borderRadius: 16, borderWidth: 1.5 },
-  clinicalValidationBadge: { width: '100%', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, marginTop: 4 },
-  clinicalValidationTxt: { fontSize: 9, textAlign: 'center', lineHeight: 13 },
+  // Warmth Flow
+  pathRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  pathItem: { flexDirection: 'row', alignItems: 'center' },
+  pathDot: { width: 44, height: 44, borderRadius: 22, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+  pathEmoji: { fontSize: 20 },
+  pathLine: { width: 22, height: 2, borderRadius: 1 },
+  emberStage: { width: 240, height: 240, alignItems: 'center', justifyContent: 'center' },
+  emberHalo: { position: 'absolute', width: 190, height: 190, borderRadius: 95 },
+  emberOrbWrap: { width: 170, height: 170, borderRadius: 85 },
+  emberOrb: { flex: 1, borderRadius: 85, alignItems: 'center', justifyContent: 'center' },
+  emberEmoji: { fontSize: 54 },
+  emberHint: { color: 'rgba(255,255,255,0.92)', fontSize: 13, fontWeight: '600', marginTop: 6 },
+  holdTrack: { width: 200, height: 6, borderRadius: 3, overflow: 'hidden' },
+  holdFill: { height: '100%', borderRadius: 3 },
+  cueCard: { width: '100%', borderWidth: 1, borderRadius: 24, paddingVertical: 18, paddingHorizontal: 20, alignItems: 'center' },
+  cueName: { fontSize: 16, fontWeight: '600' },
+  cueText: { fontSize: 17, lineHeight: 26, fontStyle: 'italic', textAlign: 'center', marginTop: 8 },
+  cueFoot: { fontSize: 12, marginTop: 10 },
 
-  // Pure Color Matrix Layout
-  neuralCanvasContainer: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 2 },
-  neuralHudCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-around',
-    width: '100%',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 14,
-    borderWidth: 1.5,
-  },
-  hudStatItem: { alignItems: 'center' },
-  hudStatLabel: { fontSize: 8, fontWeight: '800', color: '#64748B', letterSpacing: 0.6 },
-  hudStatValue: { fontSize: 11, fontWeight: '900', marginTop: 1 },
-  hudStatDivider: { width: 1, height: 16, backgroundColor: 'rgba(100,116,139,0.2)' },
+  // Color Match
+  targetStrip: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  targetLabel: { fontSize: 13 },
+  targetMini: { width: 51, height: 51, flexDirection: 'row', flexWrap: 'wrap', gap: 3 },
+  targetCell: { width: 15, height: 15, borderRadius: 5 },
+  boardCard: { borderWidth: 1, borderRadius: 32, padding: 16 },
+  boardGrid: { width: BOARD - 12, flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'center' },
+  tile: { width: TILE - 8, height: TILE - 8, borderRadius: 26, alignItems: 'center', justifyContent: 'center' },
+  tileGlow: { position: 'absolute', top: -4, left: -4, width: TILE, height: TILE, borderRadius: 30 },
+  tileDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: 'rgba(255,255,255,0.9)' },
+  beadRow: { flexDirection: 'row', gap: 8 },
+  bead: { width: 10, height: 10, borderRadius: 5 },
+  softStat: { fontSize: 14, fontWeight: '500' },
 
-  dualArenaRow: { flexDirection: 'row', width: '100%', gap: 10, flex: 1, marginTop: 6 },
-  arenaSideCard: {
-    flex: 1,
-    borderRadius: 16,
-    borderWidth: 1.5,
-    padding: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  arenaCardHeader: { fontSize: 9, fontWeight: '900', letterSpacing: 0.5, marginBottom: 8 },
-
-  miniBlueprintGrid: { width: 114, height: 114, flexDirection: 'row', flexWrap: 'wrap', gap: 5, justifyContent: 'center' },
-  miniBlueprintTile: { width: 34, height: 34, borderRadius: 10, elevation: 2 },
-
-  interactiveGameGrid: { width: 134, height: 134, flexDirection: 'row', flexWrap: 'wrap', gap: 5, justifyContent: 'center' },
-  gameMatrixCardTile: { width: 40, height: 40, borderRadius: 11, elevation: 3, position: 'relative' },
-  gameMatrixCardMatched: { borderWidth: 2.5, borderColor: '#FFFFFF' },
-  gameMatchedCheck: { position: 'absolute', top: 2, right: 2, backgroundColor: '#FFFFFF', width: 12, height: 12, borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
-  gameCheckIcon: { color: '#0F172A', fontSize: 8, fontWeight: '900' },
-
-  // Stroop Cognitive Decoupler Layout
-  stroopGameArenaContainer: { width: '100%', height: '100%', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 2 },
-  stroopTargetCard: { width: '100%', height: 110, borderRadius: 20, borderWidth: 2, alignItems: 'center', justifyContent: 'center', padding: 8, marginVertical: 4 },
-  stroopRuleBadge: { paddingVertical: 4, paddingHorizontal: 10, borderRadius: 10, marginBottom: 6 },
-  stroopRuleTxt: { fontSize: 9, fontWeight: '900', letterSpacing: 0.5 },
-  stroopTargetWordTxt: { fontSize: 36, fontWeight: '900', letterSpacing: 2 },
-
-  stroop2x2Grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, width: '100%', justifyContent: 'space-between' },
-  stroopGridButton: {
-    width: '48%',
-    height: 48,
-    borderRadius: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    elevation: 4,
-  },
-  stroopBtnIcon: { fontSize: 16 },
-  stroopBtnTxt: { color: '#FFFFFF', fontSize: 13, fontWeight: '900', letterSpacing: 0.8 },
-
-  // Session Control Button
-  sessionControlBtn: { width: width * 0.92, paddingVertical: 12, borderRadius: 16, alignItems: 'center', justifyContent: 'center', elevation: 3, marginTop: 4 },
-  sessionControlBtnTxt: { color: '#FFFFFF', fontSize: 14, fontWeight: '800', letterSpacing: 0.5 },
+  // Color Clash
+  bubbleSky: { height: 220, alignItems: 'center', justifyContent: 'center' },
+  bubble: { width: 200, height: 200, borderRadius: 100, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+  bubbleShine: { position: 'absolute', top: 26, left: 40, width: 46, height: 22, borderRadius: 11, transform: [{ rotate: '-28deg' }] },
+  stroopWord: { fontSize: 36, fontWeight: '800', letterSpacing: 1.5 },
+  hintLine: { fontSize: 14, textAlign: 'center', minHeight: 20 },
+  orbRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 14, justifyContent: 'center' },
+  orbBtnWrap: { width: 76, height: 76, alignItems: 'center', justifyContent: 'center' },
+  orbBtnGlow: { position: 'absolute', width: 76, height: 76, borderRadius: 38, opacity: 0.25 },
+  orbBtn: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center' },
+  orbBtnTxt: { color: '#FFFFFF', fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
 });
 
-export const AutogenicWarmthGame = CognitiveDeStressGame;
 export default CognitiveDeStressGame;

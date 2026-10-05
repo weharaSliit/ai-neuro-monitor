@@ -4,6 +4,7 @@ import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
 import { Header } from '../components/Header';
 import { apiService } from '../api/apiService';
+import { AmbientBackground } from '../components/AmbientBackground';
 
 const FILTERS = ['All', 'Stress', 'Pre-Stress', 'Normal'];
 
@@ -141,6 +142,7 @@ export const HistoryScreen = () => {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
+      <AmbientBackground />
       <Header title="Recovery History" showBack onBack={() => setCurrentScreen('Dashboard')} />
 
       {loading ? (

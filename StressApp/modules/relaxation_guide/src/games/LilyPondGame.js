@@ -3,1026 +3,788 @@ import {
   View,
   Text,
   StyleSheet,
-  TouchableWithoutFeedback,
   TouchableOpacity,
   Animated,
   Dimensions,
   Easing,
   Vibration,
-  Platform,
+  ImageBackground,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { ThemeContext } from '../context/ThemeContext';
 
 const { width, height } = Dimensions.get('window');
 
-const PETAL_COUNT_OUTER = 6;
-const PETAL_COUNT_INNER = 6;
-const DURATION_OPTIONS_MIN = [1, 2, 3];
-const BPM_OPTIONS = [4.5, 5, 5.5, 6, 6.5, 7];
-const AMBIENT_TICK_MS = 40;
-
-const PATTERNS = {
-  extended: {
-    id: 'extended',
-    label: 'Extended Exhale (Vagal Reset)',
-    inhaleRatio: 0.40,
-    exhaleRatio: 0.60,
-    defaultBpm: 5.5,
-    citation: 'Zaccaro et al., 2018, Frontiers in Human Neuroscience',
-    blurb: 'Longer exhalations trigger vagal nerve activation to lower heart rate and calm autonomic stress.',
-  },
-  coherent: {
-    id: 'coherent',
-    label: 'Coherent Breathing (6 BPM Resonance)',
-    inhaleRatio: 0.50,
-    exhaleRatio: 0.50,
-    defaultBpm: 6.0,
-    citation: 'Lehrer & Gevirtz, 2014, Frontiers in Psychology',
-    blurb: 'Equal 5s inhale and 5s exhale near cardiovascular resonance frequency for peak HRV oscillation.',
-  },
+// 4-7-8 Stress Reduction Protocol (unchanged)
+const BREATH_TIMING = {
+  inhale: 4000,
+  hold: 7000,
+  exhale: 8000,
+  rest: 2000,
 };
 
-const COLORS = {
-  background: '#041D17',
-  waterDark: '#07281F',
-  waterLight: '#0E4434',
-  padDark: '#0D402B',
-  padBorder: '#1F6B4C',
-  petalOuter: '#F472B6',
-  petalInner: '#FB7185',
-  petalGlow: 'rgba(244, 114, 182, 0.4)',
-  stamen: '#F59E0B',
-  centerCore: '#FDE047',
-  accent: '#10B981',
-  accentLight: '#6EE7B7',
-  text: '#E7FBF1',
-  textDim: 'rgba(231, 251, 241, 0.6)',
-  rippleIn: '#34D399',
-  rippleOut: '#38BDF8',
-  rippleTouch: '#F472B6',
+const PHASE_ORDER = ['inhale', 'hold', 'exhale', 'rest'];
+const SESSION_CYCLES = 4; // 4 rounds is the classic starter session for 4-7-8
+
+// Layout
+const CX = width / 2;
+const CY = height * 0.38;
+const RING_R = 122;
+const RING_DOTS = 32;
+const FAR = Math.min(width * 0.46, 190);
+
+let _idCounter = 0;
+const uid = () => `${Date.now()}_${++_idCounter}_${Math.random().toString(36).substr(2, 6)}`;
+const rand = (min, max) => min + Math.random() * (max - min);
+
+const PHASE_UI = {
+  inhale: { title: 'Breathe in', sub: 'Slowly through your nose and let the lotus open', color: '#A5B4FC' },
+  hold: { title: 'Hold', sub: 'Stay still while the light gathers', color: '#7DD3FC' },
+  exhale: { title: 'Breathe out', sub: 'Through your mouth, and send the light across the pond', color: '#6EE7B7' },
+  rest: { title: 'Rest', sub: 'Let the water settle', color: '#C4B5FD' },
 };
 
-const LilyBreathingGame = ({
-  onStartSession,
-  onDurationChange,
-  initialScreen = 'session',
-  initialDurationMin = 1,
-  initialBpm = 5.5,
-}) => {
-  const themeContext = React.useContext(ThemeContext);
-  const theme = themeContext?.theme || {};
-  const isDarkMode = themeContext?.isDarkMode ?? true;
+/* ---------- small building blocks ---------- */
 
-  const [screen, setScreen] = useState(initialScreen);
-  const [patternId, setPatternId] = useState('extended');
-  const [bpm, setBpm] = useState(initialBpm || PATTERNS.extended.defaultBpm);
-  const [durationMin, setDurationMin] = useState(initialDurationMin || 3);
-  useEffect(() => {
-    if (initialDurationMin) setDurationMin(initialDurationMin);
-  }, [initialDurationMin]);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [breathCount, setBreathCount] = useState(0);
-  const [phase, setPhase] = useState('idle'); // 'idle' | 'inhale' | 'exhale'
-  const [isPaused, setIsPaused] = useState(false);
-  const [isHolding, setIsHolding] = useState(false);
-  const [ripples, setRipples] = useState([]);
+// One lotus petal. The zero-size parent is rotated, the child slides outward as `bloom` grows.
+const Petal = ({ angle, bloom, w, h, from, to, color }) => (
+  <View style={[styles.zero, { transform: [{ rotate: `${angle}deg` }] }]}>
+    <Animated.View
+      style={{
+        position: 'absolute',
+        left: -w / 2,
+        top: -h / 2,
+        width: w,
+        height: h,
+        borderRadius: w / 2,
+        backgroundColor: color,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.55)',
+        transform: [
+          { translateY: bloom.interpolate({ inputRange: [0.7, 1.4], outputRange: [-from, -to] }) },
+          { scale: bloom.interpolate({ inputRange: [0.7, 1.4], outputRange: [0.65, 1.05] }) },
+        ],
+      }}
+    />
+  </View>
+);
 
-  // Interactive fireflies/sparks in water
-  const [fireflies, setFireflies] = useState(() =>
-    Array.from({ length: 6 }, (_, i) => ({
-      id: i,
-      x: Math.random() * width,
-      y: height * 0.15 + Math.random() * height * 0.5,
-      size: 4 + Math.random() * 6,
-      opacity: 0.3 + Math.random() * 0.5,
-      speed: 0.4 + Math.random() * 0.6,
-      angle: Math.random() * Math.PI * 2,
-    }))
-  );
-
-  // Animated values
-  const bloom = useRef(new Animated.Value(0)).current; // 0 closed -> 1 open
-  const phaseProgress = useRef(new Animated.Value(0)).current; // 0 -> 1
-  const phaseTextOpacity = useRef(new Animated.Value(1)).current;
-  const pulseRingScale = useRef(new Animated.Value(1)).current;
-  const screenFade = useRef(new Animated.Value(1)).current;
-  const touchGlow = useRef(new Animated.Value(0)).current;
-
-  const tickRef = useRef(null);
-  const ambientRef = useRef(null);
-  const isPressedRef = useRef(false);
-  const pausedRef = useRef(false);
-  const patternRef = useRef(patternId);
-  const bpmRef = useRef(bpm);
-  const currentPhaseDurationRef = useRef(0);
-
-  const pattern = PATTERNS[patternId];
-  const totalSeconds = durationMin * 60;
-
-  useEffect(() => { patternRef.current = patternId; }, [patternId]);
-  useEffect(() => { bpmRef.current = bpm; }, [bpm]);
-  useEffect(() => { pausedRef.current = isPaused; }, [isPaused]);
-
-  const computeDurations = () => {
-    const pat = PATTERNS[patternRef.current];
-    const periodMs = (60 / bpmRef.current) * 1000;
-    return {
-      inhaleMs: periodMs * pat.inhaleRatio,
-      exhaleMs: periodMs * pat.exhaleRatio,
-    };
-  };
-
-  // Idle pulse animation for touch guide
-  useEffect(() => {
-    if (phase === 'idle' && !isPaused) {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseRingScale, {
-            toValue: 1.25,
-            duration: 1400,
-            easing: Easing.inOut(Easing.ease),
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulseRingScale, {
-            toValue: 1.0,
-            duration: 1400,
-            easing: Easing.inOut(Easing.ease),
-            useNativeDriver: true,
-          }),
-        ])
-      ).start();
-    } else {
-      pulseRingScale.stopAnimation();
-      pulseRingScale.setValue(1);
-    }
-  }, [phase, isPaused]);
-
-  // Overall session timer
-  useEffect(() => {
-    if (screen !== 'session') return;
-    tickRef.current = setInterval(() => {
-      if (pausedRef.current) return;
-      setElapsedSeconds(prev => {
-        const next = prev + 1;
-        if (next >= totalSeconds) {
-          clearInterval(tickRef.current);
-          setScreen('complete');
-        }
-        return next;
-      });
-    }, 1000);
-    return () => clearInterval(tickRef.current);
-  }, [screen, totalSeconds]);
-
-  // Ambient pond animation loop: fireflies movement & ripple decay
-  useEffect(() => {
-    ambientRef.current = setInterval(() => {
-      setFireflies(prev =>
-        prev.map(f => {
-          const newAngle = f.angle + (Math.random() - 0.5) * 0.2;
-          let nx = f.x + Math.cos(newAngle) * f.speed;
-          let ny = f.y + Math.sin(newAngle) * f.speed;
-          if (nx < 10) nx = width - 20;
-          if (nx > width - 10) nx = 20;
-          if (ny < height * 0.1) ny = height * 0.65;
-          if (ny > height * 0.7) ny = height * 0.15;
-          return { ...f, x: nx, y: ny, angle: newAngle };
-        })
-      );
-
-      setRipples(prev =>
-        prev
-          .map(r => ({
-            ...r,
-            radius: r.radius + (r.speed || 1.4),
-            opacity: r.opacity - (r.fadeRate || 0.012),
-          }))
-          .filter(r => r.opacity > 0)
-      );
-    }, AMBIENT_TICK_MS);
-
-    return () => clearInterval(ambientRef.current);
-  }, []);
-
-  const triggerHaptic = (type = 'light') => {
-    if (Platform.OS !== 'web') {
-      try {
-        if (type === 'heavy') Vibration.vibrate(15);
-        else Vibration.vibrate(8);
-      } catch (e) {}
-    }
-  };
-
-  const addRipple = (x, y, color = COLORS.rippleTouch, initialRadius = 15, speed = 1.6, fadeRate = 0.015) => {
-    setRipples(prev => [
-      ...prev.slice(-12),
-      { id: Math.random(), x, y, radius: initialRadius, opacity: 0.7, color, speed, fadeRate },
-    ]);
-  };
-
-  const crossfadePhaseText = () => {
-    Animated.sequence([
-      Animated.timing(phaseTextOpacity, { toValue: 0, duration: 100, useNativeDriver: true }),
-      Animated.timing(phaseTextOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
-    ]).start();
-  };
-
-  const startExhale = () => {
-    setPhase('exhale');
-    crossfadePhaseText();
-    const { exhaleMs } = computeDurations();
-    currentPhaseDurationRef.current = exhaleMs;
-
-    addRipple(width / 2, height * 0.42, COLORS.rippleOut, 20, 2.0, 0.01);
-
-    phaseProgress.setValue(0);
-    Animated.timing(phaseProgress, {
-      toValue: 1,
-      duration: exhaleMs,
-      easing: Easing.linear,
-      useNativeDriver: false,
-    }).start();
-
-    Animated.timing(bloom, {
-      toValue: 0,
-      duration: exhaleMs,
-      easing: Easing.out(Easing.quad),
-      useNativeDriver: false,
-    }).start(({ finished }) => {
-      if (!finished) return;
-      setBreathCount(c => c + 1);
-      triggerHaptic('heavy');
-      setPhase('idle');
-      if (isPressedRef.current && !pausedRef.current) {
-        startInhale();
-      }
-    });
-  };
-
-  const startInhale = () => {
-    setPhase('inhale');
-    crossfadePhaseText();
-    const { inhaleMs } = computeDurations();
-    currentPhaseDurationRef.current = inhaleMs;
-    triggerHaptic('light');
-
-    addRipple(width / 2, height * 0.42, COLORS.rippleIn, 25, 2.4, 0.012);
-
-    phaseProgress.setValue(0);
-    Animated.timing(phaseProgress, {
-      toValue: 1,
-      duration: inhaleMs,
-      easing: Easing.linear,
-      useNativeDriver: false,
-    }).start();
-
-    Animated.timing(bloom, {
-      toValue: 1,
-      duration: inhaleMs,
-      easing: Easing.inOut(Easing.ease),
-      useNativeDriver: false,
-    }).start(({ finished }) => {
-      if (finished) {
-        startExhale();
-      }
-    });
-  };
-
-  const handlePressIn = (evt) => {
-    isPressedRef.current = true;
-    setIsHolding(true);
-
-    if (evt && evt.nativeEvent) {
-      addRipple(evt.nativeEvent.pageX, evt.nativeEvent.pageY, COLORS.petalOuter, 10, 2.2);
-    }
-
-    Animated.timing(touchGlow, { toValue: 1, duration: 300, useNativeDriver: true }).start();
-
-    if (pausedRef.current) return;
-    if (phase === 'idle') {
-      startInhale();
-    }
-  };
-
-  const handlePressOut = () => {
-    isPressedRef.current = false;
-    setIsHolding(false);
-    Animated.timing(touchGlow, { toValue: 0, duration: 400, useNativeDriver: true }).start();
-
-    if (phase === 'inhale') {
-      bloom.stopAnimation(() => startExhale());
-    }
-  };
-
-  const handlePondTap = (evt) => {
-    if (evt && evt.nativeEvent) {
-      const { pageX, pageY } = evt.nativeEvent;
-      addRipple(pageX, pageY, COLORS.rippleTouch, 12, 1.8, 0.02);
-      triggerHaptic('light');
-    }
-  };
-
-  const togglePause = () => {
-    const goingToPause = !isPaused;
-    if (goingToPause) {
-      bloom.stopAnimation();
-      phaseProgress.stopAnimation();
-    } else if (phase !== 'idle') {
-      if (phase === 'inhale') startInhale();
-      else if (phase === 'exhale') startExhale();
-    }
-    pausedRef.current = goingToPause;
-    setIsPaused(goingToPause);
-  };
-
-  const fadeTo = (next) => {
-    Animated.timing(screenFade, { toValue: 0, duration: 150, useNativeDriver: true }).start(() => {
-      setScreen(next);
-      Animated.timing(screenFade, { toValue: 1, duration: 250, useNativeDriver: true }).start();
-    });
-  };
-
-  const startSession = () => {
-    setElapsedSeconds(0);
-    setBreathCount(0);
-    setPhase('idle');
-    setIsPaused(false);
-    pausedRef.current = false;
-    isPressedRef.current = false;
-    bloom.setValue(0);
-    phaseProgress.setValue(0);
-    fadeTo('session');
-  };
-
-  const endSessionEarly = () => {
-    clearInterval(tickRef.current);
-    fadeTo('complete');
-  };
-
-  const selectPattern = (id) => {
-    setPatternId(id);
-    setBpm(PATTERNS[id].defaultBpm);
-  };
-
-  // Interpolated values for lotus blooming
-  const petalColorOuter = bloom.interpolate({
-    inputRange: [0, 0.5, 1],
-    outputRange: ['#3E8261', '#F472B6', '#EC4899'],
-  });
-  const petalColorInner = bloom.interpolate({
-    inputRange: [0, 0.5, 1],
-    outputRange: ['#2F664C', '#FB7185', '#F43F5E'],
-  });
-  const lotusScale = bloom.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.85, 1.25],
-  });
-  const lotusGlowRadius = bloom.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 35],
-  });
-
-  const phaseInstruction =
-    phase === 'inhale'
-      ? '🫁 Breathing in… (Lotus Blooming)'
-      : phase === 'exhale'
-      ? '💨 Breathing out… (Lotus Settling)'
-      : '✨ Touch & Hold the Lily to Breathe In';
-
-  // Dynamic Theme Colors for LilyPond
-  const pondBg = isDarkMode ? COLORS.waterDark : '#E6F4F0';
-  const padBg = isDarkMode ? COLORS.padDark : '#A7F3D0';
-  const padBorderColor = isDarkMode ? COLORS.padBorder : '#34D399';
-  const hudBgColor = isDarkMode ? 'rgba(4, 29, 23, 0.92)' : 'rgba(255, 255, 255, 0.95)';
-  const hudBorderColor = isDarkMode ? 'rgba(255, 255, 255, 0.08)' : 'rgba(6, 78, 59, 0.15)';
-  const mainTxtColor = isDarkMode ? COLORS.text : '#064E3B';
-  const dimTxtColor = isDarkMode ? COLORS.textDim : '#047857';
-
-  useEffect(() => {
-    if (screen === 'setup') {
-      setScreen('session');
-    }
-  }, [screen]);
-
-  if (screen === 'setup') return null;
-
-  // =========================================================================
-  // SESSION SCREEN
-  // =========================================================================
-  const progressPercent = Math.min(100, Math.round((elapsedSeconds / totalSeconds) * 100));
-
+// One bead on the breath ring. Lights up once the ring progress passes its position.
+const RingDot = ({ index, progress, color }) => {
+  const t = index / RING_DOTS;
   return (
-    <View style={[styles.sessionContainer, { backgroundColor: pondBg }]}>
-      {/* Interactive Water Pond Surface */}
-      <TouchableWithoutFeedback onPress={handlePondTap}>
-        <View style={styles.pondCanvas}>
-          {/* Ambient Floating Fireflies */}
-          {fireflies.map(f => (
-            <View
-              key={f.id}
-              pointerEvents="none"
-              style={[
-                styles.firefly,
-                {
-                  left: f.x,
-                  top: f.y,
-                  width: f.size,
-                  height: f.size,
-                  borderRadius: f.size / 2,
-                  opacity: f.opacity,
-                },
-              ]}
-            />
-          ))}
-
-          {/* Dynamic Water Ripples */}
-          {ripples.map(r => (
-            <View
-              key={r.id}
-              pointerEvents="none"
-              style={{
-                position: 'absolute',
-                left: (r.x || width / 2) - r.radius,
-                top: (r.y || height * 0.4) - r.radius,
-                width: r.radius * 2,
-                height: r.radius * 2,
-                borderRadius: r.radius,
-                borderWidth: 1.5,
-                borderColor: r.color,
-                opacity: r.opacity,
-              }}
-            />
-          ))}
-
-          {/* Floating Organic Lily Pad */}
-          <View style={styles.lilyPad}>
-            <View style={styles.lilyPadNotch} />
-            <View style={styles.lilyPadVein1} />
-            <View style={styles.lilyPadVein2} />
-          </View>
-
-          {/* Idle Pulse Guidance Ring around Lotus */}
-          {phase === 'idle' && (
-            <Animated.View
-              pointerEvents="none"
-              style={[
-                styles.pulseGuideRing,
-                {
-                  transform: [{ scale: pulseRingScale }],
-                },
-              ]}
-            />
-          )}
-
-          {/* Interactive Touch Target & Glowing Lotus Centerpiece */}
-          <TouchableWithoutFeedback onPressIn={handlePressIn} onPressOut={handlePressOut}>
-            <Animated.View
-              style={[
-                styles.lotusContainer,
-                {
-                  transform: [{ scale: lotusScale }],
-                  shadowRadius: lotusGlowRadius,
-                },
-              ]}
-            >
-              {/* Touch Aura Glow */}
-              <Animated.View
-                style={[
-                  styles.lotusGlowAura,
-                  {
-                    opacity: touchGlow,
-                    backgroundColor: COLORS.petalOuter,
-                  },
-                ]}
-              />
-
-              {/* Outer Blooming Petals (6 Petals) */}
-              {Array.from({ length: PETAL_COUNT_OUTER }).map((_, i) => {
-                const angle = (360 / PETAL_COUNT_OUTER) * i;
-                return (
-                  <Animated.View
-                    key={`outer-${i}`}
-                    style={[
-                      styles.petalOuter,
-                      {
-                        backgroundColor: petalColorOuter,
-                        transform: [
-                          { rotate: `${angle}deg` },
-                          {
-                            translateY: bloom.interpolate({
-                              inputRange: [0, 1],
-                              outputRange: [-12, -42],
-                            }),
-                          },
-                          {
-                            scale: bloom.interpolate({
-                              inputRange: [0, 1],
-                              outputRange: [0.6, 1.2],
-                            }),
-                          },
-                        ],
-                      },
-                    ]}
-                  />
-                );
-              })}
-
-              {/* Inner Blooming Petals (6 Petals offset) */}
-              {Array.from({ length: PETAL_COUNT_INNER }).map((_, i) => {
-                const angle = (360 / PETAL_COUNT_INNER) * i + 30;
-                return (
-                  <Animated.View
-                    key={`inner-${i}`}
-                    style={[
-                      styles.petalInner,
-                      {
-                        backgroundColor: petalColorInner,
-                        transform: [
-                          { rotate: `${angle}deg` },
-                          {
-                            translateY: bloom.interpolate({
-                              inputRange: [0, 1],
-                              outputRange: [-8, -30],
-                            }),
-                          },
-                          {
-                            scale: bloom.interpolate({
-                              inputRange: [0, 1],
-                              outputRange: [0.5, 1.0],
-                            }),
-                          },
-                        ],
-                      },
-                    ]}
-                  />
-                );
-              })}
-
-              {/* Glowing Golden Lotus Center Core */}
-              <View style={styles.lotusCore}>
-                <View style={styles.lotusCoreInner} />
-                {/* Glowing Stamens */}
-                {[0, 60, 120, 180, 240, 300].map(deg => (
-                  <View
-                    key={deg}
-                    style={[
-                      styles.stamenDot,
-                      {
-                        transform: [
-                          { rotate: `${deg}deg` },
-                          { translateY: -10 },
-                        ],
-                      },
-                    ]}
-                  />
-                ))}
-              </View>
-            </Animated.View>
-          </TouchableWithoutFeedback>
-        </View>
-      </TouchableWithoutFeedback>
-
-      {/* Real-time Interactive Breathing Control Banner */}
-      <View style={[styles.hudContainer, { backgroundColor: isDarkMode ? 'rgba(4, 29, 23, 0.88)' : (theme.bgSecondary || '#FFFFFF'), borderColor: theme.border }]}>
-        {/* Phase Instruction Card */}
-        <Animated.View style={[styles.instructionCard, { opacity: phaseTextOpacity }]}>
-          <Text style={[styles.instructionText, { color: isDarkMode ? COLORS.text : (theme.textPrimary || '#0F172A') }]}>{phaseInstruction}</Text>
-        </Animated.View>
-
-        {/* Phase Rhythm Progress Bar */}
-        <View style={styles.phaseBarTrack}>
-          <Animated.View
-            style={[
-              styles.phaseBarFill,
-              {
-                width: phaseProgress.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: ['0%', '100%'],
-                }),
-                backgroundColor: phase === 'inhale' ? COLORS.accentLight : COLORS.rippleOut,
-              },
-            ]}
-          />
-        </View>
-
-        {/* Breath Count & Realtime Stats */}
-        <View style={styles.statsBadgeRow}>
-          <View style={[styles.badgePill, { backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.06)' : (theme.bgPrimary || '#F8FAFC'), borderColor: theme.border }]}>
-            <Ionicons name="sparkles" size={14} color={COLORS.accentLight} style={{ marginRight: 5 }} />
-            <Text style={[styles.badgePillTxt, { color: isDarkMode ? COLORS.text : (theme.textPrimary || '#0F172A') }]}>{breathCount} Breaths Completed</Text>
-          </View>
-          <View style={[styles.badgePill, { backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.06)' : (theme.bgPrimary || '#F8FAFC'), borderColor: theme.border }]}>
-            <Ionicons name="speedometer-outline" size={14} color={isDarkMode ? COLORS.textDim : theme.textSecondary} style={{ marginRight: 5 }} />
-            <Text style={[styles.badgePillTxt, { color: isDarkMode ? COLORS.text : (theme.textPrimary || '#0F172A') }]}>{bpm} BPM</Text>
-          </View>
-        </View>
-
-        {/* Interactive BPM Pace Stepper */}
-        <View style={[styles.stepperContainer, { backgroundColor: isDarkMode ? 'rgba(0, 0, 0, 0.25)' : (theme.bgPrimary || '#F8FAFC'), borderColor: theme.border }]}>
-          <TouchableOpacity
-            onPress={() => {
-              setBpm(b => Math.max(4.5, Math.round((b - 0.5) * 10) / 10));
-              triggerHaptic('light');
-            }}
-            style={styles.stepperBtn}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="remove" size={18} color={isDarkMode ? COLORS.text : theme.textPrimary} />
-          </TouchableOpacity>
-
-          <Text style={[styles.stepperReadout, { color: isDarkMode ? COLORS.textDim : (theme.textSecondary || '#334155') }]}>{bpm.toFixed(1)} bpm pace</Text>
-
-          <TouchableOpacity
-            onPress={() => {
-              setBpm(b => Math.min(7.0, Math.round((b + 0.5) * 10) / 10));
-              triggerHaptic('light');
-            }}
-            style={styles.stepperBtn}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="add" size={18} color={isDarkMode ? COLORS.text : theme.textPrimary} />
-          </TouchableOpacity>
-        </View>
-
-        {/* Bottom Quick Controls */}
-        <View style={styles.quickActionRow}>
-          <TouchableOpacity onPress={togglePause} style={[styles.actionBtn, { backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.05)' : (theme.bgPrimary || '#F8FAFC') }]} activeOpacity={0.8}>
-            <Ionicons name={isPaused ? 'play-circle-outline' : 'pause-circle-outline'} size={20} color={isDarkMode ? COLORS.text : theme.textPrimary} />
-            <Text style={[styles.actionBtnTxt, { color: isDarkMode ? COLORS.text : (theme.textPrimary || '#0F172A') }]}>{isPaused ? 'Resume' : 'Pause'}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity onPress={endSessionEarly} style={styles.actionBtn} activeOpacity={0.8}>
-            <Ionicons name="stop-circle-outline" size={20} color="#F87171" />
-            <Text style={[styles.actionBtnTxt, { color: '#F87171' }]}>End Session</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+    <View style={[styles.zero, { transform: [{ rotate: `${(index / RING_DOTS) * 360}deg` }] }]}>
+      <Animated.View
+        style={[
+          styles.ringDot,
+          {
+            top: -RING_R - 3,
+            backgroundColor: color,
+            opacity: progress.interpolate({
+              inputRange: [t, t + 0.02],
+              outputRange: [0.22, 1],
+              extrapolate: 'clamp',
+            }),
+          },
+        ]}
+      />
     </View>
   );
 };
 
-export const LilyPondGame = LilyBreathingGame;
-export default LilyBreathingGame;
+export const LilyPondGame = () => {
+  const [breathPhase, setBreathPhase] = useState('inhale');
+  const [cycleCount, setCycleCount] = useState(0);
+  const [secondsLeft, setSecondsLeft] = useState(4);
+  const [ripples, setRipples] = useState([]);
+  const [engaged, setEngaged] = useState(false);
+  const [flow, setFlow] = useState(0);
+  const [sessionDone, setSessionDone] = useState(false);
+
+  // Fireflies that gather on the inhale and scatter on the exhale
+  const [fireflies] = useState(() =>
+    Array.from({ length: 14 }, () => {
+      const a = rand(0, Math.PI * 2);
+      const near = rand(70, 115);
+      const far = rand(FAR * 0.75, FAR);
+      return {
+        id: uid(),
+        size: rand(5, 9),
+        color: Math.random() > 0.5 ? '#FDE68A' : '#FFFFFF',
+        fx: Math.cos(a) * far,
+        fy: Math.sin(a) * far,
+        nx: Math.cos(a) * near,
+        ny: Math.sin(a) * near,
+        tw: new Animated.Value(rand(0.25, 1)),
+      };
+    })
+  );
+
+  // Animated values
+  const bloomScale = useRef(new Animated.Value(0.7)).current;
+  const bloomGlow = useRef(new Animated.Value(0.3)).current;
+  const phaseAnim = useRef(new Animated.Value(1)).current;
+  const gather = useRef(new Animated.Value(0)).current;
+  const ringProgress = useRef(new Animated.Value(0)).current;
+  const phaseProgress = useRef(new Animated.Value(0)).current;
+  const spin = useRef(new Animated.Value(0)).current;
+  const swirl = useRef(new Animated.Value(0)).current;
+  const touchPos = useRef(new Animated.ValueXY({ x: -200, y: -200 })).current;
+  const touchScale = useRef(new Animated.Value(0.5)).current;
+  const touchOpacity = useRef(new Animated.Value(0)).current;
+
+  // Refs for the "flow" sync score
+  const touchingRef = useRef(false);
+  const engagedRef = useRef(false);
+  const phaseRef = useRef('inhale');
+  const syncRef = useRef({ good: 0, total: 0 });
+  phaseRef.current = breathPhase;
+
+  /* ---------- ambient loops ---------- */
+  useEffect(() => {
+    const loops = [
+      Animated.loop(
+        Animated.timing(spin, { toValue: 1, duration: 90000, easing: Easing.linear, useNativeDriver: true })
+      ),
+      Animated.loop(
+        Animated.timing(swirl, { toValue: 1, duration: 60000, easing: Easing.linear, useNativeDriver: true })
+      ),
+      ...fireflies.map((f) =>
+        Animated.loop(
+          Animated.sequence([
+            Animated.timing(f.tw, { toValue: 1, duration: rand(1200, 2600), useNativeDriver: true }),
+            Animated.timing(f.tw, { toValue: 0.25, duration: rand(1200, 2600), useNativeDriver: true }),
+          ])
+        )
+      ),
+    ];
+    loops.forEach((l) => l.start());
+    return () => loops.forEach((l) => l.stop());
+  }, []);
+
+  /* ---------- 4-7-8 breathing engine (same timing logic as before) ---------- */
+  useEffect(() => {
+    if (sessionDone) return undefined;
+    let timer;
+
+    Animated.sequence([
+      Animated.timing(phaseAnim, { toValue: 1.12, duration: 200, useNativeDriver: true }),
+      Animated.timing(phaseAnim, { toValue: 1, duration: 150, useNativeDriver: true }),
+    ]).start();
+
+    switch (breathPhase) {
+      case 'inhale': {
+        Animated.parallel([
+          Animated.timing(bloomScale, {
+            toValue: 1.4,
+            duration: BREATH_TIMING.inhale,
+            easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+            useNativeDriver: true,
+          }),
+          Animated.timing(bloomGlow, {
+            toValue: 1,
+            duration: BREATH_TIMING.inhale,
+            useNativeDriver: true,
+          }),
+        ]).start();
+        timer = setTimeout(() => setBreathPhase('hold'), BREATH_TIMING.inhale);
+        break;
+      }
+      case 'hold': {
+        timer = setTimeout(() => setBreathPhase('exhale'), BREATH_TIMING.hold);
+        break;
+      }
+      case 'exhale': {
+        Animated.parallel([
+          Animated.timing(bloomScale, {
+            toValue: 0.7,
+            duration: BREATH_TIMING.exhale,
+            easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+            useNativeDriver: true,
+          }),
+          Animated.timing(bloomGlow, {
+            toValue: 0.3,
+            duration: BREATH_TIMING.exhale,
+            useNativeDriver: true,
+          }),
+        ]).start();
+        timer = setTimeout(() => {
+          setBreathPhase('rest');
+          setCycleCount((c) => c + 1);
+        }, BREATH_TIMING.exhale);
+        break;
+      }
+      case 'rest': {
+        timer = setTimeout(() => setBreathPhase('inhale'), BREATH_TIMING.rest);
+        break;
+      }
+      default:
+        break;
+    }
+
+    return () => clearTimeout(timer);
+  }, [breathPhase, sessionDone]);
+
+  /* ---------- visuals that follow the phase: ring, timeline, fireflies, countdown ---------- */
+  useEffect(() => {
+    if (sessionDone) return undefined;
+    const dur = BREATH_TIMING[breathPhase];
+
+    phaseProgress.setValue(0);
+    Animated.timing(phaseProgress, {
+      toValue: 1,
+      duration: dur,
+      easing: Easing.linear,
+      useNativeDriver: false,
+    }).start();
+
+    if (breathPhase === 'inhale') {
+      ringProgress.setValue(0);
+      Animated.timing(ringProgress, { toValue: 1, duration: dur, easing: Easing.linear, useNativeDriver: false }).start();
+      Animated.timing(gather, { toValue: 1, duration: dur, easing: Easing.inOut(Easing.quad), useNativeDriver: true }).start();
+    } else if (breathPhase === 'hold') {
+      ringProgress.setValue(1);
+    } else if (breathPhase === 'exhale') {
+      Animated.timing(ringProgress, { toValue: 0, duration: dur, easing: Easing.linear, useNativeDriver: false }).start();
+      Animated.timing(gather, { toValue: 0, duration: dur, easing: Easing.inOut(Easing.quad), useNativeDriver: true }).start();
+    } else {
+      ringProgress.setValue(0);
+    }
+
+    if (breathPhase !== 'rest') Vibration.vibrate(15); // soft cue at each phase change
+
+    setSecondsLeft(Math.round(dur / 1000));
+    const iv = setInterval(() => setSecondsLeft((s) => Math.max(1, s - 1)), 1000);
+    return () => clearInterval(iv);
+  }, [breathPhase, sessionDone]);
+
+  /* ---------- session end ---------- */
+  useEffect(() => {
+    if (cycleCount >= SESSION_CYCLES) setSessionDone(true);
+  }, [cycleCount]);
+
+  const restartSession = () => {
+    syncRef.current = { good: 0, total: 0 };
+    setFlow(0);
+    setCycleCount(0);
+    setSessionDone(false);
+  };
+
+  /* ---------- flow score: finger down while breathing in/holding, finger up while breathing out ---------- */
+  useEffect(() => {
+    const iv = setInterval(() => {
+      const p = phaseRef.current;
+      if (!engagedRef.current || p === 'rest') return;
+      const inSync = p === 'exhale' ? !touchingRef.current : touchingRef.current;
+      syncRef.current.total += 1;
+      if (inSync) syncRef.current.good += 1;
+      const pct = Math.round((syncRef.current.good / syncRef.current.total) * 100);
+      setFlow((prev) => (prev === pct ? prev : pct));
+    }, 250);
+    return () => clearInterval(iv);
+  }, []);
+
+  /* ---------- touch: press and hold the water like a lung ---------- */
+  const addRipple = (x, y) => {
+    const r = { id: uid(), x, y, anim: new Animated.Value(0) };
+    setRipples((prev) => [...prev.slice(-5), r]);
+    Animated.timing(r.anim, {
+      toValue: 1,
+      duration: 1400,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+    setTimeout(() => setRipples((prev) => prev.filter((i) => i.id !== r.id)), 1500);
+  };
+
+  const onGrant = (e) => {
+    const { pageX, pageY } = e.nativeEvent;
+    touchingRef.current = true;
+    engagedRef.current = true;
+    setEngaged(true);
+    Vibration.vibrate(10);
+    touchPos.setValue({ x: pageX - 35, y: pageY - 35 });
+    touchScale.setValue(0.5);
+    Animated.parallel([
+      Animated.spring(touchScale, { toValue: 1, friction: 6, useNativeDriver: true }),
+      Animated.timing(touchOpacity, { toValue: 1, duration: 150, useNativeDriver: true }),
+    ]).start();
+    addRipple(pageX, pageY);
+  };
+
+  const onMove = (e) => {
+    const { pageX, pageY } = e.nativeEvent;
+    touchPos.setValue({ x: pageX - 35, y: pageY - 35 });
+  };
+
+  const onRelease = (e) => {
+    const { pageX, pageY } = e.nativeEvent;
+    touchingRef.current = false;
+    Animated.parallel([
+      Animated.timing(touchScale, { toValue: 1.6, duration: 500, useNativeDriver: true }),
+      Animated.timing(touchOpacity, { toValue: 0, duration: 500, useNativeDriver: true }),
+    ]).start();
+    addRipple(pageX, pageY);
+  };
+
+  /* ---------- render ---------- */
+  const ui = PHASE_UI[breathPhase];
+  const phaseIdx = PHASE_ORDER.indexOf(breathPhase);
+  const spinDeg = spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+  const swirlDeg = swirl.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-360deg'] });
+
+  const segments = [
+    { key: 'inhale', flex: 4, label: '4s in' },
+    { key: 'hold', flex: 7, label: '7s hold' },
+    { key: 'exhale', flex: 8, label: '8s out' },
+  ];
+
+  return (
+    <View
+      style={styles.container}
+      onStartShouldSetResponder={() => !sessionDone}
+      onResponderGrant={onGrant}
+      onResponderMove={onMove}
+      onResponderRelease={onRelease}
+      onResponderTerminate={onRelease}
+    >
+      {/* Background image (the only thing kept from the old design) */}
+      <ImageBackground
+        source={require('../assets/zen_lotus_bg.png')}
+        style={styles.bgImage}
+        resizeMode="cover"
+      >
+        <View style={styles.overlayShade} pointerEvents="none" />
+
+        {/* Fireflies: drift in on the inhale, scatter on the exhale */}
+        <View style={[styles.anchor, { left: CX, top: CY }]} pointerEvents="none">
+          <Animated.View style={[styles.zero, { transform: [{ rotate: swirlDeg }] }]}>
+            {fireflies.map((f) => (
+              <Animated.View
+                key={f.id}
+                style={{
+                  position: 'absolute',
+                  left: -f.size / 2,
+                  top: -f.size / 2,
+                  width: f.size,
+                  height: f.size,
+                  borderRadius: f.size / 2,
+                  backgroundColor: f.color,
+                  shadowColor: f.color,
+                  shadowOpacity: 1,
+                  shadowRadius: 6,
+                  shadowOffset: { width: 0, height: 0 },
+                  elevation: 4,
+                  opacity: f.tw,
+                  transform: [
+                    { translateX: gather.interpolate({ inputRange: [0, 1], outputRange: [f.fx, f.nx] }) },
+                    { translateY: gather.interpolate({ inputRange: [0, 1], outputRange: [f.fy, f.ny] }) },
+                  ],
+                }}
+              />
+            ))}
+          </Animated.View>
+        </View>
+
+        {/* Water ripples */}
+        {ripples.map((rip) => (
+          <Animated.View
+            key={rip.id}
+            pointerEvents="none"
+            style={[
+              styles.rippleRing,
+              {
+                left: rip.x - 50,
+                top: rip.y - 50,
+                opacity: rip.anim.interpolate({ inputRange: [0, 1], outputRange: [0.7, 0] }),
+                transform: [{ scale: rip.anim.interpolate({ inputRange: [0, 1], outputRange: [0.3, 2.6] }) }],
+              },
+            ]}
+          />
+        ))}
+
+        {/* The breathing lotus */}
+        <View style={[styles.anchor, { left: CX, top: CY }]} pointerEvents="none">
+          {/* Halo */}
+          <Animated.View
+            style={[
+              styles.halo,
+              {
+                backgroundColor: ui.color,
+                opacity: bloomGlow.interpolate({ inputRange: [0.3, 1], outputRange: [0.1, 0.3] }),
+                transform: [{ scale: bloomScale }],
+              },
+            ]}
+          />
+
+          {/* Breath ring: fills on inhale, full on hold, drains on exhale */}
+          {Array.from({ length: RING_DOTS }).map((_, i) => (
+            <RingDot key={i} index={i} progress={ringProgress} color={ui.color} />
+          ))}
+
+          {/* A single bead circles the ring while you hold */}
+          {breathPhase === 'hold' && (
+            <Animated.View
+              style={[
+                styles.zero,
+                {
+                  transform: [
+                    {
+                      rotate: phaseProgress.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: ['0deg', '720deg'],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+            >
+              <View style={styles.comet} />
+            </Animated.View>
+          )}
+
+          {/* Petals */}
+          <Animated.View style={[styles.zero, { transform: [{ rotate: spinDeg }] }]}>
+            {Array.from({ length: 8 }).map((_, i) => (
+              <Petal key={`o${i}`} angle={i * 45} bloom={bloomScale} w={40} h={84} from={16} to={46} color="rgba(249,168,212,0.8)" />
+            ))}
+            {Array.from({ length: 8 }).map((_, i) => (
+              <Petal key={`m${i}`} angle={i * 45 + 22.5} bloom={bloomScale} w={34} h={70} from={10} to={32} color="rgba(251,207,232,0.9)" />
+            ))}
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Petal key={`i${i}`} angle={i * 60 + 10} bloom={bloomScale} w={26} h={50} from={4} to={16} color="rgba(255,241,246,0.95)" />
+            ))}
+          </Animated.View>
+
+          {/* Core with the live count */}
+          <Animated.View
+            style={[
+              styles.core,
+              { borderColor: ui.color, transform: [{ scale: phaseAnim }] },
+            ]}
+          >
+            <Text style={styles.coreNumber}>{breathPhase === 'rest' ? '•' : secondsLeft}</Text>
+          </Animated.View>
+        </View>
+
+        {/* Finger orb */}
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.touchOrb,
+            {
+              borderColor: ui.color,
+              opacity: touchOpacity,
+              transform: [...touchPos.getTranslateTransform(), { scale: touchScale }],
+            },
+          ]}
+        />
+
+        {/* Top bar: session progress and flow */}
+        <View style={styles.topBar} pointerEvents="none">
+          <View style={styles.pips}>
+            {Array.from({ length: SESSION_CYCLES }).map((_, i) => (
+              <View key={i} style={[styles.pip, i < cycleCount && styles.pipFilled]} />
+            ))}
+          </View>
+          {engaged && <Text style={styles.flowText}>Flow {flow}%</Text>}
+        </View>
+
+        {/* First-time hint */}
+        {!engaged && !sessionDone && (
+          <View style={styles.hint} pointerEvents="none">
+            <Text style={styles.hintText}>Press and hold the water as you breathe in.</Text>
+            <Text style={styles.hintText}>Lift your finger as you breathe out.</Text>
+          </View>
+        )}
+
+        {/* Bottom panel: phase instruction and 4-7-8 timeline */}
+        <View style={styles.panel} pointerEvents="none">
+          <Text style={[styles.panelTitle, { color: ui.color }]}>{ui.title}</Text>
+          <Text style={styles.panelSub}>{ui.sub}</Text>
+
+          <View style={styles.timeline}>
+            {segments.map((seg, i) => {
+              const done = i < phaseIdx;
+              const active = i === phaseIdx;
+              return (
+                <View key={seg.key} style={{ flex: seg.flex }}>
+                  <View style={styles.track}>
+                    {done && <View style={[styles.fill, { width: '100%', backgroundColor: PHASE_UI[seg.key].color }]} />}
+                    {active && (
+                      <Animated.View
+                        style={[
+                          styles.fill,
+                          {
+                            backgroundColor: ui.color,
+                            width: phaseProgress.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }),
+                          },
+                        ]}
+                      />
+                    )}
+                  </View>
+                  <Text style={[styles.segLabel, active && { color: '#FFFFFF' }]}>{seg.label}</Text>
+                </View>
+              );
+            })}
+          </View>
+        </View>
+
+        {/* Session complete */}
+        {sessionDone && (
+          <View style={styles.doneOverlay}>
+            <View style={styles.doneCard}>
+              <Text style={styles.doneEmoji}>🪷</Text>
+              <Text style={styles.doneTitle}>Session complete</Text>
+              <Text style={styles.doneBody}>
+                {SESSION_CYCLES} rounds of 4-7-8 breathing. Notice how your shoulders and jaw feel.
+              </Text>
+              {engaged && <Text style={styles.doneFlow}>Flow {flow}%</Text>}
+              <TouchableOpacity style={styles.doneButton} onPress={restartSession} activeOpacity={0.8}>
+                <Text style={styles.doneButtonText}>Breathe again</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+      </ImageBackground>
+    </View>
+  );
+};
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#041D17',
+  },
+  bgImage: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+  },
+  overlayShade: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(4, 29, 23, 0.3)',
+  },
+
+  // zero-size anchors used for radial layouts
+  anchor: {
+    position: 'absolute',
+    width: 0,
+    height: 0,
+  },
+  zero: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    width: 0,
+    height: 0,
+  },
+
+  halo: {
+    position: 'absolute',
+    left: -130,
+    top: -130,
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+  },
+  ringDot: {
+    position: 'absolute',
+    left: -3,
+    top: -3,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  comet: {
+    position: 'absolute',
+    left: -7,
+    top: -RING_R - 7,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#FFFFFF',
+    shadowOpacity: 1,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 6,
+  },
+  core: {
+    position: 'absolute',
+    left: -29,
+    top: -29,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: 'rgba(255, 236, 179, 0.95)',
+    borderWidth: 2.5,
     alignItems: 'center',
     justifyContent: 'center',
-    width: '100%',
+    elevation: 6,
   },
-  setupWrap: {
-    flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: 24,
-    width: '100%',
-    maxWidth: 480,
-    paddingVertical: 20,
+  coreNumber: {
+    fontSize: 26,
+    fontWeight: '300',
+    color: '#064E3B',
   },
-  setupTitle: {
-    color: COLORS.text,
-    fontSize: 24,
-    fontWeight: '800',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  setupSubtitle: {
-    color: COLORS.textDim,
-    fontSize: 13,
-    lineHeight: 19,
-    textAlign: 'center',
-    marginBottom: 20,
-  },
-  sectionLabel: {
-    color: COLORS.accentLight,
-    fontSize: 11,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    marginBottom: 10,
-    textAlign: 'center',
-  },
-  patternCard: {
+
+  rippleRing: {
+    position: 'absolute',
+    width: 100,
+    height: 100,
+    borderRadius: 50,
     borderWidth: 1.5,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 10,
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderColor: 'rgba(255,255,255,0.9)',
   },
-  patternCardActive: {
-    borderColor: COLORS.accent,
-    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+  touchOrb: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    borderWidth: 2,
+    backgroundColor: 'rgba(255,255,255,0.16)',
   },
-  patternCardRow: {
+
+  topBar: {
+    position: 'absolute',
+    top: 56,
+    left: 24,
+    right: 24,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 4,
   },
-  patternName: {
-    color: COLORS.text,
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  patternBlurb: {
-    color: COLORS.textDim,
-    fontSize: 12,
-    lineHeight: 16,
-    marginBottom: 6,
-  },
-  patternCitation: {
-    color: 'rgba(231, 251, 241, 0.35)',
-    fontSize: 10,
-    fontStyle: 'italic',
-  },
-  chipRow: {
+  pips: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     gap: 8,
-    justifyContent: 'center',
-    marginBottom: 12,
   },
-  chip: {
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.15)',
-    borderRadius: 20,
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+  pip: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: 'rgba(255,255,255,0.25)',
   },
-  chipActive: {
-    backgroundColor: COLORS.accent,
-    borderColor: COLORS.accent,
+  pipFilled: {
+    backgroundColor: '#F9A8D4',
   },
-  chipText: {
-    color: COLORS.text,
+  flowText: {
+    color: '#E7FBF1',
     fontSize: 13,
     fontWeight: '600',
   },
-  chipTextActive: {
-    color: '#041D17',
-    fontWeight: '800',
-  },
-  startButton: {
-    backgroundColor: COLORS.accent,
-    borderRadius: 24,
-    paddingVertical: 14,
+
+  hint: {
+    position: 'absolute',
+    top: 92,
+    left: 24,
+    right: 24,
     alignItems: 'center',
-    marginTop: 18,
-    elevation: 4,
-    shadowColor: COLORS.accent,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
   },
-  startButtonText: {
-    color: '#041D17',
-    fontSize: 16,
-    fontWeight: '900',
-    letterSpacing: 0.5,
+  hintText: {
+    color: '#FDE68A',
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'center',
+    textShadowColor: 'rgba(0,0,0,0.7)',
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 4,
   },
 
-  // SESSION STYLES
-  sessionContainer: {
-    flex: 1,
-    width: '100%',
-    backgroundColor: COLORS.waterDark,
-  },
-  pondCanvas: {
-    flex: 1,
-    width: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-    overflow: 'hidden',
-  },
-  firefly: {
+  panel: {
     position: 'absolute',
-    backgroundColor: '#6EE7B7',
-    shadowColor: '#6EE7B7',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.9,
-    shadowRadius: 6,
-  },
-  lilyPad: {
-    position: 'absolute',
-    width: 220,
-    height: 220,
-    borderRadius: 110,
-    backgroundColor: COLORS.padDark,
-    borderWidth: 2,
-    borderColor: COLORS.padBorder,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.4,
-    shadowRadius: 16,
-  },
-  lilyPadNotch: {
-    position: 'absolute',
-    top: 0,
-    right: 90,
-    width: 0,
-    height: 0,
-    borderLeftWidth: 20,
-    borderRightWidth: 20,
-    borderTopWidth: 100,
-    borderLeftColor: 'transparent',
-    borderRightColor: 'transparent',
-    borderTopColor: COLORS.waterDark,
-  },
-  lilyPadVein1: {
-    position: 'absolute',
-    top: 110,
     left: 20,
     right: 20,
-    height: 1,
-    backgroundColor: 'rgba(31, 107, 76, 0.4)',
-  },
-  lilyPadVein2: {
-    position: 'absolute',
-    left: 110,
-    top: 20,
-    bottom: 20,
-    width: 1,
-    backgroundColor: 'rgba(31, 107, 76, 0.4)',
-  },
-
-  pulseGuideRing: {
-    position: 'absolute',
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    borderWidth: 2,
-    borderColor: 'rgba(244, 114, 182, 0.4)',
-    borderStyle: 'dashed',
-  },
-  lotusContainer: {
-    width: 140,
-    height: 140,
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-    shadowColor: COLORS.petalOuter,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.8,
-  },
-  lotusGlowAura: {
-    position: 'absolute',
-    width: 160,
-    height: 160,
-    borderRadius: 80,
-  },
-  petalOuter: {
-    position: 'absolute',
-    width: 24,
-    height: 60,
-    borderRadius: 12,
-    shadowColor: COLORS.petalOuter,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 6,
-  },
-  petalInner: {
-    position: 'absolute',
-    width: 18,
-    height: 48,
-    borderRadius: 9,
-  },
-  lotusCore: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: COLORS.stamen,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: COLORS.centerCore,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.9,
-    shadowRadius: 10,
-    zIndex: 10,
-  },
-  lotusCoreInner: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: COLORS.centerCore,
-  },
-  stamenDot: {
-    position: 'absolute',
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: COLORS.centerCore,
-  },
-
-  // HUD OVERLAY STYLES
-  hudContainer: {
-    paddingHorizontal: 16,
-    paddingBottom: 10,
-    alignItems: 'center',
-    width: '100%',
-    maxWidth: 480,
-    backgroundColor: 'rgba(4, 29, 23, 0.88)',
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
+    bottom: 36,
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+    borderRadius: 28,
+    backgroundColor: 'rgba(6, 28, 24, 0.58)',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: 'rgba(255,255,255,0.12)',
   },
-  instructionCard: {
-    marginTop: 8,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 14,
-    backgroundColor: 'rgba(16, 185, 129, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.3)',
-    marginBottom: 6,
+  panelTitle: {
+    fontSize: 28,
+    fontWeight: '300',
+    letterSpacing: 0.5,
   },
-  instructionText: {
-    color: COLORS.text,
+  panelSub: {
+    color: '#E7FBF1',
     fontSize: 13,
-    fontWeight: '800',
-    textAlign: 'center',
-    letterSpacing: 0.3,
+    marginTop: 4,
+    marginBottom: 16,
   },
-  phaseBarTrack: {
-    width: '90%',
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+  timeline: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  track: {
+    height: 6,
+    borderRadius: 3,
     overflow: 'hidden',
-    marginBottom: 8,
+    backgroundColor: 'rgba(255,255,255,0.18)',
   },
-  phaseBarFill: {
-    height: '100%',
-    borderRadius: 2,
+  fill: {
+    height: 6,
+    borderRadius: 3,
   },
-  statsBadgeRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 8,
-  },
-  badgePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-  },
-  badgePillTxt: {
-    color: COLORS.text,
+  segLabel: {
+    marginTop: 6,
+    color: 'rgba(231,251,241,0.55)',
     fontSize: 11,
-    fontWeight: '700',
   },
-  stepperContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    backgroundColor: 'rgba(0, 0, 0, 0.25)',
-    paddingVertical: 4,
-    paddingHorizontal: 14,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-    marginBottom: 8,
-  },
-  stepperBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+
+  doneOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(4, 29, 23, 0.72)',
     alignItems: 'center',
     justifyContent: 'center',
+    padding: 28,
   },
-  stepperReadout: {
-    color: COLORS.textDim,
-    fontSize: 12,
-    fontWeight: '700',
-    minWidth: 90,
+  doneCard: {
+    width: '100%',
+    maxWidth: 340,
+    alignItems: 'center',
+    padding: 24,
+    borderRadius: 28,
+    backgroundColor: 'rgba(6, 28, 24, 0.9)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
+  },
+  doneEmoji: {
+    fontSize: 48,
+  },
+  doneTitle: {
+    marginTop: 8,
+    color: '#FFFFFF',
+    fontSize: 24,
+    fontWeight: '300',
+  },
+  doneBody: {
+    marginTop: 8,
+    color: '#E7FBF1',
+    fontSize: 14,
+    lineHeight: 20,
     textAlign: 'center',
   },
-  quickActionRow: {
-    flexDirection: 'row',
-    gap: 24,
-    marginTop: 4,
+  doneFlow: {
+    marginTop: 12,
+    color: '#6EE7B7',
+    fontSize: 14,
+    fontWeight: '600',
   },
-  actionBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+  doneButton: {
+    marginTop: 20,
+    paddingVertical: 12,
+    paddingHorizontal: 28,
+    borderRadius: 24,
+    backgroundColor: '#F9A8D4',
   },
-  actionBtnTxt: {
-    color: COLORS.text,
-    fontSize: 12,
+  doneButtonText: {
+    color: '#064E3B',
+    fontSize: 15,
     fontWeight: '700',
   },
 });
+
+export default LilyPondGame;

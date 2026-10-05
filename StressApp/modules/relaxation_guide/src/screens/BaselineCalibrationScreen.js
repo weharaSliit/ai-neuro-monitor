@@ -7,6 +7,7 @@ import { ThemeContext } from '../context/ThemeContext';
 import { Header } from '../components/Header';
 import { useSweetAlert } from '../context/SweetAlertContext';
 import { apiService } from '../api/apiService';
+import { AmbientBackground } from '../components/AmbientBackground';
 
 const CALIBRATION_DURATION = 120; // 2 minutes
 
@@ -243,6 +244,7 @@ export const BaselineCalibrationScreen = () => {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
+      <AmbientBackground />
       <Header title="Baseline Calibration" showBack onBack={() => setCurrentScreen('Permissions')} />
 
       <View style={styles.body}>

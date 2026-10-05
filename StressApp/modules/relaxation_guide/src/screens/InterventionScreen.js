@@ -5,17 +5,32 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Alert,
   Animated,
   Dimensions,
   ActivityIndicator,
   Vibration
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { AppContext } from '../context/AppContext';
+import { ThemeContext } from '../context/ThemeContext';
 import { Header } from '../components/Header';
-import { apiService } from '../api/apiService';
+import { DailyTasksModal } from '../components/DailyTasksModal';
+import { RewardChestModal } from '../components/RewardChestModal';
+import { AmbientBackground } from '../components/AmbientBackground';
 
 const { width } = Dimensions.get('window');
+
+// Simple, friendly game titles & unique color-mixed gradients
+const SIMPLE_GAME_MAP = {
+  flower_meadow: { title: 'Calm Meadow', icon: '🌸', color: '#EC4899', gradient: ['#F43F5E', '#EC4899', '#FDE68A'], tag: 'Garden Bloom' },
+  water_lily_pond: { title: 'Zen Lily Pond', icon: '🪷', color: '#10B981', gradient: ['#059669', '#10B981', '#06B6D4'], tag: 'Breathe & Float' },
+  box_meditation: { title: 'Focus Box', icon: '🧊', color: '#0EA5E9', gradient: ['#1E1B4B', '#3B82F6', '#38BDF8'], tag: 'Square Rhythm' },
+  diaphragmatic_pace: { title: 'Deep Belly Calm', icon: '🫁', color: '#3B82F6', gradient: ['#0284C7', '#0EA5E9', '#6EE7B7'], tag: 'Relax Body' },
+  pattern_alignment: { title: 'Color Match', icon: '🧩', color: '#F59E0B', gradient: ['#8B5CF6', '#D946EF', '#F59E0B'], tag: 'Brain Puzzle' },
+  body_scan_mindful: { title: 'Body Sweep', icon: '🧘‍♂️', color: '#8B5CF6', gradient: ['#4C1D95', '#7C3AED', '#C4B5FD'], tag: 'Release Tension' },
+  autogenic_warmth: { title: 'Warmth Flow', icon: '🔥', color: '#EF4444', gradient: ['#B91C1C', '#EF4444', '#F59E0B'], tag: 'Feel Warm' },
+  stroop_decoupler: { title: 'Color Clash', icon: '🎯', color: '#06B6D4', gradient: ['#0891B2', '#06B6D4', '#A855F7'], tag: 'Quick Focus' },
+};
 
 export const InterventionScreen = () => {
   const {
@@ -25,33 +40,22 @@ export const InterventionScreen = () => {
     setSelectedSubOption
   } = useContext(AppContext);
 
-  const [fallbackData, setFallbackData] = useState(null);
-  const [isRejecting, setIsRejecting] = useState(false);
+  const { theme } = useContext(ThemeContext);
+
   const [isAccepting, setIsAccepting] = useState(false);
-  const [showConfidenceMeter, setShowConfidenceMeter] = useState(false);
+  const [showTasksModal, setShowTasksModal] = useState(false);
+  const [showRewardModal, setShowRewardModal] = useState(false);
 
   // Animation values
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(0.95)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
-  const confidenceFadeAnim = useRef(new Animated.Value(0)).current;
-  const confidenceWidthAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    // Auto-redirect directly to technique game
-    if (currentRecommendation) {
-      if (currentRecommendation?.selected_sub_option) {
-        setSelectedSubOption(currentRecommendation.selected_sub_option);
-      }
-      setCurrentScreen('GamePlayer');
-      return;
-    }
-
-    // Entrance animation
     Animated.parallel([
       Animated.timing(fadeAnim, {
         toValue: 1,
-        duration: 600,
+        duration: 500,
         useNativeDriver: true,
       }),
       Animated.spring(scaleAnim, {
@@ -60,109 +64,238 @@ export const InterventionScreen = () => {
         tension: 40,
         useNativeDriver: true,
       }),
-      Animated.timing(confidenceFadeAnim, {
-        toValue: 1,
-        duration: 600,
-        useNativeDriver: true,
-      }),
-      Animated.timing(confidenceWidthAnim, {
-        toValue: 1,
-        duration: 1500,
-        useNativeDriver: false,
-      })
     ]).start();
-  }, [currentRecommendation]);
+
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.03, duration: 1500, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 1500, useNativeDriver: true }),
+      ])
+    ).start();
+  }, []);
 
   if (!currentRecommendation) {
     return (
-      <View style={styles.container}>
-        <Header title="Recommended Technique" showBack onBack={() => setCurrentScreen('Dashboard')} />
+      <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
+        <AmbientBackground />
+        <Header title="Relaxation Hub" showBack onBack={() => setCurrentScreen('Dashboard')} />
         <View style={styles.emptyBox}>
-          <Text style={styles.emptyTxt}>🔍 No recommendation active. Return to dashboard.</Text>
+          <Text style={styles.emptyIcon}>🎮</Text>
+          <Text style={[styles.emptyTxt, { color: theme.textMuted }]}>Choose a game from the catalog to begin!</Text>
+          <TouchableOpacity
+            style={styles.catalogBtn}
+            onPress={() => setCurrentScreen('Methods')}
+          >
+            <Text style={styles.catalogBtnTxt}>🎮 Go to Game Catalog</Text>
+          </TouchableOpacity>
         </View>
       </View>
     );
   }
 
-  const handleAcceptRecommendation = () => {
-    setIsAccepting(true);
-    Vibration.vibrate(20);
+  const techId = currentRecommendation.technique_id || 'water_lily_pond';
+  const gameInfo = SIMPLE_GAME_MAP[techId] || SIMPLE_GAME_MAP.water_lily_pond;
 
-    // Navigate directly to game player with the selected technique
+  const handleStartGame = () => {
+    setIsAccepting(true);
+    Vibration.vibrate(30);
+
     setTimeout(() => {
       if (currentRecommendation?.selected_sub_option) {
         setSelectedSubOption(currentRecommendation.selected_sub_option);
       }
       setCurrentScreen('GamePlayer');
       setIsAccepting(false);
-    }, 500);
+    }, 300);
   };
 
-  const handleRejectFallback = async () => {
-    setIsRejecting(true);
-    Vibration.vibrate(30);
-
-    try {
-      const res = await apiService.handleFallback(userId, currentRecommendation.technique_id);
-      setFallbackData(res);
-
-      // Animate fallback appearing
-      Animated.spring(scaleAnim, {
-        toValue: 1,
-        friction: 5,
-        tension: 40,
-        useNativeDriver: true,
-      }).start();
-    } catch (e) {
-      console.warn('Fallback error', e);
-      Alert.alert('Error', 'Could not load fallback options. Please try again.');
-    } finally {
-      setIsRejecting(false);
-    }
-  };
-
-  const renderConfidenceMeter = () => {
-    return null;
+  const handleSelectAlternative = (key) => {
+    const item = SIMPLE_GAME_MAP[key];
+    const subOpt = { id: key, title: item.title, description: item.tag, gradient: item.gradient };
+    setSelectedSubOption(subOpt);
+    setCurrentScreen('GamePlayer');
   };
 
   return (
-    <View style={styles.container}>
-      <Header title="Your Personalized Plan" showBack onBack={() => setCurrentScreen('Dashboard')} />
+    <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
+      <AmbientBackground />
+      <Header title="Today's Relaxation Level" showBack onBack={() => setCurrentScreen('Dashboard')} />
 
-      <ScrollView
-        contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* Recommendation Card */}
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        {/* Quick Action Bar for Quests & Rewards */}
+        <View style={styles.topActionsRow}>
+          <TouchableOpacity
+            style={styles.questBarBtn}
+            onPress={() => setShowTasksModal(true)}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.questBarIcon}>📜</Text>
+            <Text style={styles.questBarTxt}>Daily Tasks (0/4)</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.rewardBarBtn}
+            onPress={() => setShowRewardModal(true)}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.rewardBarIcon}>🎁</Text>
+            <Text style={styles.rewardBarTxt}>Claim Reward</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Featured Level Card with Gradient Border */}
         <Animated.View
           style={[
-            styles.card,
+            styles.mainCardWrapper,
             {
               opacity: fadeAnim,
-              transform: [{ scale: scaleAnim }]
-            }
+              transform: [{ scale: scaleAnim }],
+            },
           ]}
         >
-          <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
-            <Text style={styles.techTitle}>{currentRecommendation.title}</Text>
-          </Animated.View>
-
-          <Text style={styles.techDesc}>{currentRecommendation.description}</Text>
-
-          {/* Action Button */}
-          <TouchableOpacity
-            style={[styles.acceptBtn, isAccepting && styles.acceptBtnDisabled]}
-            onPress={handleAcceptRecommendation}
-            disabled={isAccepting}
+          <LinearGradient
+            colors={gameInfo.gradient}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.gradientBorderMain}
           >
-            {isAccepting ? (
-              <ActivityIndicator color="#332F45" />
-            ) : (
-              <Text style={styles.acceptBtnTxt}>▶️ Start Technique</Text>
-            )}
-          </TouchableOpacity>
+            <View style={[styles.mainCardInner, { backgroundColor: theme.bgSecondary }]}>
+              {/* Top Badge */}
+              <LinearGradient
+                colors={gameInfo.gradient}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.recommendedBadge}
+              >
+                <Text style={styles.recommendedBadgeTxt}>⭐ RECOMMENDED LEVEL</Text>
+              </LinearGradient>
+
+              {/* Icon & Title */}
+              <View style={styles.heroCenter}>
+                <Text style={styles.heroEmoji}>{gameInfo.icon}</Text>
+                <Text style={[styles.heroTitle, { color: theme.textPrimary }]}>{gameInfo.title}</Text>
+                <Text style={[styles.heroTag, { color: gameInfo.color }]}>{gameInfo.tag}</Text>
+              </View>
+
+              {/* Level Rewards Banner */}
+              <View style={styles.rewardsBanner}>
+                <Text style={styles.rewardsBannerTitle}>LEVEL REWARDS</Text>
+                <View style={styles.rewardBadgesRow}>
+                  <View style={styles.rewardItemPill}>
+                    <Text style={styles.rewardItemIcon}>⭐</Text>
+                    <Text style={styles.rewardItemTxt}>+200 XP</Text>
+                  </View>
+                  <View style={styles.rewardItemPill}>
+                    <Text style={styles.rewardItemIcon}>🧪</Text>
+                    <Text style={styles.rewardItemTxt}>+1 Potion</Text>
+                  </View>
+                  <View style={styles.rewardItemPill}>
+                    <Text style={styles.rewardItemIcon}>🎁</Text>
+                    <Text style={styles.rewardItemTxt}>Chest Key</Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Glossy 3D Color-Mixed Play Button */}
+              <Animated.View style={{ transform: [{ scale: pulseAnim }], width: '100%', alignItems: 'center' }}>
+                <TouchableOpacity
+                  onPress={handleStartGame}
+                  disabled={isAccepting}
+                  activeOpacity={0.85}
+                  style={styles.playBtnWrapper}
+                >
+                  <LinearGradient
+                    colors={gameInfo.gradient}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.playBtnGradient}
+                  >
+                    {isAccepting ? (
+                      <ActivityIndicator color="#FFFFFF" size="small" />
+                    ) : (
+                      <>
+                        <Text style={styles.playBtnIcon}>▶</Text>
+                        <Text style={styles.playBtnTxt}>PLAY LEVEL</Text>
+                      </>
+                    )}
+                  </LinearGradient>
+                </TouchableOpacity>
+              </Animated.View>
+            </View>
+          </LinearGradient>
         </Animated.View>
+
+        {/* Alternate Games Section */}
+        <View style={styles.altSection}>
+          <Text style={[styles.altSectionTitle, { color: theme.textPrimary }]}>Choose Other Relaxation Games</Text>
+          <View style={styles.altGrid}>
+            {Object.keys(SIMPLE_GAME_MAP)
+              .filter((k) => k !== techId)
+              .slice(0, 4)
+              .map((key) => {
+                const item = SIMPLE_GAME_MAP[key];
+                return (
+                  <TouchableOpacity
+                    key={key}
+                    style={styles.altCardWrapper}
+                    onPress={() => handleSelectAlternative(key)}
+                    activeOpacity={0.85}
+                  >
+                    <LinearGradient
+                      colors={item.gradient}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={styles.altGradientBorder}
+                    >
+                      <View style={[styles.altCardInner, { backgroundColor: theme.bgSecondary }]}>
+                        <Text style={styles.altGameEmoji}>{item.icon}</Text>
+                        <Text style={[styles.altGameTitle, { color: theme.textPrimary }]}>{item.title}</Text>
+                        <Text style={[styles.altGameTag, { color: item.color }]}>{item.tag}</Text>
+                        <LinearGradient
+                          colors={item.gradient}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 0 }}
+                          style={styles.altPlayBtnGradient}
+                        >
+                          <Text style={styles.altPlayTxt}>Play ▶</Text>
+                        </LinearGradient>
+                      </View>
+                    </LinearGradient>
+                  </TouchableOpacity>
+                );
+              })}
+          </View>
+        </View>
       </ScrollView>
+
+      {/* Task & Reward Modals */}
+      <DailyTasksModal
+        visible={showTasksModal}
+        onClose={() => setShowTasksModal(false)}
+        onOpenChest={() => {
+          setShowTasksModal(false);
+          setShowRewardModal(true);
+        }}
+        onStartTask={(task) => {
+          if (task?.gameId) {
+            const subOpt = { id: task.gameId, title: task.title, description: task.title };
+            setSelectedSubOption(subOpt);
+            setCurrentRecommendation({
+              technique_id: task.gameId,
+              title: task.title,
+              description: task.title,
+              selected_sub_option: subOpt,
+            });
+            setCurrentScreen('GamePlayer');
+          }
+        }}
+      />
+
+      <RewardChestModal
+        visible={showRewardModal}
+        onClose={() => setShowRewardModal(false)}
+        techniqueId={techId}
+      />
     </View>
   );
 };
@@ -170,496 +303,243 @@ export const InterventionScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FAF9FC'
   },
   content: {
     padding: 16,
-    paddingBottom: 40
+    paddingBottom: 40,
   },
   emptyBox: {
-    padding: 24,
+    padding: 32,
     alignItems: 'center',
-    marginTop: 40
+    marginTop: 60,
+  },
+  emptyIcon: {
+    fontSize: 56,
+    marginBottom: 12,
   },
   emptyTxt: {
-    color: '#8B86A3',
     fontSize: 16,
-    textAlign: 'center'
+    textAlign: 'center',
+    marginBottom: 20,
   },
-  // Header Styles
-  headerChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#E9E5F2'
-  },
-  headerChipText: {
-    color: '#8B87C4',
-    fontSize: 12,
-    fontWeight: '600',
-    letterSpacing: 0.5
-  },
-  headerChipBadge: {
-    color: '#6F6A87',
-    fontSize: 10,
-    fontWeight: '700',
-    backgroundColor: '#FAF9FC',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 12
-  },
-  mainHeadline: {
-    color: '#332F45',
-    fontSize: 20,
-    fontWeight: '700',
-    marginBottom: 4,
-    lineHeight: 28
-  },
-  subHeadline: {
-    color: '#6F6A87',
-    fontSize: 13,
-    marginBottom: 16
-  },
-  // Confidence Meter
-  confidenceContainer: {
-    backgroundColor: '#FFFFFF',
-    padding: 14,
-    borderRadius: 12,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#E9E5F2'
-  },
-  confidenceHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8
-  },
-  confidenceLabel: {
-    color: '#332F45',
-    fontSize: 13,
-    fontWeight: '600'
-  },
-  confidenceValue: {
-    fontSize: 20,
-    fontWeight: '800'
-  },
-  confidenceBarBg: {
-    height: 6,
-    backgroundColor: '#F5F3FA',
-    borderRadius: 3,
-    overflow: 'hidden'
-  },
-  confidenceBarFill: {
-    height: '100%',
-    borderRadius: 3
-  },
-  confidenceNote: {
-    color: '#8B86A3',
-    fontSize: 11,
-    marginTop: 8,
-    fontStyle: 'italic'
-  },
-  // Card Styles
-  card: {
-    backgroundColor: '#FFFFFF',
+  catalogBtn: {
+    backgroundColor: '#8B5CF6',
+    paddingVertical: 14,
+    paddingHorizontal: 24,
     borderRadius: 16,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: '#E9E5F2'
   },
-  cardHeader: {
+  catalogBtnTxt: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  topActionsRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12
+    gap: 12,
+    marginBottom: 16,
   },
-  recommendationBadge: {
-    backgroundColor: '#82C0A0',
+  questBarBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#7C3AED',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: '#A78BFA',
+    elevation: 4,
+  },
+  questBarIcon: {
+    fontSize: 20,
+    marginRight: 8,
+  },
+  questBarTxt: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  rewardBarBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F59E0B',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: '#FDE68A',
+    elevation: 4,
+  },
+  rewardBarIcon: {
+    fontSize: 20,
+    marginRight: 8,
+  },
+  rewardBarTxt: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  mainCardWrapper: {
+    borderRadius: 28,
+    elevation: 6,
+    marginBottom: 24,
+  },
+  gradientBorderMain: {
+    padding: 3,
+    borderRadius: 28,
+  },
+  mainCardInner: {
+    borderRadius: 26,
+    padding: 24,
+    alignItems: 'center',
+  },
+  recommendedBadge: {
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: 14,
+    marginBottom: 16,
+  },
+  recommendedBadgeTxt: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  heroCenter: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  heroEmoji: {
+    fontSize: 72,
+    marginBottom: 8,
+  },
+  heroTitle: {
+    fontSize: 28,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  heroTag: {
+    fontSize: 14,
+    fontWeight: '800',
+    marginTop: 4,
+  },
+  rewardsBanner: {
+    width: '100%',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 18,
+    padding: 12,
+    alignItems: 'center',
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  rewardsBannerTitle: {
+    color: '#F59E0B',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1,
+    marginBottom: 8,
+  },
+  rewardBadgesRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  rewardItemPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.2)',
     paddingHorizontal: 10,
     paddingVertical: 4,
-    borderRadius: 12
-  },
-  recommendationBadgeText: {
-    color: '#332F45',
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 0.5
-  },
-  infoButton: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#F5F3FA',
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  infoButtonText: {
-    color: '#8B86A3',
-    fontSize: 14
-  },
-  techTitle: {
-    color: '#332F45',
-    fontSize: 24,
-    fontWeight: '800',
-    marginBottom: 6
-  },
-  techDesc: {
-    color: '#8B86A3',
-    fontSize: 14,
-    lineHeight: 20,
-    marginBottom: 16
-  },
-  // Breakdown Styles
-  breakdownBox: {
-    backgroundColor: '#FAF9FC',
     borderRadius: 12,
-    padding: 14,
-    marginVertical: 14,
-    borderWidth: 1,
-    borderColor: '#F1EEF8'
   },
-  breakdownHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 10
-  },
-  breakdownTitle: {
-    color: '#332F45',
-    fontSize: 13,
-    fontWeight: '700'
-  },
-  breakdownTap: {
-    color: '#6F6A87',
-    fontSize: 10,
-    fontStyle: 'italic'
-  },
-  scoreRow: {
-    marginVertical: 6
-  },
-  scoreLabelContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 4
-  },
-  scoreEmoji: {
+  rewardItemIcon: {
     fontSize: 14,
-    marginRight: 6
+    marginRight: 4,
   },
-  scoreLbl: {
-    color: '#8B86A3',
-    fontSize: 12
-  },
-  scoreBarContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between'
-  },
-  scoreBar: {
-    flex: 1,
-    height: 4,
-    backgroundColor: '#F5F3FA',
-    borderRadius: 2,
-    marginRight: 10,
-    overflow: 'hidden'
-  },
-  scoreBarFill: {
-    height: '100%',
-    borderRadius: 2
-  },
-  scoreVal: {
-    color: '#8B87C4',
+  rewardItemTxt: {
+    color: '#FFFFFF',
     fontSize: 12,
-    fontWeight: '700',
-    minWidth: 40,
-    textAlign: 'right'
+    fontWeight: '800',
   },
-  totalRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    borderTopWidth: 1,
-    borderTopColor: '#E9E5F2',
-    paddingTop: 8,
-    marginTop: 6
+  playBtnWrapper: {
+    width: 240,
+    borderRadius: 22,
+    elevation: 8,
   },
-  totalLbl: {
-    color: '#332F45',
-    fontSize: 14,
-    fontWeight: '700'
-  },
-  totalVal: {
-    color: '#82C0A0',
-    fontSize: 16,
-    fontWeight: '800'
-  },
-  latencyContainer: {
+  playBtnGradient: {
+    paddingVertical: 16,
+    borderRadius: 22,
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 8,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#F1EEF8'
-  },
-  latencyTxt: {
-    color: '#6F6A87',
-    fontSize: 11,
-    fontStyle: 'italic',
-    marginRight: 8
-  },
-  latencyDot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#82C0A0'
-  },
-  // Sub-option Styles
-  subOptionHeaderContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-    marginTop: 4
-  },
-  subOptionHeader: {
-    color: '#332F45',
-    fontSize: 14,
-    fontWeight: '600'
-  },
-  subOptionCount: {
-    color: '#6F6A87',
-    fontSize: 11,
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 10
-  },
-  subOptionBox: {
-    backgroundColor: '#F5F3FA',
-    padding: 14,
-    borderRadius: 10,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#8B87C4'
-  },
-  subTitle: {
-    color: '#332F45',
-    fontWeight: '700',
-    fontSize: 15
-  },
-  subDesc: {
-    color: '#8B86A3',
-    fontSize: 13,
-    marginTop: 4
-  },
-  subTapHint: {
-    color: '#6F6A87',
-    fontSize: 10,
-    marginTop: 8,
-    textAlign: 'right',
-    fontStyle: 'italic'
-  },
-  // Button Styles
-  acceptBtn: {
-    backgroundColor: '#8B87C4',
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginBottom: 10,
-    flexDirection: 'row',
     justifyContent: 'center',
-    gap: 8
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
   },
-  acceptBtnDisabled: {
-    opacity: 0.6
-  },
-  acceptBtnTxt: {
+  playBtnIcon: {
     color: '#FFFFFF',
-    fontWeight: '800',
-    fontSize: 16
-  },
-  acceptBtnSub: {
-    color: '#FFFFFF',
-    fontSize: 11,
-    fontWeight: '500',
-    opacity: 0.85
-  },
-  rejectBtn: {
-    paddingVertical: 12,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#E9E5F2',
-    borderRadius: 12
-  },
-  rejectBtnDisabled: {
-    opacity: 0.5
-  },
-  rejectBtnTxt: {
-    color: '#E8B368',
-    fontSize: 14,
-    fontWeight: '600'
-  },
-  rejectBtnSub: {
-    color: '#6F6A87',
-    fontSize: 11,
-    marginTop: 2
-  },
-  // Fallback Styles
-  fallbackBox: {
-    backgroundColor: '#F1EEF8',
-    padding: 16,
-    borderRadius: 16,
-    marginTop: 16,
-    borderWidth: 1,
-    borderColor: '#8B87C4'
-  },
-  fallbackHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12
-  },
-  fallbackTitle: {
-    color: '#6B679F',
-    fontWeight: '800',
-    fontSize: 16
-  },
-  fallbackLevelBadge: {
-    backgroundColor: '#8B87C4',
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    borderRadius: 12
-  },
-  fallbackLevelText: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.5
-  },
-  fallbackSub: {
-    color: '#332F45',
-    fontSize: 13,
-    marginBottom: 12
-  },
-  altCard: {
-    backgroundColor: '#F1EEF8',
-    padding: 14,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#8B87C4'
-  },
-  altCardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 4
-  },
-  altNumber: {
-    color: '#8B87C4',
-    fontSize: 12,
-    fontWeight: '700',
+    fontSize: 22,
     marginRight: 8,
-    backgroundColor: '#F1EEF8',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6
   },
-  altTitle: {
-    color: '#332F45',
-    fontWeight: '700',
-    fontSize: 15
-  },
-  altDesc: {
-    color: '#6B679F',
-    fontSize: 13,
-    marginTop: 2
-  },
-  altAction: {
-    color: '#8B87C4',
-    fontSize: 11,
-    marginTop: 8,
-    textAlign: 'right'
-  },
-  level2Box: {
-    alignItems: 'center',
-    paddingVertical: 8
-  },
-  breathingIcon: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: '#F1EEF8',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12
-  },
-  breathingIconEmoji: {
-    fontSize: 32
-  },
-  level2Title: {
-    color: '#332F45',
-    fontWeight: '700',
-    fontSize: 17
-  },
-  level2Desc: {
-    color: '#332F45',
-    fontSize: 14,
-    marginVertical: 10,
-    textAlign: 'center',
-    lineHeight: 20
-  },
-  breathingResetBtn: {
-    backgroundColor: '#8B87C4',
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 12,
-    alignItems: 'center',
-    width: '100%'
-  },
-  breathingResetTxt: {
+  playBtnTxt: {
     color: '#FFFFFF',
-    fontWeight: '800',
-    fontSize: 15
-  },
-  breathingResetSub: {
-    color: '#FFFFFF',
-    fontSize: 11,
-    opacity: 0.85,
-    marginTop: 2
-  },
-  level3Title: {
-    color: '#332F45',
-    fontWeight: '700',
-    fontSize: 15,
-    marginBottom: 12
-  },
-  promptBtn: {
-    backgroundColor: '#F1EEF8',
-    padding: 14,
-    borderRadius: 12,
-    marginBottom: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#8B87C4'
-  },
-  promptEmoji: {
     fontSize: 20,
-    marginRight: 12
+    fontWeight: '900',
+    letterSpacing: 1,
   },
-  promptTxt: {
-    color: '#332F45',
-    fontWeight: '600',
-    fontSize: 14,
-    flex: 1
+  altSection: {
+    marginTop: 8,
   },
-  promptArrow: {
-    color: '#8B87C4',
-    fontSize: 18
-  }
+  altSectionTitle: {
+    fontSize: 18,
+    fontWeight: '900',
+    marginBottom: 12,
+  },
+  altGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  altCardWrapper: {
+    width: (width - 44) / 2,
+    borderRadius: 20,
+    elevation: 2,
+  },
+  altGradientBorder: {
+    padding: 2,
+    borderRadius: 20,
+  },
+  altCardInner: {
+    padding: 14,
+    borderRadius: 18,
+    alignItems: 'center',
+  },
+  altGameEmoji: {
+    fontSize: 36,
+    marginBottom: 6,
+  },
+  altGameTitle: {
+    fontSize: 15,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  altGameTag: {
+    fontSize: 11,
+    fontWeight: '700',
+    marginBottom: 10,
+  },
+  altPlayBtnGradient: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#FFFFFF',
+  },
+  altPlayTxt: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '900',
+  },
 });
+
+export default InterventionScreen;
