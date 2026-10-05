@@ -351,6 +351,8 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
         return Math.max(1, Math.ceil(spanMs / (24 * 60 * 60 * 1000)) + 1);
     }, [allEntries]);
 
+    const isCalibrating = !calibStatus?.isCalibrated;
+
     // 5 Feature Deviations Calculation — 100% derived from real user baselines
     const featureMetrics = useMemo(() => {
         const lw = latestWindow || {};
@@ -370,10 +372,14 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
             const mean = hasPersonal ? bl[item.key].mean : meta.fallbackMean;
             const std = (hasPersonal && bl[item.key].std) ? bl[item.key].std : meta.fallbackStd;
             const val = typeof item.raw === 'number' ? item.raw : null;
-            const z = val !== null ? computeZ(val, mean, std) : 0;
-            const stage = z > 2.0 ? 'stress' : z > 1.0 ? 'drift' : 'normal';
-            const stageLabel = stage === 'stress' ? 'Pre-Stress' : stage === 'drift' ? 'Elevated Drift' : 'Normal';
-            const stageColor = stage === 'stress' ? COLORS.stress : stage === 'drift' ? COLORS.warning : COLORS.normal;
+
+            // Zero-signal exclusion: if a user is not typing (dwell=0/flight=0), do NOT treat it as Z=4.00!
+            const hasRealSignal = val !== null && (item.key === 'tilt_angle' ? val > 0 : val > 0);
+            const z = (hasRealSignal && !isCalibrating) ? computeZ(val, mean, std) : 0;
+            
+            const stage = isCalibrating ? 'normal' : (z > 2.0 ? 'stress' : z > 1.0 ? 'drift' : 'normal');
+            const stageLabel = isCalibrating ? 'Calibrating' : (stage === 'stress' ? 'Pre-Stress' : stage === 'drift' ? 'Elevated Drift' : 'Normal');
+            const stageColor = isCalibrating ? COLORS.brand : (stage === 'stress' ? COLORS.stress : stage === 'drift' ? COLORS.warning : COLORS.normal);
 
             // Dynamically calculate user's empirical range corridors
             const fmt = (num) => (meta.decimals === 0 ? Math.round(num) : num.toFixed(meta.decimals));
@@ -381,17 +387,17 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
             let dynamicStressRange = '';
 
             if (meta.stressDirection === 'low') {
-                // CPM: drops indicate stress
                 dynamicNormalRange = `${fmt(Math.max(0, mean - std))} – ${fmt(mean + std)} ${meta.unit}`;
                 dynamicStressRange = `< ${fmt(Math.max(0, mean - 2 * std))} ${meta.unit}`;
             } else {
-                // Dwell, Flight, Scroll, Tilt: increases indicate stress
                 dynamicNormalRange = `${fmt(Math.max(0, mean - std))} – ${fmt(mean + std)} ${meta.unit}`;
                 dynamicStressRange = `> ${fmt(mean + 2 * std)} ${meta.unit}`;
             }
 
             const currentStr = val !== null ? `${fmt(val)} ${meta.unit}` : '--';
-            const baselineStr = `${fmt(mean)} ±${fmt(std)} ${meta.unit} ${hasPersonal ? '(personal)' : '(benchmark)'}`;
+            const baselineStr = isCalibrating
+                ? `Calibrating (${calibStatus?.displayDays || 'Day 1 of 7'})`
+                : `${fmt(mean)} ±${fmt(std)} ${meta.unit} ${hasPersonal ? '(personal)' : '(benchmark)'}`;
 
             return {
                 ...meta,
@@ -407,9 +413,10 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                 normalRange: dynamicNormalRange,
                 stressRange: dynamicStressRange,
                 hasPersonal,
+                isCalibrating,
             };
         });
-    }, [latestWindow, baselines, COLORS]);
+    }, [latestWindow, baselines, COLORS, isCalibrating, calibStatus]);
 
     // Which single feature's full detail panel is expanded below the tile
     // row. When the composite view is selected, default to whichever real
@@ -425,6 +432,7 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
 
     // Composite Z-score derived from real predictions or feature deviations
     const compositeZ = useMemo(() => {
+        if (isCalibrating) return 0.0;
         if (predictions && predictions.length > 0) {
             const withZ = predictions.filter((p) => typeof p.composite_z === 'number');
             if (withZ.length > 0) {
@@ -434,7 +442,7 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
         const validZs = featureMetrics.map((f) => f.z).filter((z) => typeof z === 'number');
         if (validZs.length === 0) return 0;
         return validZs.reduce((a, b) => a + b, 0) / validZs.length;
-    }, [predictions, featureMetrics]);
+    }, [predictions, featureMetrics, isCalibrating]);
 
     // Real Distribution across historical predictions
     const stageDist = useMemo(() => {
@@ -499,17 +507,28 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
             return buckets.map((group) => {
                 const zAvgs = group.map((w) => {
                     const d = w.data || {};
-                    const zs = [
-                        computeZ(d.avg_dwell, bl.avg_dwell?.mean ?? 135, bl.avg_dwell?.std ?? 15),
-                        computeZ(d.avg_flight, bl.avg_flight?.mean ?? 215, bl.avg_flight?.std ?? 25),
-                        computeZ(d.scroll_velocity, bl.scroll_velocity?.mean ?? 450, bl.scroll_velocity?.std ?? 200),
-                        computeZ(d.tilt_angle, bl.tilt_angle?.mean ?? 59, bl.tilt_angle?.std ?? 8),
-                        computeZ(d.cpm, bl.cpm?.mean ?? 42, bl.cpm?.std ?? 6),
-                    ];
-                    return zs.reduce((a, b) => a + b, 0) / zs.length;
+                    const activeZs = [];
+                    if (typeof d.avg_dwell === 'number' && d.avg_dwell > 0) {
+                        activeZs.push(computeZ(d.avg_dwell, bl.avg_dwell?.mean ?? 135, bl.avg_dwell?.std ?? 15));
+                    }
+                    if (typeof d.avg_flight === 'number' && d.avg_flight > 0) {
+                        activeZs.push(computeZ(d.avg_flight, bl.avg_flight?.mean ?? 215, bl.avg_flight?.std ?? 25));
+                    }
+                    if (typeof d.scroll_velocity === 'number' && d.scroll_velocity > 0) {
+                        activeZs.push(computeZ(d.scroll_velocity, bl.scroll_velocity?.mean ?? 450, bl.scroll_velocity?.std ?? 200));
+                    }
+                    if (typeof d.tilt_angle === 'number' && d.tilt_angle > 0) {
+                        activeZs.push(computeZ(d.tilt_angle, bl.tilt_angle?.mean ?? 59, bl.tilt_angle?.std ?? 8));
+                    }
+                    if (typeof d.cpm === 'number' && d.cpm > 0) {
+                        activeZs.push(computeZ(d.cpm, bl.cpm?.mean ?? 42, bl.cpm?.std ?? 6));
+                    }
+                    return activeZs.length > 0 ? (activeZs.reduce((a, b) => a + b, 0) / activeZs.length) : 0;
                 });
                 const avgZ = zAvgs.reduce((a, b) => a + b, 0) / zAvgs.length;
-                const pct = Math.min(100, Math.round((avgZ / 3.0) * 100));
+                const pct = isCalibrating
+                    ? Math.min(30, Math.max(14, Math.round((avgZ / 3.0) * 35) + 14))
+                    : Math.min(100, Math.round((avgZ / 3.0) * 100));
                 return {
                     value: pct,
                     date: group[group.length - 1].date,
@@ -523,20 +542,22 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
         const std = bl[selectedFeature]?.std ?? meta.fallbackStd;
 
         return buckets.map((group) => {
-            const zs = group.map((w) => {
-                const val = w.data?.[selectedFeature];
-                const num = typeof val === 'number' ? val : mean;
-                return computeZ(num, mean, std);
-            });
-            const avgZ = zs.reduce((a, b) => a + b, 0) / zs.length;
-            const pct = Math.min(100, Math.round((avgZ / 3.0) * 100));
+            const validVals = group
+                .map((w) => w.data?.[selectedFeature])
+                .filter((val) => typeof val === 'number' && (selectedFeature === 'tilt_angle' ? val > 0 : val > 0));
+            
+            const avgVal = validVals.length > 0 ? (validVals.reduce((a, b) => a + b, 0) / validVals.length) : mean;
+            const singleZ = validVals.length > 0 ? computeZ(avgVal, mean, std) : 0;
+            const pct = isCalibrating
+                ? Math.min(30, Math.max(14, Math.round((singleZ / 3.0) * 35) + 14))
+                : Math.min(100, Math.round((singleZ / 3.0) * 100));
             return {
                 value: pct,
                 date: group[group.length - 1].date,
                 windowCount: group.length,
             };
         });
-    }, [windowSlice, selectedFeature, baselines, timeRange]);
+    }, [windowSlice, selectedFeature, baselines, timeRange, isCalibrating]);
 
     // Weekly Overview stats derived dynamically from real predictions
     const { weeklyScores, avgScore, peakDay, calmDay, detectionStats } = useMemo(() => {
@@ -616,8 +637,8 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
         return `Idiographic baseline drift, anomaly boundary & continuous telemetry (${timeRange}D view)`;
     }, [mode, timeRange]);
 
-    const overallStateColor = compositeZ > 2.0 ? COLORS.stress : compositeZ > 1.0 ? COLORS.warning : COLORS.normal;
-    const overallStateLabel = compositeZ > 2.0 ? 'Pre-Stress Anomaly' : compositeZ > 1.0 ? 'Elevated Drift' : 'Normal Baseline';
+    const overallStateColor = isCalibrating ? COLORS.brand : (compositeZ > 2.0 ? COLORS.stress : compositeZ > 1.0 ? COLORS.warning : COLORS.normal);
+    const overallStateLabel = isCalibrating ? 'Calibrating Baseline' : (compositeZ > 2.0 ? 'Pre-Stress Anomaly' : compositeZ > 1.0 ? 'Elevated Drift' : 'Normal Baseline');
 
     return (
         <ScreenBackground edges={['left', 'right']}>
@@ -710,6 +731,40 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                         : 'Collecting your natural typing rhythm, scroll habits & device posture to build a personalized baseline.'}
                                 </Text>
                             </Card>
+                        ) : isCalibrating ? (
+                            <Card accentColor={COLORS.brand} elevated style={styles.card}>
+                                <View style={styles.rowBetween}>
+                                    <View style={styles.rowGap}>
+                                        <Icon name={NAMES.calendar} size={18} color={COLORS.brand} />
+                                        <Text style={[styles.cardTitle, { color: t.text, marginBottom: 0 }]}>28-Day Longitudinal Roadmap</Text>
+                                    </View>
+                                    <View style={[styles.statusPill, { backgroundColor: COLORS.brand + '20' }]}>
+                                        <StatusDot color={COLORS.brand} active size={8} />
+                                        <Text style={[styles.statusPillText, { color: COLORS.brand }]}>WEEK 1 OF 4</Text>
+                                    </View>
+                                </View>
+                                <View style={{ marginTop: 12, backgroundColor: COLORS.brand + '10', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: COLORS.brand + '30' }}>
+                                    <View style={styles.rowBetween}>
+                                        <Text style={{ fontSize: 12, fontWeight: '800', color: COLORS.brand }}>Phase 1: Baseline Calibration</Text>
+                                        <Text style={{ fontSize: 11, fontWeight: '700', color: COLORS.brand }}>Days 1–7 (Active)</Text>
+                                    </View>
+                                    <Text style={{ fontSize: 11, color: t.textMuted, marginTop: 4 }}>
+                                        Currently recording your personal interaction rhythm ({calibStatus?.displayDays || 'Day 1 of 7'}).
+                                    </Text>
+                                </View>
+                                <View style={{ marginTop: 8, backgroundColor: t.pillBg, borderRadius: 10, padding: 12 }}>
+                                    <View style={styles.rowBetween}>
+                                        <Text style={{ fontSize: 12, fontWeight: '800', color: t.text }}>Phase 2: Longitudinal Tracking</Text>
+                                        <Text style={{ fontSize: 11, fontWeight: '700', color: t.textMuted }}>Weeks 2–4</Text>
+                                    </View>
+                                    <Text style={{ fontSize: 11, color: t.textMuted, marginTop: 4 }}>
+                                        Continuous multi-week drift monitoring across your established baseline.
+                                    </Text>
+                                </View>
+                                <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 10 }]}>
+                                    The 28-day horizon tracks long-term behavioral trends and cognitive stability over time.
+                                </Text>
+                            </Card>
                         ) : (
                             <Card accentColor={overallStateColor} elevated style={styles.card}>
                                 <View style={styles.rowBetween}>
@@ -795,24 +850,40 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                 <View style={{ flex: 1, marginRight: 8 }}>
                                     <Text style={[styles.cardTitle, { color: t.text }]}>
                                         {selectedFeature === 'composite'
-                                            ? (timeRange === '28' ? 'Your Rhythm — Last 28 Days' : 'Your Rhythm This Week')
-                                            : `${FEATURE_METADATA[selectedFeature]?.name} Over Time`}
+                                            ? (timeRange === '28' ? '28-Day Longitudinal Trend' : 'Your Rhythm This Week (7 Days)')
+                                            : `${FEATURE_METADATA[selectedFeature]?.name} (${timeRange === '28' ? '28D Trend' : '7D Rhythm'})`}
                                     </Text>
                                     <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 2 }]}>
-                                        {dataCoverageDays > 0 && dataCoverageDays < parseInt(timeRange, 10)
-                                            ? `Showing all ${dataCoverageDays} day${dataCoverageDays === 1 ? '' : 's'} of data collected so far — same as the 7D/28D view will show until more history builds up.`
-                                            : selectedFeature === 'composite'
-                                                ? 'Tap a point on the line for that moment’s detail'
-                                                : FEATURE_METADATA[selectedFeature]?.description}
+                                        {isCalibrating
+                                            ? (timeRange === '28'
+                                                ? `Extended 4-week window: currently collecting Week 1 calibration data (${calibStatus?.displayDays || 'Day 1 of 7'}).`
+                                                : `Day ${calibStatus?.dayNumber || 1} of 7: Recording daily natural typing rhythm and touch dynamics.`)
+                                            : (selectedFeature === 'composite'
+                                                ? (timeRange === '28' ? 'Longitudinal baseline stability and multi-week drift analysis.' : 'Tap a point on the line for that moment’s detail.')
+                                                : FEATURE_METADATA[selectedFeature]?.description)}
                                     </Text>
                                 </View>
-                                <View style={{ backgroundColor: timeRange === '28' ? COLORS.brand + '15' : COLORS.normalSoft, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 }}>
-                                    <Text style={{ fontSize: 9, fontWeight: '900', color: timeRange === '28' ? COLORS.brand : COLORS.normalDark }}>{timeRange === '28' ? '28D VIEW' : 'LIVE HCI'}</Text>
+                                <View style={{ backgroundColor: timeRange === '28' ? COLORS.brand + '15' : (isCalibrating ? COLORS.brand + '15' : COLORS.normalSoft), paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 }}>
+                                    <Text style={{ fontSize: 9, fontWeight: '900', color: COLORS.brand }}>
+                                        {isCalibrating ? (timeRange === '28' ? 'WEEK 1 OF 4' : `DAY ${calibStatus?.dayNumber || 1} / 7`) : (timeRange === '28' ? '28D VIEW' : 'LIVE HCI')}
+                                    </Text>
                                 </View>
                             </View>
 
-                            {/* Plain-language hero status — the headline answer, Z-score is secondary */}
-                            {selectedFeature === 'composite' && (
+                            {/* Plain-language hero status — calibrated vs calibration mode */}
+                            {isCalibrating ? (
+                                <View style={[styles.heroRow, { backgroundColor: COLORS.brand + '12' }]}>
+                                    <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: COLORS.brand }} />
+                                    <Text style={[styles.heroText, { color: COLORS.brand }]} numberOfLines={2}>
+                                        {selectedFeature === 'composite'
+                                            ? `Baseline Calibration Active (Day ${calibStatus?.dayNumber || 1} of 7) — Learning your natural rhythm.`
+                                            : `Learning ${FEATURE_METADATA[selectedFeature]?.name} baseline (Day ${calibStatus?.dayNumber || 1} of 7).`}
+                                    </Text>
+                                    <View style={{ backgroundColor: COLORS.brand + '20', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
+                                        <Text style={{ fontSize: 9.5, fontWeight: '800', color: COLORS.brand }}>CALIBRATING</Text>
+                                    </View>
+                                </View>
+                            ) : (
                                 <View style={[styles.heroRow, { backgroundColor: overallStateColor + '12' }]}>
                                     <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: overallStateColor }} />
                                     <Text style={[styles.heroText, { color: overallStateColor }]} numberOfLines={2}>
@@ -832,18 +903,19 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                 >
                                     <LineChart
                                         points={telemetryPoints}
-                                        color={timeRange === '28' ? COLORS.brand : overallStateColor}
+                                        color={timeRange === '28' ? COLORS.brand : (isCalibrating ? COLORS.brand : overallStateColor)}
                                         width={chartWidth}
                                         height={timeRange === '28' ? 180 : 150}
                                         maxValue={100}
                                         hideValues
                                         baselineValue={65}
-                                        baselineLabel={timeRange === '28' ? 'Anomaly boundary (Z>2.0)' : 'Pre-stress boundary (Z>2.0)'}
+                                        baselineLabel={isCalibrating ? 'Target Pre-Stress Limit (Z>2.0)' : (timeRange === '28' ? 'Anomaly boundary (Z>2.0)' : 'Pre-stress boundary (Z>2.0)')}
                                         baselineColor={COLORS.stress}
                                         baseline2Value={35}
-                                        baseline2Label={timeRange === '28' ? 'Normal upper limit (Z>1.0)' : 'Drift threshold (Z>1.0)'}
+                                        baseline2Label={isCalibrating ? 'Target Calm Corridor (Z<1.0)' : (timeRange === '28' ? 'Normal upper limit (Z>1.0)' : 'Drift threshold (Z>1.0)')}
                                         baseline2Color={COLORS.warning}
-                                        colorZones
+                                        zoneLowColor={isCalibrating ? COLORS.brand : COLORS.normal}
+                                        colorZones={!isCalibrating}
                                         fitToWidth
                                     />
                                 </View>
@@ -894,8 +966,8 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                 const rangeSpan = stressThreshold - (f.baselineMean - f.baselineStd);
                                 const normalPct = rangeSpan > 0 ? Math.min(100, Math.max(0, ((normalMax - (f.baselineMean - f.baselineStd)) / rangeSpan) * 100)) : 50;
                                 const currentPct = f.rawVal !== null && rangeSpan > 0
-                                    ? Math.min(100, Math.max(0, ((f.rawVal - (f.baselineMean - f.baselineStd)) / rangeSpan) * 100))
-                                    : 0;
+                                    ? (isCalibrating ? Math.min(normalPct * 0.7, 35) : Math.min(100, Math.max(0, ((f.rawVal - (f.baselineMean - f.baselineStd)) / rangeSpan) * 100)))
+                                    : (isCalibrating ? 25 : 0);
                                 return (
                                     <View style={[styles.expandedPanel, { borderColor: t.border }]}>
                                         <View style={styles.rowBetween}>
@@ -905,7 +977,9 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                             </View>
                                             <View style={{ alignItems: 'flex-end' }}>
                                                 <Text style={[styles.featureValue, { color: f.stageColor }]}>{f.current}</Text>
-                                                <Text style={{ fontSize: 9.5, fontWeight: '700', color: t.textMuted }}>Z = {f.z.toFixed(2)}</Text>
+                                                <Text style={{ fontSize: 9.5, fontWeight: '700', color: isCalibrating ? COLORS.brand : t.textMuted }}>
+                                                    {isCalibrating ? 'CALIBRATING' : `Z = ${f.z.toFixed(2)}`}
+                                                </Text>
                                             </View>
                                         </View>
 
