@@ -54,26 +54,76 @@ function stageCopy(stage) {
     return "Your phone interaction rhythm is calm and steady right now.";
 }
 
-function buildWeeklyChart(predictions) {
+function parseEntryDate(key, data) {
+    if (data?.timestamp) return new Date(data.timestamp);
+    try {
+        const parts = key.split('_');
+        const d = parts[0];
+        const yr = parseInt(d.slice(0, 4), 10);
+        const mo = parseInt(d.slice(4, 6), 10) - 1;
+        const dy = parseInt(d.slice(6, 8), 10);
+        if (parts[1]) {
+            const tStr = parts[1];
+            const hr = parseInt(tStr.slice(0, 2), 10);
+            const mn = parseInt(tStr.slice(2, 4), 10);
+            return new Date(yr, mo, dy, hr, mn);
+        }
+        return new Date(yr, mo, dy);
+    } catch {
+        return new Date();
+    }
+}
+
+function buildWeeklyChart(predictions, allEntries, isCalibMode) {
     const now = Date.now();
     const dayMs = 24 * 60 * 60 * 1000;
     const days = Array.from({ length: 7 }, (_, i) => {
         const d = new Date(now - (6 - i) * dayMs);
-        return { day: d.toLocaleDateString('en-US', { weekday: 'short' }), date: d.toDateString(), scores: [] };
+        return {
+            day: d.toLocaleDateString('en-US', { weekday: 'short' }),
+            dateStr: d.toDateString(),
+            scores: [],
+            windows: 0,
+        };
     });
+
+    (allEntries || []).forEach(([key, data]) => {
+        const entryDate = parseEntryDate(key, data);
+        if (!entryDate) return;
+        const bucket = days.find((d) => d.dateStr === entryDate.toDateString());
+        if (bucket) {
+            bucket.windows++;
+        }
+    });
+
     (predictions || []).forEach((p) => {
         if (!p.timestamp) return;
         const pDateStr = new Date(p.timestamp).toDateString();
-        const bucket = days.find((d) => d.date === pDateStr);
+        const bucket = days.find((d) => d.dateStr === pDateStr);
         if (bucket && typeof p.stress_score === 'number') {
             bucket.scores.push(p.stress_score);
         }
     });
-    return days.map((d) => ({
-        day: d.day,
-        score: d.scores.length ? d.scores.reduce((a, b) => a + b, 0) / d.scores.length : 0,
-        hasData: d.scores.length > 0,
-    }));
+
+    const maxDailyWin = Math.max(...days.map((d) => d.windows), 1);
+
+    return days.map((d) => {
+        const hasPred = d.scores.length > 0;
+        const hasWin = d.windows > 0;
+        const avg = hasPred ? d.scores.reduce((a, b) => a + b, 0) / d.scores.length : 0;
+        return {
+            day: d.day,
+            score: avg,
+            hasData: isCalibMode ? hasWin : hasPred,
+            windowCount: d.windows,
+            hPct: isCalibMode
+                ? (hasWin ? Math.min(100, Math.max(20, Math.round((d.windows / Math.max(maxDailyWin, 40)) * 100))) : 8)
+                : (hasPred ? Math.max(Math.round(avg * 100), 8) : 8),
+            displayLabel: isCalibMode
+                ? (hasWin ? `${d.windows}` : '-')
+                : (hasPred ? `${Math.round(avg * 100)}` : '--'),
+        };
+    });
 }
 
 function DistBar({ label, value, total, color, muted }) {
@@ -116,6 +166,7 @@ const FEATURE_METADATA = {
         fallbackMean: 135,
         fallbackStd: 15,
         stressDirection: 'high',
+        targetBenchmark: 'Key press duration • Target ~135 ms',
         description: 'How long keys are held down. Muscle tension causes longer key presses.',
     },
     avg_flight: {
@@ -129,6 +180,7 @@ const FEATURE_METADATA = {
         fallbackMean: 215,
         fallbackStd: 25,
         stressDirection: 'high',
+        targetBenchmark: 'Delay between taps • Target ~215 ms',
         description: 'Time between key presses. Cognitive hesitation or fatigue lengthens pauses.',
     },
     scroll_velocity: {
@@ -142,6 +194,7 @@ const FEATURE_METADATA = {
         fallbackMean: 450,
         fallbackStd: 200,
         stressDirection: 'high',
+        targetBenchmark: 'Swipe motion speed • Target ~450 px/s',
         description: 'Screen swiping speed. Fast, rapid flicks indicate restlessness.',
     },
     tilt_angle: {
@@ -155,6 +208,7 @@ const FEATURE_METADATA = {
         fallbackMean: 59.0,
         fallbackStd: 8.0,
         stressDirection: 'high',
+        targetBenchmark: 'Holding tilt angle • Target ~59°',
         description: 'Angle of your phone. Forward hunching alters the holding angle.',
     },
     cpm: {
@@ -168,6 +222,7 @@ const FEATURE_METADATA = {
         fallbackMean: 42,
         fallbackStd: 6,
         stressDirection: 'low',
+        targetBenchmark: 'Typing rhythm speed • Target ~42 cpm',
         description: 'Characters typed per minute. Sudden drops indicate mental fatigue.',
     },
 };
@@ -304,30 +359,15 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
         };
     }, [deviceId]);
 
-    // Parse date helper from key or timestamp
-    const parseEntryDate = (key, data) => {
-        if (data?.timestamp) return new Date(data.timestamp);
-        try {
-            const parts = key.split('_');
-            const d = parts[0];
-            const yr = parseInt(d.slice(0, 4), 10);
-            const mo = parseInt(d.slice(4, 6), 10) - 1;
-            const dy = parseInt(d.slice(6, 8), 10);
-            if (parts[1]) {
-                const tStr = parts[1];
-                const hr = parseInt(tStr.slice(0, 2), 10);
-                const mn = parseInt(tStr.slice(2, 4), 10);
-                return new Date(yr, mo, dy, hr, mn);
-            }
-            return new Date(yr, mo, dy);
-        } catch {
-            return new Date();
-        }
-    };
+
+    const isCalibrating = !calibStatus?.isCalibrated;
+    const effectiveTimeRange = mode === 'analysis' ? (calibStatus?.isCalibrated ? 'post' : '7') : timeRange;
+    const isViewCalibrating = effectiveTimeRange === '7' && isCalibrating;
+    const isCalibOverview = mode === 'analysis' ? isCalibrating : (effectiveTimeRange === '7' && isCalibrating);
 
     // Filter real entries based on selected time range (7-day calibration vs post-7D drift)
     const windowSlice = useMemo(() => {
-        const days = timeRange === 'post' ? 14 : 7;
+        const days = effectiveTimeRange === 'post' ? 14 : 7;
         const cutoffTime = Date.now() - days * 24 * 60 * 60 * 1000;
         
         const filtered = allEntries.filter(([key, data]) => {
@@ -336,14 +376,14 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
         });
 
         // If dataset in range is empty, fallback to the most recent entries
-        const target = filtered.length > 0 ? filtered : allEntries.slice(-(timeRange === 'post' ? 30 : 15));
+        const target = filtered.length > 0 ? filtered : allEntries.slice(-(effectiveTimeRange === 'post' ? 30 : 15));
 
         return target.map(([key, data]) => ({
             key,
             date: parseEntryDate(key, data),
             data,
         }));
-    }, [allEntries, timeRange]);
+    }, [allEntries, effectiveTimeRange]);
 
     // How many distinct calendar days of REAL data actually exist for this
     // device. A brand-new account has the same handful of windows whether
@@ -357,9 +397,6 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
         const spanMs = Math.max(...times) - Math.min(...times);
         return Math.max(1, Math.ceil(spanMs / (24 * 60 * 60 * 1000)) + 1);
     }, [allEntries]);
-
-    const isCalibrating = !calibStatus?.isCalibrated;
-    const isViewCalibrating = timeRange === '7' && isCalibrating;
 
     // 5 Feature Deviations Calculation — 100% derived from real user baselines
     const featureMetrics = useMemo(() => {
@@ -483,7 +520,7 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
             z_tilt: 'tilt_angle',
             z_cpm: 'cpm',
         };
-        const days = parseInt(timeRange, 10) || 7;
+        const days = effectiveTimeRange === 'post' ? 14 : 7;
         const cutoffTime = Date.now() - days * 24 * 60 * 60 * 1000;
         const inRange = (predictions || []).filter((p) => p.timestamp && new Date(p.timestamp).getTime() > cutoffTime);
         const source = inRange.length > 0 ? inRange : (predictions || []);
@@ -501,7 +538,7 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
             result[featureId] = { normal, drift, stress, total: normal + drift + stress };
         });
         return result;
-    }, [predictions, timeRange]);
+    }, [predictions, effectiveTimeRange]);
 
     // Telemetry LineChart Points from real user window data — bucketed to a
     // fixed cap so the chart always fits on screen instead of scaling
@@ -509,7 +546,7 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
     const telemetryPoints = useMemo(() => {
         if (windowSlice.length === 0) return [];
         const bl = baselines || {};
-        const bucketCount = timeRange === 'post' ? 24 : 18;
+        const bucketCount = effectiveTimeRange === 'post' ? 24 : 18;
         const buckets = bucketize(windowSlice, bucketCount);
 
         if (selectedFeature === 'composite') {
@@ -535,7 +572,7 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                     return activeZs.length > 0 ? (activeZs.reduce((a, b) => a + b, 0) / activeZs.length) : 0;
                 });
                 const avgZ = zAvgs.reduce((a, b) => a + b, 0) / zAvgs.length;
-                const pct = (timeRange === '7' && isCalibrating)
+                const pct = (effectiveTimeRange === '7' && isCalibrating)
                     ? Math.min(30, Math.max(14, Math.round((avgZ / 3.0) * 35) + 14))
                     : Math.min(100, Math.round((avgZ / 3.0) * 100));
                 return {
@@ -557,7 +594,7 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
             
             const avgVal = validVals.length > 0 ? (validVals.reduce((a, b) => a + b, 0) / validVals.length) : mean;
             const singleZ = validVals.length > 0 ? computeZ(avgVal, mean, std) : 0;
-            const pct = (timeRange === '7' && isCalibrating)
+            const pct = (effectiveTimeRange === '7' && isCalibrating)
                 ? Math.min(30, Math.max(14, Math.round((singleZ / 3.0) * 35) + 14))
                 : Math.min(100, Math.round((singleZ / 3.0) * 100));
             return {
@@ -566,43 +603,36 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                 windowCount: group.length,
             };
         });
-    }, [windowSlice, selectedFeature, baselines, timeRange, isCalibrating]);
+    }, [windowSlice, selectedFeature, baselines, effectiveTimeRange, isCalibrating]);
 
-    // Weekly Overview stats derived dynamically from real predictions
+
+    // Weekly Overview stats derived dynamically from real predictions and interaction logs
     const { weeklyScores, avgScore, peakDay, calmDay, detectionStats } = useMemo(() => {
-        if (!predictions || predictions.length === 0) {
-            const empty = Array.from({ length: 7 }, (_, i) => {
-                const d = new Date();
-                d.setDate(d.getDate() - (6 - i));
-                return { day: d.toLocaleDateString('en-US', { weekday: 'short' }), score: 0, hasData: false };
-            });
-            return {
-                weeklyScores: empty,
-                avgScore: '--',
-                peakDay: null,
-                calmDay: null,
-                detectionStats: { episodes: '--', total: '--', confidence: '--' },
-            };
-        }
-        const ws = buildWeeklyChart(predictions);
+        const ws = buildWeeklyChart(predictions, allEntries, isCalibOverview);
         const withData = ws.filter((d) => d.hasData);
-        const avg = withData.length ? Math.round((withData.reduce((a, b) => a + b.score, 0) / withData.length) * 100) : '--';
-        const peak = withData.length ? withData.reduce((a, b) => (a.score > b.score ? a : b)) : null;
-        const calm = withData.length ? withData.reduce((a, b) => (a.score < b.score ? a : b)) : null;
+        
+        let avg = '--';
+        let peak = null;
+        let calm = null;
 
-        const days = parseInt(timeRange, 10) || 7;
+        if (isCalibOverview) {
+            if (withData.length > 0) {
+                peak = withData.reduce((a, b) => (a.windowCount > b.windowCount ? a : b));
+                calm = withData.reduce((a, b) => (a.windowCount < b.windowCount ? a : b));
+            }
+        } else {
+            avg = withData.length ? Math.round((withData.reduce((a, b) => a + b.score, 0) / withData.length) * 100) : '--';
+            peak = withData.length ? withData.reduce((a, b) => (a.score > b.score ? a : b)) : null;
+            calm = withData.length ? withData.reduce((a, b) => (a.score < b.score ? a : b)) : null;
+        }
+
+        const days = parseInt(effectiveTimeRange, 10) || 7;
         const cutoffTime = Date.now() - days * 24 * 60 * 60 * 1000;
-        const rangePreds = predictions
+        const rangePreds = (predictions || [])
             .filter((p) => p.timestamp && new Date(p.timestamp).getTime() > cutoffTime)
             .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
         const total = rangePreds.length;
 
-        // Real episode count: merge CONSECUTIVE flagged windows into one
-        // episode (rising-edge count) instead of counting every individually
-        // flagged window as its own "episode" -- the previous version showed
-        // 3,649 "episodes" out of 4,983 windows (73%!), which isn't what
-        // "episode" means to anyone reading it and made an otherwise calm
-        // week look like a near-constant crisis.
         let episodes = 0;
         let inEpisode = false;
         rangePreds.forEach((p) => {
@@ -611,10 +641,6 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
             inEpisode = flagged;
         });
 
-        // Real model confidence: average the `confidence` field the backend
-        // already computes per prediction (predictor.py) instead of the
-        // previous stand-in ("% of windows that were calm & non-anomalous",
-        // a completely different quantity mislabeled as "confidence").
         const confidences = rangePreds.map((p) => p.confidence).filter((c) => typeof c === 'number');
         const confidence = confidences.length > 0
             ? Math.round((confidences.reduce((a, b) => a + b, 0) / confidences.length) * 100)
@@ -625,9 +651,13 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
             avgScore: avg,
             peakDay: peak,
             calmDay: calm,
-            detectionStats: { episodes, total, confidence },
+            detectionStats: {
+                episodes: total > 0 ? episodes : '--',
+                total: total > 0 ? total : '--',
+                confidence,
+            },
         };
-    }, [predictions, timeRange]);
+    }, [predictions, allEntries, effectiveTimeRange, isCalibOverview]);
 
     const titleText = useMemo(() => {
         if (mode === 'patterns') {
@@ -638,17 +668,11 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
     }, [mode, timeRange]);
 
     const subTitleText = useMemo(() => {
-        if (mode === 'patterns') {
-            if (timeRange === 'post') {
-                return 'Tracking deviations from your normal phone baseline';
-            }
-            return isCalibrating
-                ? `Learning your personal rhythm (Day ${calibStatus?.dayNumber || 1} of 7)`
-                : '7-day daily typing rhythm & behavioral baseline';
+        if (mode === 'patterns' || mode === 'analysis') {
+            return null;
         }
-        if (mode === 'analysis') return 'Stress patterns, baseline drift & validation confidence';
         return 'Personal baseline drift & continuous telemetry';
-    }, [mode, timeRange, isCalibrating, calibStatus]);
+    }, [mode]);
 
     const overallStateColor = isViewCalibrating ? COLORS.brand : (compositeZ > 2.0 ? COLORS.stress : compositeZ > 1.0 ? COLORS.warning : COLORS.normal);
     const overallStateLabel = isViewCalibrating ? 'Calibrating Baseline' : (compositeZ > 2.0 ? 'Pre-Stress Pattern' : compositeZ > 1.0 ? 'Mild Drift' : 'Normal Range');
@@ -668,24 +692,26 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
             <View style={styles.titleToggleRow}>
                 <View style={{ flex: 1, paddingRight: 8 }}>
                     <Text style={[styles.titleText, { color: t.text }]}>{titleText}</Text>
-                    <Text style={[styles.subTitleText, { color: t.textMuted }]}>{subTitleText}</Text>
+                    {subTitleText ? <Text style={[styles.subTitleText, { color: t.textMuted }]}>{subTitleText}</Text> : null}
                 </View>
-                <View style={[styles.toggleContainer, { backgroundColor: t.pillBg, borderColor: t.border }]}>
-                    <TouchableOpacity
-                        activeOpacity={0.8}
-                        onPress={() => setTimeRange('7')}
-                        style={[styles.toggleBtn, timeRange === '7' && { backgroundColor: COLORS.brand }]}
-                    >
-                        <Text style={[styles.toggleBtnText, { color: timeRange === '7' ? '#FFF' : t.textMuted }]}>7D Baseline</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        activeOpacity={0.8}
-                        onPress={() => setTimeRange('post')}
-                        style={[styles.toggleBtn, timeRange === 'post' && { backgroundColor: COLORS.brand }]}
-                    >
-                        <Text style={[styles.toggleBtnText, { color: timeRange === 'post' ? '#FFF' : t.textMuted }]}>After 7 Days</Text>
-                    </TouchableOpacity>
-                </View>
+                {mode !== 'analysis' && (
+                    <View style={[styles.toggleContainer, { backgroundColor: t.pillBg, borderColor: t.border }]}>
+                        <TouchableOpacity
+                            activeOpacity={0.8}
+                            onPress={() => setTimeRange('7')}
+                            style={[styles.toggleBtn, timeRange === '7' && { backgroundColor: COLORS.brand }]}
+                        >
+                            <Text style={[styles.toggleBtnText, { color: timeRange === '7' ? '#FFF' : t.textMuted }]}>7D Baseline</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            activeOpacity={0.8}
+                            onPress={() => setTimeRange('post')}
+                            style={[styles.toggleBtn, timeRange === 'post' && { backgroundColor: COLORS.brand }]}
+                        >
+                            <Text style={[styles.toggleBtnText, { color: timeRange === 'post' ? '#FFF' : t.textMuted }]}>After 7 Days</Text>
+                        </TouchableOpacity>
+                    </View>
+                )}
             </View>
 
             {/* Top Navigation Tabs */}
@@ -741,7 +767,7 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                 <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 8 }]}>
                                     {calibStatus?.isCalibrated
                                         ? 'Your calm baseline is ready. Actively monitoring for behavioral stress shifts.'
-                                        : 'Learning your everyday phone habits. No stress alerts during this 7-day period.'}
+                                        : 'No stress alerts during this 7-day period.'}
                                 </Text>
                             </Card>
                         ) : (
@@ -1050,7 +1076,7 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                         )}
                                         <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 8 }]}>
                                             {isViewCalibrating
-                                                ? `During the 7-day calibration period, the engine learns your unique ${f.name.toLowerCase()} baseline without applying premature stress thresholds.`
+                                                ? `During the 7-day calibration period, the engine learns your unique ${f.name.toLowerCase()} baseline .`
                                                 : f.description}
                                         </Text>
                                     </View>
@@ -1198,47 +1224,48 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                 {activeTab === 'overview' && (
                     <>
                         <Card elevated style={styles.card}>
-                            <View style={styles.rowBetween}>
-                                <Text style={[styles.cardTitle, { color: t.text }]}>Weekly Behavioral Stress Pattern</Text>
-                                <Text style={[styles.avgBadge, { color: COLORS.brand, backgroundColor: COLORS.brand + '15' }]}>
-                                    Avg {avgScore}/100
+                            <View style={[styles.rowBetween, { alignItems: 'flex-start' }]}>
+                                <Text style={[styles.cardTitle, { color: t.text, flex: 1, marginRight: 8 }]} numberOfLines={2}>
+                                    {isCalibOverview ? 'Daily Baseline Activity' : 'Weekly Behavioral Stress Pattern'}
                                 </Text>
+                                <View style={[styles.avgBadge, { backgroundColor: isCalibOverview ? COLORS.brand + '15' : (avgScore !== '--' ? COLORS.brand + '15' : t.pillBg) }]}>
+                                    <Text style={{ fontSize: 10.5, fontWeight: '850', color: isCalibOverview ? COLORS.brand : (avgScore !== '--' ? COLORS.brand : t.textMuted) }}>
+                                        {isCalibOverview
+                                            ? `${dataLogCount || 0} Windows Logged`
+                                            : (avgScore !== '--' ? `Avg ${avgScore}/100` : 'Calibrating')}
+                                    </Text>
+                                </View>
                             </View>
-                            <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 4 }]}>
-                                Daily aggregated behavioral load computed across your recorded sensor windows
-                            </Text>
 
-                            <View style={styles.barChart}>
+                            <View style={[styles.barChart, { marginTop: 14 }]}>
                                 {weeklyScores.map((s, i) => {
-                                    const hPct = Math.max(Math.round(s.score * 100), 8);
-                                    const scoreNum = Math.round(s.score * 100);
                                     const isPeak = !!(peakDay && s.hasData && s.day === peakDay.day && weeklyScores.filter((d) => d.hasData).length > 1);
                                     const isCalm = !!(calmDay && s.hasData && s.day === calmDay.day && weeklyScores.filter((d) => d.hasData).length > 1 && !isPeak);
-                                    const color = !s.hasData
-                                        ? t.border
-                                        : s.score >= 0.6
-                                        ? COLORS.stress
-                                        : s.score >= 0.4
-                                        ? COLORS.warning
-                                        : COLORS.normal;
+                                    const color = isCalibOverview
+                                        ? (s.hasData ? COLORS.brand : t.border)
+                                        : (!s.hasData
+                                            ? t.border
+                                            : s.score >= 0.6
+                                            ? COLORS.stress
+                                            : s.score >= 0.4
+                                            ? COLORS.warning
+                                            : COLORS.normal);
                                     return (
                                         <View key={i} style={styles.barCol}>
-                                            {/* Numeric value above the bar -- when most days score similarly
-                                                high, bar HEIGHT alone can't distinguish them; the number can. */}
-                                            <Text style={[styles.barScoreLabel, { color: s.hasData ? color : t.textMuted }]}>
-                                                {s.hasData ? scoreNum : '--'}
+                                            <Text style={[styles.barScoreLabel, { color: s.hasData ? (isCalibOverview ? COLORS.brand : color) : t.textMuted }]}>
+                                                {s.displayLabel}
                                             </Text>
                                             <View style={[styles.barTrack, { backgroundColor: t.pillBg }]}>
-                                                <View style={[styles.barFill, { height: `${hPct}%`, backgroundColor: color }]} />
+                                                <View style={[styles.barFill, { height: `${s.hPct}%`, backgroundColor: color }]} />
                                             </View>
                                             <Text
                                                 style={[
                                                     styles.barLabel,
-                                                    { color: isPeak ? COLORS.warning : isCalm ? COLORS.normal : t.textMuted },
-                                                    (isPeak || isCalm) && { fontWeight: '900' },
+                                                    { color: isPeak ? (isCalibOverview ? COLORS.brand : COLORS.warning) : isCalm ? COLORS.normal : t.textMuted },
+                                                    (isPeak || isCalm) && { fontWeight: '950' },
                                                 ]}
                                             >
-                                                {s.day}{isPeak ? ' 🔥' : isCalm ? ' 🍃' : ''}
+                                                {s.day}{!isCalibOverview ? (isPeak ? ' 🔥' : isCalm ? ' 🍃' : '') : (isPeak ? ' 📍' : '')}
                                             </Text>
                                         </View>
                                     );
@@ -1246,74 +1273,93 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                             </View>
                         </Card>
 
-                        {/* Peak vs Calmest stats */}
+                        {/* Peak vs Calmest / Calibration stats */}
                         <View style={styles.statsRow}>
                             <View style={[styles.statBox, { backgroundColor: t.surface, borderColor: t.border }]}>
-                                <Text style={[styles.statLabel, { color: t.textMuted }]}>Average Score</Text>
-                                <Text style={[styles.statValue, { color: t.text }]}>{avgScore}</Text>
-                            </View>
-                            <View style={[styles.statBox, { backgroundColor: t.surface, borderColor: t.border }]}>
-                                <Text style={[styles.statLabel, { color: t.textMuted }]}>Peak Stress Day</Text>
-                                <Text style={[styles.statValue, { color: COLORS.warning, fontSize: 16 }]}>
-                                    {peakDay?.day || '--'}
+                                <Text style={[styles.statLabel, { color: t.textMuted }]}>
+                                    {isCalibOverview ? 'Calibration' : 'Average Score'}
+                                </Text>
+                                <Text style={[styles.statValue, { color: t.text, fontSize: isCalibOverview ? 15 : 18 }]}>
+                                    {isCalibOverview ? (calibStatus?.displayDays || 'Day 1 of 7') : avgScore}
                                 </Text>
                             </View>
                             <View style={[styles.statBox, { backgroundColor: t.surface, borderColor: t.border }]}>
-                                <Text style={[styles.statLabel, { color: t.textMuted }]}>Calmest Day</Text>
-                                <Text style={[styles.statValue, { color: COLORS.normal, fontSize: 16 }]}>
-                                    {calmDay?.day || '--'}
+                                <Text style={[styles.statLabel, { color: t.textMuted }]}>
+                                    {isCalibOverview ? 'Most Active Day' : 'Peak Stress Day'}
+                                </Text>
+                                <Text style={[styles.statValue, { color: COLORS.warning, fontSize: 15 }]}>
+                                    {isCalibOverview ? (peakDay ? `${peakDay.day} (${peakDay.windowCount})` : '--') : (peakDay?.day || '--')}
+                                </Text>
+                            </View>
+                            <View style={[styles.statBox, { backgroundColor: t.surface, borderColor: t.border }]}>
+                                <Text style={[styles.statLabel, { color: t.textMuted }]}>
+                                    {isCalibOverview ? 'Total Windows' : 'Calmest Day'}
+                                </Text>
+                                <Text style={[styles.statValue, { color: isCalibOverview ? COLORS.brand : COLORS.normal, fontSize: 15 }]}>
+                                    {isCalibOverview ? `${dataLogCount || 0} logged` : (calmDay?.day || '--')}
                                 </Text>
                             </View>
                         </View>
 
-                        {/* Pre-Stress Detection Summary */}
+                        {/* Pre-Stress Detection & Validation Summary */}
                         <Card elevated style={styles.card}>
                             <Text style={[styles.cardTitle, { color: t.text, marginBottom: 12 }]}>
-                                Pre-Stress Detection & Validation Summary
+                                {isCalibOverview ? 'Baseline Calibration Status' : 'Pre-Stress Detection Summary'}
                             </Text>
-                            <View style={styles.rowBetween}>
-                                <View>
-                                    <Text style={[styles.hint, { color: t.textMuted }]}>Episodes detected</Text>
-                                    <Text style={[styles.statValue, { color: t.text, fontSize: 18 }]}>
-                                        {detectionStats.episodes}
+
+                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <View style={{ flex: 1, alignItems: 'center' }}>
+                                    <Text style={[styles.hint, { color: t.textMuted, fontSize: 10.5, textAlign: 'center' }]}>
+                                        {isCalibOverview ? 'Stage' : 'Episodes detected'}
+                                    </Text>
+                                    <Text style={[styles.statValue, { color: t.text, fontSize: 16, marginTop: 4 }]}>
+                                        {isCalibOverview ? (calibStatus?.displayDays || 'Day 1 of 7') : detectionStats.episodes}
                                     </Text>
                                 </View>
-                                <View>
-                                    <Text style={[styles.hint, { color: t.textMuted }]}>Windows evaluated</Text>
-                                    <Text style={[styles.statValue, { color: t.text, fontSize: 18 }]}>
-                                        {detectionStats.total}
+
+                                <View style={{ width: 1, height: 28, backgroundColor: t.border }} />
+
+                                <View style={{ flex: 1, alignItems: 'center' }}>
+                                    <Text style={[styles.hint, { color: t.textMuted, fontSize: 10.5, textAlign: 'center' }]}>
+                                        {isCalibOverview ? 'Windows Captured' : 'Windows evaluated'}
+                                    </Text>
+                                    <Text style={[styles.statValue, { color: t.text, fontSize: 16, marginTop: 4 }]}>
+                                        {isCalibOverview ? (dataLogCount !== null ? `${dataLogCount}` : '0') : detectionStats.total}
                                     </Text>
                                 </View>
-                                <View>
-                                    <Text style={[styles.hint, { color: t.textMuted }]}>Model Confidence</Text>
+
+                                <View style={{ width: 1, height: 28, backgroundColor: t.border }} />
+
+                                <View style={{ flex: 1, alignItems: 'center' }}>
+                                    <Text style={[styles.hint, { color: t.textMuted, fontSize: 10.5, textAlign: 'center' }]}>
+                                        {isCalibOverview ? 'AI Engine' : 'Model Confidence'}
+                                    </Text>
                                     <Text style={[
                                         styles.statValue,
                                         {
-                                            color: detectionStats.confidence === '--'
-                                                ? t.textMuted
-                                                : detectionStats.confidence >= 70
+                                            color: isCalibOverview
+                                                ? COLORS.brand
+                                                : (detectionStats.confidence === '--'
+                                                    ? t.textMuted
+                                                    : detectionStats.confidence >= 70
                                                     ? COLORS.normal
                                                     : detectionStats.confidence >= 40
-                                                        ? COLORS.warning
-                                                        : COLORS.stress,
-                                            fontSize: 18,
+                                                    ? COLORS.warning
+                                                    : COLORS.stress),
+                                            fontSize: 16,
+                                            marginTop: 4,
                                         },
                                     ]}>
-                                        {detectionStats.confidence}{detectionStats.confidence !== '--' ? '%' : ''}
+                                        {isCalibOverview ? `${calibStatus?.progressPct || 14}%` : `${detectionStats.confidence}${detectionStats.confidence !== '--' ? '%' : ''}`}
                                     </Text>
                                 </View>
                             </View>
-                            <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 12, lineHeight: 16 }]}>
-                                An episode is a run of consecutive elevated windows counted once, not each window
-                                individually. Model Confidence is the anomaly model's own certainty in each prediction,
-                                averaged across this range.
-                            </Text>
                         </Card>
                     </>
                 )}
 
                 {/* ═════════════════════════════════════════════════════════════════ */}
-                {/* TAB 3: BASELINE (7-Day Calibration & Continual EMA Learning)     */}
+                {/* TAB 3: BASELINE (7-Day Calibration & Continual Baseline Learning) */}
                 {/* ═════════════════════════════════════════════════════════════════ */}
                 {activeTab === 'baseline' && (
                     <>
@@ -1379,30 +1425,22 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                 </View>
                             </View>
 
-                            <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 10, lineHeight: 17 }]}>
-                                {calibStatus?.isCalibrated
-                                    ? 'Your personalized baseline fingerprint is locked in. The engine continues adapting to subtle lifestyle shifts using EMA during confirmed calm windows.'
-                                    : 'Passive observation stage: collecting natural typing rhythm, holding angles, and scrolling habits to compute your unique baseline mean and standard deviation.'}
-                            </Text>
-
-                            <View style={[styles.rowBetween, { marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: t.border }]}>
-                                <Text style={[styles.hint, { color: t.textMuted }]}>Valid stationary windows</Text>
+                            <View style={[styles.rowBetween, { marginTop: 14, paddingTop: 10, borderTopWidth: 1, borderTopColor: t.border }]}>
+                                <Text style={[styles.hint, { color: t.textMuted }]}>Observation windows</Text>
                                 <Text style={[styles.featureName, { color: t.text }]}>
-                                    {dataLogCount !== null ? `${dataLogCount} windows` : '-- windows'}
+                                    {dataLogCount !== null ? `${dataLogCount} windows captured` : '-- windows'}
                                 </Text>
                             </View>
                             <View style={[styles.rowBetween, { marginTop: 8 }]}>
-                                <Text style={[styles.hint, { color: t.textMuted }]}>Inference model</Text>
-                                <Text style={[styles.featureName, { color: t.text }]}>One-Class SVM (Idiographic)</Text>
+                                <Text style={[styles.hint, { color: t.textMuted }]}>Analysis model</Text>
+                                <Text style={[styles.featureName, { color: t.text }]}>Personalized Baseline AI</Text>
                             </View>
                         </Card>
 
-                        {/* Continual Learning EMA Baseline Table */}
+                        {/* Continual Learning Baseline Table */}
                         <Card elevated style={styles.card}>
-                            <Text style={[styles.cardTitle, { color: t.text }]}>Idiographic Baseline Matrix (EMA)</Text>
-                            <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 4, marginBottom: 12 }]}>
-                                Adapts dynamically using Exponential Moving Average (α = 0.2), updated exclusively during verified
-                                non-anomalous stationary windows.
+                            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 10 }]}>
+                                Personal Baseline Measurements
                             </Text>
 
                             {featureMetrics.map((f, i) => (
@@ -1414,13 +1452,36 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                         i === 0 && { borderTopWidth: 0 },
                                     ]}
                                 >
-                                    <View style={styles.rowGap}>
+                                    <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                                         <Icon name={f.iconName} size={18} color={COLORS.brand} />
-                                        <Text style={[styles.featureName, { color: t.text }]}>{f.name}</Text>
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={[styles.featureName, { color: t.text }]}>{f.name}</Text>
+                                            <Text style={{ fontSize: 10, color: t.textMuted, marginTop: 1 }}>
+                                                {f.targetBenchmark || `Normal benchmark: ~${f.fallbackMean} ${f.unit}`}
+                                            </Text>
+                                        </View>
                                     </View>
-                                    <Text style={[styles.hint, { color: t.textMuted, fontWeight: '700' }]}>
-                                        {f.baselineStr}
-                                    </Text>
+                                    
+                                    <View style={{ alignItems: 'flex-end' }}>
+                                        {calibStatus?.isCalibrated ? (
+                                            <Text style={[styles.hint, { color: t.text, fontWeight: '800' }]}>
+                                                {f.baselineStr}
+                                            </Text>
+                                        ) : (
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                                {f.rawVal !== null && f.rawVal > 0 ? (
+                                                    <Text style={{ fontSize: 11, fontWeight: '700', color: t.text }}>
+                                                        {f.current}
+                                                    </Text>
+                                                ) : null}
+                                                <View style={{ backgroundColor: COLORS.brand + '15', paddingHorizontal: 7, paddingVertical: 2.5, borderRadius: 6 }}>
+                                                    <Text style={{ fontSize: 9.5, fontWeight: '800', color: COLORS.brand }}>
+                                                        Calibrating
+                                                    </Text>
+                                                </View>
+                                            </View>
+                                        )}
+                                    </View>
                                 </View>
                             ))}
                         </Card>
@@ -1465,7 +1526,7 @@ const styles = StyleSheet.create({
     tabBtn: { flex: 1, paddingVertical: 9, borderRadius: 12, borderWidth: 1, alignItems: 'center' },
     scroll: { padding: 16, paddingTop: 6, paddingBottom: 40 },
     card: { marginVertical: 6, padding: 16, borderRadius: 20 },
-    cardTitle: { fontSize: 12, fontWeight: '850', textTransform: 'uppercase', letterSpacing: 0.4 },
+    cardTitle: { fontSize: 12, fontWeight: '850', textTransform: 'uppercase', letterSpacing: 0.4, flexShrink: 1 },
     cardSub: { fontSize: 11.5, lineHeight: 16 },
     rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
     rowGap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -1529,7 +1590,7 @@ const styles = StyleSheet.create({
     statBox: { flex: 1, borderRadius: 14, borderWidth: 1, padding: 12, alignItems: 'center' },
     statLabel: { fontSize: 9, fontWeight: '700', textTransform: 'uppercase' },
     statValue: { fontSize: 18, fontWeight: '900', marginTop: 4 },
-    avgBadge: { fontSize: 11, fontWeight: '850', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
+    avgBadge: { paddingHorizontal: 8, paddingVertical: 3.5, borderRadius: 8, alignSelf: 'flex-start' },
     hint: { fontSize: 11 },
     progressTrack: { height: 8, borderRadius: 4, overflow: 'hidden' },
     progressFill: { height: '100%', borderRadius: 4 },

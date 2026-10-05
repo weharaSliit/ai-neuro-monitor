@@ -590,29 +590,29 @@ export default function PhenotypingScreen({ navigation }) {
 
                     {/* Centered Large Circular Progress Gauge */}
                     <View style={styles.centerGaugeWrap}>
-                        <View style={{ width: 154, height: 154, alignItems: 'center', justifyContent: 'center' }}>
-                            <Svg width={154} height={154} style={StyleSheet.absoluteFill}>
+                        <View style={{ width: 170, height: 170, alignItems: 'center', justifyContent: 'center' }}>
+                            <Svg width={170} height={170} style={StyleSheet.absoluteFill}>
                                 {/* Background Ring Track */}
                                 <SvgCircle
-                                    cx={77}
-                                    cy={77}
-                                    r={70}
+                                    cx={85}
+                                    cy={85}
+                                    r={68}
                                     stroke={statusMainColor + '20'}
                                     strokeWidth={10}
                                     fill="transparent"
                                 />
                                 {/* Dynamic Progress Fill */}
                                 <SvgCircle
-                                    cx={77}
-                                    cy={77}
-                                    r={70}
+                                    cx={85}
+                                    cy={85}
+                                    r={68}
                                     stroke={statusMainColor}
                                     strokeWidth={10}
                                     fill="transparent"
-                                    strokeDasharray={`${2 * Math.PI * 70} ${2 * Math.PI * 70}`}
-                                    strokeDashoffset={2 * Math.PI * 70 * (1 - ringProgress)}
+                                    strokeDasharray={`${2 * Math.PI * 68} ${2 * Math.PI * 68}`}
+                                    strokeDashoffset={2 * Math.PI * 68 * (1 - ringProgress)}
                                     strokeLinecap="round"
-                                    transform="rotate(-90 77 77)"
+                                    transform="rotate(-90 85 85)"
                                 />
                             </Svg>
 
