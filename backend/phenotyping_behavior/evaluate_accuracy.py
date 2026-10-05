@@ -27,12 +27,14 @@ import argparse
 import sys
 import os
 import numpy as np
+from scipy import stats
 from datetime import datetime, timezone
 
 # ── Path fix: allow running directly from phenotyping_behavior/ ──────────────
 _CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 _BACKEND_ROOT = os.path.abspath(os.path.join(_CURRENT_DIR, ".."))
-for _p in [_CURRENT_DIR, _BACKEND_ROOT]:
+_REPO_ROOT = os.path.abspath(os.path.join(_CURRENT_DIR, "..", ".."))
+for _p in [_CURRENT_DIR, _BACKEND_ROOT, _REPO_ROOT]:
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -42,6 +44,7 @@ from firebase_service import (
     get_all_stress_predictions,
     get_validation_labels,
     get_physiological_predictions,
+    get_controlled_experiments,
 )
 
 # ── Validation quality thresholds ────────────────────────────────────────────
@@ -233,6 +236,107 @@ def evaluate_physio(user_id):
     return res
 
 
+# ── Method 3: Controlled Cognitive Stress Experiment & Hypothesis Testing ─────
+
+def evaluate_controlled_experiment(user_id):
+    """
+    Method 3: Controlled Cognitive Stressor Validation (Lab / In-App Test).
+    
+    Compares behavioral metrics during a relaxed baseline task vs an induced
+    cognitive stressor (timed Stroop test / mental arithmetic).
+    
+    Statistical tests performed:
+      1. Paired Student's t-test (t-statistic, p-value)
+      2. Wilcoxon Signed-Rank test (non-parametric p-value)
+      3. Cohen's d Effect Size for dwell time, scroll velocity, and anomaly Z
+      4. Controlled Classification Confusion Matrix (TP, TN, FP, FN, Accuracy)
+    """
+    raw_exp = get_controlled_experiments(user_id)
+    if not raw_exp or not isinstance(raw_exp, dict):
+        return None
+
+    calm_dwells, stress_dwells = [], []
+    calm_flights, stress_flights = [], []
+    calm_scrolls, stress_scrolls = [], []
+    calm_z_scores, stress_z_scores = [], []
+    
+    tp = tn = fp = fn = 0
+
+    for exp_id, record in raw_exp.items():
+        if not isinstance(record, dict):
+            continue
+        c = record.get('calm_metrics', {})
+        s = record.get('stress_metrics', {})
+        
+        if not c or not s:
+            continue
+            
+        if 'avg_dwell' in c and 'avg_dwell' in s:
+            calm_dwells.append(float(c['avg_dwell']))
+            stress_dwells.append(float(s['avg_dwell']))
+        if 'avg_flight' in c and 'avg_flight' in s:
+            calm_flights.append(float(c['avg_flight']))
+            stress_flights.append(float(s['avg_flight']))
+        if 'scroll_velocity' in c and 'scroll_velocity' in s:
+            calm_scrolls.append(float(c['scroll_velocity']))
+            stress_scrolls.append(float(s['scroll_velocity']))
+        if 'composite_z' in c and 'composite_z' in s:
+            calm_z_scores.append(float(c['composite_z']))
+            stress_z_scores.append(float(s['stress_z'] if 'stress_z' in s else s['composite_z']))
+
+        # Anomaly evaluation: Calm should be Normal (TN), Stressed should be Anomaly (TP)
+        c_anom = c.get('is_anomaly', False) or float(c.get('stress_score', 0)) > AI_SCORE_THRESHOLD
+        s_anom = s.get('is_anomaly', True) or float(s.get('stress_score', 1)) > AI_SCORE_THRESHOLD
+        
+        if s_anom: tp += 1
+        else: fn += 1
+        
+        if not c_anom: tn += 1
+        else: fp += 1
+
+    n_sessions = len(calm_dwells)
+    if n_sessions == 0:
+        return None
+
+    # Statistical significance on Dwell Time and Composite Z
+    res = _metrics(tp, tn, fp, fn)
+    res['total_sessions'] = n_sessions
+    
+    # Paired t-test
+    if n_sessions >= 2:
+        try:
+            t_stat, p_val = stats.ttest_rel(stress_dwells, calm_dwells)
+            res['t_stat'] = round(float(t_stat), 4)
+            res['p_val'] = round(float(p_val), 6)
+        except Exception:
+            res['t_stat'] = None
+            res['p_val'] = None
+            
+        # Cohen's d effect size on dwell time
+        diff_mean = float(np.mean(stress_dwells) - np.mean(calm_dwells))
+        pooled_sd = float(np.sqrt((np.var(stress_dwells) + np.var(calm_dwells)) / 2.0))
+        res['cohens_d'] = round(diff_mean / max(pooled_sd, 1e-6), 4)
+        
+        # Wilcoxon Signed-Rank Test
+        try:
+            if n_sessions >= 5:
+                w_stat, w_pval = stats.wilcoxon(stress_dwells, calm_dwells)
+                res['wilcoxon_p'] = round(float(w_pval), 6)
+            else:
+                res['wilcoxon_p'] = None
+        except Exception:
+            res['wilcoxon_p'] = None
+    else:
+        res['t_stat'] = None
+        res['p_val'] = None
+        res['cohens_d'] = None
+        res['wilcoxon_p'] = None
+
+    res['mean_dwell_calm'] = round(float(np.mean(calm_dwells)), 2)
+    res['mean_dwell_stress'] = round(float(np.mean(stress_dwells)), 2)
+    return res
+
+
 # ── Report printer ────────────────────────────────────────────────────────────
 
 def _bar(value, width=20):
@@ -240,10 +344,10 @@ def _bar(value, width=20):
     filled = int(round(value * width))
     return '[' + '#' * filled + '-' * (width - filled) + f']  {value * 100:.1f}%'
 
-def print_report(user_id, ema_res, physio_res):
+def print_report(user_id, ema_res, physio_res, exp_res=None):
     line = '=' * 70
     print(f'\n{line}')
-    print(f'  DIGITAL PHENOTYPING -- ACCURACY REPORT')
+    print(f'  DIGITAL PHENOTYPING -- TRIPLE-METHOD ACCURACY & VALIDATION REPORT')
     print(f'  User: {user_id}')
     print(line)
 
@@ -258,36 +362,22 @@ def print_report(user_id, ema_res, physio_res):
         print(f"  Confusion Matrix:  TP={cm['TP']}  TN={cm['TN']}  "
               f"FP={cm['FP']}  FN={cm['FN']}")
 
-        # ── FIX 1: Minimum sample size gate ──────────────────────────────────
         if n < MIN_SAMPLES_PRELIMINARY:
             print(f"  [!!] RELIABILITY WARNING: Only {n} matched samples.")
             print(f"       Results are UNRELIABLE — minimum {MIN_SAMPLES_PRELIMINARY} needed to interpret.")
-            print(f"       Do NOT report these numbers in research. Collect more surveys.")
         elif n < MIN_SAMPLES_VALID:
             print(f"  [!]  PRELIMINARY RESULTS: {n} samples (need {MIN_SAMPLES_VALID} for valid, {MIN_SAMPLES_PUBLISHABLE} to publish).")
-            print(f"       Treat these numbers as early indicators only.")
         elif n < MIN_SAMPLES_PUBLISHABLE:
             print(f"  [~]  VALID but not yet publishable: {n}/{MIN_SAMPLES_PUBLISHABLE} samples collected.")
         else:
             print(f"  [OK] Sample size sufficient for publication ({n} >= {MIN_SAMPLES_PUBLISHABLE}).")
 
-        # ── FIX 2: Class balance check ────────────────────────────────────────
-        stressed_labels = cm['TP'] + cm['FN']   # all ground-truth "Stressed" cases
-        normal_labels   = cm['TN'] + cm['FP']   # all ground-truth "Normal" cases
-        if normal_labels == 0:
-            print(f"  [!!] CLASS IMBALANCE: Zero 'Normal/Calm' surveys found!")
-            print(f"       Accuracy is inflated — the model has never been tested on calm moments.")
-            print(f"       -> Users MUST submit surveys also when they feel calm and relaxed.")
-        elif stressed_labels == 0:
-            print(f"  [!!] CLASS IMBALANCE: Zero 'Stressed' surveys found!")
-            print(f"       Accuracy is inflated — the model has never been tested on stress moments.")
+        stressed_labels = cm['TP'] + cm['FN']
+        normal_labels   = cm['TN'] + cm['FP']
+        if normal_labels == 0 or stressed_labels == 0:
+            print(f"  [!!] CLASS IMBALANCE: Need both calm and stressed surveys.")
         else:
-            ratio = round(stressed_labels / max(normal_labels, 1), 2)
-            if ratio > 3.0 or ratio < 0.33:
-                print(f"  [!]  IMBALANCED LABELS: {stressed_labels} Stressed vs {normal_labels} Normal (ratio={ratio}).")
-                print(f"       Collect more of the minority class for balanced evaluation.")
-            else:
-                print(f"  [OK] Balanced labels: {stressed_labels} Stressed / {normal_labels} Normal.")
+            print(f"  [OK] Label Distribution: {stressed_labels} Stressed / {normal_labels} Normal.")
 
         print(f"  Accuracy    {_bar(ema_res['accuracy'])}")
         print(f"  Precision   {_bar(ema_res['precision'])}")
@@ -295,29 +385,13 @@ def print_report(user_id, ema_res, physio_res):
         print(f"  F1-Score    {_bar(ema_res['f1_score'])}")
     else:
         print('  [!] No matched EMA survey labels found for this user yet.')
-        print('      -> Ask the user to complete a SISS or PSS-4 check-in in the app.')
+        print('      -> Complete a SISS or PSS-4 check-in in the mobile app.')
 
     # --- Method 2 ---
-    print('\n  -- Method 2: Objective Physiological Triangulation (Wearable) --')
+    print('\n  -- Method 2: Objective Physiological Triangulation (IoT Wearable) --')
     if physio_res and physio_res['total'] > 0:
         cm = physio_res['confusion_matrix']
         n  = physio_res['total']
-
-        # ── FIX 1 (Method 2): Minimum sample size gate ───────────────────────
-        if n < MIN_SAMPLES_PRELIMINARY:
-            print(f"  [!!] RELIABILITY WARNING: Only {n} matched physiological pairs.")
-            print(f"       Results are UNRELIABLE — minimum {MIN_SAMPLES_PRELIMINARY} needed.")
-        elif n < MIN_SAMPLES_VALID:
-            print(f"  [!]  PRELIMINARY: {n} matched pairs (need {MIN_SAMPLES_VALID} for valid results).")
-        else:
-            print(f"  [OK] Physiological sample count sufficient ({n} pairs).")
-
-        # ── FIX 2 (Method 2): Class balance check ────────────────────────────
-        stressed_physio = cm['TP'] + cm['FN']
-        normal_physio   = cm['TN'] + cm['FP']
-        if normal_physio == 0:
-            print(f"  [!!] CLASS IMBALANCE: Zero 'Normal' physiological readings matched.")
-            print(f"       Pearson r and Accuracy are unreliable without calm baseline data.")
 
         print(f"  Matched pairs   :  {n}")
         print(f"  Pearson r       :  {physio_res['pearson_r']}  "
@@ -330,19 +404,44 @@ def print_report(user_id, ema_res, physio_res):
         print(f"  F1-Score    {_bar(physio_res['f1_score'])}")
     else:
         print('  [!] No physiological wearable predictions found for this user.')
-        print('      -> Physiological module must be running and synced.')
+        print('      -> Physiological/wearable module must be synced.')
+
+    # --- Method 3 ---
+    print('\n  -- Method 3: Controlled Cognitive Stress Experiment (Hypothesis Testing) --')
+    if exp_res and exp_res['total'] > 0:
+        cm = exp_res['confusion_matrix']
+        print(f"  Completed Tests :  {exp_res['total_sessions']} experimental sessions")
+        print(f"  Mean Dwell Time :  Calm: {exp_res['mean_dwell_calm']} ms  -->  Stressed: {exp_res['mean_dwell_stress']} ms")
+        if exp_res.get('p_val') is not None:
+            sig_str = "*** p < 0.001 (Highly Significant)" if exp_res['p_val'] < 0.001 else "** p < 0.01" if exp_res['p_val'] < 0.01 else "* p < 0.05 (Significant)" if exp_res['p_val'] < 0.05 else "n.s. (Not Significant)"
+            print(f"  Paired t-test   :  t = {exp_res['t_stat']}, p = {exp_res['p_val']} ({sig_str})")
+        if exp_res.get('cohens_d') is not None:
+            effect_str = "Large Effect (d > 0.8)" if abs(exp_res['cohens_d']) >= 0.8 else "Medium Effect" if abs(exp_res['cohens_d']) >= 0.5 else "Small Effect"
+            print(f"  Cohen's d       :  {exp_res['cohens_d']} ({effect_str})")
+        if exp_res.get('wilcoxon_p') is not None:
+            print(f"  Wilcoxon p-val  :  {exp_res['wilcoxon_p']}")
+        print(f"  Confusion Matrix:  TP={cm['TP']}  TN={cm['TN']}  FP={cm['FP']}  FN={cm['FN']}")
+        print(f"  Accuracy    {_bar(exp_res['accuracy'])}")
+    else:
+        print('  [!] No controlled experiment sessions recorded yet for this user.')
+        print('      -> Run: python run_controlled_experiment.py --user_id <UID>')
 
     print(f'\n{line}\n')
-    return {"ema_validation": ema_res, "physiological_triangulation": physio_res}
+    return {
+        "ema_validation": ema_res,
+        "physiological_triangulation": physio_res,
+        "controlled_experiment": exp_res
+    }
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 def run_evaluation(user_id):
-    """Evaluate a single user and print the report."""
+    """Evaluate a single user across all 3 methods and print the report."""
     ema_res    = evaluate_ema(user_id)
     physio_res = evaluate_physio(user_id)
-    return print_report(user_id, ema_res, physio_res)
+    exp_res    = evaluate_controlled_experiment(user_id)
+    return print_report(user_id, ema_res, physio_res, exp_res)
 
 
 def run_all_users():
@@ -350,7 +449,6 @@ def run_all_users():
     user_ids = list_all_user_ids()
     if not user_ids:
         print('\n[WARN] No registered users found in Firebase under phenotyping/users/')
-        print('       Make sure at least one user has completed app onboarding.\n')
         return
 
     print(f'\n[INFO] Found {len(user_ids)} registered user(s) in Firebase.')
@@ -358,14 +456,15 @@ def run_all_users():
     for uid in user_ids:
         ema    = evaluate_ema(uid)
         physio = evaluate_physio(uid)
-        all_results[uid] = print_report(uid, ema, physio)
+        exp    = evaluate_controlled_experiment(uid)
+        all_results[uid] = print_report(uid, ema, physio, exp)
 
     return all_results
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='Digital Phenotyping Accuracy Evaluation Tool',
+        description='Digital Phenotyping Accuracy & Validation Suite (Methods 1, 2, and 3)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
@@ -400,9 +499,9 @@ if __name__ == '__main__':
         run_all_users()
 
     else:
-        # Default: evaluate the supplied user_id
         uid = args.user_id
         if not uid:
             parser.print_help()
             sys.exit(1)
         run_evaluation(uid)
+

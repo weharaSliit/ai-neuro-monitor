@@ -25,7 +25,7 @@ const SIGNAL_DETAILS_CONFIG = {
         title: '📜 Screen Scrolling',
         unit: 'px/s',
         measures: [
-            { id: 'scroll_velocity', name: 'Scroll Velocity', unit: 'px/s', baselineKey: 'scroll_velocity', fallbackBaseline: 922, colorZone: 'scroll', explanation: "How fast you scroll through content. Faster scrolling than usual can indicate impatience, frustration, or difficulty focusing — a subtle pre-stress marker." }
+            { id: 'scroll_velocity', name: 'Scroll Velocity', unit: 'px/s', baselineKey: 'scroll_velocity', fallbackBaseline: 450, colorZone: 'scroll', explanation: "How fast you scroll through content. Faster scrolling than usual can indicate impatience, frustration, or difficulty focusing — a subtle pre-stress marker." }
         ]
     },
     tilt: {
@@ -33,13 +33,6 @@ const SIGNAL_DETAILS_CONFIG = {
         unit: '°',
         measures: [
             { id: 'tilt_angle', name: 'Tilt Angle', unit: '°', baselineKey: 'tilt_angle', fallbackBaseline: 59, colorZone: 'tilt', explanation: "The angle at which you hold your phone, measured by the accelerometer. Studies show people hunch over their phone (higher tilt angle) when stressed or anxious. Population mean ≈59° when calm." }
-        ]
-    },
-    cpm: {
-        title: '🔡 Typing Speed',
-        unit: 'cpm',
-        measures: [
-            { id: 'cpm', name: 'Typing Speed', unit: 'cpm', baselineKey: 'cpm', fallbackBaseline: 39, colorZone: 'cpm', explanation: "How fast you type in this window. A significant drop in typing speed compared to your personal baseline can signal cognitive fatigue or mental overload, even before you consciously feel it." }
         ]
     },
     app_switch: {

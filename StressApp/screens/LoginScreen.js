@@ -13,16 +13,16 @@ import { useAuth } from '../context/AuthContext';
 
 export default function LoginScreen({ navigation }) {
   const { login } = useAuth();
-  const [userId,   setUserId]   = useState('');
+  const [userId, setUserId] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [busy,     setBusy]    = useState(false);
+  const [busy, setBusy] = useState(false);
 
-  const text      = COLORS.light.text;
-  const muted     = COLORS.light.textMuted;
-  const textSub   = COLORS.light.textSub;
+  const text = COLORS.light.text;
+  const muted = COLORS.light.textMuted;
+  const textSub = COLORS.light.textSub;
   const cardHover = COLORS.light.cardHover;
-  const border    = COLORS.light.border;
+  const border = COLORS.light.border;
 
   const submit = async () => {
     if (!userId.trim() || !password) {

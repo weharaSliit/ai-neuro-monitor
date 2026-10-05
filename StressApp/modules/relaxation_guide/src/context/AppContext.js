@@ -75,7 +75,7 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
         const prob = typeof telemetry.confidence === 'number'
           ? telemetry.confidence
           : (telemetry.features_flat && telemetry.features_flat.length >= 1 ? telemetry.features_flat[0] : 0.15);
-        
+
         setStressProbability(prob);
         setConfidence(prob);
 
