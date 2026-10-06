@@ -14,6 +14,20 @@ EMA_ALPHA = 0.1
 # making every future real keystroke read as a huge deviation.
 ZERO_MEANS_NO_SIGNAL = {'avg_dwell', 'dwell_std', 'avg_flight', 'flight_std', 'scroll_velocity', 'cpm'}
 
+# Minimum physiological standard deviation floor per feature to prevent
+# micro-variance collapse during prolonged uniform typing.
+FEATURE_MIN_STD = {
+    'avg_dwell':        5.0,
+    'dwell_std':        2.0,
+    'avg_flight':       9.0,
+    'flight_std':       3.0,
+    'interaction_rate': 0.2,
+    'scroll_velocity':  40.0,
+    'tilt_angle':       3.0,
+    'cpm':              3.0,
+    'app_switch_rate':  0.1,
+}
+
 def update_personalized_baseline(user_id, current_window_features, is_anomaly):
     """
     Methodology: Continual Learning via EMA.
@@ -56,9 +70,12 @@ def update_personalized_baseline(user_id, current_window_features, is_anomaly):
         current_dev = abs(current_val - old_mean)
         new_std = (EMA_ALPHA * current_dev) + ((1 - EMA_ALPHA) * old_std)
 
+        min_allowed_std = FEATURE_MIN_STD.get(feature_name, 1.0)
+        safe_std = max(new_std, min_allowed_std)
+
         updated_baselines[feature_name] = {
             'mean': round(float(new_mean), 6),
-            'std': round(float(max(new_std, 0.001)), 6) # Prevent std from hitting zero
+            'std': round(float(safe_std), 6) # Enforce physiological minimum floor
         }
 
     # 3. Save the evolved baseline back to Firebase
@@ -72,5 +89,7 @@ def update_personalized_baseline(user_id, current_window_features, is_anomaly):
 def calculate_z_score(feature_val, mean, std):
     """
     Helper used by predictor to see how far the user is from their baseline.
+    Floors denominator at 1.0 to prevent division by near-zero std spikes.
     """
-    return (feature_val - mean) / (std + 1e-6)
+    safe_std = max(float(std or 0), 1.0)
+    return (feature_val - mean) / safe_std

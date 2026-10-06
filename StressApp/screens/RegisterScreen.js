@@ -13,18 +13,18 @@ import { useAuth } from '../context/AuthContext';
 
 export default function RegisterScreen({ navigation }) {
   const { register } = useAuth();
-  const [userId,   setUserId]   = useState('');
-  const [name,     setName]     = useState('');
+  const [userId, setUserId] = useState('');
+  const [name, setName] = useState('');
   const [password, setPassword] = useState('');
-  const [confirm,  setConfirm]  = useState('');
+  const [confirm, setConfirm] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [busy,     setBusy]    = useState(false);
+  const [busy, setBusy] = useState(false);
 
-  const text      = COLORS.light.text;
-  const muted     = COLORS.light.textMuted;
-  const textSub   = COLORS.light.textSub;
+  const text = COLORS.light.text;
+  const muted = COLORS.light.textMuted;
+  const textSub = COLORS.light.textSub;
   const cardHover = COLORS.light.cardHover;
-  const border    = COLORS.light.border;
+  const border = COLORS.light.border;
 
   const submit = async () => {
     if (!userId.trim() || !password) {
