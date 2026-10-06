@@ -494,6 +494,12 @@ public class KeystrokeCollectorService extends AccessibilityService {
         return prefs.getString(PhenotypingIdentityModule.USER_ID_KEY, null);
     }
 
+    private String getSessionId() {
+        SharedPreferences prefs = getSharedPreferences(
+            PhenotypingIdentityModule.PREFS_NAME, Context.MODE_PRIVATE);
+        return prefs.getString(PhenotypingIdentityModule.SESSION_ID_KEY, null);
+    }
+
     // -----------------------------------------------------------------------
     // Flush: compute stats → POST to Flask → secondary write to Firebase UI
     // -----------------------------------------------------------------------
@@ -544,6 +550,7 @@ public class KeystrokeCollectorService extends AccessibilityService {
         final long       elapsed           = Math.max(1, (System.currentTimeMillis() - sessionStartTime) / 60000L);
         sessionStartTime = System.currentTimeMillis();
         final String     currentUserId     = currentUserIdCheck;
+        final String     currentSessionId  = getSessionId();
 
         final boolean windowMotionValid   = this.dataValid;
         final boolean windowCategoryValid = this.appCategoryValid;
@@ -595,6 +602,9 @@ public class KeystrokeCollectorService extends AccessibilityService {
 
                 JSONObject payload = new JSONObject();
                 payload.put("user_id",           currentUserId);
+                if (currentSessionId != null && !currentSessionId.trim().isEmpty()) {
+                    payload.put("session_id",    currentSessionId.trim());
+                }
                 payload.put("dwell_times",       dwellArr);
                 payload.put("flight_times",      flightArr);
                 payload.put("scroll_velocity",   avgScroll);
@@ -618,8 +628,8 @@ public class KeystrokeCollectorService extends AccessibilityService {
                 payload.put("unlocks_count",     unlockSnapshot);
                 payload.put("data_valid",        windowDataValid);
 
-                Log.d(TAG, "Sending to Flask: " + flightSnapshot.size()
-                    + " flight times | scroll=" + String.format("%.1f", avgScroll)
+                Log.d(TAG, "Sending to Flask: user=" + currentUserId + " session=" + currentSessionId
+                    + " | " + flightSnapshot.size() + " flight times | scroll=" + String.format("%.1f", avgScroll)
                     + " px/s | tilt=" + String.format("%.1f", tiltAngleSnapshot)
                     + " deg | cpm=" + String.format("%.1f", cpm)
                     + " | app_switches=" + appSwitchSnapshot
@@ -692,10 +702,6 @@ public class KeystrokeCollectorService extends AccessibilityService {
 
     private String httpPost(String urlStr, String jsonBody) {
         return httpRequest("POST", urlStr, jsonBody);
-    }
-
-    private String httpPatch(String urlStr, String jsonBody) {
-        return httpRequest("PATCH", urlStr, jsonBody);
     }
 
     private String httpRequest(String method, String urlStr, String jsonBody) {

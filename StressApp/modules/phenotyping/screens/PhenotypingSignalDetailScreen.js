@@ -138,15 +138,15 @@ export default function PhenotypingSignalDetailScreen({ navigation, route }) {
                     },
                 ]);
             } else if (signalId === 'scroll') {
-                const scrollMean = bl?.scroll_velocity?.mean || 750;
-                const scrollStd = bl?.scroll_velocity?.std || 120;
+                const scrollMean = bl?.scroll_velocity?.mean || 450;
+                const scrollStd = bl?.scroll_velocity?.std || 200;
                 const scrollVal = latest.scroll_velocity || 0;
                 const zScroll = Math.abs((scrollVal - scrollMean) / scrollStd);
                 setMeasures([
                     {
                         ...config.measures[0],
                         value: `${Math.round(scrollVal)} px/s`,
-                        baseline: fmtBaseline('scroll_velocity', 0, 'px/s', '750 px/s'),
+                        baseline: fmtBaseline('scroll_velocity', 0, 'px/s', '450 px/s'),
                         status: zScroll > 2.0 ? 'anomalous' : zScroll > 1.0 ? 'elevated' : 'normal',
                     },
                 ]);
