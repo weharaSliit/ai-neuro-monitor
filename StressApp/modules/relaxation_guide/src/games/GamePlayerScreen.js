@@ -7,9 +7,10 @@ import {
   Animated,
   Dimensions,
   StatusBar,
-  SafeAreaView,
-  Vibration
+  Vibration,
+  Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
@@ -23,6 +24,11 @@ import { LilyPondGame } from '../games/LilyPondGame';
 import { PulseWaveGame } from '../games/PulseWaveGame';
 import { CognitiveDeStressGame } from '../games/CognitiveDeStressGame';
 import { MeditationGame } from '../games/MeditationGame';
+import {
+  PMRMuscleReleaseGame,
+  EMDRSaccadicTraceGame,
+  BioGSRLiquidPoolGame,
+} from '../games/InnovativeTechniquesGame';
 
 const { width } = Dimensions.get('window');
 
@@ -100,6 +106,35 @@ const TECHNIQUE_DETAILS = {
     meaningTitle: 'Speed Color Challenge',
     suggestedMin: 3,
   },
+
+  // ===== INNOVATIVE WESAD-VALIDATED TECHNIQUES =====
+  pmr_crystal_squeeze: {
+    id: 'pmr_crystal_squeeze',
+    title: 'Somatic PMR',
+    icon: '💎',
+    color: '#EC4899',
+    gradient: ['#881337', '#BE185D', '#F472B6'],
+    meaningTitle: 'PMR Iso-Tension & Release',
+    suggestedMin: 3,
+  },
+  emdr_saccadic_trace: {
+    id: 'emdr_saccadic_trace',
+    title: 'Cosmic Trace',
+    icon: '✨',
+    color: '#38BDF8',
+    gradient: ['#0369A1', '#38BDF8', '#C084FC'],
+    meaningTitle: 'EMDR Saccadic Desensitization',
+    suggestedMin: 3,
+  },
+  galvanic_biofeedback_flow: {
+    id: 'galvanic_biofeedback_flow',
+    title: 'Bio GSR Pool',
+    icon: '💧',
+    color: '#06B6D4',
+    gradient: ['#083344', '#06B6D4', '#67E8F9'],
+    meaningTitle: 'GSR Fluid Closed-Loop Biofeedback',
+    suggestedMin: 3,
+  },
 };
 
 const getTechKey = (target) => {
@@ -110,6 +145,10 @@ const getTechKey = (target) => {
     raw = target.id || target.technique_id || target.key || target.title || '';
   }
   const s = String(raw).toLowerCase();
+
+  if (s.includes('pmr') || s.includes('crystal') || s.includes('somatic') || s.includes('squeeze')) return 'pmr_crystal_squeeze';
+  if (s.includes('emdr') || s.includes('saccadic') || s.includes('trace') || s.includes('cosmic')) return 'emdr_saccadic_trace';
+  if (s.includes('gsr') || s.includes('galvanic') || s.includes('fluid') || s.includes('pool')) return 'galvanic_biofeedback_flow';
 
   if (s.includes('pattern') || s.includes('match') || s.includes('alignment')) return 'pattern_alignment';
   if (s.includes('autogenic') || s.includes('warmth') || s.includes('warm')) return 'autogenic_warmth';
@@ -231,13 +270,22 @@ export const GamePlayerScreen = () => {
       case 'stroop_decoupler':
         return <CognitiveDeStressGame mode={techKey} subOptionId={techKey} initialScreen="session" initialDurationMin={tech.suggestedMin} onTally={handleTally} onFinish={handleFinishGame} onStartSession={handleStartSession} />;
 
+      case 'pmr_crystal_squeeze':
+        return <PMRMuscleReleaseGame onTally={handleTally} onFinish={handleFinishGame} />;
+
+      case 'emdr_saccadic_trace':
+        return <EMDRSaccadicTraceGame onTally={handleTally} onFinish={handleFinishGame} />;
+
+      case 'galvanic_biofeedback_flow':
+        return <BioGSRLiquidPoolGame onTally={handleTally} onFinish={handleFinishGame} />;
+
       default:
         return <FlowerMeadowGame initialScreen="session" initialDurationMin={tech.suggestedMin} onStartSession={handleStartSession} onTally={handleTally} onFinish={handleFinishGame} />;
     }
   };
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
+    <SafeAreaView edges={['left', 'right']} style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
       <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
 
       {/* Header Controls Bar */}
@@ -294,12 +342,7 @@ export const GamePlayerScreen = () => {
           <Text style={[styles.statValue, { color: '#EC4899' }]}>x{combo}</Text>
         </View>
 
-        <View style={styles.statDivider} />
 
-        <View style={styles.statItem}>
-          <Text style={styles.statLabel}>🏆 LEVEL</Text>
-          <Text style={[styles.statValue, { color: '#10B981' }]}>Lvl {level}</Text>
-        </View>
 
         <View style={styles.statDivider} />
 
@@ -420,57 +463,57 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   topBar: {
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 6,
+    paddingHorizontal: 12,
+    paddingTop: 2,
+    paddingBottom: 2,
     borderBottomWidth: 1,
   },
   headerTop: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 2,
+    marginBottom: 1,
   },
   backButton: {
-    padding: 6,
+    padding: 4,
     borderRadius: 8,
   },
   gameTitle: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
   },
   gameIcon: {
-    fontSize: 22,
+    fontSize: 18,
   },
   gameTitleText: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '900',
   },
   headerRightBtns: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
   },
   headerQuestBtn: {
     backgroundColor: '#7C3AED',
-    paddingVertical: 5,
-    paddingHorizontal: 10,
-    borderRadius: 12,
-    borderWidth: 1.5,
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+    borderRadius: 10,
+    borderWidth: 1,
     borderColor: '#A78BFA',
   },
   headerQuestEmoji: {
     color: '#FFFFFF',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '900',
   },
   pauseButton: {
-    padding: 6,
+    padding: 4,
     borderRadius: 8,
   },
   gameDescription: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
     textAlign: 'center',
   },
@@ -478,36 +521,36 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
-    marginHorizontal: 16,
-    marginTop: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 16,
-    borderWidth: 2,
+    marginHorizontal: 12,
+    marginTop: 2,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 14,
+    borderWidth: 1.5,
   },
   statItem: {
     alignItems: 'center',
   },
   statLabel: {
-    fontSize: 9,
+    fontSize: 8.5,
     fontWeight: '900',
-    letterSpacing: 0.5,
+    letterSpacing: 0.4,
   },
   statValue: {
-    fontSize: 14,
+    fontSize: 12.5,
     fontWeight: '900',
     marginTop: 1,
   },
   statDivider: {
     width: 1,
-    height: 18,
+    height: 14,
     backgroundColor: 'rgba(255,255,255,0.15)',
   },
   canvasContainer: {
     flex: 1,
-    marginHorizontal: 12,
-    marginVertical: 6,
-    borderRadius: 20,
+    marginHorizontal: 8,
+    marginVertical: 4,
+    borderRadius: 18,
     overflow: 'hidden',
   },
   pausedOverlay: {
@@ -516,74 +559,76 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   pausedContent: {
-    paddingVertical: 24,
-    paddingHorizontal: 32,
+    paddingVertical: 20,
+    paddingHorizontal: 28,
     borderRadius: 20,
     alignItems: 'center',
     gap: 12,
   },
   pausedIcon: {
-    fontSize: 40,
+    fontSize: 36,
   },
   pausedText: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '900',
   },
   resumeButton: {
-    paddingVertical: 10,
-    paddingHorizontal: 24,
-    borderRadius: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 20,
+    borderRadius: 12,
     marginTop: 4,
   },
   resumeButtonText: {
     color: '#FFFFFF',
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '900',
   },
   boosterBarContainer: {
     flexDirection: 'row',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    gap: 8,
+    paddingHorizontal: 10,
+    paddingTop: 4,
+    paddingBottom: Platform.OS === 'android' ? 24 : 14,
+    marginBottom: 4,
+    gap: 5,
     alignItems: 'center',
   },
   boosterBtnGradient: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 16,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 14,
     borderWidth: 1.5,
     borderColor: '#FFFFFF',
     elevation: 3,
   },
   boosterIcon: {
-    fontSize: 16,
-    marginRight: 4,
+    fontSize: 15,
+    marginRight: 3,
   },
   boosterTxt: {
     color: '#FFFFFF',
-    fontSize: 11,
+    fontSize: 10.5,
     fontWeight: '900',
   },
   completeSessionBtnWrapper: {
     flex: 1,
-    borderRadius: 16,
+    borderRadius: 14,
     elevation: 4,
   },
   completeSessionBtnGradient: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderRadius: 16,
+    paddingVertical: 9,
+    paddingHorizontal: 10,
+    borderRadius: 14,
     borderWidth: 1.5,
     borderColor: '#FFFFFF',
   },
   completeSessionBtnTxt: {
     color: '#FFFFFF',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '900',
   },
 });

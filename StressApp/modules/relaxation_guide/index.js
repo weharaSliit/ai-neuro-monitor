@@ -15,7 +15,8 @@ import { useAuth } from '../../context/AuthContext';
 import { AppProvider, AppContext } from './src/context/AppContext';
 import { ThemeProvider, ThemeContext } from './src/context/ThemeContext';
 import { SweetAlertProvider } from './src/context/SweetAlertContext';
-import { BottomNavBar } from './src/components/BottomNavBar';
+import { SideDrawer } from './src/components/SideDrawer';
+import { HostAppSwitchBar } from './src/components/HostAppSwitchBar';
 import { RealtimeStressTrendCard } from './src/components/RealtimeStressTrendCard';
 
 import { DashboardScreen } from './src/screens/DashboardScreen';
@@ -92,7 +93,8 @@ const MainNavigator = () => {
       />
       <RealtimeStressTrendCard />
       <View style={styles.screenContainer}>{renderScreen()}</View>
-      <BottomNavBar />
+      {currentScreen !== 'GamePlayer' && <HostAppSwitchBar />}
+      <SideDrawer />
     </View>
   );
 };

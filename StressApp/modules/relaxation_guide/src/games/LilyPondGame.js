@@ -26,7 +26,7 @@ const SESSION_CYCLES = 4; // 4 rounds is the classic starter session for 4-7-8
 
 // Layout
 const CX = width / 2;
-const CY = height * 0.38;
+const CY = height * 0.33;
 const RING_R = 122;
 const RING_DOTS = 32;
 const FAR = Math.min(width * 0.46, 190);
@@ -40,6 +40,13 @@ const PHASE_UI = {
   hold: { title: 'Hold', sub: 'Stay still while the light gathers', color: '#7DD3FC' },
   exhale: { title: 'Breathe out', sub: 'Through your mouth, and send the light across the pond', color: '#6EE7B7' },
   rest: { title: 'Rest', sub: 'Let the water settle', color: '#C4B5FD' },
+};
+
+const PHASE_TINTS = {
+  inhale: 'rgba(99, 102, 241, 0.48)',
+  hold: 'rgba(59, 130, 246, 0.45)',
+  exhale: 'rgba(16, 185, 129, 0.45)',
+  rest: 'rgba(139, 92, 246, 0.48)',
 };
 
 /* ---------- small building blocks ---------- */
@@ -90,7 +97,8 @@ const RingDot = ({ index, progress, color }) => {
   );
 };
 
-export const LilyPondGame = () => {
+export const LilyPondGame = (props = {}) => {
+  const { initialScreen, initialDurationMin, onStartSession, onTally, onFinish } = props;
   const [breathPhase, setBreathPhase] = useState('inhale');
   const [cycleCount, setCycleCount] = useState(0);
   const [secondsLeft, setSecondsLeft] = useState(4);
@@ -130,6 +138,19 @@ export const LilyPondGame = () => {
   const touchPos = useRef(new Animated.ValueXY({ x: -200, y: -200 })).current;
   const touchScale = useRef(new Animated.Value(0.5)).current;
   const touchOpacity = useRef(new Animated.Value(0)).current;
+
+  const tints = useRef({
+    inhale: new Animated.Value(1),
+    hold: new Animated.Value(0),
+    exhale: new Animated.Value(0),
+    rest: new Animated.Value(0),
+  }).current;
+
+  useEffect(() => {
+    PHASE_ORDER.forEach((p) => {
+      Animated.timing(tints[p], { toValue: p === breathPhase ? 1 : 0, duration: 1400, useNativeDriver: true }).start();
+    });
+  }, [breathPhase]);
 
   // Refs for the "flow" sync score
   const touchingRef = useRef(false);
@@ -354,6 +375,15 @@ export const LilyPondGame = () => {
       >
         <View style={styles.overlayShade} pointerEvents="none" />
 
+        {/* Phase dynamic background tints */}
+        {PHASE_ORDER.map((p) => (
+          <Animated.View
+            key={p}
+            pointerEvents="none"
+            style={[StyleSheet.absoluteFillObject, { backgroundColor: PHASE_TINTS[p], opacity: tints[p] }]}
+          />
+        ))}
+
         {/* Fireflies: drift in on the inhale, scatter on the exhale */}
         <View style={[styles.anchor, { left: CX, top: CY }]} pointerEvents="none">
           <Animated.View style={[styles.zero, { transform: [{ rotate: swirlDeg }] }]}>
@@ -488,11 +518,10 @@ export const LilyPondGame = () => {
           {engaged && <Text style={styles.flowText}>Flow {flow}%</Text>}
         </View>
 
-        {/* First-time hint */}
-        {!engaged && !sessionDone && (
+        {/* Guideline hint sentence */}
+        {!sessionDone && (
           <View style={styles.hint} pointerEvents="none">
-            <Text style={styles.hintText}>Press and hold the water as you breathe in.</Text>
-            <Text style={styles.hintText}>Lift your finger as you breathe out.</Text>
+            <Text style={styles.hintText}>Press & hold the water to breathe in • Release to breathe out</Text>
           </View>
         )}
 
@@ -561,7 +590,7 @@ const styles = StyleSheet.create({
   },
   overlayShade: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(4, 29, 23, 0.3)',
+    backgroundColor: 'rgba(4, 29, 23, 0.16)',
   },
 
   // zero-size anchors used for radial layouts
@@ -676,15 +705,21 @@ const styles = StyleSheet.create({
 
   hint: {
     position: 'absolute',
-    top: 92,
-    left: 24,
-    right: 24,
+    top: 44,
+    left: 14,
+    right: 14,
     alignItems: 'center',
+    backgroundColor: 'rgba(6, 28, 24, 0.72)',
+    paddingVertical: 5,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(253, 230, 138, 0.28)',
   },
   hintText: {
     color: '#FDE68A',
-    fontSize: 13,
-    fontWeight: '600',
+    fontSize: 11,
+    fontWeight: '800',
     textAlign: 'center',
     textShadowColor: 'rgba(0,0,0,0.7)',
     textShadowOffset: { width: 1, height: 1 },
@@ -693,13 +728,13 @@ const styles = StyleSheet.create({
 
   panel: {
     position: 'absolute',
-    left: 20,
-    right: 20,
-    bottom: 36,
-    paddingVertical: 18,
-    paddingHorizontal: 20,
-    borderRadius: 28,
-    backgroundColor: 'rgba(6, 28, 24, 0.58)',
+    left: 18,
+    right: 18,
+    bottom: 85,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    borderRadius: 24,
+    backgroundColor: 'rgba(6, 28, 24, 0.65)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.12)',
   },

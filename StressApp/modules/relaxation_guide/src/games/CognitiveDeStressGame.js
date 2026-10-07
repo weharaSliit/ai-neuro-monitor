@@ -78,7 +78,7 @@ const DriftOrb = ({ size, color, top, left, duration, dx, dy }) => {
         height: size,
         borderRadius: size / 2,
         backgroundColor: color,
-        opacity: 0.22,
+        opacity: 0.38,
         transform: [
           { translateX: t.interpolate({ inputRange: [0, 1], outputRange: [0, dx] }) },
           { translateY: t.interpolate({ inputRange: [0, 1], outputRange: [0, dy] }) },
