@@ -23,6 +23,28 @@ const { width } = Dimensions.get('window');
 // Simple, friendly game titles & unique color-mixed gradients
 const SIMPLE_GAME_MAP = {
   flower_meadow: { title: 'Calm Meadow', icon: '🌸', color: '#EC4899', gradient: ['#F43F5E', '#EC4899', '#FDE68A'], tag: 'Garden Bloom' },
+  breathing_garden: { title: 'Calm Meadow', icon: '🌸', color: '#EC4899', gradient: ['#F43F5E', '#EC4899', '#FDE68A'], tag: 'Garden Bloom' },
+  water_lily_pond: { title: 'Zen Lily Pond', icon: '🪷', color: '#10B981', gradient: ['#059669', '#10B981', '#06B6D4'], tag: 'Breathe & Float' },
+  soft_fascination: { title: 'Zen Lily Pond', icon: '🪷', color: '#10B981', gradient: ['#059669', '#10B981', '#06B6D4'], tag: 'Breathe & Float' },
+  guided_imagery: { title: 'Zen Lily Pond', icon: '🪷', color: '#10B981', gradient: ['#059669', '#10B981', '#06B6D4'], tag: 'Breathe & Float' },
+  box_meditation: { title: 'Focus Box', icon: '🧊', color: '#0EA5E9', gradient: ['#1E1B4B', '#3B82F6', '#38BDF8'], tag: 'Square Rhythm' },
+  guided_meditation: { title: 'Focus Box', icon: '🧊', color: '#0EA5E9', gradient: ['#1E1B4B', '#3B82F6', '#38BDF8'], tag: 'Square Rhythm' },
+  vagus_humming: { title: 'Focus Box', icon: '🧊', color: '#0EA5E9', gradient: ['#1E1B4B', '#3B82F6', '#38BDF8'], tag: 'Square Rhythm' },
+  diaphragmatic_pace: { title: 'Deep Belly Calm', icon: '🫁', color: '#3B82F6', gradient: ['#0284C7', '#0EA5E9', '#6EE7B7'], tag: 'Relax Body' },
+  pattern_alignment: { title: 'Color Match', icon: '🧩', color: '#F59E0B', gradient: ['#8B5CF6', '#D946EF', '#F59E0B'], tag: 'Brain Puzzle' },
+  body_scan_mindful: { title: 'Body Sweep', icon: '🧘‍♂️', color: '#8B5CF6', gradient: ['#4C1D95', '#7C3AED', '#C4B5FD'], tag: 'Release Tension' },
+  autogenic_warmth: { title: 'Warmth Flow', icon: '🔥', color: '#EF4444', gradient: ['#B91C1C', '#EF4444', '#F59E0B'], tag: 'Feel Warm' },
+  stroop_decoupler: { title: 'Color Clash', icon: '🎯', color: '#06B6D4', gradient: ['#0891B2', '#06B6D4', '#A855F7'], tag: 'Quick Focus' },
+  pmr_crystal_squeeze: { title: 'Somatic PMR', icon: '💎', color: '#EC4899', gradient: ['#881337', '#BE185D', '#F472B6'], tag: 'Muscle Iso-Tension' },
+  progressive_muscle: { title: 'Somatic PMR', icon: '💎', color: '#EC4899', gradient: ['#881337', '#BE185D', '#F472B6'], tag: 'Muscle Iso-Tension' },
+  cognitive_destress: { title: 'Somatic PMR', icon: '💎', color: '#EC4899', gradient: ['#881337', '#BE185D', '#F472B6'], tag: 'Muscle Iso-Tension' },
+  emdr_saccadic_trace: { title: 'Cosmic Trace', icon: '✨', color: '#38BDF8', gradient: ['#0369A1', '#38BDF8', '#C084FC'], tag: 'EMDR Saccadic Trace' },
+  cosmic_nebula: { title: 'Cosmic Trace', icon: '✨', color: '#38BDF8', gradient: ['#0369A1', '#38BDF8', '#C084FC'], tag: 'EMDR Saccadic Trace' },
+  galvanic_biofeedback_flow: { title: 'Bio GSR Pool', icon: '💧', color: '#06B6D4', gradient: ['#083344', '#06B6D4', '#67E8F9'], tag: 'GSR Fluid Biofeedback' },
+};
+
+const UNIQUE_TECHNIQUES = {
+  flower_meadow: { title: 'Calm Meadow', icon: '🌸', color: '#EC4899', gradient: ['#F43F5E', '#EC4899', '#FDE68A'], tag: 'Garden Bloom' },
   water_lily_pond: { title: 'Zen Lily Pond', icon: '🪷', color: '#10B981', gradient: ['#059669', '#10B981', '#06B6D4'], tag: 'Breathe & Float' },
   box_meditation: { title: 'Focus Box', icon: '🧊', color: '#0EA5E9', gradient: ['#1E1B4B', '#3B82F6', '#38BDF8'], tag: 'Square Rhythm' },
   diaphragmatic_pace: { title: 'Deep Belly Calm', icon: '🫁', color: '#3B82F6', gradient: ['#0284C7', '#0EA5E9', '#6EE7B7'], tag: 'Relax Body' },
@@ -228,15 +250,18 @@ export const InterventionScreen = () => {
           </LinearGradient>
         </Animated.View>
 
-        {/* Alternate Games Section */}
+        {/* Alternate Games Section - All Techniques Catalog */}
         <View style={styles.altSection}>
-          <Text style={[styles.altSectionTitle, { color: theme.textPrimary }]}>Choose Other Relaxation Games</Text>
+          <Text style={[styles.altSectionTitle, { color: theme.textPrimary }]}>🎮 Test Any Technique in the Catalog ({Object.keys(UNIQUE_TECHNIQUES).length} Games Available)</Text>
+          <Text style={{ color: theme.textMuted, fontSize: 12, marginBottom: 14 }}>
+            For research user studies, you can select and test ANY technique below:
+          </Text>
+
           <View style={styles.altGrid}>
-            {Object.keys(SIMPLE_GAME_MAP)
+            {Object.keys(UNIQUE_TECHNIQUES)
               .filter((k) => k !== techId)
-              .slice(0, 4)
               .map((key) => {
-                const item = SIMPLE_GAME_MAP[key];
+                const item = UNIQUE_TECHNIQUES[key];
                 return (
                   <TouchableOpacity
                     key={key}
@@ -260,7 +285,7 @@ export const InterventionScreen = () => {
                           end={{ x: 1, y: 0 }}
                           style={styles.altPlayBtnGradient}
                         >
-                          <Text style={styles.altPlayTxt}>Play ▶</Text>
+                          <Text style={styles.altPlayTxt}>Test Game ▶</Text>
                         </LinearGradient>
                       </View>
                     </LinearGradient>

@@ -107,7 +107,7 @@ const TECHNIQUE_DETAILS = {
     suggestedMin: 3,
   },
 
-  // ===== INNOVATIVE WESAD-VALIDATED TECHNIQUES =====
+  // ===== INNOVATIVE BIOPHYSICAL TECHNIQUES =====
   pmr_crystal_squeeze: {
     id: 'pmr_crystal_squeeze',
     title: 'Somatic PMR',
@@ -586,9 +586,9 @@ const styles = StyleSheet.create({
   boosterBarContainer: {
     flexDirection: 'row',
     paddingHorizontal: 10,
-    paddingTop: 4,
-    paddingBottom: Platform.OS === 'android' ? 24 : 14,
-    marginBottom: 4,
+    paddingTop: 6,
+    paddingBottom: Platform.OS === 'android' ? 76 : 66,
+    marginBottom: 10,
     gap: 5,
     alignItems: 'center',
   },

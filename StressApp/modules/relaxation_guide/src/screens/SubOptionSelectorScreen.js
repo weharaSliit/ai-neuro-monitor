@@ -6,41 +6,21 @@ import { Header } from '../components/Header';
 import { AmbientBackground } from '../components/AmbientBackground';
 
 const SIMPLE_SUB_META = {
-  water_lily_pond: {
-    icon: '🪷',
-    title: 'Zen Lily Pond',
-    tag: 'Breathing Waves',
-    accent: '#10B981',
-    badge: '⭐ TOP PICK'
-  },
-  flower_meadow: {
-    icon: '🌸',
-    title: 'Calm Meadow',
-    tag: 'Garden Bloom',
-    accent: '#EC4899',
-    badge: '🌸 POPULAR'
-  },
-  diaphragmatic_pace: {
-    icon: '🫁',
-    title: 'Deep Belly Calm',
-    tag: 'Relax Body',
-    accent: '#3B82F6',
-    badge: '🌿 DEEP CALM'
-  },
-  box_meditation: {
-    icon: '🧊',
-    title: 'Focus Box',
-    tag: 'Square Rhythm',
-    accent: '#0EA5E9',
-    badge: '🧊 BALANCED'
-  },
-  pattern_alignment: {
-    icon: '🧩',
-    title: 'Color Match',
-    tag: 'Brain Puzzle',
-    accent: '#F59E0B',
-    badge: '🎯 FOCUS'
-  },
+  flower_meadow: { icon: '🌸', title: 'Calm Meadow', tag: 'Garden Bloom', accent: '#EC4899', badge: '🌸 POPULAR' },
+  breathing_garden: { icon: '🌸', title: 'Calm Meadow', tag: 'Garden Bloom', accent: '#EC4899', badge: '🌸 POPULAR' },
+  water_lily_pond: { icon: '🪷', title: 'Zen Lily Pond', tag: 'Breathe & Float', accent: '#10B981', badge: '⭐ TOP PICK' },
+  box_meditation: { icon: '🧊', title: 'Focus Box', tag: 'Square Rhythm', accent: '#0EA5E9', badge: '🧊 BALANCED' },
+  guided_meditation: { icon: '🧊', title: 'Focus Box', tag: 'Square Rhythm', accent: '#0EA5E9', badge: '🧊 BALANCED' },
+  diaphragmatic_pace: { icon: '🫁', title: 'Deep Belly Calm', tag: 'Relax Body', accent: '#3B82F6', badge: '🌿 DEEP CALM' },
+  pattern_alignment: { icon: '🧩', title: 'Color Match', tag: 'Brain Puzzle', accent: '#F59E0B', badge: '🎯 FOCUS' },
+  body_scan_mindful: { icon: '🧘‍♂️', title: 'Body Sweep', tag: 'Release Tension', accent: '#8B5CF6', badge: '🧘 MINDFUL' },
+  autogenic_warmth: { icon: '🔥', title: 'Warmth Flow', tag: 'Thermal Warmth', accent: '#EF4444', badge: '🔥 THERMAL' },
+  stroop_decoupler: { icon: '🎯', title: 'Color Clash', tag: 'Quick Focus', accent: '#06B6D4', badge: '🎯 RAPID' },
+  pmr_crystal_squeeze: { icon: '💎', title: 'Somatic PMR', tag: 'Muscle Iso-Tension', accent: '#EC4899', badge: '💎 SOMATIC' },
+  progressive_muscle: { icon: '💎', title: 'Somatic PMR', tag: 'Muscle Iso-Tension', accent: '#EC4899', badge: '💎 SOMATIC' },
+  emdr_saccadic_trace: { icon: '✨', title: 'Cosmic Trace', tag: 'EMDR Saccadic', accent: '#38BDF8', badge: '✨ COSMIC' },
+  cosmic_nebula: { icon: '✨', title: 'Cosmic Trace', tag: 'EMDR Saccadic', accent: '#38BDF8', badge: '✨ COSMIC' },
+  galvanic_biofeedback_flow: { icon: '💧', title: 'Bio GSR Pool', tag: 'GSR Fluid Biofeedback', accent: '#06B6D4', badge: '💧 BIOFEEDBACK' },
 };
 
 export const SubOptionSelectorScreen = () => {

@@ -6,10 +6,13 @@ import { ThemeContext } from '../context/ThemeContext';
 import { Header } from '../components/Header';
 import { apiService } from '../api/apiService';
 import { AmbientBackground } from '../components/AmbientBackground';
+import { useSweetAlert } from '../context/SweetAlertContext';
+import { calculateBadges } from '../utils/badgeUtils';
 
 export const UserProfileScreen = () => {
-  const { userId, username, hostExit, setCurrentScreen } = useContext(AppContext);
+  const { userId, username, hostExit, setCurrentScreen, historyList } = useContext(AppContext);
   const { theme, isDarkMode, toggleTheme } = useContext(ThemeContext);
+  const { showAlert } = useSweetAlert();
   // Relaxation Guide's own screens are all reached via setCurrentScreen
   // (in-module switch, see AppContext). The Physiological module is a
   // separate top-level stack screen (App.js), so reaching its Dashboard
@@ -39,6 +42,50 @@ export const UserProfileScreen = () => {
     return val.replace(/_/g, ' ').toUpperCase();
   };
 
+  // Dynamic calculation based on backend profileData + live historyList sessions
+  const baseCount = profileData?.recent_interventions_count ?? 3;
+  const completedCount = baseCount + (historyList?.length || 0);
+
+  const baseXP = profileData?.xp_points ?? 250;
+  const historyXP = (historyList || []).reduce((acc, sess) => {
+    const ratingBonus = (sess.star_rating || 5) * 20;
+    return acc + 150 + ratingBonus;
+  }, 0);
+  const liveXP = baseXP + historyXP;
+
+  const baseStreak = profileData?.streak_days ?? 3;
+  const calculateStreak = () => {
+    if (!historyList || historyList.length === 0) return baseStreak;
+    const uniqueDays = new Set(
+      historyList.map((h) => {
+        const d = h.timestamp ? new Date(h.timestamp * 1000) : new Date();
+        return d.toISOString().split('T')[0];
+      })
+    );
+    return Math.max(baseStreak, baseStreak + uniqueDays.size);
+  };
+  const liveStreak = calculateStreak();
+
+  const dynamicBadges = calculateBadges(historyList, profileData);
+
+  const handleBadgePress = (b) => {
+    if (b.unlocked) {
+      showAlert({
+        title: `${b.icon} ${b.title}`,
+        text: `STATUS: UNLOCKED 🎉\n\nAchievement Requirement:\n${b.description}\n\nGreat job on maintaining your relaxation progress!`,
+        icon: 'success',
+        confirmButtonText: 'AWESOME! 🏆'
+      });
+    } else {
+      showAlert({
+        title: `${b.icon} ${b.title}`,
+        text: `STATUS: LOCKED 🔒\n\nHow to unlock:\n${b.description}`,
+        icon: 'warning',
+        confirmButtonText: 'GOT IT 👍'
+      });
+    }
+  };
+
   return (
     <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
       <AmbientBackground />
@@ -61,26 +108,28 @@ export const UserProfileScreen = () => {
             {/* Stats row */}
             <View style={[styles.statsRow, { backgroundColor: theme.bgPrimary }]}>
               <View style={styles.statBox}>
-                <Text style={[styles.statVal, { color: theme.accent }]}>⚡ {profileData?.xp_points ?? 0}</Text>
+                <Text style={[styles.statVal, { color: theme.accent }]}>⚡ {liveXP}</Text>
                 <Text style={[styles.statLbl, { color: theme.textMuted }]}>XP Points</Text>
               </View>
               <View style={styles.statBox}>
-                <Text style={[styles.statVal, { color: theme.accent }]}>🔥 {profileData?.streak_days ?? 1}d</Text>
+                <Text style={[styles.statVal, { color: theme.accent }]}>🔥 {liveStreak}d</Text>
                 <Text style={[styles.statLbl, { color: theme.textMuted }]}>Streak</Text>
               </View>
               <View style={styles.statBox}>
-                <Text style={[styles.statVal, { color: theme.accent }]}>🎯 {profileData?.recent_interventions_count ?? 0}</Text>
+                <Text style={[styles.statVal, { color: theme.accent }]}>🎯 {completedCount}</Text>
                 <Text style={[styles.statLbl, { color: theme.textMuted }]}>Completed</Text>
               </View>
             </View>
           </View>
 
           {/* Badges & Achievements Catalog */}
-          <Text style={[styles.secTitle, { color: theme.textPrimary }]}>Earned Research Badges</Text>
+          <Text style={[styles.secTitle, { color: theme.textPrimary }]}>Earned Achievement Badges</Text>
           <View style={styles.badgeGrid}>
-            {profileData?.badges?.map((b) => (
-              <View
+            {dynamicBadges.map((b) => (
+              <TouchableOpacity
                 key={b.id}
+                activeOpacity={0.8}
+                onPress={() => handleBadgePress(b)}
                 style={[
                   styles.badgeCard,
                   { backgroundColor: theme.bgSecondary, borderColor: b.unlocked ? theme.accent : theme.border },
@@ -93,7 +142,7 @@ export const UserProfileScreen = () => {
                 <Text style={[styles.statusTag, { color: b.unlocked ? theme.success : theme.textMuted }]}>
                   {b.unlocked ? 'UNLOCKED' : 'LOCKED'}
                 </Text>
-              </View>
+              </TouchableOpacity>
             ))}
           </View>
 

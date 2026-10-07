@@ -28,7 +28,7 @@ const vibrate = (p = 30) => {
    SHARED BUILDING BLOCKS
    =========================================================================== */
 
-// Collapsible WESAD / clinical evidence note (keeps the thesis badge, saves screen space)
+// Collapsible biophysical / clinical evidence note (keeps the thesis badge, saves screen space)
 const EvidenceChip = ({ title, text, accent = '#FDE68A' }) => {
   const [open, setOpen] = useState(false);
   return (

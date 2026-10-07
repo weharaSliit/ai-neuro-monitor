@@ -420,6 +420,7 @@ export const DashboardScreen = () => {
           <Text style={[s.sectionTitle, { color: theme.textPrimary }]}>Quick Actions</Text>
           <View style={s.actionGrid}>
             {[
+              { id: 'StroopTest', icon: '🧠', label: 'Stress Test', sub: '2-Min Stroop', tint: 'rgba(245,158,11,0.14)', accent: '#F59E0B' },
               { id: 'Methods', icon: '🧘', label: 'Techniques', sub: '7 Techniques', tint: 'rgba(56,189,248,0.14)', accent: '#38BDF8' },
               { id: 'PerformanceOverview', icon: '📊', label: 'Analytics', sub: 'Analytics & Trends', tint: 'rgba(16,185,129,0.14)', accent: '#10B981' },
               { id: 'UserProfile', icon: '👤', label: 'User Profile', sub: 'Account & XP', tint: 'rgba(236,72,153,0.14)', accent: '#EC4899' },

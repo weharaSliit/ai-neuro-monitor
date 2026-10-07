@@ -19,6 +19,7 @@ import { SideDrawer } from './src/components/SideDrawer';
 import { HostAppSwitchBar } from './src/components/HostAppSwitchBar';
 import { RealtimeStressTrendCard } from './src/components/RealtimeStressTrendCard';
 
+import { apiService } from './src/api/apiService';
 import { DashboardScreen } from './src/screens/DashboardScreen';
 import { FusionPipelineScreen } from './src/screens/FusionPipelineScreen';
 import { MethodsScreen } from './src/screens/MethodsScreen';
@@ -30,13 +31,17 @@ import { RecoveryScreen } from './src/screens/RecoveryScreen';
 import { HistoryScreen } from './src/screens/HistoryScreen';
 import { UserProfileScreen } from './src/screens/UserProfileScreen';
 import { PerformanceOverviewScreen } from './src/screens/PerformanceOverviewScreen';
+import { StressInductionStroopScreen } from './src/screens/StressInductionStroopScreen';
 
 import { useFocusEffect } from '@react-navigation/native';
 
 LogBox.ignoreLogs(['Expo AV has been deprecated', 'Expo AV is deprecated']);
 
 const MainNavigator = () => {
-  const { currentScreen, setCurrentScreen, identityChecked, userId } = React.useContext(AppContext);
+  const {
+    currentScreen, setCurrentScreen, identityChecked, userId,
+    setCurrentRecommendation, setSelectedSubOption, setPreInterventionLabel
+  } = React.useContext(AppContext);
   const { isDarkMode, theme } = React.useContext(ThemeContext);
 
   const u = (userId || '').toLowerCase();
@@ -60,6 +65,37 @@ const MainNavigator = () => {
     switch (currentScreen) {
       case 'Dashboard':
         return <DashboardScreen />;
+      case 'StroopTest':
+        return (
+          <StressInductionStroopScreen
+            onComplete={async (results) => {
+              try {
+                const prob = results?.stressProbability || 0.85;
+                const stateLabel = results?.stressState || 'stress';
+                setPreInterventionLabel(stateLabel);
+                
+                const rec = await apiService.getIntervention(userId, {
+                  user_id: userId,
+                  timestamp: Date.now() / 1000,
+                  fused_stress_label: stateLabel,
+                  stress_probability: prob,
+                  seconds_since_last_packet: 0.0
+                });
+                
+                if (rec) {
+                  setCurrentRecommendation(rec);
+                  if (rec.selected_sub_option) {
+                    setSelectedSubOption(rec.selected_sub_option);
+                  }
+                }
+              } catch (err) {
+                console.warn('Stroop recommendation fetch error', err);
+              } finally {
+                setCurrentScreen('Intervention');
+              }
+            }}
+          />
+        );
       case 'FusionPipeline':
         return isAdmin ? <FusionPipelineScreen /> : <DashboardScreen />;
       case 'Methods':

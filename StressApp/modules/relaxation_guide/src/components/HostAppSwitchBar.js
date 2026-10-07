@@ -75,7 +75,7 @@ export const HostAppSwitchBar = () => {
 const styles = StyleSheet.create({
   outerWrapper: {
     position: 'absolute',
-    bottom: Platform.OS === 'ios' ? 38 : 30,
+    bottom: Platform.OS === 'ios' ? 74 : 64,
     left: 14,
     right: 14,
     zIndex: 9999,
