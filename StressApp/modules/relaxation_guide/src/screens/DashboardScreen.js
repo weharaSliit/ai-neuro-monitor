@@ -40,7 +40,7 @@ const AmbientOrb = ({ size, color, top, left, duration, dx, dy }) => {
         height: size,
         borderRadius: size / 2,
         backgroundColor: color,
-        opacity: 0.22,
+        opacity: 0.38,
         transform: [
           { translateX: t.interpolate({ inputRange: [0, 1], outputRange: [0, dx] }) },
           { translateY: t.interpolate({ inputRange: [0, 1], outputRange: [0, dy] }) },
@@ -334,16 +334,15 @@ export const DashboardScreen = () => {
       <AmbientOrb size={180} color={isDark ? '#10B981' : '#6EE7B7'} top={640} left={-60} duration={13000} dx={60} dy={-30} />
 
       <Header
-        title="Welcome to Relaxation Guide"
-        showBack={true}
-        onBack={handleBackToMain}
+        title="Relaxation Guide"
+        showBack={false}
       />
 
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
         <Animated.View style={{ opacity: fadeIn, transform: [{ translateY: slideUp }] }}>
 
           {/* ═══════════ 2. WELCOME + STATUS ROW ═══════════ */}
-          <View style={[s.welcomeRow, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
+          <View style={[s.welcomeRow, { backgroundColor: isDark ? 'rgba(30, 41, 59, 0.75)' : 'rgba(255, 255, 255, 0.85)', borderColor: theme.border }]}>
             <View style={s.welcomeLeft}>
               <Text style={[s.greetingTxt, { color: theme.textMuted }]}>{greeting}</Text>
               <Text style={[s.nameTxt, { color: theme.textPrimary }]}>{isAdmin ? 'Ojani (Admin)' : username}</Text>
@@ -353,71 +352,65 @@ export const DashboardScreen = () => {
               </View>
             </View>
             <View style={s.welcomeRight}>
-              <Text style={[s.clockTxt, { color: theme.accent }]}>{timeStr}</Text>
-              <View style={[s.idPill, { backgroundColor: theme.bgPrimary, borderColor: theme.border }]}>
+              <Text style={[s.clockTxt, { color: isDark ? '#A5B4FC' : '#4F46E5' }]}>{timeStr}</Text>
+              <View style={[s.idPill, { backgroundColor: isDark ? 'rgba(15, 23, 42, 0.6)' : 'rgba(241, 245, 249, 0.8)', borderColor: theme.border }]}>
                 <Text style={[s.idPillTxt, { color: theme.textMuted }]}>{isAdmin ? '🛡️ Admin (Ojani)' : `🆔 ${userId}`}</Text>
               </View>
             </View>
           </View>
 
           {/* ═══════════ LIVE TELEMETRY STREAMS ═══════════ */}
-          <Text style={[s.sectionTitle, { color: theme.textPrimary, marginBottom: 8 }]}>Live Telemetry Streams</Text>
+          <View style={s.sectionHeaderRow}>
+            <Text style={[s.sectionTitle, { color: theme.textPrimary }]}>Live Telemetry Streams</Text>
+            <View style={s.liveBadgePill}>
+              <View style={[s.liveBadgeDot, { backgroundColor: sc.color }]} />
+              <Text style={[s.liveBadgeTxt, { color: sc.color }]}>LIVE</Text>
+            </View>
+          </View>
 
-          <View style={{ gap: 10, marginBottom: 16 }}>
+          <View style={{ gap: 8, marginBottom: 12 }}>
             {/* 🫀 Physiological Stream */}
-            <View style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              paddingHorizontal: 14,
-              paddingVertical: 12,
-              borderRadius: 14,
-              backgroundColor: theme.bgSecondary,
-              borderWidth: 1,
-              borderColor: theme.border,
-            }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                <Text style={{ fontSize: 20 }}>🫀</Text>
+            <View style={[s.streamCard, { backgroundColor: isDark ? 'rgba(30, 41, 59, 0.7)' : 'rgba(255, 255, 255, 0.85)', borderColor: theme.border }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <View style={[s.streamIconBadge, { backgroundColor: 'rgba(239, 68, 68, 0.15)' }]}>
+                  <Text style={{ fontSize: 20 }}>🫀</Text>
+                </View>
                 <View>
-                  <Text style={{ fontSize: 13, fontWeight: '700', color: theme.textPrimary }}>Physiological Stream</Text>
-                  <Text style={{ fontSize: 11, color: theme.textMuted }}>Smart Ring + Earbud</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '800', color: theme.textPrimary }}>Physiological Stream</Text>
+                  <Text style={{ fontSize: 11, color: theme.textMuted, marginTop: 1 }}>Smart Ring + Earbud</Text>
                 </View>
               </View>
               <View style={{ alignItems: 'flex-end', gap: 2 }}>
-                <Text style={{ fontSize: 12, fontWeight: '800', color: sc.color }}>
-                  Label: {hasLivePacket ? sc.displayLabel : 'Awaiting'}
-                </Text>
-                <Text style={{ fontSize: 12, fontWeight: '700', color: theme.accent }}>
-                  Probability: {hasLivePacket ? (typeof sc.pct === 'number' ? `${sc.pct}%` : sc.pct) : '--'}
+                <View style={[s.labelPill, { backgroundColor: sc.bgTint }]}>
+                  <Text style={{ fontSize: 11, fontWeight: '800', color: sc.color }}>
+                    {hasLivePacket ? sc.displayLabel : 'Awaiting'}
+                  </Text>
+                </View>
+                <Text style={{ fontSize: 11, fontWeight: '700', color: isDark ? '#94A3B8' : '#64748B', marginTop: 2 }}>
+                  Probability: <Text style={{ color: isDark ? '#F8FAFC' : '#0F172A', fontWeight: '900' }}>{hasLivePacket ? (typeof sc.pct === 'number' ? `${sc.pct}%` : sc.pct) : '--'}</Text>
                 </Text>
               </View>
             </View>
 
             {/* 📱 Phenotyping Stream */}
-            <View style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              paddingHorizontal: 14,
-              paddingVertical: 12,
-              borderRadius: 14,
-              backgroundColor: theme.bgSecondary,
-              borderWidth: 1,
-              borderColor: theme.border,
-            }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                <Text style={{ fontSize: 20 }}>📱</Text>
+            <View style={[s.streamCard, { backgroundColor: isDark ? 'rgba(30, 41, 59, 0.7)' : 'rgba(255, 255, 255, 0.85)', borderColor: theme.border }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <View style={[s.streamIconBadge, { backgroundColor: 'rgba(56, 189, 248, 0.15)' }]}>
+                  <Text style={{ fontSize: 20 }}>📱</Text>
+                </View>
                 <View>
-                  <Text style={{ fontSize: 13, fontWeight: '700', color: theme.textPrimary }}>Phenotyping Stream</Text>
-                  <Text style={{ fontSize: 11, color: theme.textMuted }}>Behavioral & Smartphone</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '800', color: theme.textPrimary }}>Phenotyping Stream</Text>
+                  <Text style={{ fontSize: 11, color: theme.textMuted, marginTop: 1 }}>Behavioral & Smartphone</Text>
                 </View>
               </View>
               <View style={{ alignItems: 'flex-end', gap: 2 }}>
-                <Text style={{ fontSize: 12, fontWeight: '800', color: sc.color }}>
-                  Label: {hasLivePacket ? sc.displayLabel : 'Awaiting'}
-                </Text>
-                <Text style={{ fontSize: 12, fontWeight: '700', color: theme.accent }}>
-                  Probability: {hasLivePacket ? (typeof sc.pct === 'number' ? `${sc.pct}%` : sc.pct) : '--'}
+                <View style={[s.labelPill, { backgroundColor: sc.bgTint }]}>
+                  <Text style={{ fontSize: 11, fontWeight: '800', color: sc.color }}>
+                    {hasLivePacket ? sc.displayLabel : 'Awaiting'}
+                  </Text>
+                </View>
+                <Text style={{ fontSize: 11, fontWeight: '700', color: isDark ? '#94A3B8' : '#64748B', marginTop: 2 }}>
+                  Probability: <Text style={{ color: isDark ? '#F8FAFC' : '#0F172A', fontWeight: '900' }}>{hasLivePacket ? (typeof sc.pct === 'number' ? `${sc.pct}%` : sc.pct) : '--'}</Text>
                 </Text>
               </View>
             </View>
@@ -428,7 +421,7 @@ export const DashboardScreen = () => {
           <View style={s.actionGrid}>
             {[
               { id: 'Methods', icon: '🧘', label: 'Techniques', sub: '7 Techniques', tint: 'rgba(56,189,248,0.14)', accent: '#38BDF8' },
-              { id: 'PerformanceOverview', icon: '📊', label: 'Performance', sub: 'Analytics & Trends', tint: 'rgba(16,185,129,0.14)', accent: '#10B981' },
+              { id: 'PerformanceOverview', icon: '📊', label: 'Analytics', sub: 'Analytics & Trends', tint: 'rgba(16,185,129,0.14)', accent: '#10B981' },
               { id: 'UserProfile', icon: '👤', label: 'User Profile', sub: 'Account & XP', tint: 'rgba(236,72,153,0.14)', accent: '#EC4899' },
               { id: 'CommonHome', icon: '🏠', label: 'Main Home', sub: 'Return to App', tint: 'rgba(59,130,246,0.14)', accent: '#3B82F6' },
               ...(isAdmin ? [
@@ -495,7 +488,7 @@ export const DashboardScreen = () => {
         onRequestClose={() => setShowInterventionModal(false)}
       >
         <View style={s.modalOverlay}>
-          <View style={[s.modalCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
+          <View style={[s.modalCard, { backgroundColor: isDark ? '#1E293B' : '#FFFFFF', borderColor: theme.border }]}>
             <View style={s.modalHeaderRow}>
               <View style={[s.modalIconRing, { backgroundColor: 'rgba(16, 185, 129, 0.15)', borderColor: '#10B981' }]}>
                 <Text style={{ fontSize: 32 }}>🪷</Text>
@@ -541,34 +534,38 @@ export const DashboardScreen = () => {
    ════════════════════════════════════════════════════════ */
 const s = StyleSheet.create({
   container: { flex: 1, position: 'relative' },
-  scroll: { padding: 16, paddingBottom: 32 },
+  scroll: { padding: 10, paddingBottom: 105 },
 
   /* ── Welcome Row ── */
   welcomeRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    borderRadius: 20,
+    borderRadius: 16,
     borderWidth: 1,
-    padding: 16,
-    marginBottom: 14,
+    padding: 10,
+    marginBottom: 8,
     elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
   },
   welcomeLeft: { flex: 1 },
-  greetingTxt: { fontSize: 12, fontWeight: '600' },
-  nameTxt: { fontSize: 22, fontWeight: '900', marginTop: 2, letterSpacing: -0.3 },
-  liveChip: { flexDirection: 'row', alignItems: 'center', marginTop: 8 },
-  liveChipTxt: { fontSize: 11, fontWeight: '700' },
+  greetingTxt: { fontSize: 11, fontWeight: '700', letterSpacing: 0.2 },
+  nameTxt: { fontSize: 17, fontWeight: '900', marginTop: 1, letterSpacing: -0.3 },
+  liveChip: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
+  liveChipTxt: { fontSize: 10, fontWeight: '800' },
   welcomeRight: { alignItems: 'flex-end' },
-  clockTxt: { fontSize: 20, fontWeight: '900', letterSpacing: 0.5 },
+  clockTxt: { fontSize: 15, fontWeight: '900', letterSpacing: 0.4 },
   idPill: {
-    marginTop: 8,
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 8,
-    borderWidth: 1
+    marginTop: 4,
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+    borderRadius: 10,
+    borderWidth: 1,
   },
-  idPillTxt: { fontSize: 9, fontWeight: '600' },
+  idPillTxt: { fontSize: 9, fontWeight: '700' },
 
   /* ── Pulse Dot ── */
   pulseDotWrap: {
@@ -584,12 +581,68 @@ const s = StyleSheet.create({
     width: 8, height: 8, borderRadius: 4
   },
 
-  /* ── Section Title ── */
+  /* ── Section Title & Headers ── */
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
   sectionTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    marginBottom: 10,
-    letterSpacing: 0.2
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0.2,
+    marginBottom: 4,
+  },
+  liveBadgePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.3)',
+    marginBottom: 4,
+  },
+  liveBadgeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  liveBadgeTxt: {
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+
+  /* ── Stream Cards ── */
+  streamCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+  },
+  streamIconBadge: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  labelPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 10,
   },
 
   /* ── Quick Actions ── */
@@ -597,130 +650,137 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
-    marginBottom: 16
+    marginBottom: 18,
   },
   actionCard: {
     flex: 1,
     minWidth: '46%',
     maxWidth: '48.5%',
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    borderRadius: 20,
     borderWidth: 1,
-    elevation: 2
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
   },
   actionIconWrap: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
+    width: 40,
+    height: 40,
+    borderRadius: 14,
     alignItems: 'center',
-    justifyContent: 'center'
+    justifyContent: 'center',
   },
   actionIcon: {
-    fontSize: 20
+    fontSize: 20,
   },
   actionLabel: {
     fontSize: 13,
     fontWeight: '800',
-    flex: 1
+    flex: 1,
   },
 
   /* ── Launch CTA Button ── */
   ctaBtnWrapper: {
-    borderRadius: 20,
-    elevation: 6,
+    borderRadius: 22,
+    elevation: 8,
+    shadowColor: '#7C3AED',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
   },
   ctaBtnGradient: {
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-    borderRadius: 20,
+    paddingVertical: 18,
+    paddingHorizontal: 22,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1.5,
-    borderColor: '#FFFFFF',
+    borderColor: 'rgba(255, 255, 255, 0.4)',
   },
   ctaInner: {
-    alignItems: 'center'
+    alignItems: 'center',
   },
   ctaMain: {
     color: '#FFFFFF',
     fontSize: 17,
     fontWeight: '900',
-    letterSpacing: 0.3
+    letterSpacing: 0.3,
   },
   ctaSub: {
-    color: '#FFFFFF',
+    color: 'rgba(255, 255, 255, 0.92)',
     fontSize: 11,
     fontWeight: '700',
     marginTop: 4,
-    opacity: 0.9,
-    textAlign: 'center'
+    textAlign: 'center',
   },
 
   /* ── Modal Overlay ── */
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(10, 15, 30, 0.85)',
+    backgroundColor: 'rgba(10, 15, 30, 0.82)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20
+    padding: 20,
   },
   modalCard: {
     width: '100%',
     maxWidth: 400,
-    borderRadius: 24,
+    borderRadius: 26,
     borderWidth: 1,
-    padding: 22,
-    elevation: 12
+    padding: 24,
+    elevation: 16,
   },
   modalHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 14,
-    marginBottom: 12
+    marginBottom: 14,
   },
   modalIconRing: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
     borderWidth: 2,
     alignItems: 'center',
-    justifyContent: 'center'
+    justifyContent: 'center',
   },
   modalTitle: {
-    fontSize: 18,
-    fontWeight: '900'
+    fontSize: 19,
+    fontWeight: '900',
   },
   modalBadgeTxt: {
     fontSize: 11,
     fontWeight: '800',
-    marginTop: 2
+    marginTop: 2,
   },
   modalDesc: {
     fontSize: 13,
-    lineHeight: 19,
-    marginBottom: 18
+    lineHeight: 20,
+    marginBottom: 20,
   },
   modalLaunchBtn: {
-    paddingVertical: 14,
-    borderRadius: 16,
+    paddingVertical: 15,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 10
+    marginBottom: 10,
   },
   modalLaunchBtnTxt: {
     color: '#FFFFFF',
     fontSize: 15,
-    fontWeight: '900'
+    fontWeight: '900',
   },
   modalCloseBtn: {
     paddingVertical: 8,
-    alignItems: 'center'
+    alignItems: 'center',
   },
   modalCloseBtnTxt: {
     fontSize: 13,
-    fontWeight: '700'
-  }
+    fontWeight: '700',
+  },
 });
 
 export default DashboardScreen;

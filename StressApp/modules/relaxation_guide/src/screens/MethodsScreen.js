@@ -78,6 +78,30 @@ const ARCADE_GAMES = [
     description: 'Color challenge to refocus your mind.',
     color: '#06B6D4', // Teal
   },
+  {
+    id: 'pmr_crystal_squeeze',
+    level: 9,
+    title: 'Somatic PMR',
+    icon: '💎',
+    description: 'Isometric crystal squeeze & release to drop SCL conductance.',
+    color: '#EC4899',
+  },
+  {
+    id: 'emdr_saccadic_trace',
+    level: 10,
+    title: 'Cosmic Trace (EMDR)',
+    icon: '✨',
+    description: 'Bilateral saccadic eye pursuit to down-regulate amygdala.',
+    color: '#38BDF8',
+  },
+  {
+    id: 'galvanic_biofeedback_flow',
+    level: 11,
+    title: 'Bio GSR Pool',
+    icon: '💧',
+    description: 'Real-time EDA fluid biofeedback to cool sudomotor SCR bursts.',
+    color: '#06B6D4',
+  },
 ];
 
 export const MethodsScreen = () => {
@@ -112,7 +136,7 @@ export const MethodsScreen = () => {
   return (
     <View style={[styles.container, { backgroundColor: theme?.bgPrimary || (isDark ? '#0F172A' : '#FAF9FC') }]}>
       <AmbientBackground />
-      <Header title="Relaxation Arcade" showBack onBack={() => setCurrentScreen('Dashboard')} />
+      <Header title="Relaxation Arcade" showBack={false} />
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {/* Daily Tasks Button */}
@@ -131,7 +155,7 @@ export const MethodsScreen = () => {
 
         {/* Section Title */}
         <Text style={[styles.arcadeTitle, { color: theme?.textPrimary || (isDark ? '#F8FAFC' : '#0F172A') }]}>
-          Choose Level
+          Choose Technique
         </Text>
 
         {/* Color-Coded Soothing Relaxation Cards */}
@@ -156,9 +180,6 @@ export const MethodsScreen = () => {
               <View style={styles.titleRow}>
                 <Text style={[styles.gameTitle, { color: theme?.textPrimary || (isDark ? '#F8FAFC' : '#0F172A') }]}>
                   {game.title}
-                </Text>
-                <Text style={[styles.levelTag, { color: game.color }]}>
-                  Lvl {game.level}
                 </Text>
               </View>
               <Text style={[styles.gameDesc, { color: theme?.textMuted || '#94A3B8' }]} numberOfLines={1}>
@@ -204,7 +225,7 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: 16,
-    paddingBottom: 36,
+    paddingBottom: 88,
     gap: 10,
   },
 

@@ -30,6 +30,9 @@ const SIMPLE_GAME_MAP = {
   body_scan_mindful: { title: 'Body Sweep', icon: '🧘‍♂️', color: '#8B5CF6', gradient: ['#4C1D95', '#7C3AED', '#C4B5FD'], tag: 'Release Tension' },
   autogenic_warmth: { title: 'Warmth Flow', icon: '🔥', color: '#EF4444', gradient: ['#B91C1C', '#EF4444', '#F59E0B'], tag: 'Feel Warm' },
   stroop_decoupler: { title: 'Color Clash', icon: '🎯', color: '#06B6D4', gradient: ['#0891B2', '#06B6D4', '#A855F7'], tag: 'Quick Focus' },
+  pmr_crystal_squeeze: { title: 'Somatic PMR', icon: '💎', color: '#EC4899', gradient: ['#881337', '#BE185D', '#F472B6'], tag: 'Muscle Iso-Tension' },
+  emdr_saccadic_trace: { title: 'Cosmic Trace', icon: '✨', color: '#38BDF8', gradient: ['#0369A1', '#38BDF8', '#C084FC'], tag: 'EMDR Saccadic Trace' },
+  galvanic_biofeedback_flow: { title: 'Bio GSR Pool', icon: '💧', color: '#06B6D4', gradient: ['#083344', '#06B6D4', '#67E8F9'], tag: 'GSR Fluid Biofeedback' },
 };
 
 export const InterventionScreen = () => {
@@ -119,7 +122,7 @@ export const InterventionScreen = () => {
   return (
     <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
       <AmbientBackground />
-      <Header title="Today's Relaxation Level" showBack onBack={() => setCurrentScreen('Dashboard')} />
+      <Header title="Today's Recommended Session" showBack onBack={() => setCurrentScreen('Dashboard')} />
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {/* Quick Action Bar for Quests & Rewards */}

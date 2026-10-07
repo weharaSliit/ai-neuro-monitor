@@ -7,9 +7,9 @@ import {
   TouchableOpacity,
   Animated,
   Easing,
-  SafeAreaView,
   Dimensions,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Circle } from 'react-native-svg';
 import { AppContext } from '../context/AppContext';
@@ -97,7 +97,7 @@ export const PerformanceOverviewScreen = () => {
     const fetchLiveMetrics = async () => {
       try {
         await apiService.getBanditState(userId);
-        
+
         const currentTopKey = resolveTopMethodKey();
         const currentTopObj = TECHNIQUE_LOOKUP[currentTopKey] || TECHNIQUE_LOOKUP.water_lily_pond;
 
@@ -170,7 +170,7 @@ export const PerformanceOverviewScreen = () => {
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme?.bgPrimary || (isDark ? '#0F172A' : '#FAF9FC') }]}>
       <AmbientBackground />
-      <Header title="Your Overview" showBack onBack={() => setCurrentScreen('Dashboard')} />
+      <Header title="Your Overview" showBack={false} />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <Animated.View style={{ opacity: fadeAnim, gap: 16 }}>
@@ -488,7 +488,7 @@ const styles = StyleSheet.create({
   scroll: {
     paddingHorizontal: 18,
     paddingTop: 12,
-    paddingBottom: 36,
+    paddingBottom: 88,
   },
 
   // Base Card Styles

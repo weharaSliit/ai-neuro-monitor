@@ -42,7 +42,7 @@ export const UserProfileScreen = () => {
   return (
     <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
       <AmbientBackground />
-      <Header title="User Profile" showBack onBack={() => setCurrentScreen('Dashboard')} />
+      <Header title="Relaxation Settings" showBack={false} />
 
       {loading ? (
         <View style={styles.center}>
@@ -140,7 +140,8 @@ const styles = StyleSheet.create({
     alignItems: 'center'
   },
   content: {
-    padding: 16
+    padding: 16,
+    paddingBottom: 88,
   },
   profileCard: {
     borderRadius: 16,
