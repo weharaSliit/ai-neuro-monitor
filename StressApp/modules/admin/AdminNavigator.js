@@ -12,6 +12,8 @@ import AdminUserDetailScreen from './screens/AdminUserDetailScreen';
 import AdminSessionDetailScreen from './screens/AdminSessionDetailScreen';
 import AdminEegLiveScreen from './screens/AdminEegLiveScreen';
 import PhenotypingAnalysisScreen from '../phenotyping/screens/PhenotypingAnalysisScreen';
+import PhenotypingValidationScreen from '../phenotyping/screens/PhenotypingValidationScreen';
+import FusionSessionScreen from '../fusion/screens/FusionSessionScreen';
 import RelaxationGuideModule from '../relaxation_guide';
 
 const Stack = createNativeStackNavigator();
@@ -23,22 +25,22 @@ export default function AdminNavigator() {
       <Stack.Screen name="AdminUserDetail" component={AdminUserDetailScreen} />
       <Stack.Screen name="AdminSessionDetail" component={AdminSessionDetailScreen} />
       <Stack.Screen name="AdminEegLive" component={AdminEegLiveScreen} />
-      {/* Research-grade phenotyping deep-dive (Z-scores, idiographic
-          baseline table) -- moved here from the user app, reused as-is;
-          it already reads whichever user is logged in via useAuth(), so
-          today it still reflects the ADMIN's own account, same known
-          limitation as AdminRelaxation below (flagged, not silently
-          pretended to be per-user yet). headerShown:true here since this
-          screen was built assuming a native header owns its back button +
-          top inset (edges={['left','right']} only, per its own
-          ScreenBackground usage) -- same as its old registration in the
-          user app's App.js. */}
       <Stack.Screen
         name="PhenotypingAnalysis"
         component={PhenotypingAnalysisScreen}
         options={{ headerShown: true, title: 'Analysis & Patterns' }}
       />
+      <Stack.Screen
+        name="PhenotypingValidation"
+        component={PhenotypingValidationScreen}
+        options={{ headerShown: true, title: 'Validation Report' }}
+      />
       <Stack.Screen name="AdminRelaxation" component={RelaxationGuideModule} />
+      <Stack.Screen
+        name="AdminFusion"
+        component={FusionSessionScreen}
+        options={{ headerShown: true, title: 'Multimodal Fusion' }}
+      />
     </Stack.Navigator>
   );
 }
