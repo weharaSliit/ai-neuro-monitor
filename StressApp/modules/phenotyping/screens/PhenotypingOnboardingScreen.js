@@ -139,7 +139,10 @@ export default function PhenotypingOnboardingScreen({ navigation }) {
                             <View style={styles.sensorActionRow}>
                                 <TouchableOpacity
                                     style={[styles.sensorActionBtn, { backgroundColor: COLORS.brand, flex: 2 }]}
-                                    onPress={() => {
+                                    onPress={async () => {
+                                        if (Platform.OS === 'android' && PhenotypingIdentity) {
+                                            try { await PhenotypingIdentity.requestRuntimePermissions(); } catch { }
+                                        }
                                         if (Platform.OS === 'android') {
                                             Linking.sendIntent('android.settings.ACCESSIBILITY_SETTINGS').catch(() =>
                                                 Linking.openSettings()
@@ -170,9 +173,14 @@ export default function PhenotypingOnboardingScreen({ navigation }) {
                                 borderColor: t.border,
                                 marginTop: 14,
                             }]}
-                            onPress={() => {
+                            onPress={async () => {
                                 if (sensorCheckStatus !== 'on') return;
                                 if (Platform.OS === 'android' && PhenotypingIdentity) {
+                                    try {
+                                        await PhenotypingIdentity.requestRuntimePermissions();
+                                    } catch (e) {
+                                        console.warn('PhenoCare: requestRuntimePermissions error', e);
+                                    }
                                     PhenotypingIdentity.scheduleEmaNotifications();
                                 }
                                 setStep(2);

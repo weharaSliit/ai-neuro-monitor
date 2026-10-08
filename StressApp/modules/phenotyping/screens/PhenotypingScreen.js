@@ -6,7 +6,7 @@
 // Step 2: 7-Day Calibration Roadmap with auto-transition to Dashboard.
 // ============================================================
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, NativeModules, Platform, Modal, Animated, Linking } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, NativeModules, Platform, Modal, Linking, AppState } from 'react-native';
 import Svg, { Circle as SvgCircle, Path as SvgPath } from 'react-native-svg';
 import { useFocusEffect } from '@react-navigation/native';
 import { ref, onValue, off, update, query, limitToLast, orderByKey } from 'firebase/database';
@@ -24,6 +24,17 @@ import { isPhenotypingOnboarded, markPhenotypingOnboarded } from './PhenotypingO
 import { usePhenotypingDeviceId } from '../utils/deviceIdentity';
 
 const { PhenotypingIdentity } = NativeModules;
+
+// digitalSignals' own ids (avg_dwell, scroll_velocity, ...) don't match
+// PhenotypingSignalHistoryScreen's SIGNAL_DETAILS_CONFIG keys (keyboard,
+// scroll, ...) -- passing them straight through as `signalId` silently fell
+// back to that screen's 'keyboard' default for any id it didn't recognize,
+// e.g. tapping "Screen Scrolling" opened Keyboard Patterns history instead.
+const SIGNAL_HISTORY_ID = {
+    avg_dwell: 'keyboard',
+    scroll_velocity: 'scroll',
+    app_switch: 'app_switch',
+};
 
 // ── Micro sparkline using raw SVG ────────────────────────────────────
 function Sparkline({ values, color, width = 80, height = 32, baselineMean }) {
@@ -72,23 +83,17 @@ function DeviationBar({ z, color, t }) {
 }
 
 // ── Interactive signal card with sparkline ──────────────────────────────────
-// iconBounce: an Animated.Value to bob the icon (used for Activity Context
-// so the walking emoji visibly animates the moment motion is detected,
-// instead of sitting static). onPress is optional -- omit it for cards
-// where a numeric 7-day history view wouldn't mean anything (Activity
-// Context is a Still/Moving state, not a continuous baseline-tracked value).
-function MiniSignalCard({ icon, title, subtext, value, deltaText, color, sparkValues, baselineMean, z, t, onPress, iconBounce }) {
+// onPress is optional -- omit it for cards where a numeric 7-day history
+// view wouldn't mean anything (Activity Context is a Still/Moving state,
+// not a continuous baseline-tracked value).
+function MiniSignalCard({ icon, title, subtext, value, deltaText, color, sparkValues, baselineMean, z, t, onPress }) {
     return (
         <TouchableOpacity onPress={onPress} activeOpacity={onPress ? 0.8 : 1} disabled={!onPress}>
             <Card style={styles.signalCard} accentColor={color}>
                 <View style={styles.signalRow}>
                     <View style={{ flex: 1 }}>
                         <View style={styles.signalTitleRow}>
-                            {iconBounce ? (
-                                <Animated.Text style={[styles.signalIcon, { transform: [{ translateY: iconBounce }] }]}>{icon}</Animated.Text>
-                            ) : (
-                                <Text style={styles.signalIcon}>{icon}</Text>
-                            )}
+                            <Text style={styles.signalIcon}>{icon}</Text>
                             <Text style={[styles.signalTitle, { color: t.text }]}>{title}</Text>
                         </View>
                         <Text style={[styles.signalSubtext, { color: t.textMuted }]} numberOfLines={1}>{subtext}</Text>
@@ -144,21 +149,9 @@ export default function PhenotypingScreen({ navigation }) {
     // Rolling history for sparklines (last 20 windows)
     const [windowHistory, setWindowHistory] = useState([]);
 
-    // ── Motion detection (walking/running) animated alert
+    // ── Motion detection (walking/running), from the real activity-recognition
+    // signal in liveWindow.data_valid -- see digitalSignals' "activity" entry below.
     const isUserMoving = liveWindow?.data_valid === false;
-    const motionBounce = useRef(new Animated.Value(0)).current;
-    useEffect(() => {
-        if (isUserMoving) {
-            Animated.loop(
-                Animated.sequence([
-                    Animated.timing(motionBounce, { toValue: -8, duration: 400, useNativeDriver: true }),
-                    Animated.timing(motionBounce, { toValue: 0, duration: 400, useNativeDriver: true }),
-                ])
-            ).start();
-        } else {
-            motionBounce.setValue(0);
-        }
-    }, [isUserMoving]);
 
     // ── 30-second live ticker
     const [now, setNow] = useState(() => new Date());
@@ -167,33 +160,12 @@ export default function PhenotypingScreen({ navigation }) {
         return () => clearInterval(id);
     }, []);
 
-    // ── Reference baseline for new-user seeding. The backend's
-    // get_seed_baseline() (see /behavior/reference-baseline) is the single
-    // source of truth -- it's the template participant's real, fully-
-    // calibrated 7-day baseline, fetched once and cached offline rather than
-    // duplicated here, so recalibrating only requires updating one place.
-    const [referenceBaselines, setReferenceBaselines] = useState(null);
-    useEffect(() => {
-        const AS = require('@react-native-async-storage/async-storage').default;
-        (async () => {
-            try {
-                const c = await AS.getItem('@pheno_reference_baseline');
-                if (c) setReferenceBaselines(JSON.parse(c));
-            } catch { }
-            try {
-                const res = await fetch(`${API_BASE}/behavior/reference-baseline`);
-                const data = await res.json();
-                if (res.ok && data.baselines) {
-                    setReferenceBaselines(data.baselines);
-                    AS.setItem('@pheno_reference_baseline', JSON.stringify(data.baselines)).catch(() => { });
-                }
-            } catch { }
-        })();
-    }, []);
 
     // ── Firebase profile (display_name, created_at, study_id, is_calibrated)
-    // On first profile creation, auto-seeds the reference 7-day baseline so users
-    // skip the calibration wait. Live signals still come from THIS user's phone.
+    // For new users we only write display_name + created_at + is_calibrated:false
+    // so the real 7-day countdown starts immediately.
+    // is_calibrated is set to true ONLY by the backend's /behavior/calibrate
+    // endpoint after the 7-day window completes with the user's own data.
     useEffect(() => {
         if (!deviceId) return;
         const AS = require('@react-native-async-storage/async-storage').default;
@@ -205,23 +177,26 @@ export default function PhenotypingScreen({ navigation }) {
                 try { await AS.setItem(`@pheno_profile_${deviceId}`, JSON.stringify(p)); } catch { }
             } else {
                 try { const c = await AS.getItem(`@pheno_profile_${deviceId}`); if (c) setFirebaseProfile(JSON.parse(c)); } catch { }
-                // NEW USER: seed reference baseline + mark calibrated immediately.
-                // Skipped if referenceBaselines hasn't loaded yet (no network on
-                // first launch); the effect re-runs once it arrives.
-                if (referenceBaselines) {
+                // NEW USER: the 7-day clock starts when the sensor is enabled
+                // (onboarding completed), NOT when this screen is first opened.
+                // Only create the profile here if onboarding is already done;
+                // handleCompleteOnboarding() covers the first-time path.
+                // Do NOT set is_calibrated:true or write any baselines —
+                // those are set by /behavior/calibrate after day 7.
+                isPhenotypingOnboarded(deviceId).then((ok) => {
+                    if (!ok) return;
                     update(profileRef, {
                         display_name: user?.name || 'User',
-                        is_calibrated: true,
+                        is_calibrated: false,
                         created_at: new Date().toISOString(),
-                        baselines: referenceBaselines,
                     }).catch(() => { });
-                }
+                });
             }
         }, async () => {
             try { const c = await AS.getItem(`@pheno_profile_${deviceId}`); if (c) setFirebaseProfile(JSON.parse(c)); } catch { }
         });
         return () => off(profileRef, 'value', handler);
-    }, [deviceId, referenceBaselines]);
+    }, [deviceId]);
 
     const displayName = firebaseProfile?.display_name || firebaseProfile?.name || user?.name || 'User';
     const studyId = firebaseProfile?.study_id || null;
@@ -286,7 +261,9 @@ export default function PhenotypingScreen({ navigation }) {
         return { ageMs, label, isFresh: ageMs >= 0 && ageMs < 90_000 };
     }, [latestPrediction, now]);
 
-    // ── Onboarding check
+    // ── Onboarding check — runs in useFocusEffect (re-fires when screen is focused)
+    // AND in a separate useEffect on deviceId change (handles the case where deviceId
+    // was null when useFocusEffect first fired, so the onboarding modal never showed).
     useFocusEffect(useCallback(() => {
         if (!deviceId) return;
         isPhenotypingOnboarded(deviceId).then((ok) => {
@@ -294,6 +271,16 @@ export default function PhenotypingScreen({ navigation }) {
             if (!ok) { setShowOnboardingModal(true); setOnboardingStep(1); setSensorToggle(false); }
         });
     }, [deviceId]));
+
+    // Safety net: also check when deviceId first resolves (catches the case where
+    // useFocusEffect fired while deviceId was still null and returned early).
+    useEffect(() => {
+        if (!deviceId) return;
+        isPhenotypingOnboarded(deviceId).then((ok) => {
+            setOnboarded(ok);
+            if (!ok) { setShowOnboardingModal(true); setOnboardingStep(1); setSensorToggle(false); }
+        });
+    }, [deviceId]);
 
     // ── Accessibility sensor check
     useFocusEffect(useCallback(() => {
@@ -340,29 +327,32 @@ export default function PhenotypingScreen({ navigation }) {
     }, [deviceId]);
 
     // ── Live behavioral window with offline cache + rolling history for sparklines
+    // limitToLast(20): we only need the last 20 windows for the sparkline history.
+    // Without this, the entire data_logs subtree (thousands of 30s windows after
+    // 7+ days) would be downloaded on every screen open and every new window write.
     useEffect(() => {
         if (!deviceId) return;
         const AS = require('@react-native-async-storage/async-storage').default;
-        const logsRef = ref(db, `phenotyping/data_logs/${deviceId}`);
+        const logsQuery = query(ref(db, `phenotyping/data_logs/${deviceId}`), orderByKey(), limitToLast(20));
         const loadCache = async () => { try { const c = await AS.getItem(`@pheno_win_${deviceId}`); if (c) { const { k, d } = JSON.parse(c); setLiveWindow(d); setLastUpdated(k); } } catch { } };
-        const handler = onValue(logsRef, async (snapshot) => {
+        const handler = onValue(logsQuery, async (snapshot) => {
             const raw = snapshot.val();
             if (raw) {
                 const entries = Object.entries(raw).sort((a, b) => a[0].localeCompare(b[0]));
                 const [k, d] = entries[entries.length - 1];
                 setLiveWindow(d); setLastUpdated(k);
-                // Keep last 20 windows for sparkline history
-                const hist = entries.slice(-20).map(([, v]) => v);
+                // All 20 windows for sparkline history
+                const hist = entries.map(([, v]) => v);
                 setWindowHistory(hist);
                 try { await AS.setItem(`@pheno_win_${deviceId}`, JSON.stringify({ k, d })); } catch { }
             } else { await loadCache(); }
         }, loadCache);
-        return () => off(logsRef, 'value', handler);
+        return () => off(logsQuery, 'value', handler);
     }, [deviceId]);
 
-    // ── Auto-calibrate after 7+ days
+    // ── Auto-calibrate once a FULL 7 days have elapsed (dayNumber 8 = day 7 finished)
     useEffect(() => {
-        if (!deviceId || !liveCalibStatus || liveCalibStatus.isCalibrated || liveCalibStatus.dayNumber < 7) return;
+        if (!deviceId || !liveCalibStatus || liveCalibStatus.isCalibrated || liveCalibStatus.dayNumber < 8) return;
         (async () => {
             if (!(await shouldAttemptCalibrateToday(deviceId))) return;
             try {
@@ -393,10 +383,23 @@ export default function PhenotypingScreen({ navigation }) {
         }
     }, []);
 
-    // Run sensor check when onboarding modal opens at Step 1
+    // Run sensor check when onboarding modal opens at Step 1.
+    // Also subscribe to AppState so the check fires automatically when the
+    // user comes back from Android Accessibility Settings — without this,
+    // the modal keeps showing ❌ even after the sensor is turned on because
+    // a React Native <Modal> keeps the underlying screen in focus the whole
+    // time, so useFocusEffect never re-fires on return.
     useEffect(() => {
         if (showOnboardingModal && onboardingStep === 1) {
             checkSensorStatus();
+            // Re-check every time the app comes to the foreground (user
+            // returns from Settings after enabling the accessibility service).
+            const sub = AppState.addEventListener('change', (nextState) => {
+                if (nextState === 'active') {
+                    checkSensorStatus();
+                }
+            });
+            return () => sub.remove();
         }
         // Clear any lingering interval when modal closes
         if (!showOnboardingModal && sensorCheckIntervalRef.current) {
@@ -427,6 +430,16 @@ export default function PhenotypingScreen({ navigation }) {
     const handleCompleteOnboarding = async () => {
         if (!deviceId) return;
         await markPhenotypingOnboarded(deviceId, { sensorEnabled: true });
+        // Sensor is verified ON at this point -> Day 1 starts now. If the
+        // backend already started the clock from an earlier window, keep that
+        // created_at and only fill in the display name.
+        const profileRef = ref(db, `phenotyping/users/${deviceId}`);
+        const fields = { display_name: firebaseProfile?.display_name || user?.name || 'User' };
+        if (!firebaseProfile?.created_at) {
+            fields.created_at = new Date().toISOString();
+            fields.is_calibrated = false;
+        }
+        update(profileRef, fields).catch(() => { });
         setOnboarded(true); setShowOnboardingModal(false);
     };
 
@@ -456,9 +469,16 @@ export default function PhenotypingScreen({ navigation }) {
             if (Math.abs(pct) < 5) return null;
             return (pct > 0 ? '▲ +' : '▼ ') + pct + '% vs calm';
         };
-        const dwellZ = getZ(liveWindow.avg_dwell, bl.avg_dwell?.mean || 135, bl.avg_dwell?.std || 15);
-        const scrollZ = getZ(liveWindow.scroll_velocity, bl.scroll_velocity?.mean || 750, bl.scroll_velocity?.std || 120);
-        const switchZ = appSwitchPerMin > 4 ? 3 : appSwitchPerMin > 2.5 ? 1.5 : 0;
+        // No personal baseline yet (days 1-7): nothing to deviate from, so
+        // signals stay neutral instead of being colored against population defaults.
+        const calibrating = !liveCalibStatus?.isCalibrated;
+        const dwellZ = calibrating ? 0 : getZ(liveWindow.avg_dwell, bl.avg_dwell?.mean || 135, bl.avg_dwell?.std || 15);
+        const scrollZ = calibrating ? 0 : getZ(liveWindow.scroll_velocity, bl.scroll_velocity?.mean || 450, bl.scroll_velocity?.std || 200);
+        // app_switch_rate from service is per-second; cap at 10/min for display.
+        // Values > 10/min indicate a partial or spurious window (e.g. first window
+        // after boot) and should not drive a stress zone.
+        const appSwitchPerMinCapped = Math.min(appSwitchPerMin, 10);
+        const switchZ = appSwitchPerMinCapped > 4 ? 3 : appSwitchPerMinCapped > 2.5 ? 1.5 : 0;
         return [
             {
                 id: 'avg_dwell', icon: '⌨️', title: 'Keyboard Patterns',
@@ -474,11 +494,11 @@ export default function PhenotypingScreen({ navigation }) {
                 subtext: delta(liveWindow.scroll_velocity, bl.scroll_velocity?.mean) || 'Scroll speed & frequency patterns',
                 color: colorZ(scrollZ), z: scrollZ,
                 sparkValues: sparkHistories.scroll_velocity,
-                baselineMean: bl.scroll_velocity?.mean || 750,
+                baselineMean: bl.scroll_velocity?.mean || 450,
             },
             {
                 id: 'app_switch', icon: '📱', title: 'Screen Activity',
-                value: `${appSwitchPerMin.toFixed(1)} /min`,
+                value: `${Math.min(appSwitchPerMin, 10).toFixed(1)} /min`,
                 subtext: appSwitchPerMin > 0.001 ? 'App switching rate active' : 'No app switches this window',
                 color: colorZ(switchZ), z: switchZ,
                 sparkValues: sparkHistories.app_switch,
@@ -493,7 +513,7 @@ export default function PhenotypingScreen({ navigation }) {
                 baselineMean: null,
             },
         ];
-    }, [liveWindow, baselines, COLORS, sparkHistories]);
+    }, [liveWindow, baselines, COLORS, sparkHistories, liveCalibStatus]);
 
     // ── Gauge status: CALIBRATING (days 1-7) → CALM/PRE-STRESS/HIGH STRESS (day 7+)
     const { statusMainColor, statusLabel, statusEmoji } = useMemo(() => {
@@ -570,29 +590,29 @@ export default function PhenotypingScreen({ navigation }) {
 
                     {/* Centered Large Circular Progress Gauge */}
                     <View style={styles.centerGaugeWrap}>
-                        <View style={{ width: 154, height: 154, alignItems: 'center', justifyContent: 'center' }}>
-                            <Svg width={154} height={154} style={StyleSheet.absoluteFill}>
+                        <View style={{ width: 170, height: 170, alignItems: 'center', justifyContent: 'center' }}>
+                            <Svg width={170} height={170} style={StyleSheet.absoluteFill}>
                                 {/* Background Ring Track */}
                                 <SvgCircle
-                                    cx={77}
-                                    cy={77}
-                                    r={70}
+                                    cx={85}
+                                    cy={85}
+                                    r={68}
                                     stroke={statusMainColor + '20'}
                                     strokeWidth={10}
                                     fill="transparent"
                                 />
                                 {/* Dynamic Progress Fill */}
                                 <SvgCircle
-                                    cx={77}
-                                    cy={77}
-                                    r={70}
+                                    cx={85}
+                                    cy={85}
+                                    r={68}
                                     stroke={statusMainColor}
                                     strokeWidth={10}
                                     fill="transparent"
-                                    strokeDasharray={`${2 * Math.PI * 70} ${2 * Math.PI * 70}`}
-                                    strokeDashoffset={2 * Math.PI * 70 * (1 - ringProgress)}
+                                    strokeDasharray={`${2 * Math.PI * 68} ${2 * Math.PI * 68}`}
+                                    strokeDashoffset={2 * Math.PI * 68 * (1 - ringProgress)}
                                     strokeLinecap="round"
-                                    transform="rotate(-90 77 77)"
+                                    transform="rotate(-90 85 85)"
                                 />
                             </Svg>
 
@@ -608,9 +628,11 @@ export default function PhenotypingScreen({ navigation }) {
                                 ) : (
                                     <>
                                         <Text style={[styles.gaugeDay, { color: statusMainColor }]}>
-                                            Day {liveCalibStatus?.dayNumber || (firebaseProfile ? 1 : '...')}
+                                            Day {liveCalibStatus ? Math.min(liveCalibStatus.dayNumber, 7) : (firebaseProfile ? 1 : '...')}
                                         </Text>
-                                        <Text style={[styles.gaugeSub, { color: t.textMuted }]}>of 7</Text>
+                                        <Text style={[styles.gaugeSub, { color: t.textMuted }]}>
+                                            {liveCalibStatus?.phase === 'awaiting' ? 'finalizing baseline' : 'of 7'}
+                                        </Text>
                                         <Text style={[styles.gaugeHourSub, { color: statusMainColor }]}>
                                             {Math.max(1, Math.round(dayProgress * 24))}h / 24h
                                         </Text>
@@ -653,19 +675,6 @@ export default function PhenotypingScreen({ navigation }) {
                             Arrows compare this window against your own calm baseline.
                         </Text>
 
-                        {/* Motion alert banner */}
-                        {isUserMoving && (
-                            <View style={{
-                                flexDirection: 'row', alignItems: 'center',
-                                backgroundColor: COLORS.warning + '18',
-                                borderRadius: 12, padding: 10, marginBottom: 8,
-                                borderWidth: 1, borderColor: COLORS.warning + '40',
-                            }}>
-                                <Animated.Text style={{ fontSize: 20, transform: [{ translateY: motionBounce }], marginRight: 8 }}>🏃</Animated.Text>
-                                <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.warning, flex: 1 }}>Motion detected — baseline excluded</Text>
-                            </View>
-                        )}
-
                         {digitalSignals.map((s) => (
                             <MiniSignalCard
                                 key={s.id}
@@ -679,11 +688,10 @@ export default function PhenotypingScreen({ navigation }) {
                                 baselineMean={s.baselineMean}
                                 z={s.z}
                                 t={t}
-                                iconBounce={s.id === 'activity' && isUserMoving ? motionBounce : null}
                                 onPress={
                                     s.id === 'activity'
                                         ? undefined
-                                        : () => navigation.navigate('PhenotypingSignalHistory', { signalId: s.id })
+                                        : () => navigation.navigate('PhenotypingSignalHistory', { signalId: SIGNAL_HISTORY_ID[s.id] || s.id })
                                 }
                             />
                         ))}
@@ -802,7 +810,10 @@ export default function PhenotypingScreen({ navigation }) {
                                     <View style={styles.sensorActionRow}>
                                         <TouchableOpacity
                                             style={[styles.sensorActionBtn, { backgroundColor: COLORS.brand, flex: 2 }]}
-                                            onPress={() => {
+                                            onPress={async () => {
+                                                if (Platform.OS === 'android' && PhenotypingIdentity) {
+                                                    try { await PhenotypingIdentity.requestRuntimePermissions(); } catch { }
+                                                }
                                                 // Deep-link to Android Accessibility settings
                                                 if (Platform.OS === 'android') {
                                                     Linking.sendIntent('android.settings.ACCESSIBILITY_SETTINGS').catch(() =>
@@ -834,9 +845,14 @@ export default function PhenotypingScreen({ navigation }) {
                                         borderColor: t.border,
                                         marginTop: 14,
                                     }]}
-                                    onPress={() => {
+                                    onPress={async () => {
                                         if (sensorCheckStatus !== 'on') return;
                                         if (Platform.OS === 'android' && PhenotypingIdentity) {
+                                            try {
+                                                await PhenotypingIdentity.requestRuntimePermissions();
+                                            } catch (e) {
+                                                console.warn('PhenoCare: requestRuntimePermissions error', e);
+                                            }
                                             PhenotypingIdentity.scheduleEmaNotifications();
                                         }
                                         setOnboardingStep(2);

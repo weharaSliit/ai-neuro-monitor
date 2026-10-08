@@ -28,6 +28,15 @@ import api from '../api/client';
 
 const POLL_INTERVAL_MS = 5000;
 const TREND_CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
+// A "session" is one login-to-logout span (AuthContext.js), not "how far
+// back the trend chart should remember" -- without this, logging out and
+// back in reset the chart to empty even though the earlier data is still
+// sitting in Firebase. This backfills the PRIOR few sessions once (see
+// the historicalWindows effect below, keyed off sessionCount so it only
+// re-runs when a new session actually starts, not on every 5s poll) and
+// merges them with the live-polled current session.
+const RECENT_SESSIONS_FOR_CHART = 4;
+const CHART_POINTS_MAX = 40;
 
 function DistBar({ label, value, total, color, muted }) {
   const pct = total > 0 ? (value / total) * 100 : 0;
@@ -78,6 +87,7 @@ export default function RingSummaryScreen({ navigation }) {
   const [sessionDist, setSessionDist] = useState({ normal: 0, stress: 0 });
   const [sessionCount, setSessionCount] = useState(0);
   const [driftWeeks, setDriftWeeks] = useState(null);
+  const [historicalWindows, setHistoricalWindows] = useState([]);
   const intervalRef = useRef(null);
 
   useEffect(() => {
@@ -162,12 +172,61 @@ export default function RingSummaryScreen({ navigation }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, sessionCount]);
 
+  // Backfills the trend charts with the PRIOR few sessions' own
+  // predictions, so logging out and back in doesn't reset the chart to
+  // empty -- the current/latest session is already covered by the live
+  // 5s poll above (chartWindows); this only needs to run when a new
+  // session actually starts (sessionCount changes), same efficient
+  // pattern the Session Distribution effect above already uses.
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const h = await api.get(`/history/${userId}`);
+        const sessionIds = Object.keys(h.data?.sessions || {});
+        const priorSessionIds = sessionIds.slice(0, -1).slice(-RECENT_SESSIONS_FOR_CHART);
+        const results = await Promise.all(
+          priorSessionIds.map((sid) => api.get(`/history/${userId}/${sid}`).catch(() => null))
+        );
+        if (cancelled) return;
+        const preds = results
+          .filter(Boolean)
+          .flatMap((s) => Object.values(s.data?.predictions || {}));
+        setHistoricalWindows(preds);
+      } catch {
+        // leave last-known historical backfill showing
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, sessionCount]);
+
+  // Merges the live current-session poll with the prior-sessions backfill
+  // into one chronological series, most-recent-first, capped so the chart
+  // doesn't grow unbounded across many logins. De-duped by timestamp +
+  // window_idx as a guard (the two sources shouldn't overlap since prior
+  // sessions explicitly excludes the current one, but a session rotating
+  // mid-fetch is possible).
+  const combinedWindows = useMemo(() => {
+    const merged = [...chartWindows, ...historicalWindows];
+    const seen = new Set();
+    const deduped = merged.filter((w) => {
+      const key = `${w.timestamp}_${w.window_idx}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    deduped.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    return deduped.slice(0, CHART_POINTS_MAX);
+  }, [chartWindows, historicalWindows]);
+
   const trend = useMemo(() => {
-    return [...chartWindows]
+    return [...combinedWindows]
       .reverse()
       .filter((w) => w.timestamp && w.prob_stress !== undefined && w.prob_stress !== null)
       .map((w) => ({ value: Math.round(w.prob_stress * 100), date: new Date(w.timestamp) }));
-  }, [chartWindows]);
+  }, [combinedWindows]);
 
   // Raw heart-rate/GSR trends -- same `features` object already fetched per
   // window (backend/physiological/firebase_service.py::save_prediction()),
@@ -176,18 +235,18 @@ export default function RingSummaryScreen({ navigation }) {
   // AVNN/SDHR/pNN20/etc set Admin shows -- that fuller feature-level detail
   // stays Admin-only, per this screen's original design (see file header).
   const heartRateTrend = useMemo(() => {
-    return [...chartWindows]
+    return [...combinedWindows]
       .reverse()
       .filter((w) => w.timestamp && w.features?.MeanHR)
       .map((w) => ({ value: Math.round(w.features.MeanHR), date: new Date(w.timestamp) }));
-  }, [chartWindows]);
+  }, [combinedWindows]);
 
   const gsrTrend = useMemo(() => {
-    return [...chartWindows]
+    return [...combinedWindows]
       .reverse()
       .filter((w) => w.timestamp && w.features?.SCL_mean !== undefined && w.features?.SCL_mean !== null)
       .map((w) => ({ value: Number(w.features.SCL_mean.toFixed(2)), date: new Date(w.timestamp) }));
-  }, [chartWindows]);
+  }, [combinedWindows]);
 
   const t = theme;
   const connected = status === 'online';

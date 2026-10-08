@@ -111,25 +111,35 @@ function ZoneChart({
     const zoneLabelOf = (z) => (z === 'high' ? 'Stress' : z === 'mid' ? 'Trending' : 'Normal');
     const zones = raw.map((p) => zoneOf(p.value));
 
-    const targetLabelCount = Math.max(4, Math.round(contentWidth / 85));
+    const targetLabelCount = Math.max(3, Math.round(contentWidth / 90));
     const labelStep = Math.max(1, Math.ceil(raw.length / targetLabelCount));
+
+    // Precompute non-overlapping label indices (minimum 62px gap between labels)
+    const visibleLabelIndices = [];
+    if (haveAllTimes && raw.length > 0) {
+        let lastX = -999;
+        raw.forEach((_p, i) => {
+            const isEndpoint = i === 0 || i === raw.length - 1;
+            const isStep = i % labelStep === 0;
+            if (isStep || isEndpoint) {
+                if (xs[i] - lastX >= 62) {
+                    visibleLabelIndices.push(i);
+                    lastX = xs[i];
+                } else if (i === raw.length - 1 && visibleLabelIndices.length > 0) {
+                    const prevPrevX = visibleLabelIndices.length > 1 ? xs[visibleLabelIndices[visibleLabelIndices.length - 2]] : -999;
+                    if (xs[i] - prevPrevX >= 62) {
+                        visibleLabelIndices[visibleLabelIndices.length - 1] = i;
+                    }
+                }
+            }
+        });
+    }
 
     const baselineY = valueToY(baselineValue);
     const baseline2Y = baseline2Value != null ? valueToY(baseline2Value) : null;
 
     const selected = selectedIndex != null ? raw[selectedIndex] : null;
-    let detailNode = (
-        <View style={styles.detailRow}>
-            <Text style={[styles.detailHint, { color: COLORS.light.textMuted }]}>
-                {isScrollable ? '← Swipe horizontally to view history · Tap point for details' : 'Tap a point for details'}
-            </Text>
-            {isScrollable && (
-                <View style={styles.scrollBadge}>
-                    <Text style={styles.scrollBadgeText}>Scrollable ⇄</Text>
-                </View>
-            )}
-        </View>
-    );
+    let detailNode = null;
     if (selected) {
         const zone = zones[selectedIndex];
         const dColor = zoneColorOf(zone);
@@ -139,9 +149,9 @@ function ZoneChart({
         let devText = '';
         if (baseline2Value != null) {
             const dev = Math.round(selected.value - baseline2Value);
-            devText = dev === 0 ? ' · at your baseline'
-                : dev > 0 ? ` · ${dev} pts above baseline`
-                    : ` · ${Math.abs(dev)} pts below baseline`;
+            devText = dev === 0 ? ' · at baseline'
+                : dev > 0 ? ` · +${dev}%`
+                    : ` · -${Math.abs(dev)}%`;
         }
         const windowText = selected.windowCount ? ` · avg of ${selected.windowCount} windows` : '';
         detailNode = (
@@ -150,11 +160,22 @@ function ZoneChart({
                 <Text style={{ color: COLORS.light.textMuted }}>{devText}{windowText} · {time}</Text>
             </Text>
         );
+    } else if (isScrollable) {
+        detailNode = (
+            <View style={styles.detailRow}>
+                <Text style={[styles.detailHint, { color: COLORS.light.textMuted }]}>
+                    ← Swipe horizontally to view history
+                </Text>
+                <View style={styles.scrollBadge}>
+                    <Text style={styles.scrollBadgeText}>Scrollable ⇄</Text>
+                </View>
+            </View>
+        );
     }
 
     return (
         <View style={{ width, overflow: 'hidden' }}>
-            <View style={styles.detailBar}>{detailNode}</View>
+            {detailNode && <View style={styles.detailBar}>{detailNode}</View>}
 
             <ScrollView
                 ref={scrollRef}
@@ -173,13 +194,10 @@ function ZoneChart({
                         <SvgLine x1={0} y1={0} x2={0} y2={height} stroke={COLORS.light.border} strokeWidth={1} />
                         <SvgLine x1={0} y1={height} x2={contentWidth} y2={height} stroke={COLORS.light.border} strokeWidth={1} />
 
-                        {haveAllTimes && raw.map((_p, i) => {
-                            if (!(i % labelStep === 0 || i === raw.length - 1)) return null;
-                            return (
-                                <SvgLine key={`grid-${i}`} x1={xs[i]} y1={0} x2={xs[i]} y2={height}
-                                    stroke={COLORS.light.borderSoft} strokeWidth={1} />
-                            );
-                        })}
+                        {haveAllTimes && visibleLabelIndices.map((i) => (
+                            <SvgLine key={`grid-${i}`} x1={xs[i]} y1={0} x2={xs[i]} y2={height}
+                                stroke={COLORS.light.borderSoft} strokeWidth={1} />
+                        ))}
 
                         <SvgLine x1={0} y1={baselineY} x2={contentWidth} y2={baselineY}
                             stroke={baselineColor} strokeWidth={1.5} strokeDasharray="5,4" />
@@ -216,10 +234,11 @@ function ZoneChart({
                     </Svg>
 
                     <View pointerEvents="none" style={{ position: 'absolute', top: height + 2, left: 0, width: contentWidth, height: X_LABEL_HEIGHT }}>
-                        {haveAllTimes && raw.map((p, i) => {
-                            if (!(i % labelStep === 0 || i === raw.length - 1)) return null;
+                        {haveAllTimes && visibleLabelIndices.map((i) => {
+                            const p = raw[i];
+                            const clampedX = Math.min(contentWidth - 52, Math.max(0, xs[i] - 26));
                             return (
-                                <Text key={i} style={[styles.xLabel, { left: Math.max(0, xs[i] - 26), color: COLORS.light.textMuted }]}>
+                                <Text key={`xlabel-${i}`} style={[styles.xLabel, { left: clampedX, color: COLORS.light.textMuted }]}>
                                     {new Date(p.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                 </Text>
                             );
@@ -281,8 +300,29 @@ function MultiLineChart({
     const clamp01 = (v) => Math.min(1, Math.max(0, v));
     const valueToY = (v) => PAD_Y + (height - PAD_Y * 2) * (1 - clamp01(v / maxValue));
 
-    const targetLabelCount = Math.max(4, Math.round(contentWidth / 85));
+    const targetLabelCount = Math.max(3, Math.round(contentWidth / 90));
     const labelStep = Math.max(1, Math.ceil(points.length / targetLabelCount));
+
+    // Precompute non-overlapping label indices (minimum 62px gap)
+    const visibleLabelIndices = [];
+    if (haveAllTimes && points.length > 0) {
+        let lastX = -999;
+        points.forEach((_p, i) => {
+            const isEndpoint = i === 0 || i === points.length - 1;
+            const isStep = i % labelStep === 0;
+            if (isStep || isEndpoint) {
+                if (xs[i] - lastX >= 62) {
+                    visibleLabelIndices.push(i);
+                    lastX = xs[i];
+                } else if (i === points.length - 1 && visibleLabelIndices.length > 0) {
+                    const prevPrevX = visibleLabelIndices.length > 1 ? xs[visibleLabelIndices[visibleLabelIndices.length - 2]] : -999;
+                    if (xs[i] - prevPrevX >= 62) {
+                        visibleLabelIndices[visibleLabelIndices.length - 1] = i;
+                    }
+                }
+            }
+        });
+    }
 
     const baselineY = baselineValue != null ? valueToY(baselineValue) : null;
 
@@ -304,13 +344,10 @@ function MultiLineChart({
                         <SvgLine x1={0} y1={0} x2={0} y2={height} stroke={COLORS.light.border} strokeWidth={1} />
                         <SvgLine x1={0} y1={height} x2={contentWidth} y2={height} stroke={COLORS.light.border} strokeWidth={1} />
 
-                        {haveAllTimes && points.map((_p, i) => {
-                            if (!(i % labelStep === 0 || i === points.length - 1)) return null;
-                            return (
-                                <SvgLine key={`grid-${i}`} x1={xs[i]} y1={0} x2={xs[i]} y2={height}
-                                    stroke={COLORS.light.borderSoft} strokeWidth={1} />
-                            );
-                        })}
+                        {haveAllTimes && visibleLabelIndices.map((i) => (
+                            <SvgLine key={`grid-${i}`} x1={xs[i]} y1={0} x2={xs[i]} y2={height}
+                                stroke={COLORS.light.borderSoft} strokeWidth={1} />
+                        ))}
 
                         {baselineY !== null && (
                             <SvgLine x1={0} y1={baselineY} x2={contentWidth} y2={baselineY}
@@ -344,10 +381,11 @@ function MultiLineChart({
                     </Svg>
 
                     <View pointerEvents="none" style={{ position: 'absolute', top: height + 2, left: 0, width: contentWidth, height: X_LABEL_HEIGHT }}>
-                        {haveAllTimes && points.map((p, i) => {
-                            if (!(i % labelStep === 0 || i === points.length - 1)) return null;
+                        {haveAllTimes && visibleLabelIndices.map((i) => {
+                            const p = points[i];
+                            const clampedX = Math.min(contentWidth - 52, Math.max(0, xs[i] - 26));
                             return (
-                                <Text key={i} style={[styles.xLabel, { left: Math.max(0, xs[i] - 26), color: COLORS.light.textMuted }]}>
+                                <Text key={`xlabel-${i}`} style={[styles.xLabel, { left: clampedX, color: COLORS.light.textMuted }]}>
                                     {new Date(p.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                 </Text>
                             );
@@ -414,40 +452,48 @@ export default function LineChart({
     const targetLabelCount = 4;
     const labelStep = Math.max(1, Math.ceil(raw.length / targetLabelCount));
 
-    // GiftedLineChart width constraint:
+    // GiftedLineChart width & height constraint:
     // Total rendered width = plotWidth + yAxisLabelWidth + initialSpacing + endSpacing
     // We strictly calibrate plotWidth so total rendered width matches `width` exactly without spilling out of the card.
-    const yAxisLabelWidth = hideValues ? 0 : (suffix ? 40 : 34);
+    const yAxisLabelWidth = hideValues ? 0 : (suffix ? 52 : 38);
     const initialSpacing = 8;
     const endSpacing = 8;
     const plotWidth = Math.max(60, width - yAxisLabelWidth - initialSpacing - endSpacing);
+    const containerHeight = (haveAllTimes && !hideValues) ? height + 22 : height;
 
     const xPositions = [initialSpacing];
+    for (let i = 1; i < raw.length; i++) {
+        let spacing;
+        if (haveAllTimes && totalSpan > 0) {
+            const frac = (times[i] - times[i - 1]) / totalSpan;
+            spacing = Math.max(4, frac * plotWidth);
+        } else {
+            spacing = Math.max(2, plotWidth / (raw.length - 1));
+        }
+        xPositions.push(xPositions[i - 1] + spacing);
+    }
+
+    let lastLabelX = -999;
     const data = raw.map((p, i) => {
         const point = { value: p.value };
-        if (haveAllTimes && p.date && (i % labelStep === 0 || i === raw.length - 1)) {
-            point.label = new Date(p.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        }
         if (i > 0) {
-            let spacing;
-            if (haveAllTimes && totalSpan > 0) {
-                const frac = (times[i] - times[i - 1]) / totalSpan;
-                spacing = Math.max(4, frac * plotWidth);
-            } else {
-                spacing = Math.max(2, plotWidth / (raw.length - 1));
+            point.spacing = xPositions[i] - xPositions[i - 1];
+        }
+        if (haveAllTimes && p.date && (i % labelStep === 0 || i === raw.length - 1)) {
+            if (xPositions[i] - lastLabelX >= 55) {
+                point.label = new Date(p.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                lastLabelX = xPositions[i];
             }
-            point.spacing = spacing;
-            xPositions.push(xPositions[i - 1] + spacing);
         }
         return point;
     });
 
     return (
-        <View style={{ width, height, overflow: 'hidden' }}>
-            {haveAllTimes && (
+        <View style={{ width, height: containerHeight, overflow: 'hidden' }}>
+            {haveAllTimes && !hideValues && (
                 <Svg width={width} height={height} style={StyleSheet.absoluteFill} pointerEvents="none">
                     {raw.map((_p, i) => {
-                        if (!(i % labelStep === 0 || i === raw.length - 1)) return null;
+                        if (data[i]?.label == null) return null;
                         return (
                             <SvgLine key={`grid-${i}`} x1={xPositions[i] + yAxisLabelWidth} y1={0} x2={xPositions[i] + yAxisLabelWidth} y2={height}
                                 stroke={COLORS.light.borderSoft} strokeWidth={1} />

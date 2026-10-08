@@ -15,6 +15,14 @@ import api from '../../physiological/api/client';
 
 const TREND_CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
 
+function parseTimestamp(ts, fallbackMinutesAgo = 0) {
+  if (!ts) return new Date(Date.now() - fallbackMinutesAgo * 60000);
+  if (ts instanceof Date) return ts;
+  if (typeof ts === 'number') return new Date(ts < 10000000000 ? ts * 1000 : ts);
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime()) ? new Date(Date.now() - fallbackMinutesAgo * 60000) : d;
+}
+
 export default function AdminSessionDetailScreen({ route }) {
   const { userId, sessionId } = route.params;
   const [predictions, setPredictions] = useState(null);
@@ -38,8 +46,11 @@ export default function AdminSessionDetailScreen({ route }) {
   const windows = predictions ? Object.entries(predictions).sort((a, b) => (a[1].window_idx ?? 0) - (b[1].window_idx ?? 0)) : [];
   const trend = useMemo(() => windows
     .map(([, w]) => w)
-    .filter((w) => w.timestamp && w.prob_stress !== undefined && w.prob_stress !== null)
-    .map((w) => ({ value: Math.round(w.prob_stress * 100), date: new Date(w.timestamp) })), [windows]);
+    .filter((w) => w.prob_stress !== undefined && w.prob_stress !== null)
+    .map((w, i) => ({
+      value: Math.round(w.prob_stress * 100),
+      date: parseTimestamp(w.timestamp || w.timestamp_end, windows.length - 1 - i),
+    })), [windows]);
   const trendColor = windows.length && windows[windows.length - 1][1].label === 'Stress' ? COLORS.stress : COLORS.normal;
 
   return (
@@ -62,9 +73,11 @@ export default function AdminSessionDetailScreen({ route }) {
                 points={trend}
                 color={trendColor}
                 width={TREND_CHART_WIDTH}
-                height={130}
+                height={145}
                 maxValue={100}
-                suffix="%"
+                baselineValue={50}
+                baselineLabel="Stress threshold"
+                colorZones
               />
             </Card>
           )}

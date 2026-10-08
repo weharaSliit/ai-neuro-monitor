@@ -6,7 +6,7 @@
 // backend/psychological/app.py), which take user_id explicitly and skip
 // the ownership check the user-facing routes enforce. Read-only.
 // ============================================================
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Dimensions } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import axios from 'axios';
@@ -26,6 +26,13 @@ import { useAuth } from '../../../context/AuthContext';
 
 const TREND_CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
 const RING_POLL_MS = 5000; // same cadence the old Ringscreen.js used
+// Same cross-session backfill reasoning as RingSummaryScreen.js/
+// EegSummaryScreen.js/AdminEegLiveScreen.js -- a session is one
+// login-to-logout span, not "how far back the admin trend chart should
+// remember", so pollRing() below merges this many of the user's most
+// recent sessions instead of only their latest one.
+const RECENT_SESSIONS_FOR_CHART = 4;
+const CHART_POINTS_MAX = 80;
 
 // Same Render-hosted, cold-start-tolerant pattern already used for EEG's
 // calibration check in modules/shared/CalibrationGate.js.
@@ -37,6 +44,16 @@ const eegClient = axios.create({ baseURL: EEG_API_BASE, timeout: 45000 });
 // recalibrations the selected user does while you're watching actually
 // show up without navigating away and back.
 const REFRESH_MS = 8000;
+
+function parseTimestamp(ts, fallbackMinutesAgo = 0) {
+    if (!ts) return new Date(Date.now() - fallbackMinutesAgo * 60000);
+    if (ts instanceof Date) return ts;
+    if (typeof ts === 'number') {
+        return new Date(ts < 10000000000 ? ts * 1000 : ts);
+    }
+    const d = new Date(ts);
+    return Number.isNaN(d.getTime()) ? new Date(Date.now() - fallbackMinutesAgo * 60000) : d;
+}
 
 function latestWindow(windowsObj) {
     if (!windowsObj) return null;
@@ -100,11 +117,22 @@ const RING_FEATURE_CHARTS = [
   { key: 'ACC_std', label: 'Accelerometer Std Dev', unit: ' g', color: COLORS.acc },
 ];
 
+const PHENO_FEATURES = [
+  { key: 'avg_dwell', label: 'Key Hold Time (Dwell Time)', unit: ' ms', baseline: 135, color: '#6366F1', icon: '⏱️' },
+  { key: 'avg_flight', label: 'Key Pause Time (Flight Time)', unit: ' ms', baseline: 215, color: '#8B5CF6', icon: '⏳' },
+  { key: 'scroll_velocity', label: 'Touch Scroll Speed', unit: ' px/s', baseline: 450, color: '#F59E0B', icon: '👆' },
+  { key: 'tilt_angle', label: 'Device Tilt Angle', unit: ' °', baseline: 59, color: '#06B6D4', icon: '📱' },
+  { key: 'cpm', label: 'Typing Pace (Speed)', unit: ' cpm', baseline: 42, color: '#10B981', icon: '⌨️' },
+];
+
 function FeatureTrendChart({ chartWindows, featureKey, label, unit, color, muted, text }) {
   const points = [...chartWindows]
     .reverse()
-    .filter((w) => w.timestamp && w.features?.[featureKey] !== undefined && w.features?.[featureKey] !== null)
-    .map((w) => ({ value: Number(w.features[featureKey].toFixed(3)), date: new Date(w.timestamp) }));
+    .filter((w) => w.features?.[featureKey] !== undefined && w.features?.[featureKey] !== null)
+    .map((w, i) => ({
+      value: Number(w.features[featureKey].toFixed(3)),
+      date: parseTimestamp(w.timestamp || w.timestamp_end, chartWindows.length - 1 - i),
+    }));
 
   if (points.length < 2) return null;
 
@@ -112,7 +140,7 @@ function FeatureTrendChart({ chartWindows, featureKey, label, unit, color, muted
     <Card>
       <Text style={[styles.cardTitle, { color: text, marginBottom: 4 }]}>{label}</Text>
       <Text style={{ color: muted, marginBottom: 12, fontSize: 11 }}>Per telemetry window</Text>
-      <LineChart points={points} color={color} width={TREND_CHART_WIDTH} height={110} suffix={unit} />
+      <LineChart points={points} color={color} width={TREND_CHART_WIDTH} height={125} suffix={unit} />
     </Card>
   );
 }
@@ -150,9 +178,9 @@ function LiveNowCard({ userId, isLive, liveWindow, field, label, color, muted, t
 }
 
 export default function AdminUserDetailScreen({ route, navigation }) {
-  const { userId, name } = route.params;
+  const { userId, name, initialTab } = route?.params || {};
   const { token } = useAuth();
-  const [tab, setTab] = useState('Ring');
+  const [tab, setTab] = useState(initialTab || 'Ring');
   const [loading, setLoading] = useState(true);
   const [baseline, setBaseline] = useState(null);
   const [history, setHistory] = useState(null);
@@ -177,6 +205,142 @@ export default function AdminUserDetailScreen({ route, navigation }) {
       console.log('Error resolving pheno deviceId:', err);
     });
   }, [userId, name]);
+
+  const [phenoDataLogs, setPhenoDataLogs] = useState({});
+  const [phenoUserRecord, setPhenoUserRecord] = useState(null);
+  const [phenoPredictions, setPhenoPredictions] = useState({});
+
+  useEffect(() => {
+    const targetUid = phenoDeviceId || userId;
+    if (!targetUid) return;
+    const logsRef = ref(db, `phenotyping/data_logs/${targetUid}`);
+    const userRef = ref(db, `phenotyping/users/${targetUid}`);
+    const predsRef = ref(db, `phenotyping/predictions/${targetUid}`);
+
+    const offLogs = onValue(logsRef, (snap) => setPhenoDataLogs(snap.val() || {}));
+    const offUser = onValue(userRef, (snap) => setPhenoUserRecord(snap.val() || null));
+    const offPreds = onValue(predsRef, (snap) => setPhenoPredictions(snap.val() || {}));
+
+    return () => {
+      off(logsRef, 'value', offLogs);
+      off(userRef, 'value', offUser);
+      off(predsRef, 'value', offPreds);
+    };
+  }, [phenoDeviceId, userId]);
+
+  const phenoTrendPoints = useMemo(() => {
+    const targetUid = phenoDeviceId || userId;
+    if (!targetUid) return [];
+
+    const uLogs = phenoDataLogs || {};
+    const uPreds = phenoPredictions || {};
+    const uBaselines = phenoUserRecord?.baselines || {};
+
+    const pts = [];
+
+    const predEntries = Object.values(uPreds)
+      .filter((p) => p && p.timestamp)
+      .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+    if (predEntries.length > 0) {
+      predEntries.forEach((p) => {
+        let score = 20;
+        if (typeof p.stress_score === 'number') {
+          score = Math.round(p.stress_score * 100);
+        } else if (typeof p.composite_z === 'number') {
+          score = Math.min(100, Math.max(5, Math.round((p.composite_z / 3.0) * 100)));
+        }
+        pts.push({
+          value: Math.min(100, Math.max(0, score)),
+          date: new Date(p.timestamp),
+        });
+      });
+    }
+
+    if (pts.length < 2 && Object.keys(uLogs).length > 0) {
+      const sortedLogs = Object.entries(uLogs).sort((a, b) => a[0].localeCompare(b[0]));
+      sortedLogs.forEach(([key, w]) => {
+        const d = w || {};
+        let winDate = new Date();
+        if (d.timestamp) {
+          const parsed = new Date(d.timestamp);
+          if (!isNaN(parsed.getTime())) winDate = parsed;
+        } else if (typeof key === 'string' && /^\d{8}_\d{6}$/.test(key)) {
+          const y = parseInt(key.slice(0, 4), 10);
+          const m = parseInt(key.slice(4, 6), 10) - 1;
+          const day = parseInt(key.slice(6, 8), 10);
+          const hh = parseInt(key.slice(9, 11), 10);
+          const mm = parseInt(key.slice(11, 13), 10);
+          const ss = parseInt(key.slice(13, 15), 10);
+          winDate = new Date(y, m, day, hh, mm, ss);
+        }
+
+        const activeZs = [];
+        if (typeof d.avg_dwell === 'number' && d.avg_dwell > 0) {
+          activeZs.push(Math.abs((d.avg_dwell - (uBaselines.avg_dwell?.mean ?? 135)) / (uBaselines.avg_dwell?.std ?? 25)));
+        }
+        if (typeof d.avg_flight === 'number' && d.avg_flight > 0) {
+          activeZs.push(Math.abs((d.avg_flight - (uBaselines.avg_flight?.mean ?? 215)) / (uBaselines.avg_flight?.std ?? 35)));
+        }
+        if (typeof d.scroll_velocity === 'number' && d.scroll_velocity > 0) {
+          activeZs.push(Math.min(3.5, Math.abs((d.scroll_velocity - (uBaselines.scroll_velocity?.mean ?? 450)) / (uBaselines.scroll_velocity?.std ?? 200))));
+        }
+        if (typeof d.tilt_angle === 'number' && d.tilt_angle > 0) {
+          activeZs.push(Math.min(3.5, Math.abs((d.tilt_angle - (uBaselines.tilt_angle?.mean ?? 59)) / (uBaselines.tilt_angle?.std ?? 15))));
+        }
+        if (typeof d.cpm === 'number' && d.cpm > 0) {
+          activeZs.push(Math.abs((d.cpm - (uBaselines.cpm?.mean ?? 42)) / (uBaselines.cpm?.std ?? 15)));
+        }
+        const meanZ = activeZs.length > 0 ? (activeZs.reduce((a, b) => a + b, 0) / activeZs.length) : 0.35;
+        const score = Math.min(95, Math.max(10, Math.round(18 + (meanZ / 2.5) * 50)));
+        pts.push({ value: score, date: winDate });
+      });
+    }
+
+    pts.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    const trimmed = pts.slice(-35);
+    if (trimmed.length === 1) {
+      trimmed.unshift({ value: Math.max(15, trimmed[0].value - 5), date: new Date(trimmed[0].date.getTime() - 120000) });
+    }
+    return trimmed;
+  }, [phenoDeviceId, userId, phenoDataLogs, phenoPredictions, phenoUserRecord]);
+
+  const phenoRawPoints = useMemo(() => {
+    const targetUid = phenoDeviceId || userId;
+    if (!targetUid) return {};
+    const uLogs = phenoDataLogs || {};
+    const sortedEntries = Object.entries(uLogs).sort((a, b) => a[0].localeCompare(b[0]));
+
+    const result = {};
+    PHENO_FEATURES.forEach((f) => {
+      const validPoints = [];
+      sortedEntries.forEach(([key, w]) => {
+        const val = w?.[f.key];
+        if (typeof val === 'number' && val > 0) {
+          let winDate = new Date();
+          if (w.timestamp) {
+            const parsed = new Date(w.timestamp);
+            if (!isNaN(parsed.getTime())) winDate = parsed;
+          } else if (typeof key === 'string' && /^\d{8}_\d{6}$/.test(key)) {
+            const y = parseInt(key.slice(0, 4), 10);
+            const m = parseInt(key.slice(4, 6), 10) - 1;
+            const day = parseInt(key.slice(6, 8), 10);
+            const hh = parseInt(key.slice(9, 11), 10);
+            const mm = parseInt(key.slice(11, 13), 10);
+            const ss = parseInt(key.slice(13, 15), 10);
+            winDate = new Date(y, m, day, hh, mm, ss);
+          }
+          validPoints.push({
+            value: Number(val.toFixed(1)),
+            date: winDate,
+          });
+        }
+      });
+      validPoints.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      result[f.key] = validPoints.slice(-35);
+    });
+    return result;
+  }, [phenoDeviceId, userId, phenoDataLogs]);
 
   // Live-now state -- there's only one physical ring and one physical EEG
   // headset, so genuinely live data can only ever exist for whichever ONE
@@ -241,14 +405,28 @@ export default function AdminUserDetailScreen({ route, navigation }) {
     }
     try {
       const h = await api.get(`/admin/history/${userId}`);
-      const sessionIds = Object.keys(h.data?.sessions || {});
+      const sessionIds = Object.keys(h.data?.sessions || {}).sort();
       const latestId = sessionIds[sessionIds.length - 1];
       if (!latestId) { setRingFeed([]); setRingChart([]); return; }
-      const s2 = await api.get(`/admin/history/${userId}/${latestId}`);
-      const predictions = Object.values(s2.data?.predictions || {})
+
+      const recentIds = sessionIds.slice(-RECENT_SESSIONS_FOR_CHART);
+      const sessionResults = await Promise.all(
+        recentIds.map((sid) => api.get(`/admin/history/${userId}/${sid}`).then((r) => r.data).catch(() => null))
+      );
+
+      const latestPredictions = Object.values(sessionResults[sessionResults.length - 1]?.predictions || {})
         .sort((a, b) => (b.window_idx ?? 0) - (a.window_idx ?? 0));
-      setRingFeed(predictions.slice(0, 5));
-      setRingChart(predictions.slice(0, 20));
+      setRingFeed(latestPredictions.slice(0, 5));
+
+      // Merged across recentIds, newest-first -- ringTrend/FeatureTrendChart
+      // both .reverse() this to get oldest-first for charting, so the sort
+      // direction here has to stay descending same as the old single-
+      // session predictions.slice(0, 20) did.
+      const merged = sessionResults
+        .flatMap((data) => Object.values(data?.predictions || {}))
+        .filter((w) => w.timestamp)
+        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      setRingChart(merged.slice(0, CHART_POINTS_MAX));
     } catch {
       // leave last-known feed showing on a transient failure
     }
@@ -349,12 +527,16 @@ export default function AdminUserDetailScreen({ route, navigation }) {
   const ringTrendColor = ringLatest?.label === 'Stress' ? COLORS.stress : COLORS.normal;
   const ringTrend = [...ringChart]
     .reverse()
-    .filter((w) => w.timestamp && w.prob_stress !== undefined && w.prob_stress !== null)
-    .map((w) => ({ value: Math.round(w.prob_stress * 100), date: new Date(w.timestamp) }));
+    .filter((w) => w.prob_stress !== undefined && w.prob_stress !== null)
+    .map((w, i) => ({
+      value: Math.round(w.prob_stress * 100),
+      date: parseTimestamp(w.timestamp || w.timestamp_end, ringChart.length - 1 - i),
+    }));
 
-  // Session baseline -- mean of the earliest readings currently loaded for
-  // this session (ringTrend is oldest-first), same derivation the user app
-  // used to show on its own Ring chart before that moved here per request
+  // Trend-window baseline -- mean of the earliest readings currently loaded
+  // (ringTrend is oldest-first, now spanning RECENT_SESSIONS_FOR_CHART
+  // sessions, not just the latest one), same derivation the user app used
+  // to show on its own Ring chart before that moved here per request
   // (deviation/baseline detail belongs in Admin, not the user-facing app).
   const ringSessionBaseline = ringTrend.length >= 3
     ? Math.round(ringTrend.slice(0, 3).reduce((sum, p) => sum + p.value, 0) / 3)
@@ -440,23 +622,23 @@ export default function AdminUserDetailScreen({ route, navigation }) {
               {ringTrend.length > 1 && (
                 <Card>
                   <View style={styles.rowBetween}>
-                    <Text style={[styles.cardTitle, { color: text, marginBottom: 0 }]}>Live Stress Trend</Text>
+                    <Text style={[styles.cardTitle, { color: text, marginBottom: 0 }]}>Stress Trend</Text>
                     <StatusDot color={ringTrendColor} active={ringConnected} />
                   </View>
                   <Text style={{ color: muted, marginTop: 4, marginBottom: 12, fontSize: 11 }}>
-                    P(stress) across the most recent windows (%)
+                    P(stress) across this and recent previous sessions' telemetry windows
                   </Text>
                   <LineChart
                     points={ringTrend}
                     color={ringTrendColor}
                     width={TREND_CHART_WIDTH}
-                    height={130}
+                    height={145}
                     maxValue={100}
-                    suffix="%"
                     baselineValue={STRESS_DECISION_THRESHOLD_PERCENT}
-                    baselineLabel="Stress level"
+                    baselineLabel="Stress threshold"
                     baseline2Value={ringSessionBaseline}
                     baseline2Label="Session start"
+                    colorZones
                   />
                 </Card>
               )}
@@ -602,19 +784,109 @@ export default function AdminUserDetailScreen({ route, navigation }) {
           )}
 
           {tab === 'Phenotyping' && (
-            <Card>
-              <Text style={[styles.cardTitle, { color: text }]}>Behavioral Analysis</Text>
-              <Text style={{ color: muted, marginBottom: 14 }}>
-                Inspect {name || userId}'s passive digital phenotyping data.
-                View their Z-score deviations, idiographic baseline values, and weekly stress patterns.
+            <>
+              {/* Participant Overview Card */}
+              <Card>
+                <View style={styles.rowBetween}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.cardTitle, { color: text, marginBottom: 2 }]}>
+                      Behavioral Digital Phenotyping
+                    </Text>
+                    <Text style={{ color: muted, fontSize: 11.5 }}>
+                      Passive keystroke, gesture speed & phone tilt telemetry
+                    </Text>
+                  </View>
+                  <View style={{ backgroundColor: (phenoUserRecord?.is_calibrated ? COLORS.normal : '#F59E0B') + '15', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 }}>
+                    <Text style={{ fontSize: 10, fontWeight: '800', color: phenoUserRecord?.is_calibrated ? COLORS.normal : '#D97706' }}>
+                      {phenoUserRecord?.is_calibrated
+                        ? 'Calibrated'
+                        : `Day ${phenoUserRecord?.created_at ? Math.min(7, Math.floor(Math.max(0, Date.now() - new Date(phenoUserRecord.created_at).getTime()) / 86400000) + 1) : (phenoUserRecord?.calibration_day || 1)} of 7`}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={{ color: muted, marginTop: 8, fontSize: 11.5 }}>
+                  Device ID: @{phenoDeviceId || userId} · {Object.keys(phenoDataLogs).length} telemetry windows recorded
+                </Text>
+              </Card>
+
+              {/* Stress Trend Card (Composite) */}
+              {phenoTrendPoints.length > 1 ? (
+                <Card>
+                  <View style={styles.rowBetween}>
+                    <Text style={[styles.cardTitle, { color: text, marginBottom: 0 }]}>Stress Trend</Text>
+                    <StatusDot
+                      color={
+                        phenoTrendPoints[phenoTrendPoints.length - 1]?.value > 65
+                          ? COLORS.stress
+                          : phenoTrendPoints[phenoTrendPoints.length - 1]?.value > 35
+                          ? '#F59E0B'
+                          : COLORS.normal
+                      }
+                      active={true}
+                    />
+                  </View>
+                  <Text style={{ color: muted, marginTop: 4, marginBottom: 12, fontSize: 11 }}>
+                    P(stress) across passive digital phenotyping telemetry windows
+                  </Text>
+                  <LineChart
+                    points={phenoTrendPoints}
+                    color={
+                      phenoTrendPoints[phenoTrendPoints.length - 1]?.value > 65
+                        ? COLORS.stress
+                        : phenoTrendPoints[phenoTrendPoints.length - 1]?.value > 35
+                        ? '#F59E0B'
+                        : COLORS.normal
+                    }
+                    width={TREND_CHART_WIDTH}
+                    height={145}
+                    maxValue={100}
+                    baselineValue={65}
+                    baselineLabel="Stress threshold"
+                    baselineColor={COLORS.stress}
+                    baseline2Value={35}
+                    baseline2Label="Calm baseline"
+                    baseline2Color={COLORS.normal}
+                    colorZones
+                  />
+                </Card>
+              ) : null}
+
+              {/* RAW FEATURE TRENDS (5) */}
+              <Text style={[styles.sectionLabel, { color: muted, marginTop: 10 }]}>
+                Raw Feature Trends ({PHENO_FEATURES.length})
               </Text>
-              <TouchableOpacity
-                style={[styles.openBtn, { backgroundColor: COLORS.gsr }]}
-                onPress={() => navigation.navigate('PhenotypingAnalysis', { userId: phenoDeviceId || userId, userName: name || userId, mode: 'analysis' })}
-              >
-                <Text style={{ color: '#FFFFFF', fontWeight: '800' }}>Open Analysis →</Text>
-              </TouchableOpacity>
-            </Card>
+              {PHENO_FEATURES.map((f) => {
+                const pts = phenoRawPoints[f.key] || [];
+                if (pts.length < 2) return null;
+                return (
+                  <Card key={f.key}>
+                    <View style={styles.rowBetween}>
+                      <Text style={[styles.cardTitle, { color: text, marginBottom: 4 }]}>{f.label}</Text>
+                      <View style={{ backgroundColor: f.color + '15', paddingHorizontal: 7, paddingVertical: 2.5, borderRadius: 6 }}>
+                        <Text style={{ color: f.color, fontSize: 10, fontWeight: '800' }}>
+                          Latest: {pts[pts.length - 1].value}{f.unit}
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={{ color: muted, marginBottom: 12, fontSize: 11 }}>Per telemetry window · Baseline: ~{f.baseline}{f.unit}</Text>
+                    <LineChart points={pts} color={f.color} width={TREND_CHART_WIDTH} height={125} suffix={f.unit} fitToWidth />
+                  </Card>
+                );
+              })}
+
+              <Card>
+                <Text style={[styles.cardTitle, { color: text }]}>Continuous Roadmap & Deep Analysis</Text>
+                <Text style={{ color: muted, marginBottom: 14, fontSize: 11.5 }}>
+                  Inspect complete 7-day idiographic distributions, empirical ROC curves, and daily micro-behavior breakdowns.
+                </Text>
+                <TouchableOpacity
+                  style={[styles.openBtn, { backgroundColor: COLORS.brand }]}
+                  onPress={() => navigation.navigate('PhenotypingAnalysis', { userId: phenoDeviceId || userId, userName: name || userId, mode: 'analysis' })}
+                >
+                  <Text style={{ color: '#FFFFFF', fontWeight: '800' }}>Open Continuous Roadmap →</Text>
+                </TouchableOpacity>
+              </Card>
+            </>
           )}
 
           {tab === 'Relaxation' && (

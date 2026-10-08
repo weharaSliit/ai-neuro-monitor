@@ -7,7 +7,7 @@
 // child per session, the same pattern fusion_en/{userId}/... uses). No raw
 // µV charts or the 29-feature bipolar grid -- that detail lives in Admin.
 // ============================================================
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { View, Text, ScrollView, StyleSheet, Dimensions } from 'react-native';
 import { ref, onValue, off, get } from 'firebase/database';
 import { db } from '../firebase';
@@ -45,6 +45,11 @@ const FEATURE_TREND_CONFIG = [
 ];
 const TREND_CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
 const TREND_CHART_HEIGHT = 70;
+// A "session" is one login-to-logout span, not "how far back Feature
+// Trends should remember" -- see RingSummaryScreen.js's identical
+// constant/reasoning. Backfills this many PRIOR sessions' own blocks
+// alongside the live current-session listener.
+const RECENT_SESSIONS_FOR_CHART = 4;
 
 function sortedWindows(windowsObj) {
     if (!windowsObj) return [];
@@ -137,6 +142,7 @@ export default function EegSummaryScreen() {
   const [recentSessions, setRecentSessions] = useState([]);
   const [sessionDist, setSessionDist] = useState({ normal: 0, stress: 0 });
   const [driftWeeks, setDriftWeeks] = useState(null);
+  const [historicalWindowsList, setHistoricalWindowsList] = useState([]);
 
   useEffect(() => {
     if (!userId) return;
@@ -163,7 +169,15 @@ export default function EegSummaryScreen() {
   // Per-feature time series across this session's blocks (~25s cadence,
   // see BLOCK_SEC in realtime/pipeline.py) -- sessionWindows already holds
   // the full session, not just the latest block, from the listener above.
-  const windowsList = sortedWindows(sessionWindows);
+  // Merged with historicalWindowsList (the prior few sessions, backfilled
+  // below) and re-sorted by real timestamp -- window_idx alone would
+  // clash across sessions since it's each session's own local counter
+  // restarting from 0, not a global ordering.
+  const windowsList = useMemo(() => {
+    const merged = [...sortedWindows(sessionWindows), ...historicalWindowsList];
+    merged.sort((a, b) => (a.timestamp_end ?? 0) - (b.timestamp_end ?? 0));
+    return merged;
+  }, [sessionWindows, historicalWindowsList]);
   const featureSeries = FEATURE_TREND_CONFIG.map(({ key, label, color }) => {
     const points = windowsList
       .filter((w) => !w.skipped && w.features_eeg?.bipolar?.[key] != null)
@@ -179,7 +193,11 @@ export default function EegSummaryScreen() {
     const userRef = ref(db, `psychological/${userId}`);
     get(userRef).then((snap) => {
       const all = snap.val() || {};
-      const sids = Object.keys(all);
+      // Session ids are ISO timestamps (AuthContext.js), lexicographically
+      // sortable -- Object.keys() on Firebase's JSON response isn't
+      // guaranteed chronological, so sort explicitly rather than trust
+      // insertion order.
+      const sids = Object.keys(all).sort();
       let nNorm = 0;
       let nStress = 0;
       const recents = [];
@@ -200,8 +218,16 @@ export default function EegSummaryScreen() {
       });
       setSessionDist({ normal: nNorm, stress: nStress });
       setRecentSessions(recents.slice(-5).reverse());
+
+      // Backfill for Feature Trends: the PRIOR few sessions' own blocks
+      // (excluding the current live one, already covered by the
+      // sessionWindows listener) -- reuses this same already-fetched
+      // `all` rather than a second Firebase read, so logging out and
+      // back in doesn't reset the chart to empty.
+      const priorSids = sids.filter((sid) => sid !== currentSessionId).slice(-RECENT_SESSIONS_FOR_CHART);
+      setHistoricalWindowsList(priorSids.flatMap((sid) => sortedWindows(all[sid])));
     }).catch(() => {});
-  }, [userId, hasSession]);
+  }, [userId, hasSession, currentSessionId]);
 
   const t = theme;
   const qualityScore = latest?.eeg_quality_score;
@@ -297,12 +323,16 @@ export default function EegSummaryScreen() {
         )}
 
         {/* Feature Trends: how the extracted signal features are moving
-            block-to-block (~25s cadence) across this live session. */}
-        {hasSession && hasFeatureTrends && (
+            block-to-block (~25s cadence) -- spans the live session plus
+            the prior few sessions' own blocks (windowsList's merge
+            above), so this doesn't gate on hasSession: a user who just
+            logged back in (headband not streaming yet) still sees their
+            recent history, not an empty card. */}
+        {hasFeatureTrends && (
           <Card style={styles.card}>
             <Text style={[styles.cardTitle, { color: t.text, marginBottom: 2 }]}>Feature Trends</Text>
             <Text style={[styles.cardSub, { color: t.textMuted, marginBottom: 10 }]}>
-              Extracted EEG features over this session, updated every block
+              {hasSession ? 'Extracted EEG features, updated every block' : 'Extracted EEG features from your recent sessions'}
             </Text>
             {featureSeries.map(({ key, label, color, points, last }, i) => (
               <View key={key} style={[styles.trendBlock, i === featureSeries.length - 1 ? null : { marginBottom: 14 }]}>
@@ -370,7 +400,7 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', marginBottom: 18 },
   headerIconCircle: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
   title: { fontSize: 22, fontWeight: '900', letterSpacing: -0.2 },
-  card: { marginVertical: 6 },
+  card: { marginHorizontal: 20, marginVertical: 8, padding: 18, borderRadius: 22 },
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   rowGap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   cardTitle: { fontSize: 15, fontWeight: '800' },

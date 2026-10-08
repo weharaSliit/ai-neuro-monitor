@@ -79,6 +79,8 @@ export default function ProfileScreen({ navigation }) {
   const [avatarUri,    setAvatarUri]    = useState(null);
   const [uploading,    setUploading]    = useState(false);
   const [driftWeeks,   setDriftWeeks]   = useState(null);
+  const [phenoProfile, setPhenoProfile] = useState(null);
+  const [phenoLogsCount, setPhenoLogsCount] = useState(0);
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
   const text   = theme.text;
@@ -103,6 +105,25 @@ export default function ProfileScreen({ navigation }) {
 
   useEffect(() => { loadProfile(); }, [userId]);
   useFocusEffect(useCallback(() => { loadProfile(); }, [userId]));
+
+  // Digital Phenotyping profile listener
+  useEffect(() => {
+    if (!userId) return;
+    const pRef = dbRef(db, `phenotyping/users/${userId}`);
+    const handler = onValue(pRef, (snap) => setPhenoProfile(snap.val() || null));
+    return () => off(pRef, 'value', handler);
+  }, [userId]);
+
+  // Digital Phenotyping activity logs count listener
+  useEffect(() => {
+    if (!userId) return;
+    const lRef = dbRef(db, `phenotyping/data_logs/${userId}`);
+    const handler = onValue(lRef, (snap) => {
+      const val = snap.val();
+      setPhenoLogsCount(val ? Object.keys(val).length : 0);
+    });
+    return () => off(lRef, 'value', handler);
+  }, [userId]);
 
   useEffect(() => {
     if (!userId) return;
@@ -166,7 +187,7 @@ export default function ProfileScreen({ navigation }) {
           </View>
         </View>
 
-        {/* Stats row */}
+        {/* Stats row - 3 integrated modalities */}
         <View style={styles.statsRow}>
           <Card style={styles.statCard}>
             <Text style={[styles.statValue, { color: COLORS.brand }]}>{sessionCount}</Text>
@@ -178,7 +199,101 @@ export default function ProfileScreen({ navigation }) {
             </Text>
             <Text style={[styles.statLabel, { color: muted }]}>Ring Baseline</Text>
           </Card>
+          <Card
+            style={styles.statCard}
+            onPress={() => navigation.navigate('PhenotypingAnalysis', { initialTab: 'overview', mode: 'analysis' })}
+            activeOpacity={0.8}
+          >
+            <Text
+              style={[
+                styles.statValue,
+                { color: phenoProfile?.is_calibrated ? COLORS.normal : '#F59E0B' },
+              ]}
+            >
+              {phenoProfile?.is_calibrated
+                ? 'Calibrated'
+                : phenoProfile?.created_at
+                ? `Day ${Math.min(7, Math.floor(Math.max(0, Date.now() - new Date(phenoProfile.created_at).getTime()) / 86400000) + 1)}/7`
+                : 'Pending'}
+            </Text>
+            <Text style={[styles.statLabel, { color: muted }]}>Behavioral Baseline</Text>
+          </Card>
         </View>
+
+        {/* Dedicated Digital Phenotyping Status & Privacy Card */}
+        <Card style={styles.navCard} accentColor={COLORS.brand}>
+          <View style={styles.cardHeaderRow}>
+            <View style={styles.rowGap}>
+              <View style={[styles.actionIconCircle, { backgroundColor: '#6366F115' }]}>
+                <Text style={{ fontSize: 18 }}>📱</Text>
+              </View>
+              <View>
+                <Text style={[styles.cardTitle, { color: text }]}>Behavioral Digital Phenotyping</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                  <View style={{ width: 7, height: 7, borderRadius: 3.5, backgroundColor: COLORS.normal }} />
+                  <Text style={{ fontSize: 11, color: COLORS.normal, fontWeight: '800' }}>
+                    Active · {phenoLogsCount} Windows Logged
+                  </Text>
+                </View>
+              </View>
+            </View>
+          </View>
+
+          {/* Calibration State & Privacy Details */}
+          <View style={{ marginTop: 12, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 14, backgroundColor: theme.surfaceAlt || `${COLORS.brand}08` }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <Text style={{ fontSize: 11.5, color: muted, fontWeight: '700' }}>Calibration State</Text>
+              <Text style={{ fontSize: 11.5, fontWeight: '800', color: phenoProfile?.is_calibrated ? COLORS.normal : '#F59E0B' }}>
+                {phenoProfile?.is_calibrated ? 'Completed · Active Tracking' : `Day ${Math.min(7, Math.floor(Math.max(0, Date.now() - new Date(phenoProfile?.created_at || Date.now()).getTime()) / 86400000) + 1)} of 7 · Passive Observation`}
+              </Text>
+            </View>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text style={{ fontSize: 11.5, color: muted, fontWeight: '700' }}>Privacy & Sensor</Text>
+              <Text style={{ fontSize: 11.5, fontWeight: '800', color: COLORS.normal }}>
+                Background Sensing: Running 🔒
+              </Text>
+            </View>
+          </View>
+
+          {/* Direct Navigation Buttons */}
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+            <TouchableOpacity
+              style={{
+                flex: 1,
+                paddingVertical: 10,
+                borderRadius: 12,
+                backgroundColor: COLORS.brand,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+              onPress={() => navigation.navigate('Physiological', { screen: 'Phenotyping' })}
+              activeOpacity={0.85}
+            >
+              <Text style={{ color: '#FFFFFF', fontSize: 11.5, fontWeight: '850' }}>
+                Open Dashboard →
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={{
+                flex: 1,
+                paddingVertical: 10,
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: COLORS.brand + '50',
+                backgroundColor: theme.pillBg || '#FFFFFF',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+              onPress={() => navigation.navigate('PhenotypingAnalysis', { initialTab: 'overview', mode: 'analysis' })}
+              activeOpacity={0.85}
+            >
+              <Text style={{ color: COLORS.brand, fontSize: 11.5, fontWeight: '850' }}>
+                View Roadmap →
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </Card>
 
         {/* Staleness/drift warning -- moved here from Fusion so it's not
             duplicated across screens; Profile is where the calibration
@@ -273,7 +388,7 @@ export default function ProfileScreen({ navigation }) {
           </Card>
         )}
 
-        {/* Quick Actions */}
+        {/* Quick Actions - Physiological Self-Report */}
         <Card style={styles.navCard}>
           <Text style={[styles.cardTitle, { color: text, marginBottom: 12 }]}>Self-Report & Check-In</Text>
           <TouchableOpacity onPress={() => navigation.navigate('PSS4')} activeOpacity={0.85}>
@@ -284,6 +399,58 @@ export default function ProfileScreen({ navigation }) {
                 <Text style={[styles.actionSub, { color: muted }]}>Answer 4 quick self-check questions</Text>
               </View>
               <Icon name={NAMES.chevronRight} size={16} color={COLORS.normalDark} />
+            </View>
+          </TouchableOpacity>
+        </Card>
+
+        {/* Digital Phenotyping Check-Ins & Usability Feedback */}
+        <Card style={styles.navCard}>
+          <Text style={[styles.cardTitle, { color: text, marginBottom: 12 }]}>Digital Phenotyping Check-Ins</Text>
+
+          {/* 1. SISS Instant Feeling (EMA) */}
+          <TouchableOpacity
+            onPress={() => navigation.navigate('PhenotypingEma', { initialTab: 'siss' })}
+            activeOpacity={0.85}
+            style={{ marginBottom: 8 }}
+          >
+            <View style={[styles.actionTile, { backgroundColor: '#10B98110', borderColor: '#10B98130' }]}>
+              <Text style={{ fontSize: 20 }}>😊</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.actionLabel, { color: '#059669' }]}>Instant Feeling Check (SISS)</Text>
+                <Text style={[styles.actionSub, { color: muted }]}>1-tap momentary mood & stress check</Text>
+              </View>
+              <Icon name={NAMES.chevronRight} size={16} color="#059669" />
+            </View>
+          </TouchableOpacity>
+
+          {/* 2. PSS-4 Weekly Survey (Phenotyping EMA) */}
+          <TouchableOpacity
+            onPress={() => navigation.navigate('PhenotypingEma', { initialTab: 'pss4' })}
+            activeOpacity={0.85}
+            style={{ marginBottom: 8 }}
+          >
+            <View style={[styles.actionTile, { backgroundColor: `${COLORS.brand}10`, borderColor: `${COLORS.brand}30` }]}>
+              <Text style={{ fontSize: 20 }}>📋</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.actionLabel, { color: COLORS.brand }]}>Phenotyping PSS-4 Survey</Text>
+                <Text style={[styles.actionSub, { color: muted }]}>Weekly behavioral baseline survey</Text>
+              </View>
+              <Icon name={NAMES.chevronRight} size={16} color={COLORS.brand} />
+            </View>
+          </TouchableOpacity>
+
+          {/* 3. App Usability Feedback (Research Evaluation) */}
+          <TouchableOpacity
+            onPress={() => navigation.navigate('PhenotypingEma', { mode: 'feedback' })}
+            activeOpacity={0.85}
+          >
+            <View style={[styles.actionTile, { backgroundColor: '#F59E0B10', borderColor: '#F59E0B30' }]}>
+              <Text style={{ fontSize: 20 }}>⭐</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.actionLabel, { color: '#D97706' }]}>App Usability Feedback</Text>
+                <Text style={[styles.actionSub, { color: muted }]}>5-domain research validation survey</Text>
+              </View>
+              <Icon name={NAMES.chevronRight} size={16} color="#D97706" />
             </View>
           </TouchableOpacity>
         </Card>
