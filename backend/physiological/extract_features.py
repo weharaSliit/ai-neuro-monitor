@@ -34,6 +34,45 @@ from scipy import signal
 import pywt
 
 
+# ── Waveform preview (processed signal only, never raw) ───────
+# Same decimation approach as backend/psychological/realtime/
+# pipeline.py::_downsample_wave() for EEG -- a fixed, small point
+# count so the chart data stored per window stays bounded
+# regardless of actual_fs, instead of growing with session length
+# or sampling rate. NEVER applied to raw gsr_adc_array/ibi_array --
+# only to gsr_components['filtered'] (already IQR-cleaned,
+# detrended, low-pass filtered) -- see firebase_service.py's
+# save_prediction() docstring: raw sensor arrays never reach
+# Firebase, only derived/processed values.
+WAVE_GSR_POINTS = 80
+
+
+def _downsample_wave(values, target_points=WAVE_GSR_POINTS):
+    arr = np.asarray(values, dtype=np.float64)
+    n = len(arr)
+    if n == 0:
+        return []
+    if n <= target_points:
+        return [round(float(v), 4) for v in arr]
+    step = n / target_points
+    idx = (np.arange(target_points) * step).astype(int)
+    return [round(float(v), 4) for v in arr[idx]]
+
+
+# IBI is already beat-level derived data (R-peaks detected on-device
+# by the ESP32/MAX30102 firmware), not a raw continuous signal -- a
+# 60s window rarely exceeds ~150 beats even at an elevated heart
+# rate, so no lossy decimation is applied, only a defensive cap
+# (keep the most recent IBI_SEQUENCE_MAX values) so one unusually
+# dense window can't write an unbounded array.
+IBI_SEQUENCE_MAX = 150
+
+
+def _cap_ibi_sequence(ibi_array):
+    vals = [round(float(v), 1) for v in ibi_array]
+    return vals[-IBI_SEQUENCE_MAX:]
+
+
 # ── Feature column order must match training exactly ─────────
 # This is the exact order from feature_cols_obj1_v2.pkl
 FEATURE_COLS = [
@@ -435,6 +474,13 @@ def extract_features(ibi_array, gsr_adc_array,
                               data and feature_dict's HRV values (AVNN etc.)
                               are fixed placeholders, not a real reading --
                               see extract_hrv_features()'s docstring
+        wave_dict            : dict with 'wave_gsr' (processed/decimated
+                              GSR signal, WAVE_GSR_POINTS values) and
+                              'ibi_sequence' (capped raw-beat IBI list) --
+                              both already bounded, safe to persist as-is;
+                              see save_prediction()'s docstring for why
+                              this is NOT the same thing as storing raw
+                              sensor arrays.
     """
 
     # ── Step 1: Motion check ──────────────────────────────────
@@ -467,7 +513,13 @@ def extract_features(ibi_array, gsr_adc_array,
         dtype=np.float64
     )
 
-    return features_array, motion_contaminated, feature_dict, hrv_is_fallback
+    # ── Step 7: Waveform preview (processed only, bounded size) ──
+    wave_dict = {
+        'wave_gsr':      _downsample_wave(gsr_components['filtered']),
+        'ibi_sequence':  _cap_ibi_sequence(ibi_array),
+    }
+
+    return features_array, motion_contaminated, feature_dict, hrv_is_fallback, wave_dict
 
 
 # ── Signal quality ────────────────────────────────────────────
@@ -539,13 +591,15 @@ if __name__ == '__main__':
     acc_sim = np.random.normal(0.93, 0.02, 3000).tolist()
 
     # Run extraction
-    features, motion_flag, feat_dict, hrv_fallback_flag = extract_features(
+    features, motion_flag, feat_dict, hrv_fallback_flag, wave_dict = extract_features(
         ibi_sim, gsr_sim, acc_sim, gsr_cal
     )
 
     print(f"\nOutput shape: {features.shape}")
     print(f"Motion contaminated: {motion_flag}")
     print(f"HRV fallback (insufficient clean IBI): {hrv_fallback_flag}")
+    print(f"wave_gsr points: {len(wave_dict['wave_gsr'])}  "
+          f"ibi_sequence points: {len(wave_dict['ibi_sequence'])}")
     print(f"\nFeature values:")
     print("-" * 40)
     for i, col in enumerate(FEATURE_COLS):

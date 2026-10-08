@@ -14,6 +14,7 @@
 // this specific user happens to be the currently active global session
 // (psychological/current_session_id), since there's only one EEG headset.
 // ============================================================
+import { getContentWidth } from '../../shared/theme/layout';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     View, Text, StyleSheet, Dimensions,
@@ -32,7 +33,7 @@ import { eegClient } from '../../shared/eegApiClient';
 import { useAuth } from '../../../context/AuthContext';
 
 const CHART_POINTS = 120;
-const RAW_CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
+const RAW_CHART_WIDTH = Math.max(260, getContentWidth() - 80);
 
 function downsampleWithIndices(values) {
     if (!values || values.length === 0) return { values: [], indices: [] };
@@ -143,8 +144,11 @@ function BipolarWaveformChart({ points, min, max, color, width, height = 150 }) 
     );
 }
 
-function BipolarFeaturesChart({ features, pointWidth = 36, height = 150 }) {
+function BipolarFeaturesChart({ features, pointWidth: minPointWidth = 36, height = 150 }) {
+    const [boxW, setBoxW] = useState(0);
     if (!features) return null;
+    // Fill the card when there's room; keep >= minPointWidth and scroll otherwise.
+    const pointWidth = Math.max(minPointWidth, boxW > 0 ? boxW / BIPOLAR_FEATURES.length : 0);
     const rawValues = BIPOLAR_FEATURES.map(({ key }) => {
         const v = features[key] ?? 0;
         return Math.sign(v) * Math.log10(1 + Math.abs(v));
@@ -176,7 +180,8 @@ function BipolarFeaturesChart({ features, pointWidth = 36, height = 150 }) {
     });
 
     return (
-        <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled={true} style={{ width: '100%' }}>
+        <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled={true} style={{ width: '100%' }}
+            onLayout={(e) => { const w = Math.floor(e.nativeEvent.layout.width); if (w > 0 && Math.abs(w - boxW) > 1) setBoxW(w); }}>
             <View style={{ width: totalWidth, paddingVertical: 4 }}>
                 <Svg width={totalWidth} height={height}>
                     {/* Grid lines */}
@@ -228,13 +233,13 @@ function SignalChart({ title, lastValue, points, min, max, color, t, last }) {
             </View>
             {points.length > 1 ? (
                 <>
-                    <BipolarWaveformChart
-                        points={points}
+                    <LineChart
+                        points={points.map((p) => ({ value: p.value }))}
                         color={color}
                         width={RAW_CHART_WIDTH}
-                        height={150}
-                        min={min}
-                        max={max}
+                        height={160}
+                        suffix=" µV"
+                        minGap={3}
                     />
                     <Text style={[styles.signalRange, { color: t.textMuted }]}>
                         This block's range: {min.toFixed(1)} to {max.toFixed(1)} µV
@@ -249,7 +254,7 @@ function SignalChart({ title, lastValue, points, min, max, color, t, last }) {
 }
 
 export default function AdminEegLiveScreen({ route, navigation }) {
-    const { userId } = route.params;
+    const { userId } = route?.params || {};
     const t = COLORS.light;
     const COLORS_FLAT = COLORS;
     const [sessionId, setSessionId] = useState('');

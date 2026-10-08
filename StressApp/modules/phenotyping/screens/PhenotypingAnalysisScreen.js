@@ -8,6 +8,7 @@
 // All values, baseline envelopes, stage thresholds, and window counts are
 // dynamically derived from Firebase RTDB without static hardcoding.
 // ============================================================
+import { getContentWidth } from '../../shared/theme/layout';
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions } from 'react-native';
 import { ref, onValue, off, get, query, orderByKey, limitToLast } from 'firebase/database';
@@ -22,7 +23,7 @@ import { useTheme } from '../../physiological/config/ThemeContext';
 import { usePhenotypingDeviceId } from '../utils/deviceIdentity';
 import { computeCalibrationStatus } from '../utils/calibrationStatus';
 
-const CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
+const CHART_WIDTH = Math.max(260, getContentWidth() - 80);
 const DRIFT_CONFIRM_TARGET = 3;
 
 function computeZ(val, mean, std) {

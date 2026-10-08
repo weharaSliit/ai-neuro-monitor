@@ -91,7 +91,10 @@ function StatBlock({ label, value, color, t }) {
 
 // Plain SVG ROC plot -- no charting library needed, matches the rest of
 // this app's hand-rolled SVG chart approach (see LineChart.js).
-function RocChart({ roc, best, width, COLORS, t }) {
+function RocChart({ roc, best, width: boxWidth, COLORS, t }) {
+    // Square plot: fills the card on phones, capped (and centred) on tablets
+    // so it doesn't become a giant square.
+    const width = Math.min(boxWidth, 380);
     const PAD = 24;
     const plotSize = width - PAD * 2;
     const toX = (fpr) => PAD + fpr * plotSize;
@@ -99,7 +102,7 @@ function RocChart({ roc, best, width, COLORS, t }) {
     const pathPoints = roc.map((p) => `${toX(p.fpr)},${toY(p.tpr)}`).join(' ');
 
     return (
-        <View>
+        <View style={{ width, alignSelf: 'center' }}>
             <Svg width={width} height={PAD * 2 + plotSize}>
                 <SvgLine x1={PAD} y1={PAD} x2={PAD} y2={PAD + plotSize} stroke={t.border} strokeWidth={1} />
                 <SvgLine x1={PAD} y1={PAD + plotSize} x2={PAD + plotSize} y2={PAD + plotSize} stroke={t.border} strokeWidth={1} />

@@ -4,6 +4,7 @@
 // (GET /admin/history/<userId>/<sessionId>) -- the raw feature/probability
 // data behind each window, for admin inspection.
 // ============================================================
+import { getContentWidth } from '../../shared/theme/layout';
 import React, { useCallback, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Dimensions } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
@@ -13,7 +14,7 @@ import LineChart from '../../shared/LineChart';
 import { COLORS } from '../../physiological/config/theme';
 import api from '../../physiological/api/client';
 
-const TREND_CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
+const TREND_CHART_WIDTH = Math.max(260, getContentWidth() - 80);
 
 function parseTimestamp(ts, fallbackMinutesAgo = 0) {
   if (!ts) return new Date(Date.now() - fallbackMinutesAgo * 60000);

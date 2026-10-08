@@ -248,9 +248,17 @@ def save_prediction(user_id, session_id, window_idx,
                     prediction, label,
                     prob_normal, prob_stress,
                     trending_toward_stress,
-                    features_dict):
+                    features_dict,
+                    wave_dict=None):
+    """wave_dict (extract_features.py's 5th return value) is the one
+    exception to "raw sensor arrays never reach Firebase" below --
+    it's already processed (wave_gsr: filtered/decimated to
+    WAVE_GSR_POINTS, never the raw gsr_adc_array) and/or already
+    beat-level derived + capped (ibi_sequence), not the raw
+    continuous sensor stream. Optional/None for callers (calibration
+    capture) that don't push a per-window record at all."""
     ref = _ref(f'predictions/{user_id}/{session_id}')
-    new_ref = ref.push({
+    record = {
         'window_idx':             window_idx,
         'timestamp':               datetime.now(timezone.utc).isoformat(),
         'prediction':              int(prediction),
@@ -261,7 +269,11 @@ def save_prediction(user_id, session_id, window_idx,
         'features': {
             k: float(v) for k, v in features_dict.items()
         }
-    })
+    }
+    if wave_dict:
+        record['wave_gsr'] = wave_dict.get('wave_gsr', [])
+        record['ibi_sequence'] = wave_dict.get('ibi_sequence', [])
+    new_ref = ref.push(record)
 
     session_ref = _ref(f'sessions/{user_id}/{session_id}/window_count')
     count = session_ref.get() or 0
