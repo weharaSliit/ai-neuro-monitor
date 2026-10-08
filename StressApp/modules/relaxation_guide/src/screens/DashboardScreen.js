@@ -3,6 +3,7 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   ActivityIndicator, Animated, Easing, Dimensions, Modal
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation } from '@react-navigation/native';
 import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
@@ -11,6 +12,43 @@ import { apiService } from '../api/apiService';
 import { useSweetAlert } from '../context/SweetAlertContext';
 
 const { width: SCREEN_W } = Dimensions.get('window');
+
+/* ────────────────────────────────────────────────────────
+   AMBIENT DRIFTING LIGHT ORBS (SERENE BACKDROP)
+   ──────────────────────────────────────────────────────── */
+const AmbientOrb = ({ size, color, top, left, duration, dx, dy }) => {
+  const t = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(t, { toValue: 1, duration, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(t, { toValue: 0, duration, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [t, duration]);
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        top,
+        left,
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        backgroundColor: color,
+        opacity: 0.38,
+        transform: [
+          { translateX: t.interpolate({ inputRange: [0, 1], outputRange: [0, dx] }) },
+          { translateY: t.interpolate({ inputRange: [0, 1], outputRange: [0, dy] }) },
+        ],
+      }}
+    />
+  );
+};
 
 const DAILY_TIPS = [
   { tip: 'Box breathing (4-4-4-4) lowers cortisol within 90 seconds.', icon: '🌬️' },
@@ -35,58 +73,6 @@ const QUOTES = [
   { quote: "Feelings come and go like clouds in a windy sky. Conscious breathing is my anchor.", author: "Thich Nhat Hanh", icon: "☁️" },
   { quote: "When you own your breath, nobody can steal your peace.", author: "Zen Proverb", icon: "🕊️" }
 ];
-
-/* ────────────────────────────────────────────────────────
-   LIVE QUOTES BANNER - Auto-rotating with crossfade
-   ──────────────────────────────────────────────────────── */
-const LiveQuotesBanner = ({ theme }) => {
-  const [index, setIndex] = useState(Math.floor(Math.random() * QUOTES.length));
-  const fadeAnim = useRef(new Animated.Value(1)).current;
-  const slideAnim = useRef(new Animated.Value(0)).current;
-
-  const cycleQuote = useCallback(() => {
-    // Fade out + slide up
-    Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 0, duration: 400, useNativeDriver: true }),
-      Animated.timing(slideAnim, { toValue: -12, duration: 400, useNativeDriver: true })
-    ]).start(() => {
-      setIndex(prev => (prev + 1) % QUOTES.length);
-      slideAnim.setValue(12);
-      // Fade in + slide down into place
-      Animated.parallel([
-        Animated.timing(fadeAnim, { toValue: 1, duration: 500, useNativeDriver: true }),
-        Animated.spring(slideAnim, { toValue: 0, tension: 80, friction: 10, useNativeDriver: true })
-      ]).start();
-    });
-  }, []);
-
-  useEffect(() => {
-    const timer = setInterval(cycleQuote, 8000);
-    return () => clearInterval(timer);
-  }, [cycleQuote]);
-
-  const q = QUOTES[index];
-
-  return (
-    <View style={[s.quoteCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
-      {/* Decorative accent line */}
-      <View style={[s.quoteAccentLine, { backgroundColor: theme.accent }]} />
-
-      <Animated.View style={[s.quoteInner, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
-        <Text style={s.quoteIcon}>{q.icon}</Text>
-        <Text style={[s.quoteText, { color: theme.textPrimary }]}>"{q.quote}"</Text>
-        <Text style={[s.quoteAuthor, { color: theme.accent }]}>— {q.author}</Text>
-      </Animated.View>
-
-      {/* Dot indicators */}
-      <View style={s.dotRow}>
-        {QUOTES.map((_, i) => (
-          <View key={i} style={[s.dot, { backgroundColor: i === index ? theme.accent : theme.border }]} />
-        ))}
-      </View>
-    </View>
-  );
-};
 
 /* ────────────────────────────────────────────────────────
    PULSING LIVE DOT
@@ -124,7 +110,7 @@ const PulseDot = ({ color }) => {
 const getStateConfig = (stressState, stressProbability, rawLabel, theme, isCalibrated = true, hasLivePacket = true) => {
   if (hasLivePacket === false) {
     return {
-      color: theme.warning,
+      color: theme.warning || '#F59E0B',
       bgTint: 'rgba(245,158,11,0.14)',
       label: 'WAITING FOR LIVE STREAM',
       displayLabel: 'Awaiting Telemetry',
@@ -148,7 +134,7 @@ const getStateConfig = (stressState, stressProbability, rawLabel, theme, isCalib
 
   if (isHighStress || (isGenericStress && !isLowStress && prob >= 0.60)) {
     return {
-      color: theme.danger,
+      color: theme.danger || '#EF4444',
       bgTint: 'rgba(239,68,68,0.14)',
       label: 'HIGH STRESS',
       displayLabel: 'High Stress',
@@ -174,7 +160,7 @@ const getStateConfig = (stressState, stressProbability, rawLabel, theme, isCalib
     };
   } else if (isGenericStress) {
     return {
-      color: theme.danger,
+      color: theme.danger || '#EF4444',
       bgTint: 'rgba(239,68,68,0.14)',
       label: 'STRESS',
       displayLabel: 'Stress State',
@@ -188,7 +174,7 @@ const getStateConfig = (stressState, stressProbability, rawLabel, theme, isCalib
   }
 
   return {
-    color: theme.success,
+    color: theme.success || '#10B981',
     bgTint: 'rgba(16,185,129,0.14)',
     label: 'NORMAL',
     displayLabel: 'Normal / Calm',
@@ -199,36 +185,6 @@ const getStateConfig = (stressState, stressProbability, rawLabel, theme, isCalib
     pct: Math.min(99, Math.round((1 - prob) * 100)),
     breathDuration: 3200,
   };
-};
-
-/* ────────────────────────────────────────────────────────
-   DAILY TIP BANNER
-   ──────────────────────────────────────────────────────── */
-const DailyTipBanner = ({ theme }) => {
-  const [tipIdx, setTipIdx] = useState(Math.floor(Math.random() * DAILY_TIPS.length));
-  const fadeAnim = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    const t = setInterval(() => {
-      Animated.sequence([
-        Animated.timing(fadeAnim, { toValue: 0, duration: 300, useNativeDriver: true }),
-        Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }),
-      ]).start();
-      setTipIdx(p => (p + 1) % DAILY_TIPS.length);
-    }, 9000);
-    return () => clearInterval(t);
-  }, []);
-
-  const tip = DAILY_TIPS[tipIdx];
-  return (
-    <Animated.View style={[s.tipBanner, { backgroundColor: theme.bgSecondary, borderColor: theme.border, opacity: fadeAnim }]}>
-      <Text style={s.tipIcon}>{tip.icon}</Text>
-      <Text style={[s.tipTxt, { color: theme.textSecondary }]}>
-        <Text style={{ color: theme.accent, fontWeight: '800' }}>Daily Tip  </Text>
-        {tip.tip}
-      </Text>
-    </Animated.View>
-  );
 };
 
 /* ────────────────────────────────────────────────────────
@@ -298,10 +254,11 @@ export const DashboardScreen = () => {
     currentRecommendation, setCurrentRecommendation, setPreInterventionLabel, setSelectedSubOption
   } = useContext(AppContext);
 
-  const { theme } = useContext(ThemeContext);
+  const { theme, isDarkMode } = useContext(ThemeContext);
   const [loading, setLoading] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
 
+  const isDark = isDarkMode ?? theme?.isDark ?? true;
   const u = (userId || '').toLowerCase();
   const isAdmin = u === 'ojani' || u.includes('ojani') || u === 'admin' || u.includes('admin');
 
@@ -316,7 +273,6 @@ export const DashboardScreen = () => {
       Animated.spring(slideUp, { toValue: 0, tension: 40, friction: 7, useNativeDriver: true })
     ]).start();
 
-    // Subtle CTA breathing
     Animated.loop(
       Animated.sequence([
         Animated.timing(ctaScale, { toValue: 1.015, duration: 2000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
@@ -366,47 +322,27 @@ export const DashboardScreen = () => {
   const greeting = currentTime.getHours() < 12 ? 'Good Morning' : currentTime.getHours() < 18 ? 'Good Afternoon' : 'Good Evening';
   const timeStr = currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-  // Breathing ring behind stress card
-  const breathRing1 = useRef(new Animated.Value(1)).current;
-  const breathRing1O = useRef(new Animated.Value(0.4)).current;
-  const breathRing2 = useRef(new Animated.Value(1)).current;
-  const breathRing2O = useRef(new Animated.Value(0.2)).current;
-
-  useEffect(() => {
-    const dur = sc.breathDuration;
-    const runRing = (scaleAnim, opacityAnim, delay, maxScale) => {
-      setTimeout(() => {
-        Animated.loop(
-          Animated.sequence([
-            Animated.parallel([
-              Animated.timing(scaleAnim, { toValue: maxScale, duration: dur, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-              Animated.timing(opacityAnim, { toValue: 0, duration: dur, useNativeDriver: true }),
-            ]),
-            Animated.parallel([
-              Animated.timing(scaleAnim, { toValue: 1, duration: 0, useNativeDriver: true }),
-              Animated.timing(opacityAnim, { toValue: 0.3, duration: 0, useNativeDriver: true }),
-            ]),
-          ])
-        ).start();
-      }, delay);
-    };
-    runRing(breathRing1, breathRing1O, 0, 1.35);
-    runRing(breathRing2, breathRing2O, dur / 2, 1.35);
-  }, [stressState]);
-
   return (
     <View style={[s.container, { backgroundColor: theme.bgPrimary }]}>
+      {/* Innovative Drifting Ambient Background */}
+      <LinearGradient
+        colors={isDark ? ['#0F172A', '#131C35', '#162544'] : ['#F0F9FF', '#E8F1FB', '#F7EEF8']}
+        style={StyleSheet.absoluteFill}
+      />
+      <AmbientOrb size={260} color={isDark ? '#38BDF8' : '#7DD3FC'} top={-60} left={-80} duration={9000} dx={50} dy={40} />
+      <AmbientOrb size={200} color={isDark ? '#818CF8' : '#F9A8D4'} top={360} left={SCREEN_W - 140} duration={11000} dx={-40} dy={-50} />
+      <AmbientOrb size={180} color={isDark ? '#10B981' : '#6EE7B7'} top={640} left={-60} duration={13000} dx={60} dy={-30} />
+
       <Header
-        title="Welcome to Relaxation Guide"
-        showBack={true}
-        onBack={handleBackToMain}
+        title="Relaxation Guide"
+        showBack={false}
       />
 
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
         <Animated.View style={{ opacity: fadeIn, transform: [{ translateY: slideUp }] }}>
 
           {/* ═══════════ 2. WELCOME + STATUS ROW ═══════════ */}
-          <View style={[s.welcomeRow, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
+          <View style={[s.welcomeRow, { backgroundColor: isDark ? 'rgba(30, 41, 59, 0.75)' : 'rgba(255, 255, 255, 0.85)', borderColor: theme.border }]}>
             <View style={s.welcomeLeft}>
               <Text style={[s.greetingTxt, { color: theme.textMuted }]}>{greeting}</Text>
               <Text style={[s.nameTxt, { color: theme.textPrimary }]}>{isAdmin ? 'Ojani (Admin)' : username}</Text>
@@ -416,84 +352,77 @@ export const DashboardScreen = () => {
               </View>
             </View>
             <View style={s.welcomeRight}>
-              <Text style={[s.clockTxt, { color: theme.accent }]}>{timeStr}</Text>
-              <View style={[s.idPill, { backgroundColor: theme.bgPrimary, borderColor: theme.border }]}>
+              <Text style={[s.clockTxt, { color: isDark ? '#A5B4FC' : '#4F46E5' }]}>{timeStr}</Text>
+              <View style={[s.idPill, { backgroundColor: isDark ? 'rgba(15, 23, 42, 0.6)' : 'rgba(241, 245, 249, 0.8)', borderColor: theme.border }]}>
                 <Text style={[s.idPillTxt, { color: theme.textMuted }]}>{isAdmin ? '🛡️ Admin (Ojani)' : `🆔 ${userId}`}</Text>
               </View>
             </View>
           </View>
 
           {/* ═══════════ LIVE TELEMETRY STREAMS ═══════════ */}
-          <Text style={[s.sectionTitle, { color: theme.textPrimary, marginBottom: 8 }]}>Live Telemetry Streams</Text>
+          <View style={s.sectionHeaderRow}>
+            <Text style={[s.sectionTitle, { color: theme.textPrimary }]}>Live Telemetry Streams</Text>
+            <View style={s.liveBadgePill}>
+              <View style={[s.liveBadgeDot, { backgroundColor: sc.color }]} />
+              <Text style={[s.liveBadgeTxt, { color: sc.color }]}>LIVE</Text>
+            </View>
+          </View>
 
-          <View style={{ gap: 10, marginBottom: 16 }}>
+          <View style={{ gap: 8, marginBottom: 12 }}>
             {/* 🫀 Physiological Stream */}
-            <View style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              paddingHorizontal: 14,
-              paddingVertical: 12,
-              borderRadius: 12,
-              backgroundColor: theme.bgSecondary,
-              borderWidth: 1,
-              borderColor: theme.border,
-            }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                <Text style={{ fontSize: 20 }}>🫀</Text>
+            <View style={[s.streamCard, { backgroundColor: isDark ? 'rgba(30, 41, 59, 0.7)' : 'rgba(255, 255, 255, 0.85)', borderColor: theme.border }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <View style={[s.streamIconBadge, { backgroundColor: 'rgba(239, 68, 68, 0.15)' }]}>
+                  <Text style={{ fontSize: 20 }}>🫀</Text>
+                </View>
                 <View>
-                  <Text style={{ fontSize: 13, fontWeight: '700', color: theme.textPrimary }}>Physiological Stream</Text>
-                  <Text style={{ fontSize: 11, color: theme.textMuted }}>Smart Ring + Earbud</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '800', color: theme.textPrimary }}>Physiological Stream</Text>
+                  <Text style={{ fontSize: 11, color: theme.textMuted, marginTop: 1 }}>Smart Ring + Earbud</Text>
                 </View>
               </View>
               <View style={{ alignItems: 'flex-end', gap: 2 }}>
-                <Text style={{ fontSize: 12, fontWeight: '800', color: sc.color }}>
-                  Label: {hasLivePacket ? sc.displayLabel : 'Awaiting'}
-                </Text>
-                <Text style={{ fontSize: 12, fontWeight: '700', color: theme.accent }}>
-                  Probability: {hasLivePacket ? (typeof sc.pct === 'number' ? `${sc.pct}%` : sc.pct) : '--'}
+                <View style={[s.labelPill, { backgroundColor: sc.bgTint }]}>
+                  <Text style={{ fontSize: 11, fontWeight: '800', color: sc.color }}>
+                    {hasLivePacket ? sc.displayLabel : 'Awaiting'}
+                  </Text>
+                </View>
+                <Text style={{ fontSize: 11, fontWeight: '700', color: isDark ? '#94A3B8' : '#64748B', marginTop: 2 }}>
+                  Probability: <Text style={{ color: isDark ? '#F8FAFC' : '#0F172A', fontWeight: '900' }}>{hasLivePacket ? (typeof sc.pct === 'number' ? `${sc.pct}%` : sc.pct) : '--'}</Text>
                 </Text>
               </View>
             </View>
 
-            {/* ⌨️ Phenotyping Stream */}
-            <View style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              paddingHorizontal: 14,
-              paddingVertical: 12,
-              borderRadius: 12,
-              backgroundColor: theme.bgSecondary,
-              borderWidth: 1,
-              borderColor: theme.border,
-            }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                <Text style={{ fontSize: 20 }}>📱</Text>
+            {/* 📱 Phenotyping Stream */}
+            <View style={[s.streamCard, { backgroundColor: isDark ? 'rgba(30, 41, 59, 0.7)' : 'rgba(255, 255, 255, 0.85)', borderColor: theme.border }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <View style={[s.streamIconBadge, { backgroundColor: 'rgba(56, 189, 248, 0.15)' }]}>
+                  <Text style={{ fontSize: 20 }}>📱</Text>
+                </View>
                 <View>
-                  <Text style={{ fontSize: 13, fontWeight: '700', color: theme.textPrimary }}>Phenotyping Stream</Text>
-                  <Text style={{ fontSize: 11, color: theme.textMuted }}>Behavioral & Smartphone</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '800', color: theme.textPrimary }}>Phenotyping Stream</Text>
+                  <Text style={{ fontSize: 11, color: theme.textMuted, marginTop: 1 }}>Behavioral & Smartphone</Text>
                 </View>
               </View>
               <View style={{ alignItems: 'flex-end', gap: 2 }}>
-                <Text style={{ fontSize: 12, fontWeight: '800', color: sc.color }}>
-                  Label: {hasLivePacket ? sc.displayLabel : 'Awaiting'}
-                </Text>
-                <Text style={{ fontSize: 12, fontWeight: '700', color: theme.accent }}>
-                  Probability: {hasLivePacket ? (typeof sc.pct === 'number' ? `${sc.pct}%` : sc.pct) : '--'}
+                <View style={[s.labelPill, { backgroundColor: sc.bgTint }]}>
+                  <Text style={{ fontSize: 11, fontWeight: '800', color: sc.color }}>
+                    {hasLivePacket ? sc.displayLabel : 'Awaiting'}
+                  </Text>
+                </View>
+                <Text style={{ fontSize: 11, fontWeight: '700', color: isDark ? '#94A3B8' : '#64748B', marginTop: 2 }}>
+                  Probability: <Text style={{ color: isDark ? '#F8FAFC' : '#0F172A', fontWeight: '900' }}>{hasLivePacket ? (typeof sc.pct === 'number' ? `${sc.pct}%` : sc.pct) : '--'}</Text>
                 </Text>
               </View>
             </View>
           </View>
 
-
-
-          {/* ═══════════ 4. QUICK ACTION GRID ═══════════ */}
+          {/* ═══════════ QUICK ACTION GRID ═══════════ */}
           <Text style={[s.sectionTitle, { color: theme.textPrimary }]}>Quick Actions</Text>
           <View style={s.actionGrid}>
             {[
+              { id: 'StroopTest', icon: '🧠', label: 'Stress Test', sub: '2-Min Stroop', tint: 'rgba(245,158,11,0.14)', accent: '#F59E0B' },
               { id: 'Methods', icon: '🧘', label: 'Techniques', sub: '7 Techniques', tint: 'rgba(56,189,248,0.14)', accent: '#38BDF8' },
-              { id: 'PerformanceOverview', icon: '📊', label: 'Performance', sub: 'Analytics & Trends', tint: 'rgba(16,185,129,0.14)', accent: '#10B981' },
+              { id: 'PerformanceOverview', icon: '📊', label: 'Analytics', sub: 'Analytics & Trends', tint: 'rgba(16,185,129,0.14)', accent: '#10B981' },
               { id: 'UserProfile', icon: '👤', label: 'User Profile', sub: 'Account & XP', tint: 'rgba(236,72,153,0.14)', accent: '#EC4899' },
               { id: 'CommonHome', icon: '🏠', label: 'Main Home', sub: 'Return to App', tint: 'rgba(59,130,246,0.14)', accent: '#3B82F6' },
               ...(isAdmin ? [
@@ -522,24 +451,29 @@ export const DashboardScreen = () => {
             ))}
           </View>
 
-
-
-          {/* ═══════════ 7. LAUNCH CTA ═══════════ */}
+          {/* ═══════════ LAUNCH CTA ═══════════ */}
           <Animated.View style={{ transform: [{ scale: ctaScale }] }}>
             <TouchableOpacity
-              style={[s.ctaBtn, { backgroundColor: theme.accent }, loading && { opacity: 0.5 }]}
               onPress={triggerIntervention}
               disabled={loading}
               activeOpacity={0.85}
+              style={s.ctaBtnWrapper}
             >
-              {loading ? (
-                <ActivityIndicator color={theme.accentText} size="small" />
-              ) : (
-                <View style={s.ctaInner}>
-                  <Text style={[s.ctaMain, { color: theme.accentText }]}>🚀  Start Relaxation Session</Text>
-                  <Text style={[s.ctaSub, { color: theme.accentText }]}>Smart AI selects the best exercise for your stress level</Text>
-                </View>
-              )}
+              <LinearGradient
+                colors={['#7C3AED', '#3B82F6']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={s.ctaBtnGradient}
+              >
+                {loading ? (
+                  <ActivityIndicator color="#FFFFFF" size="small" />
+                ) : (
+                  <View style={s.ctaInner}>
+                    <Text style={s.ctaMain}>🚀  Start Relaxation Session</Text>
+                    <Text style={s.ctaSub}>Smart AI selects the best exercise for your stress level</Text>
+                  </View>
+                )}
+              </LinearGradient>
             </TouchableOpacity>
           </Animated.View>
 
@@ -555,7 +489,7 @@ export const DashboardScreen = () => {
         onRequestClose={() => setShowInterventionModal(false)}
       >
         <View style={s.modalOverlay}>
-          <View style={[s.modalCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
+          <View style={[s.modalCard, { backgroundColor: isDark ? '#1E293B' : '#FFFFFF', borderColor: theme.border }]}>
             <View style={s.modalHeaderRow}>
               <View style={[s.modalIconRing, { backgroundColor: 'rgba(16, 185, 129, 0.15)', borderColor: '#10B981' }]}>
                 <Text style={{ fontSize: 32 }}>🪷</Text>
@@ -600,82 +534,39 @@ export const DashboardScreen = () => {
    STYLES
    ════════════════════════════════════════════════════════ */
 const s = StyleSheet.create({
-  container: { flex: 1 },
-  scroll: { padding: 16, paddingBottom: 32 },
-
-  /* ── Live Quotes Banner ── */
-  quoteCard: {
-    borderRadius: 20,
-    borderWidth: 1,
-    marginBottom: 14,
-    overflow: 'hidden'
-  },
-  quoteAccentLine: {
-    height: 3,
-    width: '100%'
-  },
-  quoteInner: {
-    paddingHorizontal: 20,
-    paddingTop: 18,
-    paddingBottom: 8,
-    alignItems: 'center'
-  },
-  quoteIcon: {
-    fontSize: 28,
-    marginBottom: 10
-  },
-  quoteText: {
-    fontSize: 14,
-    fontWeight: '600',
-    textAlign: 'center',
-    lineHeight: 22,
-    fontStyle: 'italic',
-    letterSpacing: 0.2
-  },
-  quoteAuthor: {
-    fontSize: 11,
-    fontWeight: '800',
-    marginTop: 10,
-    letterSpacing: 0.3
-  },
-  dotRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 5,
-    paddingBottom: 14,
-    paddingTop: 6
-  },
-  dot: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5
-  },
+  container: { flex: 1, position: 'relative' },
+  scroll: { padding: 10, paddingBottom: 105 },
 
   /* ── Welcome Row ── */
   welcomeRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    borderRadius: 18,
+    borderRadius: 16,
     borderWidth: 1,
-    padding: 16,
-    marginBottom: 14
+    padding: 10,
+    marginBottom: 8,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
   },
   welcomeLeft: { flex: 1 },
-  greetingTxt: { fontSize: 12, fontWeight: '600' },
-  nameTxt: { fontSize: 22, fontWeight: '900', marginTop: 2, letterSpacing: -0.3 },
-  liveChip: { flexDirection: 'row', alignItems: 'center', marginTop: 8 },
-  liveChipTxt: { fontSize: 11, fontWeight: '700' },
+  greetingTxt: { fontSize: 11, fontWeight: '700', letterSpacing: 0.2 },
+  nameTxt: { fontSize: 17, fontWeight: '900', marginTop: 1, letterSpacing: -0.3 },
+  liveChip: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
+  liveChipTxt: { fontSize: 10, fontWeight: '800' },
   welcomeRight: { alignItems: 'flex-end' },
-  clockTxt: { fontSize: 20, fontWeight: '900', letterSpacing: 0.5 },
+  clockTxt: { fontSize: 15, fontWeight: '900', letterSpacing: 0.4 },
   idPill: {
-    marginTop: 8,
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 8,
-    borderWidth: 1
+    marginTop: 4,
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+    borderRadius: 10,
+    borderWidth: 1,
   },
-  idPillTxt: { fontSize: 9, fontWeight: '600' },
+  idPillTxt: { fontSize: 9, fontWeight: '700' },
 
   /* ── Pulse Dot ── */
   pulseDotWrap: {
@@ -691,94 +582,68 @@ const s = StyleSheet.create({
     width: 8, height: 8, borderRadius: 4
   },
 
-  /* ── Stress State Hero ── */
-  stateHero: {
-    borderRadius: 20,
-    borderWidth: 1.5,
-    padding: 16,
-    marginBottom: 16
-  },
-  stateHeroTop: {
+  /* ── Section Title & Headers ── */
+  sectionHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12
-  },
-  stateLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1
-  },
-  stateIconCircle: {
-    width: 48, height: 48, borderRadius: 16,
-    alignItems: 'center', justifyContent: 'center',
-    marginRight: 12
-  },
-  stateEmoji: { fontSize: 24 },
-  statePill: {
-    paddingVertical: 4,
-    paddingHorizontal: 14,
-    borderRadius: 12,
-    alignSelf: 'flex-start'
-  },
-  statePillTxt: {
-    color: '#FFF',
-    fontWeight: '900',
-    fontSize: 11,
-    letterSpacing: 0.6
-  },
-  stateTagline: {
-    fontSize: 11,
-    marginTop: 4,
-    lineHeight: 16,
-    maxWidth: SCREEN_W * 0.55
-  },
-  metricsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderRadius: 14,
-    borderWidth: 1,
-    marginBottom: 12
-  },
-  metricCol: { alignItems: 'center', flex: 1 },
-  metricValue: { fontSize: 16, fontWeight: '900' },
-  metricLabel: { fontSize: 9, fontWeight: '600', marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.4 },
-  metricDivider: { width: 1, height: 30 },
-
-  progressSection: { marginTop: 2 },
-  progressLabels: {
-    flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 6
+    marginBottom: 4,
   },
-  progressLbl: { fontSize: 9, fontWeight: '600' },
-  progressBg: {
-    height: 7,
-    borderRadius: 4,
-    overflow: 'hidden'
-  },
-  progressFill: {
-    height: '100%',
-    borderRadius: 4
-  },
-
-  overrideBar: {
-    marginTop: 10,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    backgroundColor: 'rgba(239,68,68,0.06)'
-  },
-  overrideTxt: { fontSize: 10, fontWeight: '800', textAlign: 'center' },
-
-  /* ── Section Title ── */
   sectionTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    marginBottom: 10,
-    letterSpacing: 0.2
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0.2,
+    marginBottom: 4,
+  },
+  liveBadgePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.3)',
+    marginBottom: 4,
+  },
+  liveBadgeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  liveBadgeTxt: {
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+
+  /* ── Stream Cards ── */
+  streamCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+  },
+  streamIconBadge: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  labelPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 10,
   },
 
   /* ── Quick Actions ── */
@@ -786,164 +651,137 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
-    marginBottom: 16
+    marginBottom: 18,
   },
   actionCard: {
     flex: 1,
     minWidth: '46%',
     maxWidth: '48.5%',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    borderRadius: 20,
     borderWidth: 1,
-    elevation: 2
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
   },
   actionIconWrap: {
-    width: 32, height: 32,
-    borderRadius: 16,
-    alignItems: 'center', justifyContent: 'center'
-  },
-  actionIcon: { fontSize: 16 },
-  actionLabel: { fontSize: 12, fontWeight: '700' },
-
-  /* ── Daily Tip ── */
-  tipBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    borderRadius: 16,
-    borderWidth: 1,
-    padding: 14,
-    marginBottom: 4,
-  },
-  tipIcon: { fontSize: 22 },
-  tipTxt: { flex: 1, fontSize: 12, lineHeight: 18 },
-
-  /* ── Breathing ring ── */
-  breathRingWrap: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
+    width: 40,
+    height: 40,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    overflow: 'hidden',
   },
-  breathRingBase: {
-    position: 'absolute',
-    width: '80%',
-    aspectRatio: 1,
-    borderRadius: 999,
-    borderWidth: 1,
+  actionIcon: {
+    fontSize: 20,
   },
-
-  /* ── CTA Button ── */
-  ctaBtn: {
-    paddingVertical: 18,
-    borderRadius: 18,
-    alignItems: 'center',
-    marginTop: 8,
-    elevation: 5,
-    shadowColor: '#38BDF8',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.3,
-    shadowRadius: 14
-  },
-  ctaInner: { alignItems: 'center' },
-  ctaMain: { fontWeight: '900', fontSize: 15, letterSpacing: 0.2 },
-  ctaSub: { fontSize: 11, opacity: 0.85, marginTop: 2, fontWeight: '600' },
-
-  /* ── Calibration Banner ── */
-  calibrationCard: {
-    borderRadius: 16,
-    borderWidth: 1.5,
-    padding: 14,
-    marginBottom: 16,
-  },
-  calibrationHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 6,
-    gap: 8,
-  },
-  calibrationTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  calibrationBody: {
+  actionLabel: {
     fontSize: 13,
-    lineHeight: 18,
+    fontWeight: '800',
+    flex: 1,
   },
 
-  /* ── Intervention Modal Styles ── */
+  /* ── Launch CTA Button ── */
+  ctaBtnWrapper: {
+    borderRadius: 22,
+    elevation: 8,
+    shadowColor: '#7C3AED',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+  },
+  ctaBtnGradient: {
+    paddingVertical: 18,
+    paddingHorizontal: 22,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.4)',
+  },
+  ctaInner: {
+    alignItems: 'center',
+  },
+  ctaMain: {
+    color: '#FFFFFF',
+    fontSize: 17,
+    fontWeight: '900',
+    letterSpacing: 0.3,
+  },
+  ctaSub: {
+    color: 'rgba(255, 255, 255, 0.92)',
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 4,
+    textAlign: 'center',
+  },
+
+  /* ── Modal Overlay ── */
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    backgroundColor: 'rgba(10, 15, 30, 0.82)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20
+    padding: 20,
   },
   modalCard: {
     width: '100%',
-    maxWidth: 380,
-    borderRadius: 24,
+    maxWidth: 400,
+    borderRadius: 26,
     borderWidth: 1,
-    padding: 22,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.35,
-    shadowRadius: 16,
-    elevation: 12
+    padding: 24,
+    elevation: 16,
   },
   modalHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 14,
-    width: '100%',
-    marginBottom: 14
+    marginBottom: 14,
   },
   modalIconRing: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
     borderWidth: 2,
     alignItems: 'center',
-    justifyContent: 'center'
+    justifyContent: 'center',
   },
   modalTitle: {
-    fontSize: 18,
-    fontWeight: '800'
+    fontSize: 19,
+    fontWeight: '900',
   },
   modalBadgeTxt: {
-    fontSize: 12,
-    fontWeight: '700',
-    marginTop: 2
+    fontSize: 11,
+    fontWeight: '800',
+    marginTop: 2,
   },
   modalDesc: {
     fontSize: 13,
-    lineHeight: 19,
-    textAlign: 'center',
-    marginBottom: 20
+    lineHeight: 20,
+    marginBottom: 20,
   },
   modalLaunchBtn: {
-    width: '100%',
-    paddingVertical: 14,
-    borderRadius: 16,
+    paddingVertical: 15,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 10
+    marginBottom: 10,
   },
   modalLaunchBtnTxt: {
     color: '#FFFFFF',
     fontSize: 15,
-    fontWeight: '800',
-    letterSpacing: 0.5
+    fontWeight: '900',
   },
   modalCloseBtn: {
     paddingVertical: 8,
-    paddingHorizontal: 16
+    alignItems: 'center',
   },
   modalCloseBtnTxt: {
     fontSize: 13,
-    fontWeight: '600'
-  }
+    fontWeight: '700',
+  },
 });
+
+export default DashboardScreen;

@@ -73,7 +73,7 @@ export const RealtimeStressTrendCard = () => {
   const chartData = buildChart();
 
   return (
-    <View style={{ marginHorizontal: 12, marginTop: Platform.OS === 'ios' ? 62 : 52, marginBottom: 8 }}>
+    <View style={{ marginHorizontal: 12, marginTop: Platform.OS === 'ios' ? 42 : 32, marginBottom: 8 }}>
       {/* Top Stream Channel Tabs */}
       <View style={{ flexDirection: 'row', gap: 6, marginBottom: 4 }}>
         <TouchableOpacity

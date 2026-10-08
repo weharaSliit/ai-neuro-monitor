@@ -2,6 +2,7 @@ import React, { useContext } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { AppContext } from '../context/AppContext';
 import { Header } from '../components/Header';
+import { AmbientBackground } from '../components/AmbientBackground';
 
 export const PrivacyPolicyScreen = () => {
   const { setCurrentScreen, setPrivacyAccepted, isCalibrated } = useContext(AppContext);
@@ -13,6 +14,7 @@ export const PrivacyPolicyScreen = () => {
 
   return (
     <View style={styles.container}>
+      <AmbientBackground />
       {/* Returning users reach this screen from Profile to re-read it, not
           as a forced first step, so give them a way back out. */}
       <Header
