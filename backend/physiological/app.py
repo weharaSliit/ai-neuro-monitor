@@ -308,7 +308,7 @@ def predict():
 
     # ── Extract features from raw arrays ───────────────────────
     try:
-        features_2d, motion_rejected, feat_dict, hrv_is_fallback = \
+        features_2d, motion_rejected, feat_dict, hrv_is_fallback, wave_dict = \
             extract_features(
                 ibi_array,
                 gsr_adc_array,
@@ -398,7 +398,8 @@ def predict():
         user_id, session_id, window_idx,
         result['prediction'], result['label'],
         result['prob_normal'], result['prob_stress'],
-        result['trending_toward_stress'], feat_dict
+        result['trending_toward_stress'], feat_dict,
+        wave_dict
     )
     save_prediction_quality(
         user_id, session_id, window_idx,
