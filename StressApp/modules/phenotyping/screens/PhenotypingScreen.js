@@ -5,6 +5,7 @@
 // Step 1: Visual breadcrumb (Settings -> Accessibility -> PhenoCare Sensor) + Interactive Switch
 // Step 2: 7-Day Calibration Roadmap with auto-transition to Dashboard.
 // ============================================================
+import { getContentWidth } from '../../shared/theme/layout';
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, NativeModules, Platform, Modal, Linking, AppState } from 'react-native';
 import Svg, { Circle as SvgCircle, Path as SvgPath } from 'react-native-svg';
@@ -37,6 +38,9 @@ const SIGNAL_HISTORY_ID = {
 };
 
 // ── Micro sparkline using raw SVG ────────────────────────────────────
+// Scales with the screen (phone -> tablet) instead of a fixed 72px.
+const SPARK_W = Math.round(Math.min(150, Math.max(72, getContentWidth() * 0.2)));
+
 function Sparkline({ values, color, width = 80, height = 32, baselineMean }) {
     if (!values || values.length < 2) return <View style={{ width, height }} />;
     const min = Math.min(...values);
@@ -100,7 +104,7 @@ function MiniSignalCard({ icon, title, subtext, value, deltaText, color, sparkVa
                         <DeviationBar z={z || 0} color={color} t={t} />
                     </View>
                     <View style={styles.signalRight}>
-                        <Sparkline values={sparkValues} color={color} width={72} height={28} baselineMean={baselineMean} />
+                        <Sparkline values={sparkValues} color={color} width={SPARK_W} height={28} baselineMean={baselineMean} />
                         <Text style={[styles.signalValue, { color }]}>{value}</Text>
                         {deltaText ? <Text style={[styles.signalDelta, { color }]}>{deltaText}</Text> : null}
                     </View>
@@ -518,20 +522,20 @@ export default function PhenotypingScreen({ navigation }) {
     // ── Gauge status: CALIBRATING (days 1-7) → CALM/PRE-STRESS/HIGH STRESS (day 7+)
     const { statusMainColor, statusLabel, statusEmoji } = useMemo(() => {
         if (!liveCalibStatus?.isCalibrated) {
-            return { statusMainColor: COLORS.brand, statusLabel: 'CALIBRATING', statusEmoji: '⚖️' };
+            return { statusMainColor: COLORS.brand, statusLabel: 'Learning you', statusEmoji: '⚖️' };
         }
         if (latestPrediction) {
             const label = (latestPrediction.label || '').toLowerCase();
             const score = Number(latestPrediction.stress_score || 0);
             if (latestPrediction.is_anomaly || score > 0.85 || label.includes('high'))
-                return { statusMainColor: COLORS.stress, statusLabel: 'HIGH STRESS', statusEmoji: '😰' };
+                return { statusMainColor: COLORS.stress, statusLabel: 'Stressed', statusEmoji: '😰' };
             if (score > 0.6 || label.includes('pre'))
-                return { statusMainColor: COLORS.warning, statusLabel: 'PRE-STRESS', statusEmoji: '😐' };
+                return { statusMainColor: COLORS.warning, statusLabel: 'Rising', statusEmoji: '😐' };
             if (score > 0.4)
-                return { statusMainColor: COLORS.warning, statusLabel: 'ELEVATED', statusEmoji: '😕' };
-            return { statusMainColor: COLORS.normal, statusLabel: 'CALM', statusEmoji: '😊' };
+                return { statusMainColor: COLORS.warning, statusLabel: 'A bit tense', statusEmoji: '😕' };
+            return { statusMainColor: COLORS.normal, statusLabel: 'Calm', statusEmoji: '😊' };
         }
-        return { statusMainColor: COLORS.normal, statusLabel: 'NORMAL', statusEmoji: '😊' };
+        return { statusMainColor: COLORS.normal, statusLabel: 'Calm', statusEmoji: '😊' };
     }, [liveCalibStatus, latestPrediction, COLORS]);
 
     // ── Ring arc
@@ -563,7 +567,10 @@ export default function PhenotypingScreen({ navigation }) {
             <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
                 {/* Page header — no name/device text */}
                 <View style={{ marginHorizontal: 20, marginBottom: 12 }}>
-                    <Text style={[styles.plainTitle, { color: t.text }]}>Digital Phenotyping</Text>
+                    <Text style={[styles.plainTitle, { color: t.text }]}>Phone</Text>
+                    <Text style={{ color: t.textMuted, fontSize: 13, fontWeight: '600' }}>
+                        How you type and scroll can show stress building up.
+                    </Text>
                 </View>
 
                 {/* Unified Behavioral Sensor & Calibration Telemetry Card */}
@@ -572,7 +579,7 @@ export default function PhenotypingScreen({ navigation }) {
                     <View style={styles.rowBetween}>
                         <View style={styles.rowGap}>
                             <Icon name="cellphone-cog" size={18} color={accessibilityOn ? COLORS.normal : COLORS.warning} />
-                            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 0 }]}>Behavioral Sensor Status</Text>
+                            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 0 }]}>Phone sensor</Text>
                         </View>
                         <View style={[styles.statusPill, { backgroundColor: accessibilityOn ? COLORS.normalSoft : COLORS.warningSoft }]}>
                             <StatusDot color={accessibilityOn ? COLORS.normal : COLORS.warning} active={accessibilityOn} size={8} />
@@ -663,7 +670,7 @@ export default function PhenotypingScreen({ navigation }) {
                 {digitalSignals && (
                     <View style={styles.section}>
                         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-                            <Text style={[styles.sectionTitle, { color: t.text }]}>Passive Behavioral Signals</Text>
+                            <Text style={[styles.sectionTitle, { color: t.text }]}>Your phone habits</Text>
                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                                 <StatusDot color={signalFreshness.isFresh ? COLORS.normal : t.textMuted} active={signalFreshness.isFresh} size={7} />
                                 <Text style={{ fontSize: 10, fontWeight: '800', color: signalFreshness.isFresh ? COLORS.normal : t.textMuted }}>
@@ -700,7 +707,7 @@ export default function PhenotypingScreen({ navigation }) {
 
                 {/* Quick Actions */}
                 <View style={styles.section}>
-                    <Text style={[styles.sectionTitle, { color: t.text }]}>Quick Action</Text>
+                    <Text style={[styles.sectionTitle, { color: t.text }]}>More</Text>
                     <View style={styles.actionsRow}>
                         <QuickAction icon="📈" label="Patterns" color={COLORS.brand} isDark={isDark}
                             onPress={() => navigation.navigate('PhenotypingAnalysis', { initialTab: 'patterns', mode: 'patterns' })} />
@@ -961,7 +968,7 @@ const styles = StyleSheet.create({
     emaHeaderBtnText: { fontSize: 11, fontWeight: '800' },
     backRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
     plainTitle: { fontSize: 22, fontWeight: '900', letterSpacing: -0.2, marginBottom: 4 },
-    hwCard: { marginHorizontal: 20, marginVertical: 8, padding: 18, borderRadius: 22 },
+    hwCard: { marginHorizontal: 20, marginVertical: 8, padding: 18 },
     rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
     rowGap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     statusPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
@@ -971,7 +978,7 @@ const styles = StyleSheet.create({
     centerGaugeWrap: { alignItems: 'center', justifyContent: 'center', width: '100%', paddingVertical: 4 },
     centerAlign: { alignItems: 'center', justifyContent: 'center' },
     gaugeEmoji: { fontSize: 26, marginBottom: 2 },
-    gaugeStatusLabel: { fontSize: 13, fontWeight: '900', letterSpacing: -0.2, marginTop: 2 },
+    gaugeStatusLabel: { fontSize: 17, fontWeight: '900', letterSpacing: -0.2, marginTop: 2 },
     gaugeDay: { fontSize: 24, fontWeight: '900', letterSpacing: -0.5 },
     gaugeSub: { fontSize: 11, fontWeight: '800' },
     gaugeHourSub: { fontSize: 10, fontWeight: '900', letterSpacing: 0.3, marginTop: 3 },

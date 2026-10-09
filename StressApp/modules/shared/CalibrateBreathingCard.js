@@ -1,18 +1,36 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Animated, Easing } from 'react-native';
+import { View, Text, StyleSheet, Animated, Easing, TouchableOpacity } from 'react-native';
+import Svg, { Circle } from 'react-native-svg';
 import axios from 'axios';
 import physiologicalApi from '../physiological/api/client';
 import { API_BASE, DEVICE_ID } from '../physiological/config/config';
 import { COLORS } from '../physiological/config/theme';
 import { eegClient } from './eegApiClient';
-import StatusDot from './StatusDot';
-import { useCalibrationSummary, useDeviceStatus, useSignupAge } from './CalibrationGate';
+import Icon from './Icon';
+import { useCalibrationSummary, useDeviceStatus } from './CalibrationGate';
+
+// ============================================================
+// CalibrateBreathingCard -- calm-breathing baseline calibration.
+// Same calls and rules as before (one Start button runs Ring + Headband
+// together, whichever are online; each device reports its own progress;
+// completion waits for every online device). Only the presentation is
+// new, and matches the website's version (web/src/components/
+// BreathingCalibration.jsx):
+//   idle     -> plain explanation, which devices will be used, Start
+//   running  -> breathing circle inside a progress ring (% + time left),
+//               one progress bar per device in plain words
+//   complete -> clear "saved" state; error -> friendly retry
+// ============================================================
 
 const RING_CONTACT_POLL_MS = 5000;
-
 const IN_PROGRESS_STATUSES = ['settling', 'capturing', 'saving'];
 const POLL_INTERVAL_MS = 2000;
 const BREATH_TIMINGS = { inhale: 4000, hold: 4000, exhale: 4000, rest: 2000 };
+// Expected end-to-end durations (settle + capture), used for the progress
+// estimate and "time left" -- same figures the old card showed as text.
+const EXPECTED_SEC = { ring: 210, eeg: 85 };
+const ORB = 190;
+const RING_STROKE = 8;
 
 function useCaptureRunner(onUpdate) {
   const pollRef = useRef(null);
@@ -41,7 +59,7 @@ function useCaptureRunner(onUpdate) {
           stop();
         }
       } catch (e) {
-
+        // a single missed poll doesn't mean it failed -- the next tick tries again
       }
     }, POLL_INTERVAL_MS);
   }, [onUpdate, stop]);
@@ -49,72 +67,66 @@ function useCaptureRunner(onUpdate) {
   useEffect(() => () => stop(), [stop]);
   return run;
 }
-function DayBars({ label, status, signupAgeDays }) {
-  if (!status?.ok) return null;
-  const usingSignup = !status.exists;
-  if (usingSignup && signupAgeDays == null) return null;
 
-  const ageDays = usingSignup ? signupAgeDays : (status.age_days ?? 0);
-  const filled = Math.min(7, Math.floor(ageDays));
-  const softStale = usingSignup ? signupAgeDays >= 7 : status.is_stale_soft;
-  const hardStale = usingSignup ? false : status.is_stale_hard;
-
-  return (
-    <View style={styles.dayBarsBlock}>
-      <Text style={styles.dayBarsLabel}>{label}{usingSignup ? ' — since you joined' : ''}</Text>
-      <View style={styles.dayBarsRow}>
-        {[1, 2, 3, 4, 5, 6, 7].map((d) => (
-          <View key={d} style={[styles.dayBarFill, d <= filled ? styles.dayBarFillOn : styles.dayBarFillOff]} />
-        ))}
-      </View>
-      {softStale && (
-        <Text style={styles.dayBarsNote}>
-          {hardStale ? 'Expired — recalibrate' : usingSignup ? '7 days reached — recommended to calibrate' : 'Recommended to recalibrate'}
-        </Text>
-      )}
-    </View>
-  );
+// 0..1 progress for one device, or null when it isn't taking part.
+function deviceProgress(state, expected, elapsedSec, totalSec) {
+  if (!expected) return null;
+  if (!state.triggered) return 0;
+  if (state.status === 'error') return 0;
+  if (!IN_PROGRESS_STATUSES.includes(state.status)) return 1;
+  const timeFrac = Math.min(0.95, elapsedSec / totalSec);
+  if (state.status === 'saving') return 0.97;
+  if (state.status === 'capturing' && state.window_idx != null && state.n_windows) {
+    return Math.min(0.96, Math.max(timeFrac, 0.15 + 0.8 * (state.window_idx / state.n_windows)));
+  }
+  return timeFrac;
 }
 
-// One row per device -- both Ring and Headband are started together by
-// the single Calibrate button below, but each shows its own independent
-// progress here (not a combined bar), since one can finish, fail, or get
-// skipped for insufficient data well before the other does. A device
-// that's simply not connected shows "Not connected" and is left alone --
-// never attempted, never counted as failed, same as before.
-function DeviceCalibrateRow({ label, expected, state, durationHint }) {
-  const statusLabel = () => {
-    if (!expected) return 'Not connected';
-    if (!state.triggered) return 'Waiting to start…';
-    if (state.status === 'error') return state.message || 'Failed';
-    if (state.status === 'settling') return 'Settling…';
-    if (state.status === 'saving') return 'Saving…';
-    if (state.status === 'capturing') {
-      return state.window_idx != null && state.n_windows != null
-        ? `Capturing (${state.window_idx}/${state.n_windows})`
-        : 'Capturing…';
-    }
-    return 'Done ✓';
-  };
+function deviceWords(state, expected) {
+  if (!expected) return 'Not connected — skipped';
+  if (!state.triggered) return 'Getting ready…';
+  if (state.status === 'error') return state.message || 'Something went wrong';
+  if (state.status === 'settling') return 'Letting the sensor settle…';
+  if (state.status === 'capturing') {
+    return state.window_idx != null && state.n_windows != null
+      ? `Learning your calm (${state.window_idx} of ${state.n_windows})`
+      : 'Learning your calm…';
+  }
+  if (state.status === 'saving') return 'Saving…';
+  return 'Done ✓';
+}
 
+function freshnessLine(ring, eeg) {
+  const sides = [ring, eeg].filter((s) => s?.ok !== false && s?.exists && s.age_days != null);
+  if (!sides.length) return { text: 'Not calibrated yet — this takes about 3½ minutes.', warn: true };
+  const age = Math.min(...sides.map((s) => s.age_days));
+  const days = Math.floor(age);
+  const when = days < 1 ? 'today' : days === 1 ? 'yesterday' : `${days} days ago`;
+  const stale = sides.some((s) => s.is_stale_soft);
+  return {
+    text: `Last calibrated ${when}${stale ? ' — time to recalibrate.' : ' — recalibrate about once a week.'}`,
+    warn: stale,
+  };
+}
+
+function DeviceProgressRow({ icon, tint, label, words, progress, failed }) {
+  const off = progress == null;
   return (
-    <View style={styles.deviceCalibRow}>
-      <View style={styles.deviceCalibLabelRow}>
-        <StatusDot color={expected ? COLORS.normal : COLORS.light.border} active={expected} size={7} />
-        <Text style={styles.deviceCalibLabel}>{label}</Text>
+    <View style={styles.devRow}>
+      <View style={[styles.devIcon, { backgroundColor: (off ? COLORS.light.border : tint) + '22' }]}>
+        <Icon name={icon} size={16} color={off ? COLORS.light.textMuted : tint} />
       </View>
-      <View style={{ alignItems: 'flex-end' }}>
-        <Text style={[
-          styles.miniStatusText,
-          !expected && { color: COLORS.light.textMuted },
-          expected && state.status === 'error' && { color: COLORS.stress },
-          expected && state.triggered && !IN_PROGRESS_STATUSES.includes(state.status) && state.status !== 'error' && { color: COLORS.normalDark },
-        ]}>
-          {statusLabel()}
-        </Text>
-        {expected && state.triggered && IN_PROGRESS_STATUSES.includes(state.status) && durationHint ? (
-          <Text style={styles.miniStatusSub}>~{durationHint}</Text>
-        ) : null}
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <View style={styles.devHead}>
+          <Text style={styles.devLabel}>{label}</Text>
+          {!off && <Text style={styles.devPct}>{Math.round(progress * 100)}%</Text>}
+        </View>
+        <Text style={[styles.devWords, failed && { color: COLORS.stressDark }]} numberOfLines={2}>{words}</Text>
+        {!off && (
+          <View style={styles.barBg}>
+            <View style={[styles.barFill, { width: `${Math.round(progress * 100)}%`, backgroundColor: failed ? COLORS.stress : tint }]} />
+          </View>
+        )}
       </View>
     </View>
   );
@@ -122,29 +134,27 @@ function DeviceCalibrateRow({ label, expected, state, durationHint }) {
 
 export default function CalibrateBreathingCard({ userId, token, eegDb, onComplete }) {
   const { ring, eeg, refresh } = useCalibrationSummary(userId, token);
-  const signupAgeDays = useSignupAge(userId, eegDb);
   const { ringOnline, eegOnline, eegSessionId } = useDeviceStatus(userId, eegDb);
   const [stage, setStage] = useState('idle'); // idle | running | complete | error
   const [ringState, setRingState] = useState({ triggered: false, status: 'idle' });
   const [eegState, setEegState] = useState({ triggered: false, status: 'idle' });
   const [errorMsg, setErrorMsg] = useState(null);
+  const [startedAt, setStartedAt] = useState(null);
+  const [now, setNow] = useState(Date.now());
 
   const runRing = useCaptureRunner((data) => setRingState((r) => ({ ...r, ...data })));
   const runEeg = useCaptureRunner((data) => setEegState((e) => ({ ...e, ...data })));
 
-  // Single combined trigger -- one "Calibrate" action starts both Ring
-  // and EEG together (whichever are actually online), same as the
-  // original design; DeviceCalibrateRow below still shows each device's
-  // own independent progress rather than one merged bar, since they
-  // settle, fail, or get skipped on their own separate timelines.
+  // Single combined trigger -- one Start runs Ring and EEG together
+  // (whichever are actually online); each still reports its own progress.
   const start = useCallback(() => {
     if (!ringOnline && !eegOnline) {
-      setErrorMsg('No device detected — connect your Ring or EEG headband first.');
+      setErrorMsg('No device detected — turn on and wear your ring or headband first.');
       setStage('error');
       return;
     }
-
     setErrorMsg(null);
+    setStartedAt(Date.now());
     setStage('running');
 
     if (ringOnline) {
@@ -164,27 +174,13 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
     }
   }, [ringOnline, eegOnline, eegSessionId, token, runRing, runEeg]);
 
-  // "Expected" (not just "triggered") is what actually gates completion --
-  // a device that's online is expected to eventually be calibrated, even
-  // before its button has been pressed, so completion correctly waits for
-  // BOTH online devices to be individually started and finished, instead
-  // of firing the moment just one of them settles because the other
-  // "wasn't triggered yet" (which used to look identical to "not
-  // available at all" when both devices shared one combined Start
-  // button). A device that's genuinely offline is skipped entirely, same
-  // as before.
+  // "Expected" (online), not just "triggered", gates completion -- an
+  // online device must be started AND finish; an offline one is skipped.
   const ringExpected = ringOnline;
   const eegExpected = eegOnline && !!eegSessionId;
 
-  // eegSessionId resolves from its own separate Firebase listener and can
-  // still be null at the exact instant start() runs -- most commonly right
-  // after a fresh registration, before that listener has caught up. When
-  // that happens start() skips EEG entirely and eegState.triggered is stuck
-  // at false forever, which also permanently blocks completion below (since
-  // eegDone requires triggered===true) -- the card just sits on "Waiting to
-  // start...". This re-checks reactively and fires EEG (or Ring, for the
-  // same reason) the moment it becomes expected while already running,
-  // instead of only ever checking once at the button press.
+  // eegSessionId can arrive a moment after Start (fresh registration) --
+  // fire a device the moment it becomes expected while already running.
   useEffect(() => {
     if (stage !== 'running') return;
     if (ringExpected && !ringState.triggered) {
@@ -229,9 +225,17 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
     if (stage === 'complete' && onComplete) onComplete();
   }, [stage]);
 
+  // 1s clock for the progress estimate / time left.
+  useEffect(() => {
+    if (stage !== 'running') return undefined;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [stage]);
+
   const retry = () => {
     setStage('idle');
     setErrorMsg(null);
+    setStartedAt(null);
     setRingState({ triggered: false, status: 'idle' });
     setEegState({ triggered: false, status: 'idle' });
   };
@@ -258,15 +262,14 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
     return () => { cancelled = true; clearInterval(id); };
   }, [ringState.triggered, ringState.status]);
 
+  // ── Breathing pacer ──
   const [breathPhase, setBreathPhase] = useState('inhale');
-  const scaleAnim = useRef(new Animated.Value(1)).current;
-  const glowAnim = useRef(new Animated.Value(0.35)).current;
+  const scaleAnim = useRef(new Animated.Value(0.82)).current;
   const idlePulse = useRef(new Animated.Value(0)).current;
-  const rotateAnim = useRef(new Animated.Value(0)).current;
   const calibrating = stage === 'running';
 
   useEffect(() => {
-    if (calibrating) return;
+    if (calibrating) return undefined;
     idlePulse.setValue(0);
     const loop = Animated.loop(
       Animated.sequence([
@@ -279,22 +282,15 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
   }, [calibrating, idlePulse]);
 
   useEffect(() => {
-    if (!calibrating) return;
+    if (!calibrating) return undefined;
     let timer;
     if (breathPhase === 'inhale') {
-      Animated.parallel([
-        Animated.timing(scaleAnim, { toValue: 1.35, duration: BREATH_TIMINGS.inhale, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        Animated.timing(glowAnim, { toValue: 1, duration: BREATH_TIMINGS.inhale, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        Animated.timing(rotateAnim, { toValue: 1, duration: BREATH_TIMINGS.inhale, easing: Easing.linear, useNativeDriver: true }),
-      ]).start();
+      Animated.timing(scaleAnim, { toValue: 1, duration: BREATH_TIMINGS.inhale, easing: Easing.inOut(Easing.ease), useNativeDriver: true }).start();
       timer = setTimeout(() => setBreathPhase('hold'), BREATH_TIMINGS.inhale);
     } else if (breathPhase === 'hold') {
       timer = setTimeout(() => setBreathPhase('exhale'), BREATH_TIMINGS.hold);
     } else if (breathPhase === 'exhale') {
-      Animated.parallel([
-        Animated.timing(scaleAnim, { toValue: 1, duration: BREATH_TIMINGS.exhale, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        Animated.timing(glowAnim, { toValue: 0.35, duration: BREATH_TIMINGS.exhale, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-      ]).start();
+      Animated.timing(scaleAnim, { toValue: 0.82, duration: BREATH_TIMINGS.exhale, easing: Easing.inOut(Easing.ease), useNativeDriver: true }).start();
       timer = setTimeout(() => setBreathPhase('rest'), BREATH_TIMINGS.exhale);
     } else {
       timer = setTimeout(() => setBreathPhase('inhale'), BREATH_TIMINGS.rest);
@@ -302,65 +298,121 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
     return () => { if (timer) clearTimeout(timer); };
   }, [breathPhase, calibrating]);
 
-  const displayScale = calibrating
-    ? scaleAnim
-    : idlePulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.06] });
-  const haloOpacity = calibrating
-    ? glowAnim.interpolate({ inputRange: [0, 1], outputRange: [0.25, 0.55] })
-    : idlePulse.interpolate({ inputRange: [0, 1], outputRange: [0.2, 0.4] });
-
-  const breathText = breathPhase === 'inhale' ? 'Breathe In'
+  const breathText = breathPhase === 'inhale' ? 'Breathe in'
     : breathPhase === 'hold' ? 'Hold'
-      : breathPhase === 'exhale' ? 'Breathe Out' : 'Rest';
+      : breathPhase === 'exhale' ? 'Breathe out' : 'Rest';
+
+  // ── Progress ──
+  const elapsedSec = startedAt ? (now - startedAt) / 1000 : 0;
+  const ringP = deviceProgress(ringState, ringExpected, elapsedSec, EXPECTED_SEC.ring);
+  const eegP = deviceProgress(eegState, eegExpected, elapsedSec, EXPECTED_SEC.eeg);
+  const parts = [ringP, eegP].filter((p) => p != null);
+  const overall = stage === 'complete' ? 1 : parts.length ? Math.min(...parts) : 0;
+  const longest = Math.max(ringExpected ? EXPECTED_SEC.ring : 0, eegExpected ? EXPECTED_SEC.eeg : 0);
+  const leftSec = Math.max(0, Math.round(longest - elapsedSec));
+  const leftText = leftSec > 60 ? `about ${Math.ceil(leftSec / 60)} min left` : leftSec > 0 ? `about ${leftSec}s left` : 'finishing up…';
+
+  const R = (ORB - RING_STROKE) / 2;
+  const C = 2 * Math.PI * R;
+  const fresh = freshnessLine(ring, eeg);
+  const orbScale = calibrating ? scaleAnim : idlePulse.interpolate({ inputRange: [0, 1], outputRange: [0.86, 0.92] });
 
   return (
     <View style={styles.container}>
-      <DayBars label="Ring" status={ring} signupAgeDays={signupAgeDays} />
-      <DayBars label="EEG" status={eeg} signupAgeDays={signupAgeDays} />
-
-      {/* Idle: a single combined Calibrate action, same real connectivity
-          the trigger itself gates on. Once running, each device's own
-          progress drops down below instead. */}
       {stage === 'idle' && (
-        <Text style={styles.startLink} onPress={start}>Calibrate →</Text>
+        <View style={[styles.freshness, { backgroundColor: fresh.warn ? COLORS.warningSoft : COLORS.normalSoft }]}>
+          <Icon name={fresh.warn ? 'clock-alert-outline' : 'check-circle-outline'} size={16}
+            color={fresh.warn ? COLORS.warningDark : COLORS.normalDark} />
+          <Text style={[styles.freshnessText, { color: fresh.warn ? COLORS.warningDark : COLORS.normalDark }]}>{fresh.text}</Text>
+        </View>
+      )}
+
+      {/* Breathing orb inside a progress ring */}
+      <View style={styles.orbWrap}>
+        <Svg width={ORB} height={ORB} style={StyleSheet.absoluteFill}>
+          <Circle cx={ORB / 2} cy={ORB / 2} r={R} stroke={COLORS.light.borderSoft} strokeWidth={RING_STROKE} fill="none" />
+          {(calibrating || stage === 'complete') && (
+            <Circle
+              cx={ORB / 2} cy={ORB / 2} r={R}
+              stroke={stage === 'complete' ? COLORS.normal : COLORS.brand}
+              strokeWidth={RING_STROKE} fill="none" strokeLinecap="round"
+              strokeDasharray={`${C} ${C}`} strokeDashoffset={C * (1 - overall)}
+              transform={`rotate(-90 ${ORB / 2} ${ORB / 2})`}
+            />
+          )}
+        </Svg>
+        <Animated.View style={[styles.orb, {
+          backgroundColor: stage === 'complete' ? COLORS.normal : stage === 'error' ? COLORS.stress : COLORS.brand,
+          transform: [{ scale: orbScale }],
+        }]}>
+          <Text style={styles.orbWord}>
+            {calibrating ? breathText : stage === 'complete' ? '✓' : stage === 'error' ? '!' : '🌬️'}
+          </Text>
+          {calibrating && <Text style={styles.orbPct}>{Math.round(overall * 100)}%</Text>}
+        </Animated.View>
+      </View>
+
+      {stage === 'idle' && (
+        <>
+          <Text style={styles.lead}>Sit comfortably, keep still, and breathe slowly with the circle.</Text>
+          <Text style={styles.sub}>We learn what “calm” looks like for you. It takes about 3½ minutes.</Text>
+          <View style={styles.chipsRow}>
+            <View style={[styles.chip, { backgroundColor: ringOnline ? COLORS.normalSoft : COLORS.light.pillBg }]}>
+              <Icon name="heart-pulse" size={14} color={ringOnline ? COLORS.normalDark : COLORS.light.textMuted} />
+              <Text style={[styles.chipText, { color: ringOnline ? COLORS.normalDark : COLORS.light.textMuted }]}>
+                Ring {ringOnline ? 'ready' : 'off'}
+              </Text>
+            </View>
+            <View style={[styles.chip, { backgroundColor: eegOnline ? COLORS.normalSoft : COLORS.light.pillBg }]}>
+              <Icon name="brain" size={14} color={eegOnline ? COLORS.normalDark : COLORS.light.textMuted} />
+              <Text style={[styles.chipText, { color: eegOnline ? COLORS.normalDark : COLORS.light.textMuted }]}>
+                Headband {eegOnline ? 'ready' : 'off'}
+              </Text>
+            </View>
+          </View>
+          <TouchableOpacity style={[styles.startBtn, !ringOnline && !eegOnline && styles.startBtnOff]} onPress={start} activeOpacity={0.85}>
+            <Icon name="play" size={18} color="#FFFFFF" />
+            <Text style={styles.startBtnText}>Start calibration</Text>
+          </TouchableOpacity>
+          {!ringOnline && !eegOnline && (
+            <Text style={styles.sub}>Turn on and wear at least one device first.</Text>
+          )}
+        </>
       )}
 
       {stage === 'running' && (
         <>
-          <DeviceCalibrateRow label="Ring" expected={ringExpected} state={ringState} durationHint="3.5 minutes" />
-          <DeviceCalibrateRow label="Headband" expected={eegExpected} state={eegState} durationHint="85 seconds" />
+          <Text style={styles.lead}>{breathText === 'Rest' ? 'Relax…' : `${breathText}…`}</Text>
+          <Text style={styles.sub}>{leftText} · keep still</Text>
+          <View style={styles.devices}>
+            <DeviceProgressRow icon="heart-pulse" tint={COLORS.hrv} label="Ring" progress={ringP}
+              words={deviceWords(ringState, ringExpected)} failed={ringState.status === 'error'} />
+            <DeviceProgressRow icon="brain" tint={COLORS.warning} label="Headband" progress={eegP}
+              words={deviceWords(eegState, eegExpected)} failed={eegState.status === 'error'} />
+          </View>
+          {ringState.triggered && ringFingerDetected === false && (
+            <View style={[styles.freshness, { backgroundColor: COLORS.warningSoft, marginTop: 12 }]}>
+              <Icon name="alert-outline" size={16} color={COLORS.warningDark} />
+              <Text style={[styles.freshnessText, { color: COLORS.warningDark }]}>No finger on the ring — adjust it for a clean reading.</Text>
+            </View>
+          )}
         </>
       )}
 
-      <View style={styles.visualArea}>
-        <Animated.View style={[styles.outerHalo, { opacity: haloOpacity, transform: [{ scale: displayScale }] }]}>
-          <View style={styles.middleRing}>
-            <Animated.View style={[styles.auraSphere, {
-              transform: [{
-                rotate: rotateAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }),
-              }],
-            }]}>
-              <View style={styles.auraCore}>
-                <Text style={styles.breathText}>
-                  {stage === 'running' ? breathText : stage === 'complete' ? '✓' : stage === 'error' ? '!' : '🌬️'}
-                </Text>
-              </View>
-            </Animated.View>
-          </View>
-        </Animated.View>
-      </View>
-
-      {stage === 'running' && ringState.triggered && ringFingerDetected === false && (
-        <Text style={styles.contactWarning}>⚠ No finger detected on the ring — adjust it for a clean reading</Text>
-      )}
-
       {stage === 'complete' && (
-        <Text style={styles.statusText}>Calibration complete — your baseline has been saved.</Text>
+        <>
+          <Text style={styles.lead}>All done — your calm baseline is saved.</Text>
+          <Text style={styles.sub}>Your readings are now judged against your own body.</Text>
+        </>
       )}
+
       {stage === 'error' && (
         <>
-          <Text style={styles.statusText}>{errorMsg || 'Calibration failed'}</Text>
-          <Text style={styles.startLink} onPress={retry}>Try Again</Text>
+          <Text style={[styles.lead, { color: COLORS.stressDark }]}>{errorMsg || 'Calibration failed'}</Text>
+          <TouchableOpacity style={styles.startBtn} onPress={retry} activeOpacity={0.85}>
+            <Icon name="refresh" size={18} color="#FFFFFF" />
+            <Text style={styles.startBtnText}>Try again</Text>
+          </TouchableOpacity>
         </>
       )}
     </View>
@@ -368,161 +420,39 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
 }
 
 const styles = StyleSheet.create({
-  container: {
-    alignItems: 'center',
-    paddingVertical: 8,
+  container: { alignItems: 'center', paddingVertical: 4 },
+  freshness: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'stretch',
+    paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, marginBottom: 6,
   },
-  dayBarsBlock: {
-    width: '100%',
-    marginBottom: 14,
+  freshnessText: { flex: 1, fontSize: 12, fontWeight: '700', lineHeight: 17 },
+  orbWrap: { width: ORB, height: ORB, alignItems: 'center', justifyContent: 'center', marginVertical: 14 },
+  orb: {
+    width: ORB - 40, height: ORB - 40, borderRadius: (ORB - 40) / 2,
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: COLORS.brandDark, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.28, shadowRadius: 16, elevation: 6,
   },
-  dayBarsLabel: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: COLORS.light.textMuted,
-    marginBottom: 6,
+  orbWord: { color: '#FFFFFF', fontSize: 18, fontWeight: '900', textAlign: 'center' },
+  orbPct: { color: 'rgba(255,255,255,0.85)', fontSize: 13, fontWeight: '800', marginTop: 2 },
+  lead: { fontSize: 15, fontWeight: '800', color: COLORS.light.text, textAlign: 'center' },
+  sub: { fontSize: 12, fontWeight: '600', color: COLORS.light.textMuted, textAlign: 'center', marginTop: 4, lineHeight: 17 },
+  chipsRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8, marginTop: 14 },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 16 },
+  chipText: { fontSize: 12, fontWeight: '800' },
+  startBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, alignSelf: 'stretch',
+    marginTop: 16, paddingVertical: 14, borderRadius: 16, backgroundColor: COLORS.brand,
+    shadowColor: COLORS.brandDark, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.22, shadowRadius: 8, elevation: 3,
   },
-  dayBarsRow: {
-    flexDirection: 'row',
-    gap: 6,
-  },
-  dayBarFill: {
-    flex: 1,
-    height: 6,
-    borderRadius: 3,
-  },
-  dayBarFillOn: {
-    backgroundColor: COLORS.brand,
-  },
-  dayBarFillOff: {
-    backgroundColor: COLORS.light.border,
-  },
-  dayBarsNote: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: COLORS.warningDark,
-    marginTop: 4,
-  },
-  noDeviceText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: COLORS.light.textMuted,
-    textAlign: 'center',
-    marginBottom: 10,
-  },
-  deviceCalibRow: {
-    width: '100%',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.light.border,
-  },
-  deviceCalibLabelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  deviceCalibLabel: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: COLORS.light.text,
-  },
-  miniStartLink: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: COLORS.brand,
-  },
-  miniStatusText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: COLORS.light.textMuted,
-  },
-  miniStatusSub: {
-    fontSize: 10,
-    color: COLORS.light.textMuted,
-    marginTop: 1,
-  },
-  visualArea: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 16,
-  },
-  outerHalo: {
-    width: 168,
-    height: 168,
-    borderRadius: 84,
-    backgroundColor: COLORS.brandSoft,
-    borderWidth: 1.5,
-    borderColor: COLORS.brandLight + '60',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  middleRing: {
-    width: 136,
-    height: 136,
-    borderRadius: 68,
-    backgroundColor: COLORS.brandLight + '30',
-    borderWidth: 1,
-    borderColor: COLORS.brandLight + '80',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  auraSphere: {
-    width: 104,
-    height: 104,
-    borderRadius: 52,
-    backgroundColor: COLORS.brand,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: COLORS.brandDark,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 16,
-    elevation: 6,
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.15)',
-  },
-  auraCore: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
-  },
-  breathText: {
-    color: '#FFFFFF',
-    fontSize: 13,
-    fontWeight: '800',
-    letterSpacing: 0.3,
-  },
-  statusText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: COLORS.light.text,
-    textAlign: 'center',
-    marginTop: 4,
-  },
-  statusSub: {
-    fontSize: 11,
-    color: COLORS.light.textMuted,
-    marginTop: 4,
-  },
-  contactWarning: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: COLORS.warningDark,
-    marginTop: 8,
-    textAlign: 'center',
-  },
-  startLink: {
-    marginTop: 12,
-    fontSize: 14,
-    fontWeight: '800',
-    color: COLORS.brand,
-  },
+  startBtnOff: { opacity: 0.55 },
+  startBtnText: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
+  devices: { alignSelf: 'stretch', marginTop: 16, gap: 12 },
+  devRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  devIcon: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  devHead: { flexDirection: 'row', justifyContent: 'space-between' },
+  devLabel: { fontSize: 13, fontWeight: '800', color: COLORS.light.text },
+  devPct: { fontSize: 12, fontWeight: '800', color: COLORS.light.textSub },
+  devWords: { fontSize: 12, fontWeight: '600', color: COLORS.light.textMuted, marginTop: 1 },
+  barBg: { height: 8, borderRadius: 4, backgroundColor: COLORS.light.borderSoft, marginTop: 6, overflow: 'hidden' },
+  barFill: { height: '100%', borderRadius: 4 },
 });

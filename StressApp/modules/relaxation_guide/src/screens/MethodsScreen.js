@@ -1,131 +1,220 @@
 import React, { useState, useContext } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+} from 'react-native';
 import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
 import { Header } from '../components/Header';
-import { SuitabilityModal } from '../components/SuitabilityModal';
-import { apiService } from '../api/apiService';
-import { useSweetAlert } from '../context/SweetAlertContext';
+import { DailyTasksModal } from '../components/DailyTasksModal';
+import { RewardChestModal } from '../components/RewardChestModal';
+import { AmbientBackground } from '../components/AmbientBackground';
+
+const ARCADE_GAMES = [
+  {
+    id: 'flower_meadow',
+    level: 1,
+    title: 'Calm Meadow',
+    icon: '🌸',
+    description: 'Breathe with blooming petals to calm down.',
+    color: '#EC4899', // Rose Pink
+  },
+  {
+    id: 'water_lily_pond',
+    level: 2,
+    title: 'Zen Lily Pond',
+    icon: '🪷',
+    description: 'Tap water ripples with floating water lilies.',
+    color: '#10B981', // Emerald Green
+  },
+  {
+    id: 'box_meditation',
+    level: 3,
+    title: 'Focus Box',
+    icon: '🧊',
+    description: '4-second square rhythm to clear your mind.',
+    color: '#3B82F6', // Sky Blue
+  },
+  {
+    id: 'diaphragmatic_pace',
+    level: 4,
+    title: 'Deep Belly Calm',
+    icon: '🫁',
+    description: 'Slow deep breathing to lower stress.',
+    color: '#0EA5E9', // Ocean Cyan
+  },
+  {
+    id: 'pattern_alignment',
+    level: 5,
+    title: 'Color Match',
+    icon: '🧩',
+    description: 'Pattern matching puzzle to distract from worry.',
+    color: '#8B5CF6', // Lavender Purple
+  },
+  {
+    id: 'body_scan_mindful',
+    level: 6,
+    title: 'Body Sweep',
+    icon: '🧘‍♂️',
+    description: 'Interactive map to sweep muscle tension.',
+    color: '#7C3AED', // Violet
+  },
+  {
+    id: 'autogenic_warmth',
+    level: 7,
+    title: 'Warmth Flow',
+    icon: '🔥',
+    description: 'Soothing warmth flowing through your body.',
+    color: '#F59E0B', // Warm Amber
+  },
+  {
+    id: 'stroop_decoupler',
+    level: 8,
+    title: 'Color Clash',
+    icon: '🎯',
+    description: 'Color challenge to refocus your mind.',
+    color: '#06B6D4', // Teal
+  },
+  {
+    id: 'pmr_crystal_squeeze',
+    level: 9,
+    title: 'Somatic PMR',
+    icon: '💎',
+    description: 'Isometric crystal squeeze & release to drop SCL conductance.',
+    color: '#EC4899',
+  },
+  {
+    id: 'emdr_saccadic_trace',
+    level: 10,
+    title: 'Cosmic Trace (EMDR)',
+    icon: '✨',
+    description: 'Bilateral saccadic eye pursuit to down-regulate amygdala.',
+    color: '#38BDF8',
+  },
+  {
+    id: 'galvanic_biofeedback_flow',
+    level: 11,
+    title: 'Bio GSR Pool',
+    icon: '💧',
+    description: 'Real-time EDA fluid biofeedback to cool sudomotor SCR bursts.',
+    color: '#06B6D4',
+  },
+];
 
 export const MethodsScreen = () => {
-  const { showAlert } = useSweetAlert();
   const {
-    userId,
-    stressState,
-    stressProbability,
     setCurrentScreen,
     setCurrentRecommendation,
     setSelectedSubOption,
-    setPreInterventionLabel
+    setPreInterventionLabel,
+    stressState
   } = useContext(AppContext);
 
   const { theme } = useContext(ThemeContext);
-  const [loadingId, setLoadingId] = useState(null);
-  const [modalData, setModalData] = useState(null);
-  const [modalVisible, setModalVisible] = useState(false);
-  const [pendingSubOption, setPendingSubOption] = useState(null);
 
-  const techniques = [
-    {
-      id: 'water_lily_pond',
-      title: 'Lily Pond Breathing',
-      icon: '🪷',
-      description: 'Extended exhale pacing synced with water lilies to lower stress.',
-      color: '#10B981'
-    },
-    {
-      id: 'diaphragmatic_pace',
-      title: 'Deep Belly Pacing',
-      icon: '🫁',
-      description: 'Deep abdominal lower-lobe lung expansion for rapid pulse reduction.',
-      color: '#0284C7'
-    },
-    {
-      id: 'box_meditation',
-      title: 'Box Breathing',
-      icon: '🧊',
-      description: 'Equal 4s square breathing rhythm for tactical calm and focus.',
-      color: '#38BDF8'
-    },
-    {
-      id: 'pattern_alignment',
-      title: 'Memory Match',
-      icon: '🧩',
-      description: 'Tactile color pattern puzzle to clear intrusive worry and refocus.',
-      color: '#F59E0B'
-    },
-    {
-      id: 'body_scan_mindful',
-      title: 'Mindful Body Scan',
-      icon: '🧘‍♂️',
-      description: 'Interactive anatomical body map to release muscle tension.',
-      color: '#3B82F6'
-    },
-    {
-      id: 'autogenic_warmth',
-      title: 'Autogenic Thermal Focus',
-      icon: '🔥',
-      description: 'Vascular somatosensory focus to open blood flow and relax body.',
-      color: '#EF4444'
-    },
-    {
-      id: 'flower_meadow',
-      title: 'Flower Meadow Garden Bloom',
-      icon: '🌸',
-      description: 'Interactive floral garden bloom entrainment for biophilic attention restoration (0.97 WESAD score).',
-      color: '#F472B6'
-    },
-    {
-      id: 'stroop_decoupler',
-      title: 'Stroop Cognitive Decoupler',
-      icon: '🎯',
-      description: 'High-speed cognitive refocusing puzzle suppressing DMN rumination (0.95 WESAD recovery rating).',
-      color: '#3B82F6'
-    },
-  ];
+  const [showTasksModal, setShowTasksModal] = useState(false);
+  const [showRewardModal, setShowRewardModal] = useState(false);
 
-  const launchTechnique = (tech) => {
+  const launchGame = (game) => {
     setPreInterventionLabel(stressState);
-    const subOpt = { id: tech.id, title: tech.title, description: tech.description };
+    const subOpt = { id: game.id, title: game.title, description: game.description };
     setSelectedSubOption(subOpt);
     setCurrentRecommendation({
-      technique_id: tech.id,
-      title: tech.title,
-      description: tech.description,
+      technique_id: game.id,
+      title: game.title,
+      description: game.description,
       selected_sub_option: subOpt,
-      available_sub_options: [subOpt],
-      context_cluster_id: 1,
-      blended_score: 0.95,
-      physiological_sample: 0.95,
-      preference_score: 0.95,
-      execution_time_ms: 10.0
     });
     setCurrentScreen('GamePlayer');
   };
 
-  return (
-    <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
-      <Header title="Relaxation Catalog" showBack onBack={() => setCurrentScreen('Dashboard')} />
+  const isDark = theme?.isDark ?? true;
 
-      <ScrollView contentContainerStyle={styles.content}>
-        {techniques.map((tech) => (
+  return (
+    <View style={[styles.container, { backgroundColor: theme?.bgPrimary || (isDark ? '#0F172A' : '#FAF9FC') }]}>
+      <AmbientBackground />
+      <Header title="Relaxation Arcade" showBack={false} />
+
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        {/* Daily Tasks Button */}
+        <TouchableOpacity
+          style={[styles.taskRow, { backgroundColor: isDark ? 'rgba(30, 41, 59, 0.75)' : 'rgba(255, 255, 255, 0.85)', borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(226, 232, 240, 0.8)' }]}
+          onPress={() => setShowTasksModal(true)}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.taskIcon}>📜</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.taskTitle, { color: theme?.textPrimary || (isDark ? '#F8FAFC' : '#0F172A') }]}>Daily Tasks & Quests</Text>
+            <Text style={[styles.taskSub, { color: theme?.textMuted || '#94A3B8' }]}>Complete tasks for rewards</Text>
+          </View>
+          <Text style={[styles.arrowTxt, { color: '#3B82F6' }]}>▶</Text>
+        </TouchableOpacity>
+
+        {/* Section Title */}
+        <Text style={[styles.arcadeTitle, { color: theme?.textPrimary || (isDark ? '#F8FAFC' : '#0F172A') }]}>
+          Choose Technique
+        </Text>
+
+        {/* Color-Coded Soothing Relaxation Cards */}
+        {ARCADE_GAMES.map((game) => (
           <TouchableOpacity
-            key={tech.id}
-            style={[styles.techCard, { backgroundColor: theme.bgSecondary, borderColor: theme.border, borderLeftColor: tech.color, borderLeftWidth: 4 }]}
-            onPress={() => launchTechnique(tech)}
-            activeOpacity={0.85}
+            key={game.id}
+            style={[
+              styles.simpleCard,
+              {
+                backgroundColor: isDark ? 'rgba(30, 41, 59, 0.75)' : 'rgba(255, 255, 255, 0.85)',
+                borderColor: game.color + '50',
+              }
+            ]}
+            onPress={() => launchGame(game)}
+            activeOpacity={0.7}
           >
-            <View style={styles.techRow}>
-              <Text style={styles.techIcon}>{tech.icon}</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.techTitle, { color: theme.textPrimary }]}>{tech.title}</Text>
-                <Text style={[styles.techDesc, { color: theme.textMuted }]}>{tech.description}</Text>
+            <View style={[styles.iconBox, { backgroundColor: game.color + '18' }]}>
+              <Text style={styles.gameIcon}>{game.icon}</Text>
+            </View>
+
+            <View style={styles.infoCol}>
+              <View style={styles.titleRow}>
+                <Text style={[styles.gameTitle, { color: theme?.textPrimary || (isDark ? '#F8FAFC' : '#0F172A') }]}>
+                  {game.title}
+                </Text>
               </View>
-              <Text style={{ fontSize: 16, color: tech.color, marginLeft: 6 }}>▶</Text>
+              <Text style={[styles.gameDesc, { color: theme?.textMuted || '#94A3B8' }]} numberOfLines={1}>
+                {game.description}
+              </Text>
+            </View>
+
+            <View style={[styles.playBtn, { backgroundColor: game.color }]}>
+              <Text style={styles.playTxt}>Play</Text>
             </View>
           </TouchableOpacity>
         ))}
       </ScrollView>
+
+      {/* Task & Reward Modals */}
+      <DailyTasksModal
+        visible={showTasksModal}
+        onClose={() => setShowTasksModal(false)}
+        onOpenChest={() => {
+          setShowTasksModal(false);
+          setShowRewardModal(true);
+        }}
+        onStartTask={(task) => {
+          let target = ARCADE_GAMES[0];
+          if (task?.gameId) {
+            target = ARCADE_GAMES.find((g) => g.id === task.gameId) || target;
+          }
+          launchGame(target);
+        }}
+      />
+
+      <RewardChestModal
+        visible={showRewardModal}
+        onClose={() => setShowRewardModal(false)}
+      />
     </View>
   );
 };
@@ -136,30 +225,95 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: 16,
-    gap: 12,
+    paddingBottom: 88,
+    gap: 10,
   },
-  techCard: {
-    padding: 16,
-    borderRadius: 14,
-    borderWidth: 1,
-    elevation: 2,
-  },
-  techRow: {
+
+  // Task Row
+  taskRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    marginBottom: 4,
   },
-  techIcon: {
-    fontSize: 28,
+  taskIcon: {
+    fontSize: 22,
   },
-  techTitle: {
+  taskTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  taskSub: {
+    fontSize: 11,
+    marginTop: 1,
+  },
+  arrowTxt: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
+
+  // Title
+  arcadeTitle: {
     fontSize: 16,
     fontWeight: '800',
+    marginTop: 4,
     marginBottom: 2,
   },
-  techDesc: {
+
+  // Simple Color-Coded Game Cards
+  simpleCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 12,
+    borderRadius: 16,
+    borderWidth: 1.5,
+  },
+  iconBox: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gameIcon: {
+    fontSize: 22,
+  },
+  infoCol: {
+    flex: 1,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 2,
+  },
+  gameTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  levelTag: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  gameDesc: {
+    fontSize: 11,
+    lineHeight: 15,
+  },
+
+  // Clean Play Button
+  playBtn: {
+    paddingVertical: 7,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+  },
+  playTxt: {
+    color: '#FFFFFF',
     fontSize: 12,
-    lineHeight: 16,
+    fontWeight: '800',
   },
 });
 

@@ -52,13 +52,13 @@ export default function AccountSetupScreen({ navigation }) {
   return (
     <ScreenBackground>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        <Text style={[styles.title, { color: COLORS.light.text }]}>Welcome, {user?.name || userId}</Text>
+        <Text style={[styles.title, { color: COLORS.light.text }]}>Let’s get to know you, {user?.name || userId}</Text>
         <Text style={[styles.subtitle, { color: COLORS.light.textMuted }]}>
-          Let's check your devices, then set your personal baseline.
+          Two short steps so MindPulse judges stress against your own body, not an average.
         </Text>
 
         <Card elevated style={styles.deviceCard}>
-          <Text style={[styles.cardTitle, { color: COLORS.light.text }]}>Device Status</Text>
+          <Text style={[styles.cardTitle, { color: COLORS.light.text }]}>1 · Put on your devices</Text>
           <View style={styles.deviceRow}>
             <View style={styles.deviceRowLeft}>
               <Icon name={NAMES.my} size={18} color={COLORS.brand} />
@@ -91,7 +91,7 @@ export default function AccountSetupScreen({ navigation }) {
         </Card>
 
         <Card style={styles.calibrateCard} accentColor={COLORS.brand}>
-          <Text style={[styles.cardTitle, { color: COLORS.light.text }]}>Calibrate — Calm Breathing</Text>
+          <Text style={[styles.cardTitle, { color: COLORS.light.text }]}>2 · Calm-breathing calibration</Text>
           <CalibrateBreathingCard
             userId={userId}
             token={token}
@@ -104,6 +104,9 @@ export default function AccountSetupScreen({ navigation }) {
           <Text style={[styles.skipText, { color: COLORS.brand }]}>View calibration trend →</Text>
         </TouchableOpacity>
 
+        <Text style={[styles.deviceHint, { color: COLORS.light.textMuted, textAlign: 'center' }]}>
+          Step 3, the personal limit test (about 8 minutes), opens right after calibration.
+        </Text>
         <TouchableOpacity onPress={finish} activeOpacity={0.7} style={styles.skipRow}>
           <Text style={[styles.skipText, { color: COLORS.light.textMuted }]}>Skip for now →</Text>
         </TouchableOpacity>
@@ -131,7 +134,6 @@ const styles = StyleSheet.create({
   },
   deviceCard: {
     padding: 18,
-    borderRadius: 22,
     marginBottom: 12,
   },
   cardTitle: {
@@ -170,7 +172,6 @@ const styles = StyleSheet.create({
   },
   calibrateCard: {
     padding: 18,
-    borderRadius: 24,
     marginBottom: 8,
   },
   skipRow: {

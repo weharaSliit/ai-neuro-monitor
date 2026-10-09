@@ -176,6 +176,12 @@ function StatBlock({ label, value, color, t }) {
 }
 
 function RocChart({ roc, best, width, COLORS, t }) {
+// Plain SVG ROC plot -- no charting library needed, matches the rest of
+// this app's hand-rolled SVG chart approach (see LineChart.js).
+function RocChart({ roc, best, width: boxWidth, COLORS, t }) {
+    // Square plot: fills the card on phones, capped (and centred) on tablets
+    // so it doesn't become a giant square.
+    const width = Math.min(boxWidth, 380);
     const PAD = 24;
     const plotSize = width - PAD * 2;
     const toX = (fpr) => PAD + fpr * plotSize;
@@ -192,6 +198,20 @@ function RocChart({ roc, best, width, COLORS, t }) {
                 <SvgCircle cx={toX(best.fpr)} cy={toY(best.tpr)} r={5} fill={COLORS.stress} stroke="#FFFFFF" strokeWidth={2} />
             )}
         </Svg>
+        <View style={{ width, alignSelf: 'center' }}>
+            <Svg width={width} height={PAD * 2 + plotSize}>
+                <SvgLine x1={PAD} y1={PAD} x2={PAD} y2={PAD + plotSize} stroke={t.border} strokeWidth={1} />
+                <SvgLine x1={PAD} y1={PAD + plotSize} x2={PAD + plotSize} y2={PAD + plotSize} stroke={t.border} strokeWidth={1} />
+                <SvgLine x1={PAD} y1={PAD + plotSize} x2={PAD + plotSize} y2={PAD} stroke={t.textMuted} strokeWidth={1} strokeDasharray="4,4" />
+                <Polyline points={pathPoints} fill="none" stroke={COLORS.brand} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
+                <SvgCircle cx={toX(best.fpr)} cy={toY(best.tpr)} r={5.5} fill={COLORS.stress} stroke="#fff" strokeWidth={1.5} />
+            </Svg>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 2 }}>
+                <Text style={{ fontSize: 9, color: t.textMuted }}>0</Text>
+                <Text style={{ fontSize: 9.5, color: t.textMuted, fontWeight: '700' }}>False Positive Rate →</Text>
+                <Text style={{ fontSize: 9, color: t.textMuted }}>1</Text>
+            </View>
+        </View>
     );
 }
 

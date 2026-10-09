@@ -1,3 +1,4 @@
+import { getContentWidth } from '../../../shared/theme/layout';
 import React, { useContext, useRef, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Animated, Easing, TouchableOpacity, Platform } from 'react-native';
 import Svg, { Path, Circle, Line, Defs, LinearGradient, Stop } from 'react-native-svg';
@@ -48,7 +49,8 @@ export const RealtimeStressTrendCard = () => {
   const isReducing = diffPct <= 0;
 
   // SVG Line Chart Dimensions
-  const chartWidth = 110;
+  // Scales with the screen instead of a fixed 110px.
+  const chartWidth = CHART_W;
   const chartHeight = 32;
 
   const buildChart = () => {
@@ -73,7 +75,7 @@ export const RealtimeStressTrendCard = () => {
   const chartData = buildChart();
 
   return (
-    <View style={{ marginHorizontal: 12, marginTop: Platform.OS === 'ios' ? 62 : 52, marginBottom: 8 }}>
+    <View style={{ marginHorizontal: 12, marginTop: Platform.OS === 'ios' ? 42 : 32, marginBottom: 8 }}>
       {/* Top Stream Channel Tabs */}
       <View style={{ flexDirection: 'row', gap: 6, marginBottom: 4 }}>
         <TouchableOpacity
@@ -207,6 +209,7 @@ export const RealtimeStressTrendCard = () => {
   );
 };
 
+const CHART_W = Math.round(Math.min(200, Math.max(110, getContentWidth() * 0.3)));
 const styles = StyleSheet.create({
   card: {
     marginHorizontal: 0,
@@ -263,7 +266,7 @@ const styles = StyleSheet.create({
   },
   chartWrap: {
     height: 34,
-    width: 120,
+    width: CHART_W + 10,
     alignItems: 'center',
     justifyContent: 'center',
     marginHorizontal: 4,

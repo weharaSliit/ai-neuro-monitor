@@ -1,3 +1,4 @@
+import { getContentWidth } from '../../shared/theme/layout';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView,
@@ -11,7 +12,7 @@ import { COLORS } from '../config/theme';
 import { useAuth } from '../../../context/AuthContext';
 import LineChart from '../../shared/LineChart';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const SCREEN_WIDTH = getContentWidth();
 const DRIFT_CHART_WIDTH = SCREEN_WIDTH - 40 - 36; // screen margins + card padding
 
 // The two most human-readable features to chart drift for -- AVNN/MeanHR
