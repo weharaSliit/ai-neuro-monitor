@@ -1,7 +1,6 @@
 
 # Datasets — too large, never commit
 datasets/
-*.pkl
 *.mat
 *.h5
 *.hdf5
@@ -30,7 +29,6 @@ __pycache__/
 # Saved models
 **/saved_models/*.h5
 **/saved_models/*.pb
-**/saved_models/*.pkl
 
 # Secrets — never commit
 .env

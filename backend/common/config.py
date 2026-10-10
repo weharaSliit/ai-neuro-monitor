@@ -38,9 +38,16 @@ RESULTS_PATH = os.path.join(
 # and 04_feature_selection.ipynb for the 23-feature set). This is
 # the only model the backend loads — WESAD simulation mode has been
 # removed, the real ring is the only deployment target.
-MODEL_FILE    = os.path.join(MODELS_PATH, "best_model_obj1_v2.pkl")
-SCALER_FILE   = os.path.join(MODELS_PATH, "scaler_obj1_v2.pkl")
-FEATURES_FILE = os.path.join(MODELS_PATH, "feature_cols_obj1_v2.pkl")
+# v3 is trained on baseline-normalised features (physiological_signals/
+# retrain_personalised.py), i.e. on the same kind of input that
+# predictor.predict_window() feeds it live. v2 was trained on raw features
+# and is kept only for predict_raw(), the no-baseline path.
+MODEL_FILE    = os.path.join(MODELS_PATH, "best_model_obj1_v3.pkl")
+SCALER_FILE   = os.path.join(MODELS_PATH, "scaler_obj1_v3.pkl")
+FEATURES_FILE = os.path.join(MODELS_PATH, "feature_cols_obj1_v3.pkl")
+RAW_MODEL_FILE    = os.path.join(MODELS_PATH, "best_model_obj1_v2.pkl")
+RAW_SCALER_FILE   = os.path.join(MODELS_PATH, "scaler_obj1_v2.pkl")
+RAW_FEATURES_FILE = os.path.join(MODELS_PATH, "feature_cols_obj1_v2.pkl")
 
 # Firebase -- see backend/common/firebase_config.py for the full,
 # documented single source of truth (every module's RTDB namespace, the
@@ -142,7 +149,13 @@ TREND_RISING_THRESHOLD = 0.35
 # old 0.5 cutoff (TPR=0.862, FPR=0.155) -- trades a small amount of Stress
 # recall for a meaningfully lower false-Stress-alarm rate. Re-run that
 # notebook cell and update this value whenever the model is retrained.
-STRESS_DECISION_THRESHOLD = 0.7141
+STRESS_DECISION_THRESHOLD = 0.6447
+# Youden threshold of the v3 (baseline-normalised) model, from pooled LOSO
+# out-of-fold probabilities (AUC 0.9863, J = 0.8688, TPR 0.893, FPR 0.024);
+# see physiological_signals/results/objective1/personalised_v3_metrics.json.
+# The figures in the paragraph above describe the earlier raw-feature model
+# (v2), whose threshold 0.7141 now applies only to predict_raw().
+RAW_DECISION_THRESHOLD = 0.7141
 
 # Shared calibration-renewal windows -- used by both physiological's
 # baseline (backend/physiological/firebase_service.py::load_baseline_meta)

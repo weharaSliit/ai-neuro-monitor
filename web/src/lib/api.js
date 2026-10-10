@@ -6,7 +6,7 @@ import axios from 'axios';
 export const API_BASE = 'https://mindpulse-physiological.onrender.com';
 export const EEG_API_BASE = 'https://mindpulse-eeg.onrender.com';
 export const DEVICE_ID = 'wearable01';
-export const STRESS_DECISION_THRESHOLD_PERCENT = 71.41;
+export const STRESS_DECISION_THRESHOLD_PERCENT = 64.47;
 
 let authToken = null;
 let onUnauthorized = null;

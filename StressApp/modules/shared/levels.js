@@ -3,7 +3,7 @@ import { COLORS } from '../physiological/config/theme';
 // Population fallbacks, used only when a window carries no per-user
 // threshold: Ring = Youden's-J cutoff (backend/common/config.py),
 // EEG = DecisionThresholds.high_load_p (psychological/sam40/decision.py).
-export const DEFAULT_RING_THRESHOLD = 0.7141;
+export const DEFAULT_RING_THRESHOLD = 0.6447;
 export const DEFAULT_EEG_THRESHOLD = 0.7933;
 
 // Width of the "moderate" band just below a person's own threshold --

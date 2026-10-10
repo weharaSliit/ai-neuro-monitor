@@ -10,7 +10,7 @@ export const COLORS = {
   border: '#EAE5DA', borderSoft: '#F2EEE4', card: '#FFFFFF', bg: '#F8F6F0', pill: '#F0ECE4',
 };
 
-export const DEFAULT_RING_THRESHOLD = 0.7141;
+export const DEFAULT_RING_THRESHOLD = 0.6447;
 export const DEFAULT_EEG_THRESHOLD = 0.7933;
 const BAND = 0.12;
 
