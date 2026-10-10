@@ -12,7 +12,8 @@ from backend.common.config import (
     MODEL_FILE, SCALER_FILE, FEATURES_FILE,
     N_BASELINE_WIN, EMA_ALPHA,
     STRESS_LABELS, TREND_RISING_THRESHOLD,
-    STRESS_DECISION_THRESHOLD
+    STRESS_DECISION_THRESHOLD, RAW_DECISION_THRESHOLD,
+    RAW_MODEL_FILE, RAW_SCALER_FILE, RAW_FEATURES_FILE
 )
 
 print("Loading model files...")
@@ -22,17 +23,28 @@ try:
     feature_cols = joblib.load(FEATURES_FILE)
     print(f"  Model: {type(model).__name__} ✓")
     print(f"  Features: {len(feature_cols)} ✓")
+    raw_model        = joblib.load(RAW_MODEL_FILE)
+    raw_scaler       = joblib.load(RAW_SCALER_FILE)
+    raw_feature_cols = joblib.load(RAW_FEATURES_FILE)
+    assert list(raw_feature_cols) == list(feature_cols)
 except FileNotFoundError as e:
     # Auth/user/EMA routes don't touch the ring model at all -- letting a
     # missing local model artifact take down the whole app (including
     # /login) couples two unrelated concerns. predict_window/predict_raw
     # below raise a clear error instead if actually called with no model.
-    model = scaler = None
+    model = scaler = raw_model = raw_scaler = None
     feature_cols = []
     print(f"  WARNING: model artifacts not found ({e}) -- /predict, /calibrate, "
           f"and EMA/baseline routes will not work until MODEL_FILE/SCALER_FILE/"
           f"FEATURES_FILE (backend/common/config.py) point to real files. "
           f"Auth and other non-model routes are unaffected.")
+
+# pNN20 is a proportion (0-1) in the ring code but a percentage (0-95) in
+# the WESAD training table. predict_raw() scores raw features, so it must
+# convert; predict_window() does not need to, because normalize_features()
+# divides the deviation by the same user's own baseline std (both in ring
+# units), which cancels the scale.
+PNN20_TRAIN_SCALE = 100.0
 
 # ── Feature type definitions ──────────────────────────────────
 EDA_FEATURES = [
@@ -212,15 +224,18 @@ def predict_window(features_array, baseline_mean, baseline_std,
 
 def predict_raw(features_array):
     """Binary prediction with no personal baseline normalization yet."""
-    if model is None or scaler is None:
+    if raw_model is None or raw_scaler is None:
         raise RuntimeError(
             "physiological model artifacts not available on this machine -- "
             "see the WARNING printed at startup (predictor.py)"
         )
-    X_scaled = scaler.transform(features_array)
-    probs = model.predict_proba(X_scaled)[0]
+    # Raw-feature (v2) model: needs the training units for pNN20.
+    X = np.array(features_array, dtype=np.float64, copy=True)
+    X[:, feature_cols.index('pNN20')] *= PNN20_TRAIN_SCALE
+    X_scaled = raw_scaler.transform(X)
+    probs = raw_model.predict_proba(X_scaled)[0]
     prob_normal, prob_stress = float(probs[0]), float(probs[1])
-    prediction = 1 if prob_stress > STRESS_DECISION_THRESHOLD else 0
+    prediction = 1 if prob_stress > RAW_DECISION_THRESHOLD else 0
     return {
         'prediction':  prediction,
         'label':       STRESS_LABELS[prediction],

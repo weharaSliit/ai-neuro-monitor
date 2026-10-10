@@ -50,6 +50,9 @@ from backend.physiological.predictor import (
     predict_window, predict_raw,
     feature_cols, StressStateMachine, STRESS_DECISION_THRESHOLD
 )
+from backend.common.config import (
+    RAW_DECISION_THRESHOLD
+)
 from backend.physiological.extract_features import (
     extract_features, compute_signal_quality
 )
@@ -391,7 +394,8 @@ def predict():
     # weighted-threshold combination (see fusion_engin.py::
     # compute_realtime_multimodal_fusion()), alongside EEG's own
     # effective_high_load_p.
-    effective_threshold = personal_threshold if personal_threshold is not None else STRESS_DECISION_THRESHOLD
+    effective_threshold = personal_threshold if personal_threshold is not None else (
+        RAW_DECISION_THRESHOLD if b_mean is None else STRESS_DECISION_THRESHOLD)
 
     # ── Save structured data only ──────────────────────────────
     save_prediction(
