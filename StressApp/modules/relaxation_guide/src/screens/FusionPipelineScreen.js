@@ -4,6 +4,7 @@ import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
 import { Header } from '../components/Header';
 import { apiService } from '../api/apiService';
+import { AmbientBackground } from '../components/AmbientBackground';
 
 const POLL_MS = 2000;
 
@@ -87,6 +88,7 @@ export const FusionPipelineScreen = () => {
 
   return (
     <View style={[s.container, { backgroundColor: theme.bgPrimary }]}>
+      <AmbientBackground />
       <Header title="Live Pipeline" />
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
 

@@ -1,3 +1,4 @@
+import { getContentWidth } from '../../shared/theme/layout';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Animated, Alert, ActivityIndicator, Dimensions
@@ -9,7 +10,6 @@ import { db } from '../../../firebase';
 import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
 import Icon, { NAMES } from '../../shared/Icon';
-import LineChart from '../../shared/LineChart';
 import { CalibrationBanner, useCalibrationSummary } from '../../shared/CalibrationGate';
 import CalibrateBreathingCard from '../../shared/CalibrateBreathingCard';
 import { useTheme } from '../config/ThemeContext';
@@ -28,7 +28,7 @@ const AVATAR_SIZE = 96;
 // navCard now has its own marginHorizontal (20, see styles below) on top
 // of its `padding: 18` -- both insets have to come off the screen width
 // or the chart overflows the card's own edges.
-const DRIFT_CHART_WIDTH = Dimensions.get('window').width - 2 * 20 - 2 * 18;
+const DRIFT_CHART_WIDTH = getContentWidth() - 2 * 20 - 2 * 18;
 
 // Deliberately lean -- this used to also fold in a full History section
 // (raw baseline numbers, session distribution, PSS-4 score list, recent
@@ -80,6 +80,7 @@ export default function ProfileScreen({ navigation }) {
   const [uploading,    setUploading]    = useState(false);
   const [driftWeeks,   setDriftWeeks]   = useState(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const [calibrateOpen, setCalibrateOpen] = useState(false);
 
   const text   = theme.text;
   const muted  = theme.textMuted;
@@ -142,6 +143,11 @@ export default function ProfileScreen({ navigation }) {
     setUploading(false);
   };
 
+  // Same three steps as the website's Calibrate page (web/src/pages/SetupPage.jsx).
+  const baselineDone = !!ringCalibration?.exists || !!eegCalibration?.exists || !!baseline?.exists;
+  const personalised = personalEegPct != null && personalRingPct != null;
+  const showBreathing = calibrateOpen || !baselineDone;
+
   return (
     <ScreenBackground>
       <Animated.ScrollView style={{ opacity: fadeAnim }} showsVerticalScrollIndicator={false}>
@@ -166,163 +172,78 @@ export default function ProfileScreen({ navigation }) {
           </View>
         </View>
 
-        {/* Stats row */}
-        <View style={styles.statsRow}>
-          <Card style={styles.statCard}>
-            <Text style={[styles.statValue, { color: COLORS.brand }]}>{sessionCount}</Text>
-            <Text style={[styles.statLabel, { color: muted }]}>Total Sessions</Text>
-          </Card>
-          <Card style={styles.statCard}>
-            <Text style={[styles.statValue, { color: baseline?.exists ? COLORS.normal : COLORS.warning }]}>
-              {baseline?.exists ? 'Calibrated' : 'Pending'}
-            </Text>
-            <Text style={[styles.statLabel, { color: muted }]}>Ring Baseline</Text>
-          </Card>
-        </View>
-
-        {/* Staleness/drift warning -- moved here from Fusion so it's not
-            duplicated across screens; Profile is where the calibration
-            actions it points at (the breathing-calibration card and
-            Threshold Test below) actually live. */}
+        <Text style={[styles.sectionHeading, { color: muted }]}>Calibrate</Text>
+        {/* Staleness/drift warning (points at the steps below). */}
         <CalibrationBanner userId={userId} token={token} db={db} />
 
-        {/* Personalized thresholds: only rendered once at least one side
-            has actually separated Rest from Task (the onboarding maths+
-            Stroop task below) -- a user who's only done resting-baseline
-            calibration still sees nothing here rather than a premature
-            "Standard" placeholder for a task they haven't run yet. */}
-        {(personalEegPct != null || personalRingPct != null) && (
-          <Card style={styles.navCard} accentColor={COLORS.brand}>
-            <Text style={[styles.cardTitle, { color: text }]}>Your Personalized Thresholds</Text>
-            <View style={styles.thresholdRow}>
-              <Text style={[styles.cardSub, { color: muted }]}>EEG high-load</Text>
-              <Text style={[styles.thresholdValue, { color: text }]}>
-                {personalEegPct != null ? `${personalEegPct}%` : 'Standard'}
-              </Text>
+        {/* Step 2 -- calm-breathing baseline */}
+        <Step n={1} title="Calm-breathing calibration" done={baselineDone}>
+          {showBreathing ? (
+            <>
+              <CalibrateBreathingCard
+                userId={userId}
+                token={token}
+                eegDb={db}
+                onComplete={() => { setCalibrateOpen(false); loadProfile(); }}
+              />
+              {baselineDone && (
+                <TouchableOpacity onPress={() => setCalibrateOpen(false)} style={styles.linkBtn}>
+                  <Text style={[styles.linkBtnText, { color: muted }]}>Cancel</Text>
+                </TouchableOpacity>
+              )}
+            </>
+          ) : (
+            <View style={styles.stepActionRow}>
+              <Text style={[styles.cardSub, { color: muted, flex: 1, marginTop: 0 }]}>Your calm baseline is saved.</Text>
+              <PillButton icon="refresh" label="Recalibrate" onPress={() => setCalibrateOpen(true)} />
             </View>
-            <View style={styles.thresholdRow}>
-              <Text style={[styles.cardSub, { color: muted }]}>Ring stress</Text>
-              <Text style={[styles.thresholdValue, { color: text }]}>
-                {personalRingPct != null ? `${personalRingPct}%` : 'Standard'}
-              </Text>
-            </View>
-          </Card>
-        )}
+          )}
+        </Step>
 
-        {/* Calibrate -- Calm Breathing: a plain breathe-in/breathe-out
-            visual while real Ring+EEG resting calibration runs in the
-            background. */}
-        <Card style={styles.navCard} accentColor={COLORS.brand}>
-          <Text style={[styles.cardTitle, { color: text, marginBottom: 10 }]}>Calibrate — Calm Breathing</Text>
-          <CalibrateBreathingCard
-            userId={userId}
-            token={token}
-            eegDb={db}
-            onComplete={loadProfile}
-          />
-        </Card>
-
-        {/* Retake Threshold Test: the maths+Stroop task that separates
-            Rest from Task for the personal thresholds above -- normally
-            run once during onboarding (AccountSetupScreen.js), kept here
-            too so a returning user can try it back any time (e.g. their
-            first run didn't separate cleanly enough to personalize). */}
-        <Card onPress={() => navigation.navigate('ThresholdCalibration')} style={styles.navCard}>
-          <View style={styles.cardHeaderRow}>
-            <View style={styles.rowGap}>
-              <View style={[styles.actionIconCircle, { backgroundColor: COLORS.brandSoft }]}>
-                <Icon name={NAMES.calibration} size={18} color={COLORS.brand} />
+        {/* Step 3 -- personal limit test (maths + Stroop) */}
+        <Step n={2} title="Personal limit test (≈ 8 min)" done={personalised}>
+          {(personalEegPct != null || personalRingPct != null) ? (
+            <View style={styles.limitsRow}>
+              <View style={[styles.limitBox, { backgroundColor: COLORS.warning + '14' }]}>
+                <Text style={[styles.limitLabel, { color: muted }]}>MIND (HEADBAND)</Text>
+                <Text style={[styles.limitValue, { color: COLORS.warningDark }]}>{personalEegPct != null ? `${personalEegPct}%` : 'Standard'}</Text>
               </View>
-              <Text style={[styles.cardTitle, { color: text }]}>Threshold Test (Maths + Stroop)</Text>
+              <View style={[styles.limitBox, { backgroundColor: COLORS.hrv + '14' }]}>
+                <Text style={[styles.limitLabel, { color: muted }]}>BODY (RING)</Text>
+                <Text style={[styles.limitValue, { color: COLORS.normalDark }]}>{personalRingPct != null ? `${personalRingPct}%` : 'Standard'}</Text>
+              </View>
             </View>
-            <Icon name={NAMES.chevronRight} size={18} color={muted} />
-          </View>
-          <Text style={[styles.cardSub, { color: muted }]}>
-            Retake the maths-quiz + color-word task anytime to re-personalize your thresholds.
-          </Text>
-        </Card>
-
-        {/* Calibration drift -- weekly mean predicted-stress vs. the resting
-            baseline captured at calibration time, so a shift shows up as a
-            visual gap from the dashed line rather than a raw number. Weeks
-            with too few predictions to be meaningful are dropped server-side
-            (compute_baseline_drift_history() returns mean_prob_stress: null
-            for those), not shown as zero. */}
-        {baseline?.exists && Array.isArray(driftWeeks) && driftWeeks.some((w) => w.mean_prob_stress != null) && (
-          <Card style={styles.navCard}>
-            <Text style={[styles.cardTitle, { color: text }]}>Calibration Drift</Text>
-            <Text style={[styles.cardSub, { color: muted, marginBottom: 10 }]}>
-              {baseline?.drift?.drift_detected
-                ? 'Your recent readings have shifted from your original calibration — recalibrating is recommended.'
-                : 'How your recent readings compare to your original resting calibration, week by week.'}
+          ) : (
+            <Text style={[styles.cardSub, { color: muted, marginTop: 0 }]}>
+              {baselineDone
+                ? 'A short maths + colour-word task that finds where YOUR stress starts.'
+                : 'Unlocks after step 1 — it needs your calm baseline to compare against.'}
             </Text>
-            <LineChart
-              points={driftWeeks
-                .filter((w) => w.mean_prob_stress != null)
-                .map((w) => ({ value: Math.round(w.mean_prob_stress * 100), date: w.week_start }))}
-              width={DRIFT_CHART_WIDTH}
-              height={140}
-              color={COLORS.brand}
-              maxValue={100}
-              suffix="%"
-              baselineValue={baseline?.drift?.original_resting_mean != null
-                ? Math.round(baseline.drift.original_resting_mean * 100) : undefined}
-              baselineLabel="Your original calibration"
-              baselineColor={COLORS.normal}
-            />
-          </Card>
-        )}
-
-        {/* Quick Actions */}
-        <Card style={styles.navCard}>
-          <Text style={[styles.cardTitle, { color: text, marginBottom: 12 }]}>Self-Report & Check-In</Text>
-          <TouchableOpacity onPress={() => navigation.navigate('PSS4')} activeOpacity={0.85}>
-            <View style={[styles.actionTile, { backgroundColor: COLORS.normalSoft, borderColor: COLORS.normal + '30' }]}>
-              <Icon name={NAMES.pss4} size={22} color={COLORS.normalDark} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.actionLabel, { color: COLORS.normalDark }]}>PSS-4 Stress Assessment</Text>
-                <Text style={[styles.actionSub, { color: muted }]}>Answer 4 quick self-check questions</Text>
-              </View>
-              <Icon name={NAMES.chevronRight} size={16} color={COLORS.normalDark} />
+          )}
+          {baselineDone && (
+            <View style={[styles.stepActionRow, { justifyContent: 'flex-end', marginTop: 12 }]}>
+              <PillButton icon="clipboard-text-outline" label={personalised ? 'Take test again' : 'Start the test'}
+                onPress={() => navigation.navigate('ThresholdCalibration')} />
             </View>
-          </TouchableOpacity>
-        </Card>
+          )}
+        </Step>
 
-        {/* Relaxation Guide Card */}
-        <Card onPress={() => navigation.navigate('RelaxationGuide')} style={styles.navCard}>
-          <View style={styles.cardHeaderRow}>
-            <View style={styles.rowGap}>
-              <View style={[styles.actionIconCircle, { backgroundColor: '#10B98120' }]}>
-                <Text style={{ fontSize: 18 }}>🧠</Text>
-              </View>
-              <Text style={[styles.cardTitle, { color: text }]}>Relaxation Guide</Text>
-            </View>
-            <Icon name={NAMES.chevronRight} size={18} color={muted} />
+        {/* Clinical view + sign out */}
+        <Text style={[styles.sectionHeading, { color: muted }]}>Account</Text>
+        <TouchableOpacity style={styles.clinicalBtn} activeOpacity={0.88} onPress={() => navigation.navigate('Admin')}>
+          <View style={styles.clinicalIcon}>
+            <Icon name={NAMES.admin} size={20} color="#FFFFFF" />
           </View>
-          <Text style={[styles.cardSub, { color: muted }]}>
-            Personalized AI relaxation techniques, games & guided breathing exercises.
-          </Text>
-        </Card>
-
-        {/* Switch to Admin App without logging out */}
-        <Card onPress={() => navigation.navigate('Admin')} style={styles.navCard}>
-          <View style={styles.cardHeaderRow}>
-            <View style={styles.rowGap}>
-              <View style={[styles.actionIconCircle, { backgroundColor: COLORS.brandSoft }]}>
-                <Icon name={NAMES.admin} size={18} color={COLORS.brand} />
-              </View>
-              <Text style={[styles.cardTitle, { color: text }]}>Clinical & Admin Suite</Text>
-            </View>
-            <Icon name={NAMES.chevronRight} size={18} color={muted} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.clinicalTitle}>Clinical view</Text>
+            <Text style={styles.clinicalSub}>Full sensor detail for researchers and clinicians</Text>
           </View>
-          <Text style={[styles.cardSub, { color: muted }]}>
-            Access raw sensor signals, multi-user logs, and relaxation research labs.
-          </Text>
-        </Card>
+          <Icon name={NAMES.chevronRight} size={22} color="#FFFFFF" />
+        </TouchableOpacity>
 
-        <TouchableOpacity style={[styles.logoutBtn, { borderColor: COLORS.stress + '40', backgroundColor: '#FFFFFF' }]} onPress={logout}>
-          <Icon name={NAMES.logout} size={18} color={COLORS.stress} />
-          <Text style={[styles.logoutText, { color: COLORS.stress }]}>Sign Out of MindPulse</Text>
+        <TouchableOpacity style={styles.logoutBtn} activeOpacity={0.85} onPress={logout}>
+          <Icon name={NAMES.logout} size={18} color={COLORS.stressDark} />
+          <Text style={styles.logoutText}>Sign out</Text>
         </TouchableOpacity>
 
         <View style={{ height: 60 }} />
@@ -331,7 +252,86 @@ export default function ProfileScreen({ navigation }) {
   );
 }
 
+// Numbered step card -- same look as the website's Calibrate steps.
+function Step({ n, title, done, children }) {
+  return (
+    <Card style={styles.stepCard}>
+      <View style={styles.stepHead}>
+        <View style={[styles.stepNum, done && { backgroundColor: COLORS.normalSoft }]}>
+          <Text style={[styles.stepNumText, done && { color: COLORS.normalDark }]}>{done ? '✓' : n}</Text>
+        </View>
+        <Text style={styles.stepTitle}>{title}</Text>
+        {done ? (
+          <View style={styles.donePill}><Text style={styles.donePillText}>Done</Text></View>
+        ) : null}
+      </View>
+      {children}
+    </Card>
+  );
+}
+
+function DeviceStatus({ icon, tint, name, online, detail }) {
+  return (
+    <View style={styles.deviceChip}>
+      <View style={[styles.deviceIcon, { backgroundColor: tint + '1C' }]}>
+        <Icon name={icon} size={18} color={tint} />
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={styles.deviceName}>{name}</Text>
+        <Text style={styles.deviceDetail} numberOfLines={1}>{detail}</Text>
+      </View>
+      <View style={[styles.liveDot, { backgroundColor: online ? COLORS.normal : COLORS.light.border }]} />
+    </View>
+  );
+}
+
+function PillButton({ icon, label, onPress }) {
+  return (
+    <TouchableOpacity style={styles.pillBtn} activeOpacity={0.85} onPress={onPress}>
+      <Icon name={icon} size={16} color="#FFFFFF" />
+      <Text style={styles.pillBtnText}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
 const styles = StyleSheet.create({
+  stepCard: { marginHorizontal: 20, marginBottom: 12, padding: 18 },
+  stepHead: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
+  stepNum: { width: 28, height: 28, borderRadius: 14, backgroundColor: COLORS.brandSoft, alignItems: 'center', justifyContent: 'center' },
+  stepNumText: { fontSize: 13, fontWeight: '900', color: COLORS.brandDark },
+  stepTitle: { flex: 1, fontSize: 15, fontWeight: '800', color: COLORS.light.text },
+  donePill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, backgroundColor: COLORS.normalSoft },
+  donePillText: { fontSize: 11, fontWeight: '800', color: COLORS.normalDark },
+  deviceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  deviceChip: {
+    flexGrow: 1, flexBasis: 140, flexDirection: 'row', alignItems: 'center', gap: 10,
+    padding: 12, borderRadius: 14, borderWidth: 1, borderColor: COLORS.light.borderSoft, backgroundColor: '#FDFCF9',
+  },
+  deviceIcon: { width: 36, height: 36, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  deviceName: { fontSize: 14, fontWeight: '800', color: COLORS.light.text },
+  deviceDetail: { fontSize: 11, fontWeight: '600', color: COLORS.light.textMuted, marginTop: 1 },
+  liveDot: { width: 10, height: 10, borderRadius: 5 },
+  stepActionRow: { flexDirection: 'row', alignItems: 'center', gap: 12, flexWrap: 'wrap' },
+  pillBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: COLORS.brand,
+    paddingHorizontal: 18, paddingVertical: 11, borderRadius: 24,
+    shadowColor: COLORS.brandDark, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.22, shadowRadius: 8, elevation: 3,
+  },
+  pillBtnText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
+  linkBtn: { alignSelf: 'center', paddingVertical: 8, marginTop: 4 },
+  linkBtnText: { fontSize: 13, fontWeight: '700' },
+  limitsRow: { flexDirection: 'row', gap: 10 },
+  limitBox: { flex: 1, borderRadius: 14, padding: 14 },
+  limitLabel: { fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
+  limitValue: { fontSize: 24, fontWeight: '900', marginTop: 2, letterSpacing: -0.4 },
+  clinicalBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 14, marginHorizontal: 20, marginBottom: 12,
+    padding: 16, borderRadius: 22, backgroundColor: COLORS.brand,
+    shadowColor: COLORS.brandDark, shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.25, shadowRadius: 16, elevation: 5,
+  },
+  clinicalIcon: { width: 44, height: 44, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.22)', alignItems: 'center', justifyContent: 'center' },
+  clinicalTitle: { color: '#FFFFFF', fontSize: 16, fontWeight: '900' },
+  clinicalSub: { color: 'rgba(255,255,255,0.85)', fontSize: 12, fontWeight: '600', marginTop: 2 },
   backRow: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 20, marginTop: 12, marginBottom: 6 },
   backText: { fontSize: 13, fontWeight: '700', marginLeft: 2 },
   header: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 20, paddingTop: 10, paddingBottom: 14 },
@@ -343,10 +343,13 @@ const styles = StyleSheet.create({
   userBadge: { alignSelf: 'flex-start', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1, marginTop: 4 },
   userBadgeText: { fontSize: 11, fontWeight: '800' },
   statsRow: { flexDirection: 'row', gap: 10, marginHorizontal: 20, marginBottom: 4 },
-  statCard: { flex: 1, alignItems: 'center', padding: 16, borderRadius: 20 },
-  statValue: { fontSize: 22, fontWeight: '900' },
+  statCard: { flex: 1, alignItems: 'center', padding: 16 },
+  statValue: { fontSize: 18, fontWeight: '900' },
   statLabel: { fontSize: 11, marginTop: 3, fontWeight: '600' },
-  navCard: { marginHorizontal: 20, marginBottom: 12, padding: 18, borderRadius: 22 },
+  navCard: { marginHorizontal: 20, marginBottom: 12, padding: 18 },
+  sectionHeading: { fontSize: 11, fontWeight: '800', letterSpacing: 0.6, textTransform: 'uppercase', marginHorizontal: 24, marginTop: 18, marginBottom: 8 },
+  driftPill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
+  driftPillText: { fontSize: 11, fontWeight: '800' },
   thresholdRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 6 },
   thresholdValue: { fontSize: 14, fontWeight: '900' },
   actionIconCircle: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
@@ -357,6 +360,10 @@ const styles = StyleSheet.create({
   actionTile: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 16, borderWidth: 1, padding: 14 },
   actionLabel: { fontSize: 13, fontWeight: '800' },
   actionSub: { fontSize: 11, marginTop: 2 },
-  logoutBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginHorizontal: 20, marginTop: 12, paddingVertical: 14, borderRadius: 28, borderWidth: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.03, shadowRadius: 6, elevation: 1 },
-  logoutText: { fontSize: 14, fontWeight: '800' },
+  logoutBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    marginHorizontal: 20, marginTop: 4, paddingVertical: 15, borderRadius: 22,
+    backgroundColor: COLORS.stressSoft, borderWidth: 1, borderColor: COLORS.stress + '33',
+  },
+  logoutText: { fontSize: 15, fontWeight: '800', color: COLORS.stressDark },
 });

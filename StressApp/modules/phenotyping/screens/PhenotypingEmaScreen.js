@@ -58,11 +58,11 @@ const PSS4_QUESTIONS = [
 ];
 
 const PSS4_OPTIONS = [
-    { label: 'Never', value: 0, emoji: '😊' },
-    { label: 'Almost Never', value: 1, emoji: '🌿' },
-    { label: 'Sometimes', value: 2, emoji: '⚖️' },
-    { label: 'Fairly Often', value: 3, emoji: '⚡' },
-    { label: 'Very Often', value: 4, emoji: '🚨' },
+    { label: 'Never', value: 0, emoji: '🟢' },
+    { label: 'Almost Never', value: 1, emoji: '🟡' },
+    { label: 'Sometimes', value: 2, emoji: '🟠' },
+    { label: 'Fairly Often', value: 3, emoji: '🔴' },
+    { label: 'Very Often', value: 4, emoji: '🟣' },
 ];
 
 const FEEDBACK_ITEMS = [
@@ -272,11 +272,11 @@ export default function PhenotypingEmaScreen({ navigation, route }) {
 
     return (
         <ScreenBackground edges={['top', 'left', 'right']}>
-            {/* Top Modal-Style Header Bar matching screenshot */}
+            {/* Top Modal-Style Header Bar */}
             <View style={styles.topHeader}>
                 <View style={styles.headerLeft}>
-                    <View style={[styles.heartBadge, { backgroundColor: '#F43F5E20' }]}>
-                        <Text style={{ fontSize: 15 }}>💖</Text>
+                    <View style={[styles.heartBadge, { backgroundColor: `${COLORS.brand}15` }]}>
+                        <Icon name="pulse" size={18} color={COLORS.brand} />
                     </View>
                     <View>
                         <Text style={[styles.mainHeaderTitle, { color: t.text }]}>
@@ -292,43 +292,43 @@ export default function PhenotypingEmaScreen({ navigation, route }) {
                 </TouchableOpacity>
             </View>
 
-            {/* Quick Check (Daily) vs Weekly Survey Tabs matching screenshot */}
+            {/* Quick Check (Daily) vs Weekly Survey Tabs */}
             {!isFeedbackMode && (
                 <View style={styles.tabRowContainer}>
                     <TouchableOpacity
                         style={[
                             styles.dualTabBtn,
                             {
-                                backgroundColor: tab === 'siss' ? '#E11D4818' : t.surface,
-                                borderColor: tab === 'siss' ? '#F43F5E' : t.border,
+                                backgroundColor: tab === 'siss' ? `${COLORS.brand}15` : t.surface,
+                                borderColor: tab === 'siss' ? COLORS.brand : t.border,
                             },
                         ]}
                         onPress={() => setTab('siss')}
                         activeOpacity={0.85}
                     >
                         <View style={styles.tabTitleRow}>
-                            <Text style={{ fontSize: 13, marginRight: 4 }}>⚡</Text>
-                            <Text style={[styles.tabTitleText, { color: tab === 'siss' ? '#F43F5E' : t.text }]}>Quick Check</Text>
+                            <Text style={{ fontSize: 13, marginRight: 5 }}>⚡</Text>
+                            <Text style={[styles.tabTitleText, { color: tab === 'siss' ? COLORS.brand : t.text }]}>Quick Check</Text>
                         </View>
-                        <Text style={[styles.tabSubText, { color: tab === 'siss' ? '#FB7185' : t.textMuted }]}>SISS (Right Now)</Text>
+                        <Text style={[styles.tabSubText, { color: tab === 'siss' ? COLORS.brand : t.textMuted }]}>Right Now (SISS)</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
                         style={[
                             styles.dualTabBtn,
                             {
-                                backgroundColor: tab === 'pss4' ? '#6366F118' : t.surface,
-                                borderColor: tab === 'pss4' ? '#818CF8' : t.border,
+                                backgroundColor: tab === 'pss4' ? `${COLORS.brand}15` : t.surface,
+                                borderColor: tab === 'pss4' ? COLORS.brand : t.border,
                             },
                         ]}
                         onPress={() => setTab('pss4')}
                         activeOpacity={0.85}
                     >
                         <View style={styles.tabTitleRow}>
-                            <Text style={{ fontSize: 13, marginRight: 4 }}>✨</Text>
-                            <Text style={[styles.tabTitleText, { color: tab === 'pss4' ? '#818CF8' : t.text }]}>Weekly Survey</Text>
+                            <Text style={{ fontSize: 13, marginRight: 5 }}>📋</Text>
+                            <Text style={[styles.tabTitleText, { color: tab === 'pss4' ? COLORS.brand : t.text }]}>Weekly Survey</Text>
                         </View>
-                        <Text style={[styles.tabSubText, { color: tab === 'pss4' ? '#A5B4FC' : t.textMuted }]}>PSS-4 (Past 7 Days)</Text>
+                        <Text style={[styles.tabSubText, { color: tab === 'pss4' ? COLORS.brand : t.textMuted }]}>Past 7 Days (PSS-4)</Text>
                     </TouchableOpacity>
                 </View>
             )}
@@ -341,14 +341,13 @@ export default function PhenotypingEmaScreen({ navigation, route }) {
                 )}
 
                 {/* ═════════════════════════════════════════════════════════════ */}
-                {/* 1. SISS INSTANT FEELING (Matching Screenshot 1)               */}
+                {/* 1. SISS INSTANT FEELING                                       */}
                 {/* ═════════════════════════════════════════════════════════════ */}
                 {!isFeedbackMode && tab === 'siss' && (
                     <View style={{ marginTop: 6 }}>
-                        <Text style={styles.sectionLabelPink}>INSTANT FEELING</Text>
-                        <Text style={[styles.screenHeroTitle, { color: t.text }]}>How stressed do you feel right now?</Text>
+                        <Text style={[styles.screenHeroTitle, { color: t.text }]}>How do you feel right now?</Text>
                         <Text style={[styles.screenHeroSub, { color: t.textMuted }]}>
-                            Tap an emoji to record your immediate stress level
+                            Select your current feeling to verify passive detection
                         </Text>
 
                         {/* Large Interactive Focus Box */}
@@ -359,7 +358,7 @@ export default function PhenotypingEmaScreen({ navigation, route }) {
                         </View>
 
                         {/* 5-Level Selector Tiles */}
-                        <Text style={[styles.selectorLabel, { color: t.textMuted }]}>SELECT YOUR LEVEL</Text>
+                        <Text style={[styles.selectorLabel, { color: t.textMuted }]}>SELECT LEVEL (1 = CALM, 5 = HIGH STRESS)</Text>
                         <View style={styles.emojiTilesRow}>
                             {SISS_LEVELS.map((item) => {
                                 const selected = sissScore === item.score;
@@ -369,11 +368,8 @@ export default function PhenotypingEmaScreen({ navigation, route }) {
                                         style={[
                                             styles.emojiTile,
                                             {
-                                                backgroundColor: selected ? '#F43F5E' : t.surface,
-                                                borderColor: selected ? '#F43F5E' : t.border,
-                                                shadowColor: selected ? '#F43F5E' : 'transparent',
-                                                shadowOpacity: selected ? 0.4 : 0,
-                                                shadowRadius: 8,
+                                                backgroundColor: selected ? item.color : t.surface,
+                                                borderColor: selected ? item.color : t.border,
                                             },
                                         ]}
                                         onPress={() => setSissScore(item.score)}
@@ -390,13 +386,13 @@ export default function PhenotypingEmaScreen({ navigation, route }) {
 
                         {/* Instant Check-in Action Button */}
                         <TouchableOpacity
-                            style={[styles.gradientBtn, { backgroundColor: '#F43F5E', opacity: submitting ? 0.6 : 1 }]}
+                            style={[styles.gradientBtn, { backgroundColor: COLORS.brand, opacity: submitting ? 0.6 : 1 }]}
                             onPress={submitSiss}
                             disabled={submitting}
                             activeOpacity={0.85}
                         >
                             <Text style={styles.gradientBtnText}>
-                                {submitting ? 'Recording…' : '✈️ Submit Instant Check-In'}
+                                {submitting ? 'Saving…' : '✓ Record Stress Check-In'}
                             </Text>
                         </TouchableOpacity>
                     </View>
@@ -504,70 +500,123 @@ export default function PhenotypingEmaScreen({ navigation, route }) {
                 )}
 
                 {/* ═════════════════════════════════════════════════════════════ */}
-                {/* 3. FEEDBACK FORM (When opened via Quick Action -> Feedback)   */}
+                {/* 3. FEEDBACK FORM (Clean & Focused Research Evaluation)        */}
                 {/* ═════════════════════════════════════════════════════════════ */}
                 {isFeedbackMode && (
-                    <View style={[styles.feedbackCard, { backgroundColor: t.surface, borderColor: t.border }]}>
-                        <Text style={[styles.focusTitle, { color: t.text }]}>Digital Phenotyping Feedback</Text>
-                        <Text style={[styles.focusDesc, { color: t.textMuted }]}>
-                            Help us evaluate the usability, accuracy, and trust of the passive behavioral stress monitor.
-                        </Text>
-
+                    <View style={{ paddingHorizontal: 16, paddingBottom: 24 }}>
                         {feedbackSaved && !editingFeedback ? (
-                            <View style={{ marginTop: 14, alignItems: 'center', padding: 12, borderRadius: 12, backgroundColor: t.pillBg }}>
-                                <Text style={{ fontSize: 13, fontWeight: '800', color: t.text }}>Thank you for your feedback!</Text>
-                                <Text style={{ fontSize: 11, color: t.textMuted, marginTop: 4, textAlign: 'center' }}>
-                                    Your response helps refine the continual learning models.
+                            <View style={[styles.feedbackCard, { backgroundColor: t.surface, borderColor: t.border, alignItems: 'center', padding: 20 }]}>
+                                <Text style={{ fontSize: 24, marginBottom: 6 }}>✨</Text>
+                                <Text style={{ fontSize: 15, fontWeight: '850', color: t.text }}>Thank You for Your Feedback</Text>
+                                <Text style={{ fontSize: 12, color: t.textMuted, marginTop: 4, textAlign: 'center' }}>
+                                    Your response helps evaluate and validate the digital phenotyping model.
                                 </Text>
                                 <TouchableOpacity
-                                    style={[styles.retakeBtn, { borderColor: t.border, marginTop: 12, backgroundColor: t.surface }]}
+                                    style={[styles.retakeBtn, { borderColor: t.border, marginTop: 14, backgroundColor: t.pillBg }]}
                                     onPress={() => setEditingFeedback(true)}
                                 >
-                                    <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.brand }}>Edit Responses</Text>
+                                    <Text style={{ fontSize: 12, fontWeight: '800', color: COLORS.brand }}>Edit Responses</Text>
                                 </TouchableOpacity>
                             </View>
                         ) : (
                             <>
-                                {feedbackSections.map((sec) => (
-                                    <View key={sec} style={{ marginTop: 16 }}>
-                                        <Text style={[styles.sectionHeading, { color: COLORS.brand }]}>{sec}</Text>
-                                        {FEEDBACK_ITEMS.filter((item) => item.section === sec).map((item) => (
-                                            <View key={item.id} style={{ marginTop: 10, paddingBottom: 8 }}>
-                                                <Text style={[styles.feedbackQuestionText, { color: t.text }]}>{item.question}</Text>
-                                                <View style={styles.likert5Row}>
-                                                    {LIKERT5_OPTIONS.map((opt) => (
-                                                        <TouchableOpacity
-                                                            key={opt.value}
-                                                            style={[
-                                                                styles.likert5Btn,
-                                                                {
-                                                                    backgroundColor: feedbackAnswers[item.id] === opt.value ? COLORS.brand : t.pillBg,
-                                                                    borderColor: feedbackAnswers[item.id] === opt.value ? COLORS.brand : t.border,
-                                                                },
-                                                            ]}
-                                                            onPress={() => setFeedbackAnswers((prev) => ({ ...prev, [item.id]: opt.value }))}
-                                                            activeOpacity={0.8}
-                                                        >
-                                                            <Text style={{ fontSize: 9.5, fontWeight: '800', color: feedbackAnswers[item.id] === opt.value ? '#FFF' : t.textMuted }}>
-                                                                {opt.value}
-                                                            </Text>
-                                                        </TouchableOpacity>
-                                                    ))}
-                                                </View>
-                                                <View style={styles.rowBetween}>
-                                                    <Text style={{ fontSize: 8.5, color: t.textMuted }}>Disagree</Text>
-                                                    <Text style={{ fontSize: 8.5, color: t.textMuted }}>Agree</Text>
-                                                </View>
-                                            </View>
-                                        ))}
-                                    </View>
-                                ))}
+                                {feedbackSections.map((sec, sIdx) => {
+                                    const meta = {
+                                        'Ease of Use': { icon: '📱', color: '#6366F1' },
+                                        'Usefulness': { icon: '💡', color: '#F59E0B' },
+                                        'Trust & Accuracy': { icon: '🎯', color: '#10B981' },
+                                        'Privacy & Comfort': { icon: '🔒', color: '#8B5CF6' },
+                                        'Overall': { icon: '⭐', color: '#EC4899' },
+                                    }[sec] || { icon: '📋', color: COLORS.brand };
 
-                                <View style={{ marginTop: 14 }}>
-                                    <Text style={[styles.feedbackQuestionText, { color: t.text }]}>Additional Comments or Suggestions:</Text>
+                                    return (
+                                        <View
+                                            key={sec}
+                                            style={[
+                                                styles.feedbackCard,
+                                                {
+                                                    backgroundColor: t.surface,
+                                                    borderColor: t.border,
+                                                    marginBottom: 12,
+                                                },
+                                            ]}
+                                        >
+                                            {/* Section Header */}
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                                                <View style={{ width: 26, height: 26, borderRadius: 8, backgroundColor: `${meta.color}15`, alignItems: 'center', justifyContent: 'center' }}>
+                                                    <Text style={{ fontSize: 13 }}>{meta.icon}</Text>
+                                                </View>
+                                                <Text style={{ fontSize: 12.5, fontWeight: '900', color: t.text, letterSpacing: 0.3 }}>
+                                                    {sec.toUpperCase()}
+                                                </Text>
+                                            </View>
+
+                                            {/* Questions in this section */}
+                                            {FEEDBACK_ITEMS.filter((item) => item.section === sec).map((item, qIdx) => (
+                                                <View
+                                                    key={item.id}
+                                                    style={{
+                                                        marginTop: qIdx > 0 ? 12 : 0,
+                                                        paddingTop: qIdx > 0 ? 12 : 0,
+                                                        borderTopWidth: qIdx > 0 ? 1 : 0,
+                                                        borderTopColor: t.border,
+                                                    }}
+                                                >
+                                                    <Text style={[styles.feedbackQuestionText, { color: t.text }]}>
+                                                        {item.question}
+                                                    </Text>
+
+                                                    {/* Likert 1-5 Row */}
+                                                    <View style={styles.likert5Row}>
+                                                        {LIKERT5_OPTIONS.map((opt) => {
+                                                            const isSelected = feedbackAnswers[item.id] === opt.value;
+                                                            return (
+                                                                <TouchableOpacity
+                                                                    key={opt.value}
+                                                                    style={[
+                                                                        styles.likert5Btn,
+                                                                        {
+                                                                            backgroundColor: isSelected ? COLORS.brand : t.pillBg,
+                                                                            borderColor: isSelected ? COLORS.brand : t.border,
+                                                                        },
+                                                                    ]}
+                                                                    onPress={() => setFeedbackAnswers((prev) => ({ ...prev, [item.id]: opt.value }))}
+                                                                    activeOpacity={0.8}
+                                                                >
+                                                                    <Text
+                                                                        style={{
+                                                                            fontSize: 11,
+                                                                            fontWeight: isSelected ? '900' : '700',
+                                                                            color: isSelected ? '#FFFFFF' : t.textMuted,
+                                                                        }}
+                                                                    >
+                                                                        {opt.value}
+                                                                    </Text>
+                                                                </TouchableOpacity>
+                                                            );
+                                                        })}
+                                                    </View>
+                                                    <View style={styles.rowBetween}>
+                                                        <Text style={{ fontSize: 9, color: t.textMuted }}>1 · Disagree</Text>
+                                                        <Text style={{ fontSize: 9, color: t.textMuted }}>5 · Agree</Text>
+                                                    </View>
+                                                </View>
+                                            ))}
+                                        </View>
+                                    );
+                                })}
+
+                                {/* Additional Comments Box */}
+                                <View style={[styles.feedbackCard, { backgroundColor: t.surface, borderColor: t.border, marginBottom: 14 }]}>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                                        <View style={{ width: 26, height: 26, borderRadius: 8, backgroundColor: '#6366F115', alignItems: 'center', justifyContent: 'center' }}>
+                                            <Text style={{ fontSize: 13 }}>💬</Text>
+                                        </View>
+                                        <Text style={{ fontSize: 12.5, fontWeight: '900', color: t.text }}>COMMENTS (OPTIONAL)</Text>
+                                    </View>
                                     <TextInput
                                         style={[styles.textArea, { backgroundColor: t.pillBg, borderColor: t.border, color: t.text }]}
-                                        placeholder="Tell us what you liked or how we can improve…"
+                                        placeholder="Any observations, suggestions, or comments…"
                                         placeholderTextColor={t.textMuted}
                                         multiline
                                         numberOfLines={3}
@@ -576,8 +625,9 @@ export default function PhenotypingEmaScreen({ navigation, route }) {
                                     />
                                 </View>
 
+                                {/* Submit Button */}
                                 <TouchableOpacity
-                                    style={[styles.gradientBtn, { backgroundColor: COLORS.brand, marginTop: 14, opacity: submitting ? 0.6 : 1 }]}
+                                    style={[styles.gradientBtn, { backgroundColor: COLORS.brand, opacity: submitting ? 0.6 : 1 }]}
                                     onPress={submitFeedback}
                                     disabled={submitting}
                                     activeOpacity={0.85}

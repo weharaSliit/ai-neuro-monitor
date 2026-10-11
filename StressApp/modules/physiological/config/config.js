@@ -39,12 +39,12 @@ export const TREND_LABELS = {
 };
 
 // Same ROC/Youden's-J-derived cutoff as backend/common/config.py's
-// STRESS_DECISION_THRESHOLD (0.7141), expressed on the 0-100 scale trend
+// STRESS_DECISION_THRESHOLD (0.6447), expressed on the 0-100 scale trend
 // charts already plot on. One shared constant, not a value each user's
 // data produces -- this line is the same for every account, not a
 // personalized number, since the physiological pipeline calibrates per-
 // user HRV/GSR baselines (mean/std), not a personalized decision boundary.
-export const STRESS_DECISION_THRESHOLD_PERCENT = 71.41;
+export const STRESS_DECISION_THRESHOLD_PERCENT = 64.47;
 
 // ── GSR calibration storage key ───────────────────────────
 // Grove GSR needs a calibration value recorded at setup.

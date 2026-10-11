@@ -1,0 +1,91 @@
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../auth/AuthContext';
+import { useCalibration, useDeviceStatus, useLivePointer } from '../hooks/useLive';
+import { COLORS } from '../lib/levels';
+import { Card, CardHead, DeviceChip, Badge } from '../components/ui';
+import BreathingCalibration from '../components/BreathingCalibration';
+import ThresholdTask from '../components/ThresholdTask';
+
+// Same three steps as the app's AccountSetupScreen -> EegThresholdTaskScreen:
+// 1) devices on, 2) calm-breathing baseline, 3) the ~8 min limit test.
+// Either step can be done any time later from here too.
+function Step({ n, title, done, active, children }) {
+  return (
+    <Card style={{ marginTop: 16, opacity: active || done ? 1 : 0.55 }}>
+      <CardHead
+        title={<span className="row"><span className="avatar" style={{ width: 28, height: 28, fontSize: 13 }}>{done ? '✓' : n}</span>{title}</span>}
+        right={done ? <Badge color={COLORS.normal}>Done</Badge> : null}
+      />
+      {children}
+    </Card>
+  );
+}
+
+export default function SetupPage() {
+  const navigate = useNavigate();
+  const { user, token } = useAuth();
+  const userId = user?.userId;
+  const pointer = useLivePointer();
+  const { ringOnline, eegOnline, eegSessionId } = useDeviceStatus(userId);
+  const cal = useCalibration(userId, token);
+  const [step, setStep] = useState(null);
+
+  // Devices stream into whichever session the shared pointer names -- if
+  // that's someone else, calibrating now would mix their signal into
+  // this account's baseline.
+  const otherUserLive = pointer.userId && pointer.userId !== userId;
+  const baselineDone = !!cal.ring?.exists || !!cal.eeg?.exists;
+  const personalised = cal.eeg?.personal_high_load_p != null && cal.ring?.personal_stress_threshold != null;
+  const current = step || (baselineDone ? 'task' : 'baseline');
+  const anyDevice = ringOnline || eegOnline;
+
+  return (
+    <div style={{ maxWidth: 760, margin: '0 auto' }}>
+      <div className="greet">
+        <h1>Let’s get to know <b>you</b></h1>
+        <p>Two short steps so MindPulse judges stress against your own body, not an average.</p>
+      </div>
+
+      {otherUserLive && (
+        <div className="banner warning">
+          ⚠ Someone else ({pointer.userId}) is wearing the devices right now. Calibration is paused until they sign out.
+        </div>
+      )}
+
+      <Step n={1} title="Put on your devices" done={anyDevice} active>
+        <div className="grid grid-2" style={{ gap: 12 }}>
+          <DeviceChip icon="💍" tint={COLORS.hrv} name="Ring" online={ringOnline} detail={ringOnline ? 'Connected' : 'Turn on & wear it'} />
+          <DeviceChip icon="🧠" tint={COLORS.eeg} name="Headband" online={eegOnline} detail={eegOnline ? 'Streaming' : 'Turn on & wear it'} />
+        </div>
+        {!anyDevice && <p className="caption" style={{ marginTop: 10 }}>At least one device needs to be on to calibrate. This updates by itself.</p>}
+      </Step>
+
+      <Step n={2} title="Calm-breathing calibration" done={baselineDone} active={current === 'baseline'}>
+        {current === 'baseline' ? (
+          <BreathingCalibration ringOnline={ringOnline} eegOnline={eegOnline} eegSessionId={eegSessionId} ringCal={cal.ring} eegCal={cal.eeg}
+            disabled={otherUserLive} onComplete={() => { cal.refresh(); setStep('task'); }} />
+        ) : (
+          <div className="between">
+            <span className="body">{baselineDone ? 'Your calm baseline is saved.' : 'Not done yet.'}</span>
+            <button className="btn ghost sm" onClick={() => setStep('baseline')}>{baselineDone ? 'Recalibrate' : 'Start'}</button>
+          </div>
+        )}
+      </Step>
+
+      <Step n={3} title="Personal limit test (≈ 8 min)" done={personalised} active={current === 'task'}>
+        {current === 'task' ? (
+          <ThresholdTask eegSessionId={eegSessionId} alreadyPersonalized={personalised}
+            ringCal={cal.ring} eegCal={cal.eeg} disabled={otherUserLive || cal.loading}
+            onFinish={() => navigate('/', { replace: true })} />
+        ) : (
+          <p className="body">Unlocks after step 2 — it needs your calm baseline to compare against.</p>
+        )}
+      </Step>
+
+      <p style={{ textAlign: 'center', marginTop: 20 }}>
+        <a href="#" onClick={(e) => { e.preventDefault(); navigate('/'); }}>Skip for now →</a>
+      </p>
+    </div>
+  );
+}

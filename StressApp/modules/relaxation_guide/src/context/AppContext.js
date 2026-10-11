@@ -10,6 +10,7 @@ export const AppContext = createContext();
 // the 'guest_' fallback only exists so this module still renders standalone in dev.
 export const AppProvider = ({ children, initialUserId, initialUsername, initialIsNewUser = false, onExit = null }) => {
   const [currentScreen, setCurrentScreen] = useState('Dashboard');
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [userId, setUserId] = useState(initialUserId || `user_${Date.now()}`);
   const [username, setUsername] = useState(initialUsername || 'Participant');
   const [userEmail, setUserEmail] = useState('');
@@ -75,7 +76,7 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
         const prob = typeof telemetry.confidence === 'number'
           ? telemetry.confidence
           : (telemetry.features_flat && telemetry.features_flat.length >= 1 ? telemetry.features_flat[0] : 0.15);
-        
+
         setStressProbability(prob);
         setConfidence(prob);
 
@@ -119,6 +120,8 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
         identityChecked,
         currentScreen,
         setCurrentScreen,
+        isDrawerOpen,
+        setIsDrawerOpen,
         userId,
         setUserId,
         username,

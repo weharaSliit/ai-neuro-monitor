@@ -1,0 +1,27 @@
+import { Navigate, Route, Routes } from 'react-router-dom';
+import { useAuth } from './auth/AuthContext';
+import Layout from './components/Layout';
+import LoginPage from './pages/LoginPage';
+import UserDashboard from './pages/UserDashboard';
+import AdminDashboard from './pages/AdminDashboard';
+import SetupPage from './pages/SetupPage';
+
+function RequireAuth({ children }) {
+  const { user } = useAuth();
+  return user ? children : <Navigate to="/login" replace />;
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route element={<RequireAuth><Layout /></RequireAuth>}>
+        <Route index element={<UserDashboard />} />
+        <Route path="setup" element={<SetupPage />} />
+        <Route path="clinical" element={<AdminDashboard />} />
+        <Route path="clinical/:userId" element={<AdminDashboard />} />
+      </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}

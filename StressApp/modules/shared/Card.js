@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, TouchableOpacity, StyleSheet } from 'react-native';
 import { COLORS } from '../physiological/config/theme';
+import { RADIUS, ELEVATION } from './theme/tokens';
 
 export default function Card({ children, onPress, style, accentColor, elevated = false, glass = false }) {
   const cardStyle = [
@@ -26,21 +27,13 @@ export default function Card({ children, onPress, style, accentColor, elevated =
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 20,
+    borderRadius: RADIUS.lg,
     borderWidth: 1,
     padding: 18,
     marginBottom: 14,
-    shadowColor: '#1E293B',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.04,
-    shadowRadius: 12,
-    elevation: 2,
+    ...ELEVATION.resting,
   },
   elevated: {
-    shadowColor: '#1E293B',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.07,
-    shadowRadius: 18,
-    elevation: 4,
+    ...ELEVATION.elevated,
   },
 });

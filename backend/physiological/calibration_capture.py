@@ -201,7 +201,7 @@ def save_calibration_windows(user_id, raw_windows):
     print(f"[calibrate {user_id}] save: extracting features from {len(raw_windows)} window(s)...")
     feature_rows = []
     for i, w in enumerate(raw_windows):
-        features_2d, motion_rejected, feat_dict, hrv_is_fallback = extract_features(
+        features_2d, motion_rejected, feat_dict, hrv_is_fallback, _wave_dict = extract_features(
             w.get('ibi_array', []),
             w.get('gsr_adc_array', []),
             w.get('acc_array', []),
@@ -565,7 +565,7 @@ def run_task_calibration_capture(user_id, on_progress=None):
             # single window is expected, not fatal.
             task_scores = []
             for w in collected_windows:
-                features_2d, motion_rejected, feat_dict, hrv_is_fallback = extract_features(
+                features_2d, motion_rejected, feat_dict, hrv_is_fallback, _wave_dict = extract_features(
                     w['ibi_array'], w['gsr_adc_array'], w['acc_array'], w['gsr_calibration'], actual_fs=w['actual_fs'],
                 )
                 if motion_rejected or hrv_is_fallback:

@@ -1,567 +1,369 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { View, Text, ScrollView, StyleSheet, Dimensions } from 'react-native';
-import Svg, { Circle, Line as SvgLine } from 'react-native-svg';
-import { LineChart as GiftedLineChart } from 'react-native-gifted-charts';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
+import Svg, { Circle, Line as SvgLine, Path, Defs, LinearGradient, Stop, Text as SvgText } from 'react-native-svg';
 import { COLORS } from '../physiological/config/theme';
 
-function ReferenceLine({ value, label, color, height, maxValue, labelSide }) {
-    if (value === undefined || value === null || !maxValue) return null;
-    const top = height * (1 - Math.min(1, Math.max(0, value / maxValue)));
-    const labelBelow = top < 16;
-    return (
-        <View pointerEvents="none" style={[styles.baseline, { top, borderTopColor: color }]}>
-            {label ? (
-                <Text
-                    style={[
-                        styles.baselineLabel,
-                        { color },
-                        labelBelow ? { top: 4 } : { top: -16 },
-                        labelSide === 'left' ? { left: 0 } : { right: 0 },
-                    ]}
-                >
-                    {label}
-                </Text>
-            ) : null}
-        </View>
-    );
+// ============================================================
+// LineChart -- React Native twin of the website's chart
+// (web/src/components/Chart.jsx), so app and website draw every graph
+// the same way.
+//
+//  - Self-sizing: measures its own container (onLayout) and fits it, so
+//    it never overflows a card on any phone or tablet. `width` is only a
+//    first-frame hint.
+//  - Every point gets at least MIN_GAP px. When there are more points
+//    than fit, the plot swipes sideways (opening on the newest readings)
+//    while the y-axis stays pinned on the left -- nothing is squashed.
+//  - Tap a point -> its value/time pops up. Tap again anywhere on the
+//    chart, swipe it, or wait a few seconds -> the pop-up goes away.
+//  - colorZones: line coloured green / amber / red around the person's
+//    own limit (baselineValue); amber band = baseline2Value if given,
+//    otherwise the 12-point band below the limit (same as levels.js).
+//  - multiLine: several series on one time axis (gaps break the line).
+//  - x is index-based so time between sessions doesn't leave huge empty
+//    gaps; a dashed separator marks where one session ends.
+//
+// Same props as before, so no caller needed to change.
+// ============================================================
+
+const AXIS_W = 36;
+const PAD = { l: 10, r: 14, t: 12, b: 24 };
+const MIN_GAP = 24; // px per point -- wide enough to read each reading; charts swipe when they don't fit
+const GAP_MS = 15 * 60 * 1000;
+const BAND = 12;
+const TIP_W = 156;
+const TIP_HIDE_MS = 4000;
+
+const fmtTime = (d) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const fmtDay = (d) => d.toLocaleDateString([], { day: 'numeric', month: 'short' });
+
+function fmtNum(v) {
+    const a = Math.abs(v);
+    if (a >= 100) return v.toFixed(0);
+    if (a >= 10) return v.toFixed(1);
+    return v.toFixed(2);
 }
 
-const X_LABEL_HEIGHT = 16;
-const LEGEND_HEIGHT = 20;
-const DETAIL_HEIGHT = 18;
-const MIN_POINT_GAP = 28;
-const EDGE_PAD = 12;
-
-function LegendSwatch({ color, label }) {
-    return (
-        <View style={styles.legendItem}>
-            <View style={[styles.legendSwatch, { backgroundColor: color }]} />
-            <Text style={[styles.legendText, { color: COLORS.light.textSub }]}>{label}</Text>
-        </View>
-    );
+function toDate(d) {
+    if (d == null) return null;
+    if (d instanceof Date) return d;
+    const x = new Date(d);
+    return Number.isNaN(x.getTime()) ? null : x;
 }
 
-function ZoneChart({
-    raw, width, height, maxValue,
-    baselineLabel, baselineColor,
-    baselineValue, baseline2Value, baseline2Label, baseline2Color,
-    zoneLowColor, zoneMidColor, zoneHighColor,
-    fitToWidth = false,
-}) {
-    const [selectedIndex, setSelectedIndex] = useState(null);
-    const scrollRef = useRef(null);
-
-    // Calculate content width based on points count. fitToWidth (used for
-    // aggregated/bucketed data) always compresses points into the given
-    // width instead of forcing a horizontal scroll -- avoids making the
-    // viewer swipe through thousands of raw windows to see a trend.
-    const minContentWidth = raw.length > 1
-        ? Math.max(width, (raw.length - 1) * MIN_POINT_GAP + EDGE_PAD * 2)
-        : width;
-    const contentWidth = fitToWidth ? width : minContentWidth;
-    const isScrollable = !fitToWidth && contentWidth > width;
-
-    const times = raw.map((p) => (p.date ? new Date(p.date).getTime() : null));
-    const haveAllTimes = times.every((t) => t !== null && !Number.isNaN(t));
-    const totalSpan = haveAllTimes ? times[times.length - 1] - times[0] : 0;
-
-    const plotUsableWidth = contentWidth - EDGE_PAD * 2;
-    const xs = [];
-    raw.forEach((_p, i) => {
-        if (i === 0) { xs.push(EDGE_PAD); return; }
-        let spacing;
-        if (fitToWidth) {
-            // Bucketed/aggregated data: each point represents a time SLOT,
-            // not a precise instant, so space evenly across the width
-            // instead of by raw elapsed time. Real windows are rarely
-            // evenly spread through the day (bursts of use, then hours of
-            // silence) -- proportional spacing on real gaps stretches those
-            // silent stretches into large dead zones and crowds everything
-            // else into a sliver. Even spacing keeps the chart compact and
-            // fully used regardless of how clustered the real activity was.
-            spacing = plotUsableWidth / (raw.length - 1);
-        } else if (haveAllTimes && totalSpan > 0) {
-            const frac = (times[i] - times[i - 1]) / totalSpan;
-            spacing = Math.max(MIN_POINT_GAP * 0.6, frac * plotUsableWidth);
-        } else {
-            spacing = Math.max(MIN_POINT_GAP, plotUsableWidth / (raw.length - 1));
-        }
-        xs.push(xs[i - 1] + spacing);
-    });
-
-    // Auto-scroll to the latest reading (end) when new points arrive
-    useEffect(() => {
-        if (isScrollable && scrollRef.current) {
-            const t = setTimeout(() => {
-                scrollRef.current?.scrollToEnd({ animated: true });
-            }, 150);
-            return () => clearTimeout(t);
-        }
-    }, [raw.length, isScrollable]);
-
-    const PAD_Y = 8;
-    const clamp01 = (v) => Math.min(1, Math.max(0, v));
-    const valueToY = (v) => PAD_Y + (height - PAD_Y * 2) * (1 - clamp01(v / maxValue));
-    const ys = raw.map((p) => valueToY(p.value));
-
-    const zoneOf = (v) => (
-        v >= baselineValue ? 'high' : ((baseline2Value != null && v >= baseline2Value) ? 'mid' : 'low')
-    );
-    const zoneColorOf = (z) => (z === 'high' ? zoneHighColor : z === 'mid' ? zoneMidColor : zoneLowColor);
-    const zoneLabelOf = (z) => (z === 'high' ? 'Stress' : z === 'mid' ? 'Trending' : 'Normal');
-    const zones = raw.map((p) => zoneOf(p.value));
-
-    const targetLabelCount = Math.max(4, Math.round(contentWidth / 85));
-    const labelStep = Math.max(1, Math.ceil(raw.length / targetLabelCount));
-
-    const baselineY = valueToY(baselineValue);
-    const baseline2Y = baseline2Value != null ? valueToY(baseline2Value) : null;
-
-    const selected = selectedIndex != null ? raw[selectedIndex] : null;
-    let detailNode = (
-        <View style={styles.detailRow}>
-            <Text style={[styles.detailHint, { color: COLORS.light.textMuted }]}>
-                {isScrollable ? '← Swipe horizontally to view history · Tap point for details' : 'Tap a point for details'}
-            </Text>
-            {isScrollable && (
-                <View style={styles.scrollBadge}>
-                    <Text style={styles.scrollBadgeText}>Scrollable ⇄</Text>
+function Legend({ items, hint }) {
+    return (
+        <View style={styles.legendRow}>
+            {items.map((it) => (
+                <View key={it.label} style={styles.legendItem}>
+                    <View style={[styles.legendSwatch, { backgroundColor: it.color }, it.dashed && styles.legendDashed]} />
+                    <Text style={styles.legendText}>{it.label}</Text>
                 </View>
-            )}
-        </View>
-    );
-    if (selected) {
-        const zone = zones[selectedIndex];
-        const dColor = zoneColorOf(zone);
-        const time = selected.date
-            ? new Date(selected.date).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-            : '';
-        let devText = '';
-        if (baseline2Value != null) {
-            const dev = Math.round(selected.value - baseline2Value);
-            devText = dev === 0 ? ' · at your baseline'
-                : dev > 0 ? ` · ${dev} pts above baseline`
-                    : ` · ${Math.abs(dev)} pts below baseline`;
-        }
-        const windowText = selected.windowCount ? ` · avg of ${selected.windowCount} windows` : '';
-        detailNode = (
-            <Text style={styles.detailText} numberOfLines={1}>
-                <Text style={{ color: dColor, fontWeight: '800' }}>{zoneLabelOf(zone)} ({selected.value}%)</Text>
-                <Text style={{ color: COLORS.light.textMuted }}>{devText}{windowText} · {time}</Text>
-            </Text>
-        );
-    }
-
-    return (
-        <View style={{ width, overflow: 'hidden' }}>
-            <View style={styles.detailBar}>{detailNode}</View>
-
-            <ScrollView
-                ref={scrollRef}
-                horizontal
-                scrollEnabled={isScrollable}
-                showsHorizontalScrollIndicator={isScrollable}
-                style={{ width }}
-                contentContainerStyle={{ width: contentWidth }}
-                nestedScrollEnabled={true}
-                overScrollMode="never"
-                bounces={false}
-                scrollEventThrottle={16}
-            >
-                <View style={{ width: contentWidth, height: height + X_LABEL_HEIGHT }}>
-                    <Svg width={contentWidth} height={height} style={{ position: 'absolute', top: 0, left: 0 }}>
-                        <SvgLine x1={0} y1={0} x2={0} y2={height} stroke={COLORS.light.border} strokeWidth={1} />
-                        <SvgLine x1={0} y1={height} x2={contentWidth} y2={height} stroke={COLORS.light.border} strokeWidth={1} />
-
-                        {haveAllTimes && raw.map((_p, i) => {
-                            if (!(i % labelStep === 0 || i === raw.length - 1)) return null;
-                            return (
-                                <SvgLine key={`grid-${i}`} x1={xs[i]} y1={0} x2={xs[i]} y2={height}
-                                    stroke={COLORS.light.borderSoft} strokeWidth={1} />
-                            );
-                        })}
-
-                        <SvgLine x1={0} y1={baselineY} x2={contentWidth} y2={baselineY}
-                            stroke={baselineColor} strokeWidth={1.5} strokeDasharray="5,4" />
-                        {baseline2Y !== null && (
-                            <SvgLine x1={0} y1={baseline2Y} x2={contentWidth} y2={baseline2Y}
-                                stroke={baseline2Color} strokeWidth={1.5} strokeDasharray="5,4" />
-                        )}
-
-                        {raw.length > 1 && xs.slice(1).map((x, idx) => {
-                            const i = idx + 1;
-                            const segColor = zoneColorOf(zones[i]);
-                            const dashed = zones[i] === 'high';
-                            return (
-                                <SvgLine
-                                    key={i}
-                                    x1={xs[i - 1]} y1={ys[i - 1]} x2={x} y2={ys[i]}
-                                    stroke={segColor} strokeWidth={2.5}
-                                    strokeDasharray={dashed ? '6,4' : undefined}
-                                    strokeLinecap="round"
-                                />
-                            );
-                        })}
-
-                        {raw.map((_p, i) => (
-                            <React.Fragment key={i}>
-                                <Circle cx={xs[i]} cy={ys[i]} r={12} fill={zoneColorOf(zones[i])} fillOpacity={0.001}
-                                    onPress={() => setSelectedIndex(i)} />
-                                <Circle cx={xs[i]} cy={ys[i]} r={selectedIndex === i ? 5.5 : 3.5} fill={zoneColorOf(zones[i])}
-                                    stroke={selectedIndex === i ? COLORS.light.card : undefined}
-                                    strokeWidth={selectedIndex === i ? 2 : 0}
-                                    onPress={() => setSelectedIndex(i)} />
-                            </React.Fragment>
-                        ))}
-                    </Svg>
-
-                    <View pointerEvents="none" style={{ position: 'absolute', top: height + 2, left: 0, width: contentWidth, height: X_LABEL_HEIGHT }}>
-                        {haveAllTimes && raw.map((p, i) => {
-                            if (!(i % labelStep === 0 || i === raw.length - 1)) return null;
-                            return (
-                                <Text key={i} style={[styles.xLabel, { left: Math.max(0, xs[i] - 26), color: COLORS.light.textMuted }]}>
-                                    {new Date(p.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                </Text>
-                            );
-                        })}
-                    </View>
-                </View>
-            </ScrollView>
-
-            <View style={styles.legendRow}>
-                {baseline2Value != null && (
-                    <LegendSwatch color={baseline2Color} label={baseline2Label || 'Your baseline'} />
-                )}
-                <LegendSwatch color={baselineColor} label={baselineLabel || 'Stress threshold'} />
-            </View>
+            ))}
+            {hint ? <Text style={styles.hint}>{hint}</Text> : null}
         </View>
     );
 }
 
-function MultiLineChart({
-    points, width, height, maxValue,
-    seriesColors, seriesLabels,
-    baselineValue, baselineLabel, baselineColor,
-}) {
-    const scrollRef = useRef(null);
-    const minContentWidth = points.length > 1
-        ? Math.max(width, (points.length - 1) * MIN_POINT_GAP + EDGE_PAD * 2)
-        : width;
-    const contentWidth = minContentWidth;
-    const isScrollable = contentWidth > width;
-
-    const times = points.map((p) => (p.date ? new Date(p.date).getTime() : null));
-    const haveAllTimes = times.every((t) => t !== null && !Number.isNaN(t));
-    const totalSpan = haveAllTimes ? times[times.length - 1] - times[0] : 0;
-
-    const plotUsableWidth = contentWidth - EDGE_PAD * 2;
-    const xs = [];
-    points.forEach((_p, i) => {
-        if (i === 0) { xs.push(EDGE_PAD); return; }
-        let spacing;
-        if (haveAllTimes && totalSpan > 0) {
-            const frac = (times[i] - times[i - 1]) / totalSpan;
-            spacing = Math.max(MIN_POINT_GAP * 0.6, frac * plotUsableWidth);
-        } else {
-            spacing = Math.max(MIN_POINT_GAP, plotUsableWidth / (points.length - 1));
-        }
-        xs.push(xs[i - 1] + spacing);
-    });
-
-    useEffect(() => {
-        if (isScrollable && scrollRef.current) {
-            const t = setTimeout(() => {
-                scrollRef.current?.scrollToEnd({ animated: true });
-            }, 150);
-            return () => clearTimeout(t);
-        }
-    }, [points.length, isScrollable]);
-
-    const PAD_Y = 8;
-    const clamp01 = (v) => Math.min(1, Math.max(0, v));
-    const valueToY = (v) => PAD_Y + (height - PAD_Y * 2) * (1 - clamp01(v / maxValue));
-
-    const targetLabelCount = Math.max(4, Math.round(contentWidth / 85));
-    const labelStep = Math.max(1, Math.ceil(points.length / targetLabelCount));
-
-    const baselineY = baselineValue != null ? valueToY(baselineValue) : null;
-
-    return (
-        <View style={{ width, overflow: 'hidden' }}>
-            <ScrollView
-                ref={scrollRef}
-                horizontal
-                showsHorizontalScrollIndicator={isScrollable}
-                style={{ width }}
-                contentContainerStyle={{ width: contentWidth }}
-                nestedScrollEnabled={true}
-                overScrollMode="never"
-                bounces={false}
-                scrollEventThrottle={16}
-            >
-                <View style={{ width: contentWidth, height: height + X_LABEL_HEIGHT }}>
-                    <Svg width={contentWidth} height={height} style={{ position: 'absolute', top: 0, left: 0 }}>
-                        <SvgLine x1={0} y1={0} x2={0} y2={height} stroke={COLORS.light.border} strokeWidth={1} />
-                        <SvgLine x1={0} y1={height} x2={contentWidth} y2={height} stroke={COLORS.light.border} strokeWidth={1} />
-
-                        {haveAllTimes && points.map((_p, i) => {
-                            if (!(i % labelStep === 0 || i === points.length - 1)) return null;
-                            return (
-                                <SvgLine key={`grid-${i}`} x1={xs[i]} y1={0} x2={xs[i]} y2={height}
-                                    stroke={COLORS.light.borderSoft} strokeWidth={1} />
-                            );
-                        })}
-
-                        {baselineY !== null && (
-                            <SvgLine x1={0} y1={baselineY} x2={contentWidth} y2={baselineY}
-                                stroke={baselineColor} strokeWidth={1.5} strokeDasharray="5,4" />
-                        )}
-
-                        {seriesColors.map((seriesColor, s) => (
-                            <React.Fragment key={`series-${s}`}>
-                                {points.slice(1).map((_p, idx) => {
-                                    const i = idx + 1;
-                                    const v0 = points[i - 1].values[s];
-                                    const v1 = points[i].values[s];
-                                    if (v0 == null || v1 == null) return null;
-                                    return (
-                                        <SvgLine
-                                            key={`seg-${s}-${i}`}
-                                            x1={xs[i - 1]} y1={valueToY(v0)} x2={xs[i]} y2={valueToY(v1)}
-                                            stroke={seriesColor} strokeWidth={2.5} strokeLinecap="round"
-                                        />
-                                    );
-                                })}
-                                {points.map((p, i) => {
-                                    const v = p.values[s];
-                                    if (v == null) return null;
-                                    return (
-                                        <Circle key={`dot-${s}-${i}`} cx={xs[i]} cy={valueToY(v)} r={2.5} fill={seriesColor} />
-                                    );
-                                })}
-                            </React.Fragment>
-                        ))}
-                    </Svg>
-
-                    <View pointerEvents="none" style={{ position: 'absolute', top: height + 2, left: 0, width: contentWidth, height: X_LABEL_HEIGHT }}>
-                        {haveAllTimes && points.map((p, i) => {
-                            if (!(i % labelStep === 0 || i === points.length - 1)) return null;
-                            return (
-                                <Text key={i} style={[styles.xLabel, { left: Math.max(0, xs[i] - 26), color: COLORS.light.textMuted }]}>
-                                    {new Date(p.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                </Text>
-                            );
-                        })}
-                    </View>
-                </View>
-            </ScrollView>
-
-            <View style={styles.legendRow}>
-                {seriesLabels.map((label, s) => (
-                    <LegendSwatch key={label} color={seriesColors[s]} label={label} />
-                ))}
-                {baselineValue != null && (
-                    <LegendSwatch color={baselineColor} label={baselineLabel || 'Threshold'} />
-                )}
-            </View>
-        </View>
-    );
-}
-
-export default function LineChart({
-    points, color, width: propWidth, height, fallback, maxValue, suffix, hideValues = false,
+function LineChart({
+    points, color = COLORS.brand, width: hintWidth, height = 160, fallback, maxValue, suffix = '',
     baselineValue, baselineLabel, baselineColor = COLORS.stress,
     baseline2Value, baseline2Label, baseline2Color = COLORS.brand,
     colorZones = false,
     zoneLowColor = COLORS.normal, zoneMidColor = COLORS.warning, zoneHighColor = COLORS.stress,
     multiLine = false, seriesColors, seriesLabels,
-    fitToWidth = false,
+    // Waveforms / dense signals pass a smaller minGap (px per point).
+    minGap = MIN_GAP,
 }) {
-    const raw = points || [];
-    const windowWidth = Dimensions.get('window').width;
-    const defaultWidth = Math.max(260, windowWidth - 80);
-    const width = propWidth || defaultWidth;
+    const [width, setWidth] = useState(hintWidth || 300);
+    const [sel, setSel] = useState(null);
+    const scrollRef = useRef(null);
 
-    if (raw.length === 0) {
-        return fallback || null;
-    }
+    const isMulti = multiLine && seriesColors && seriesLabels;
+    const series = useMemo(() => (isMulti
+        ? seriesColors.map((c, i) => ({ color: c, name: seriesLabels[i] }))
+        : [{ color, name: '' }]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [isMulti, color, isMulti ? seriesColors.join() : '', isMulti ? seriesLabels.join() : '']);
 
-    if (multiLine && seriesColors && seriesLabels) {
-        return (
-            <MultiLineChart
-                points={raw} width={width} height={height} maxValue={maxValue || 100}
-                seriesColors={seriesColors} seriesLabels={seriesLabels}
-                baselineValue={baselineValue} baselineLabel={baselineLabel} baselineColor={baselineColor}
-            />
-        );
-    }
+    const rows = useMemo(() => (points || []).map((p) => ({
+        date: toDate(p.date),
+        values: isMulti ? p.values : [p.value],
+        windowCount: p.windowCount,
+    })), [points, isMulti]);
 
-    if (colorZones && maxValue && baselineValue !== undefined && baselineValue !== null) {
-        return (
-            <ZoneChart
-                raw={raw} width={width} height={height} maxValue={maxValue}
-                baselineValue={baselineValue} baselineLabel={baselineLabel} baselineColor={baselineColor}
-                baseline2Value={baseline2Value} baseline2Label={baseline2Label} baseline2Color={baseline2Color}
-                zoneLowColor={zoneLowColor} zoneMidColor={zoneMidColor} zoneHighColor={zoneHighColor}
-                fitToWidth={fitToWidth}
-            />
-        );
-    }
+    const zoned = colorZones && !isMulti && baselineValue != null;
+    const midValue = zoned ? (baseline2Value != null ? baseline2Value : baselineValue - BAND) : null;
 
-    const times = raw.map((p) => (p.date ? new Date(p.date).getTime() : null));
-    const haveAllTimes = times.every((t) => t !== null && !Number.isNaN(t));
-    const totalSpan = haveAllTimes ? times[times.length - 1] - times[0] : 0;
-    const targetLabelCount = 4;
-    const labelStep = Math.max(1, Math.ceil(raw.length / targetLabelCount));
+    const g = useMemo(() => {
+        const n = rows.length;
+        const viewW = Math.max(60, width - AXIS_W);
+        const contentW = Math.max(viewW, PAD.l + PAD.r + Math.max(0, n - 1) * minGap);
+        const plotW = contentW - PAD.l - PAD.r;
+        const plotH = Math.max(10, height - PAD.t - PAD.b);
 
-    // GiftedLineChart width constraint:
-    // Total rendered width = plotWidth + yAxisLabelWidth + initialSpacing + endSpacing
-    // We strictly calibrate plotWidth so total rendered width matches `width` exactly without spilling out of the card.
-    const yAxisLabelWidth = hideValues ? 0 : (suffix ? 40 : 34);
-    const initialSpacing = 8;
-    const endSpacing = 8;
-    const plotWidth = Math.max(60, width - yAxisLabelWidth - initialSpacing - endSpacing);
-
-    const xPositions = [initialSpacing];
-    const data = raw.map((p, i) => {
-        const point = { value: p.value };
-        if (haveAllTimes && p.date && (i % labelStep === 0 || i === raw.length - 1)) {
-            point.label = new Date(p.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        let lo; let hi;
+        if (maxValue != null) { lo = 0; hi = maxValue; } else {
+            lo = Infinity; hi = -Infinity;
+            rows.forEach((r) => r.values.forEach((v) => { if (v != null) { lo = Math.min(lo, v); hi = Math.max(hi, v); } }));
+            [baselineValue, baseline2Value].forEach((v) => { if (v != null) { lo = Math.min(lo, v); hi = Math.max(hi, v); } });
+            if (!Number.isFinite(lo)) { lo = 0; hi = 1; }
+            if (hi === lo) { lo -= 1; hi += 1; }
+            const pad = (hi - lo) * 0.1; lo -= pad; hi += pad;
         }
-        if (i > 0) {
-            let spacing;
-            if (haveAllTimes && totalSpan > 0) {
-                const frac = (times[i] - times[i - 1]) / totalSpan;
-                spacing = Math.max(4, frac * plotWidth);
-            } else {
-                spacing = Math.max(2, plotWidth / (raw.length - 1));
-            }
-            point.spacing = spacing;
-            xPositions.push(xPositions[i - 1] + spacing);
+        const x = (i) => PAD.l + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+        const y = (v) => PAD.t + (1 - (Math.min(hi, Math.max(lo, v)) - lo) / (hi - lo)) * plotH;
+
+        // Session breaks: only gaps far larger than this series' normal
+        // spacing (so weekly/daily series still draw one continuous line).
+        const diffs = [];
+        for (let i = 1; i < n; i += 1) {
+            const a = rows[i - 1].date; const b = rows[i].date;
+            if (a && b) diffs.push(b - a);
         }
-        return point;
-    });
+        const sortedDiffs = [...diffs].sort((a, b) => a - b);
+        const typical = sortedDiffs.length ? sortedDiffs[Math.floor(sortedDiffs.length / 2)] : 0;
+        const gapLimit = Math.max(GAP_MS, typical * 6);
+        const breaks = [];
+        for (let i = 1; i < n; i += 1) {
+            const a = rows[i - 1].date; const b = rows[i].date;
+            if (a && b && b - a > gapLimit) breaks.push(i);
+        }
+        const breakSet = new Set(breaks);
+        const spanMs = n > 1 && rows[0].date && rows[n - 1].date ? rows[n - 1].date - rows[0].date : 0;
+
+        const paths = series.map((_, si) => {
+            let d = ''; let area = ''; let open = false; let segStart = 0; let lastX = 0;
+            const close = () => { if (open) area += ` L${lastX.toFixed(1)} ${(PAD.t + plotH).toFixed(1)} L${segStart.toFixed(1)} ${(PAD.t + plotH).toFixed(1)} Z`; };
+            rows.forEach((r, i) => {
+                const v = r.values[si];
+                if (v == null || breakSet.has(i)) { close(); open = false; if (v == null) return; }
+                const px = x(i); const py = y(v);
+                const seg = `${open ? ' L' : ' M'}${px.toFixed(1)} ${py.toFixed(1)}`;
+                d += seg; area += seg;
+                if (!open) segStart = px;
+                open = true; lastX = px;
+            });
+            close();
+            return { d, area };
+        });
+
+        const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => lo + f * (hi - lo));
+        const multiDay = n > 1 && rows[0].date && rows[n - 1].date && fmtDay(rows[0].date) !== fmtDay(rows[n - 1].date);
+        const fmtX = (d) => (spanMs > 2 * 86400000 ? fmtDay(d) : multiDay ? `${fmtDay(d)} ${fmtTime(d)}` : fmtTime(d));
+        const labelW = spanMs > 2 * 86400000 ? 54 : multiDay ? 92 : 50;
+        const step = Math.max(1, Math.ceil(n / Math.max(2, Math.floor(plotW / labelW))));
+        const xLabels = [];
+        for (let i = 0; i < n; i += step) if (rows[i].date) xLabels.push(i);
+        if (n > 1 && rows[n - 1].date && xLabels[xLabels.length - 1] !== n - 1) {
+            if (xLabels.length && n - 1 - xLabels[xLabels.length - 1] < step / 2) xLabels.pop();
+            xLabels.push(n - 1);
+        }
+        return { n, viewW, contentW, plotW, plotH, lo, hi, x, y, breaks, paths, ticks, xLabels, fmtX, scrollable: contentW > viewW + 1 };
+    }, [rows, series, width, height, maxValue, baselineValue, baseline2Value, minGap]);
+
+    // Open on (and follow) the newest readings when the series grows.
+    const prevN = useRef(0);
+    useEffect(() => {
+        const grew = g.n > prevN.current;
+        prevN.current = g.n;
+        if (!grew || !g.scrollable || !scrollRef.current) return undefined;
+        const t = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: false }), 30);
+        return () => clearTimeout(t);
+    }, [g.n, g.scrollable, g.contentW]);
+
+    // The pop-up hides itself after a few seconds.
+    useEffect(() => {
+        if (sel == null) return undefined;
+        const t = setTimeout(() => setSel(null), TIP_HIDE_MS);
+        return () => clearTimeout(t);
+    }, [sel]);
+
+    if (!rows.length) return fallback || null;
+
+    const levelColor = (v) => (!zoned ? series[0].color
+        : v >= baselineValue ? zoneHighColor : v >= midValue ? zoneMidColor : zoneLowColor);
+    const frac = (v) => Math.min(1, Math.max(0, (g.hi - v) / (g.hi - g.lo)));
+    const { n, x, y, contentW } = g;
+    const s = sel != null && sel < n ? sel : null;
+    const hv = s != null ? rows[s] : null;
+
+    // Tap: if a pop-up is showing, any tap dismisses it; otherwise select
+    // the nearest point.
+    const onPress = (e) => {
+        if (s != null) { setSel(null); return; }
+        const px = e.nativeEvent.locationX;
+        const i = n <= 1 ? 0 : Math.round(((px - PAD.l) / g.plotW) * (n - 1));
+        setSel(Math.max(0, Math.min(n - 1, i)));
+    };
+
+    const legend = [];
+    if (isMulti) series.forEach((se) => legend.push({ color: se.color, label: se.name }));
+    if (baseline2Value != null) legend.push({ color: baseline2Color, label: baseline2Label || 'Your baseline', dashed: true });
+    if (baselineValue != null) legend.push({ color: baselineColor, label: baselineLabel || 'Stress threshold', dashed: true });
+
+    const tipW = Math.min(TIP_W, g.viewW - 8);
+    const tipLeft = hv ? Math.min(contentW - tipW - 4, Math.max(4, x(s) - tipW / 2)) : 0;
+    const hvFirst = hv ? hv.values.find((v) => v != null) : null;
+    // Pop-up goes above the point, or below it when the point is near the top.
+    const tipTop = hv && hvFirst != null ? (y(hvFirst) > 70 ? Math.max(0, y(hvFirst) - 62) : Math.min(height - 60, y(hvFirst) + 12)) : 0;
 
     return (
-        <View style={{ width, height, overflow: 'hidden' }}>
-            {haveAllTimes && (
-                <Svg width={width} height={height} style={StyleSheet.absoluteFill} pointerEvents="none">
-                    {raw.map((_p, i) => {
-                        if (!(i % labelStep === 0 || i === raw.length - 1)) return null;
-                        return (
-                            <SvgLine key={`grid-${i}`} x1={xPositions[i] + yAxisLabelWidth} y1={0} x2={xPositions[i] + yAxisLabelWidth} y2={height}
-                                stroke={COLORS.light.borderSoft} strokeWidth={1} />
-                        );
-                    })}
+        <View style={{ width: '100%' }} onLayout={(e) => {
+            const w = Math.floor(e.nativeEvent.layout.width);
+            if (w > 0 && Math.abs(w - width) > 1) setWidth(w);
+        }}>
+            <View style={styles.row}>
+                {/* Pinned y-axis */}
+                <Svg width={AXIS_W} height={height}>
+                    {g.ticks.map((t, i) => (
+                        <SvgText key={`a${i}`} x={AXIS_W - 5} y={y(t) + 3} fontSize={9} fontWeight="700"
+                            fill={COLORS.light.textMuted} textAnchor="end">
+                            {fmtNum(t)}
+                        </SvgText>
+                    ))}
                 </Svg>
+
+                <ScrollView
+                    ref={scrollRef}
+                    horizontal
+                    scrollEnabled={g.scrollable}
+                    showsHorizontalScrollIndicator={g.scrollable}
+                    style={{ width: g.viewW }}
+                    nestedScrollEnabled
+                    bounces={false}
+                    overScrollMode="never"
+                    onScrollBeginDrag={() => setSel(null)}
+                >
+                    <Pressable onPress={onPress} style={{ width: contentW, height }}>
+                        <Svg width={contentW} height={height}>
+                            <Defs>
+                                {zoned && (
+                                    <LinearGradient id="zone" x1="0" y1={PAD.t} x2="0" y2={PAD.t + g.plotH} gradientUnits="userSpaceOnUse">
+                                        <Stop offset={0} stopColor={zoneHighColor} />
+                                        <Stop offset={frac(baselineValue)} stopColor={zoneHighColor} />
+                                        <Stop offset={frac(baselineValue)} stopColor={zoneMidColor} />
+                                        <Stop offset={frac(midValue)} stopColor={zoneMidColor} />
+                                        <Stop offset={frac(midValue)} stopColor={zoneLowColor} />
+                                        <Stop offset={1} stopColor={zoneLowColor} />
+                                    </LinearGradient>
+                                )}
+                                <LinearGradient id="area" x1="0" y1="0" x2="0" y2="1">
+                                    <Stop offset="0" stopColor={zoned ? COLORS.brand : series[0].color} stopOpacity={0.16} />
+                                    <Stop offset="1" stopColor={zoned ? COLORS.brand : series[0].color} stopOpacity={0} />
+                                </LinearGradient>
+                            </Defs>
+
+                            {g.ticks.map((t, i) => (
+                                <SvgLine key={`t${i}`} x1={0} x2={contentW} y1={y(t)} y2={y(t)} stroke={COLORS.light.borderSoft} strokeWidth={1} />
+                            ))}
+
+                            {g.breaks.map((i) => {
+                                const bx = (x(i) + x(i - 1)) / 2;
+                                return <SvgLine key={`b${i}`} x1={bx} x2={bx} y1={PAD.t} y2={PAD.t + g.plotH} stroke={COLORS.light.border} strokeDasharray="3,4" />;
+                            })}
+
+                            {baseline2Value != null && (
+                                <SvgLine x1={0} x2={contentW} y1={y(baseline2Value)} y2={y(baseline2Value)}
+                                    stroke={baseline2Color} strokeOpacity={0.7} strokeWidth={1.5} strokeDasharray="5,4" />
+                            )}
+                            {baselineValue != null && (
+                                <SvgLine x1={0} x2={contentW} y1={y(baselineValue)} y2={y(baselineValue)}
+                                    stroke={baselineColor} strokeOpacity={0.7} strokeWidth={1.5} strokeDasharray="5,4" />
+                            )}
+
+                            {g.paths.map((p, si) => (
+                                <React.Fragment key={`p${si}`}>
+                                    {!isMulti && <Path d={p.area} fill="url(#area)" />}
+                                    <Path d={p.d} fill="none" strokeWidth={2.4} strokeLinejoin="round" strokeLinecap="round"
+                                        stroke={zoned ? 'url(#zone)' : series[si].color} />
+                                </React.Fragment>
+                            ))}
+
+                            {/* Every point is visible -- MIN_GAP guarantees room for a dot. */}
+                            {minGap >= 8 && series.map((se, si) => rows.map((r, i) => (r.values[si] == null ? null : (
+                                <Circle key={`d${si}-${i}`} cx={x(i)} cy={y(r.values[si])} r={2.4} fill="#FFFFFF"
+                                    stroke={zoned ? levelColor(r.values[si]) : se.color} strokeWidth={1.5} />
+                            ))))}
+
+                            {g.xLabels.map((i, k) => {
+                                const anchor = k === 0 ? 'start' : i === n - 1 ? 'end' : 'middle';
+                                const lx = anchor === 'start' ? Math.max(2, x(i) - 4) : anchor === 'end' ? Math.min(contentW - 2, x(i) + 4) : x(i);
+                                return (
+                                    <SvgText key={`x${i}`} x={lx} y={height - 6}
+                                        fontSize={9} fontWeight="700" fill={COLORS.light.textMuted} textAnchor={anchor}>
+                                        {g.fmtX(rows[i].date)}
+                                    </SvgText>
+                                );
+                            })}
+
+                            {hv && (
+                                <>
+                                    <SvgLine x1={x(s)} x2={x(s)} y1={PAD.t} y2={PAD.t + g.plotH} stroke={COLORS.light.text} strokeOpacity={0.2} />
+                                    {series.map((se, si) => (hv.values[si] == null ? null : (
+                                        <Circle key={`h${si}`} cx={x(s)} cy={y(hv.values[si])} r={5.5}
+                                            fill={zoned ? levelColor(hv.values[si]) : se.color} stroke="#FFFFFF" strokeWidth={2} />
+                                    )))}
+                                </>
+                            )}
+                        </Svg>
+
+                        {hv && (
+                            <View pointerEvents="none" style={[styles.tip, { left: tipLeft, top: tipTop, width: tipW }]}>
+                                {series.map((se, si) => (hv.values[si] == null ? null : (
+                                    <Text key={si} style={styles.tipText} numberOfLines={1}>
+                                        {isMulti ? <Text style={{ color: se.color }}>● </Text> : null}
+                                        {isMulti ? `${se.name}: ` : ''}{fmtNum(hv.values[si])}{suffix}
+                                        {zoned ? (hv.values[si] >= baselineValue ? '  · high' : hv.values[si] >= midValue ? '  · rising' : '  · calm') : ''}
+                                    </Text>
+                                )))}
+                                {hv.date ? (
+                                    <Text style={styles.tipSub} numberOfLines={1}>
+                                        {fmtDay(hv.date)} · {fmtTime(hv.date)}{hv.windowCount ? ` · avg of ${hv.windowCount}` : ''}
+                                    </Text>
+                                ) : null}
+                            </View>
+                        )}
+                    </Pressable>
+                </ScrollView>
+            </View>
+
+            {(legend.length > 0 || g.scrollable) && (
+                <Legend items={legend} hint={g.scrollable ? '← swipe for earlier' : null} />
             )}
-            <GiftedLineChart
-                data={data}
-                width={plotWidth}
-                height={height}
-                color={color}
-                thickness={2.5}
-                curved
-                areaChart
-                startFillColor={color}
-                endFillColor={color}
-                startOpacity={0.22}
-                endOpacity={0.02}
-                dataPointsColor={color}
-                dataPointsRadius={raw.length <= 30 ? 3 : 0}
-                yAxisLabelWidth={yAxisLabelWidth}
-                yAxisTextStyle={{ fontSize: 9, color: COLORS.light.textMuted }}
-                xAxisLabelTextStyle={{ fontSize: 9, color: COLORS.light.textMuted }}
-                yAxisLabelSuffix={suffix || ''}
-                hideYAxisText={hideValues}
-                hideRules={hideValues}
-                hideOrigin={hideValues}
-                yAxisExtraHeight={0}
-                noOfSections={4}
-                {...(maxValue !== undefined ? { maxValue } : {})}
-                xAxisColor={COLORS.light.borderSoft}
-                xAxisThickness={1}
-                yAxisColor="transparent"
-                rulesColor={COLORS.light.borderSoft}
-                rulesType="solid"
-                backgroundColor="transparent"
-                initialSpacing={initialSpacing}
-                endSpacing={endSpacing}
-            />
-            <ReferenceLine value={baselineValue} label={baselineLabel} color={baselineColor}
-                height={height} maxValue={maxValue} labelSide="right" />
-            <ReferenceLine value={baseline2Value} label={baseline2Label} color={baseline2Color}
-                height={height} maxValue={maxValue} labelSide="left" />
         </View>
     );
 }
 
+// Re-render only when something other than `fallback`'s identity changed.
+function propsEqual(prev, next) {
+    const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
+    for (const k of keys) {
+        if (k === 'fallback') continue;
+        if (prev[k] !== next[k]) {
+            if (Array.isArray(prev[k]) && Array.isArray(next[k]) && k !== 'points'
+                && prev[k].length === next[k].length && prev[k].every((v, i) => v === next[k][i])) continue;
+            return false;
+        }
+    }
+    return true;
+}
+
+export default React.memo(LineChart, propsEqual);
+
 const styles = StyleSheet.create({
-    baseline: {
+    row: { flexDirection: 'row', width: '100%' },
+    tip: {
         position: 'absolute',
-        left: 0,
-        right: 0,
-        borderTopWidth: 1.5,
-        borderStyle: 'dashed',
+        backgroundColor: COLORS.light.text, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6,
+        shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8, elevation: 5,
     },
-    baselineLabel: {
-        position: 'absolute',
-        fontSize: 9,
-        fontWeight: '700',
-    },
-    xLabel: {
-        position: 'absolute',
-        width: 52,
-        fontSize: 9,
-        textAlign: 'center',
-    },
-    detailBar: {
-        height: DETAIL_HEIGHT,
-        marginBottom: 6,
-        justifyContent: 'center',
-    },
-    detailRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-    },
-    detailHint: {
-        fontSize: 10,
-        fontStyle: 'italic',
-    },
-    detailText: {
-        fontSize: 11,
-    },
-    scrollBadge: {
-        backgroundColor: COLORS.brandSoft,
-        paddingHorizontal: 6,
-        paddingVertical: 2,
-        borderRadius: 4,
-    },
-    scrollBadgeText: {
-        fontSize: 9,
-        color: COLORS.brandDark,
-        fontWeight: '700',
-    },
-    legendRow: {
-        marginTop: LEGEND_HEIGHT - 12,
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        rowGap: 6,
-        columnGap: 14,
-    },
-    legendItem: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 5,
-    },
-    legendSwatch: {
-        width: 12,
-        height: 2.5,
-        borderRadius: 1,
-    },
-    legendText: {
-        fontSize: 10,
-        fontWeight: '600',
-    },
+    tipText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
+    tipSub: { color: '#FFFFFFB3', fontSize: 10, fontWeight: '600', marginTop: 1 },
+    legendRow: { marginTop: 8, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', rowGap: 6, columnGap: 14 },
+    legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+    legendSwatch: { width: 14, height: 3, borderRadius: 2 },
+    legendDashed: { opacity: 0.7 },
+    legendText: { fontSize: 10, fontWeight: '700', color: COLORS.light.textSub },
+    hint: { marginLeft: 'auto', fontSize: 10, fontWeight: '600', color: COLORS.light.textMuted },
 });

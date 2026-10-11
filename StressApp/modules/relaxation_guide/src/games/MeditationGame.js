@@ -1,599 +1,1274 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
-  Dimensions,
   Animated,
+  Dimensions,
   Easing,
-  ScrollView,
-  Platform,
   Vibration,
+  Platform,
+  ScrollView,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import Svg, { Circle, Line, G, Ellipse } from 'react-native-svg';
 import { ThemeContext } from '../context/ThemeContext';
 
 const { width } = Dimensions.get('window');
 
-/**
- * 🧘 MeditationGame — Minimalist Serene Relaxation Engine
- * Simplified, unified color palette: Calm Deep Teal & Soft Slate
- */
-export const MeditationGame = ({ initialMode, mode, initialDurationMin, onStartSession }) => {
-  const themeContext = React.useContext(ThemeContext);
-  const theme = themeContext?.theme || {};
-  const isDarkMode = themeContext?.isDarkMode ?? true;
+// ---------------------------------------------------------------------------
+// Gamification constants: soft progression, rewards only (no penalties, no fail)
+// ---------------------------------------------------------------------------
+const XP_PER_LEVEL = 300;
+const CYCLE_GOAL = 5;
+const LEVEL_TITLES = ['Seedling', 'Drifting Cloud', 'Calm Lake', 'Moonlit Mind', 'Still Mountain'];
 
-  const activeModeKey = mode || initialMode || 'diaphragmatic_pace';
-  const [activeMode, setActiveMode] = useState(activeModeKey);
+// ---------------------------------------------------------------------------
+// Mindful Body Scan Region Catalog
+// ---------------------------------------------------------------------------
+const BODY_SCAN_REGIONS = [
+  {
+    id: 'head_jaw',
+    name: 'Head & Mind',
+    nerve: 'Mind Unwind',
+    cue: 'Unclench your jaw and soften your forehead.',
+    benefit: 'Clears mental fog and eases racing thoughts.',
+    icon: '🧠',
+    color: '#7DD3FC',
+    nodeY: 28,
+  },
+  {
+    id: 'shoulders_neck',
+    name: 'Shoulders & Neck',
+    nerve: 'Tension Release',
+    cue: 'Let your shoulders drop away from your ears.',
+    benefit: 'Melts physical weight and tightness.',
+    icon: '💆‍♂️',
+    color: '#C4B5FD',
+    nodeY: 62,
+  },
+  {
+    id: 'chest_heart',
+    name: 'Heart Center',
+    nerve: 'Heart Harmony',
+    cue: 'Breathe warmth gently into your chest.',
+    benefit: 'Soothes a busy heart and anxious feelings.',
+    icon: '🫀',
+    color: '#F9A8D4',
+    nodeY: 96,
+  },
+  {
+    id: 'abdomen_core',
+    name: 'Solar Core',
+    nerve: 'Belly Calm',
+    cue: 'Send soft, slow waves of breath into your belly.',
+    benefit: 'Invites deep, whole-body relaxation.',
+    icon: '☀️',
+    color: '#FCD34D',
+    nodeY: 132,
+  },
+  {
+    id: 'feet_grounding',
+    name: 'Grounded Roots',
+    nerve: 'Rooted Peace',
+    cue: 'Feel your feet heavy and anchored.',
+    benefit: 'Draws restless energy down into the earth.',
+    icon: '👣',
+    color: '#6EE7B7',
+    nodeY: 185,
+  },
+];
+
+// ---------------------------------------------------------------------------
+// Ambient floating light motes (calm background life)
+// ---------------------------------------------------------------------------
+const Mote = ({ left, top, size, delay, duration, color }) => {
+  const anim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    if (mode || initialMode) {
-      setActiveMode(mode || initialMode);
-    }
-  }, [mode, initialMode]);
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.delay(delay),
+        Animated.timing(anim, {
+          toValue: 1,
+          duration,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, []);
 
-  // Session State
-  const [isPaused, setIsPaused] = useState(false);
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        left: `${left}%`,
+        top: `${top}%`,
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        backgroundColor: color,
+        opacity: anim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0, 0.55, 0] }),
+        transform: [{ translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [0, -70] }) }],
+      }}
+    />
+  );
+};
+
+const AmbientMotes = ({ color = 'rgba(255,255,255,0.9)', count = 14 }) => {
+  const motes = useMemo(
+    () =>
+      Array.from({ length: count }).map((_, i) => ({
+        id: i,
+        left: Math.random() * 94 + 2,
+        top: Math.random() * 80 + 10,
+        size: 3 + Math.random() * 4,
+        delay: Math.random() * 4000,
+        duration: 6000 + Math.random() * 5000,
+      })),
+    [count]
+  );
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      {motes.map((m) => (
+        <Mote key={m.id} {...m} color={color} />
+      ))}
+    </View>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Pop-able bubble (tap for a gentle reward, it drifts back after a moment)
+// ---------------------------------------------------------------------------
+const CalmBubble = ({ style, size = 34, delay = 0, onPop }) => {
+  const [visible, setVisible] = useState(true);
+  const bob = useRef(new Animated.Value(0)).current;
+  const timer = useRef(null);
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(bob, { toValue: 1, duration: 2600 + delay, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(bob, { toValue: 0, duration: 2600 + delay, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => {
+      loop.stop();
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, []);
+
+  if (!visible) return null;
+
+  return (
+    <Animated.View
+      style={[
+        style,
+        { transform: [{ translateY: bob.interpolate({ inputRange: [0, 1], outputRange: [0, -10] }) }] },
+      ]}
+    >
+      <TouchableOpacity
+        activeOpacity={0.7}
+        onPress={() => {
+          onPop && onPop();
+          setVisible(false);
+          timer.current = setTimeout(() => setVisible(true), 3500);
+        }}
+        style={[styles.bubble, { width: size, height: size, borderRadius: size / 2 }]}
+      >
+        <View style={styles.bubbleShine} />
+      </TouchableOpacity>
+    </Animated.View>
+  );
+};
+
+// ===========================================================================
+// Core Gamified Meditation Engine
+// ===========================================================================
+export const MindfulMeditationEngine = (props) => {
+  const {
+    activeMode: rawActiveMode,
+    mode,
+    initialMode,
+    subOptionId,
+    onFinishSession,
+    isPaused = false,
+  } = props;
+
+  const extractString = (val) => {
+    if (!val) return '';
+    if (typeof val === 'string') return val;
+    if (typeof val === 'object') return val.id || val.mode || val.technique_id || val.key || val.title || '';
+    return String(val);
+  };
+
+  const rawModeStr =
+    extractString(mode) ||
+    extractString(initialMode) ||
+    extractString(subOptionId) ||
+    extractString(rawActiveMode) ||
+    'box_meditation';
+  const s = rawModeStr.toLowerCase();
+
+  let activeMode = 'box_meditation';
+  if (s.includes('body') || s.includes('scan') || s.includes('sweep') || s.includes('mindful')) {
+    activeMode = 'body_scan_mindful';
+  } else if (s.includes('diaphragmatic') || s.includes('belly') || s.includes('deep') || s.includes('pace')) {
+    activeMode = 'diaphragmatic_pace';
+  } else if (s.includes('bio') || s.includes('rhythm') || s.includes('tap')) {
+    activeMode = 'bio_rhythm_tap';
+  } else {
+    activeMode = 'box_meditation';
+  }
+
+  const themeContext = React.useContext(ThemeContext);
+  const isDarkMode = themeContext?.isDarkMode ?? true;
+
+  // Local Game States
+  const [activeBodyRegion, setActiveBodyRegion] = useState(0);
   const [cyclesCompleted, setCyclesCompleted] = useState(0);
   const [secondsLeft, setSecondsLeft] = useState(4);
-  const [phaseTitle, setPhaseTitle] = useState('INHALE');
-  const [phaseInstruction, setPhaseInstruction] = useState('Inhale deeply into lower lungs through nose');
-  const [scientificTip, setScientificTip] = useState('Extended exhalation stimulates the Vagus nerve, lowering heart rate.');
-  const [activeBodyRegion, setActiveBodyRegion] = useState(0);
-  const [vagalBoost, setVagalBoost] = useState(15);
+  const [phaseIdx, setPhaseIdx] = useState(0); // 0: Inhale, 1: Hold, 2: Exhale, 3: Rest
+  const [rhythmStreak, setRhythmStreak] = useState(0);
+  const [coherenceScore, setCoherenceScore] = useState(96);
+  const [xpPopups, setXpPopups] = useState([]);
+  const [totalXp, setTotalXp] = useState(0);
+  const [softenedZones, setSoftenedZones] = useState([]);
+  const [tapHint, setTapHint] = useState('');
 
-  // Animated values
-  const boxLaserProgress = useRef(new Animated.Value(0)).current;
-  const bellyCylinderHeight = useRef(new Animated.Value(0.3)).current;
-  const zenBowlStrike = useRef(new Animated.Value(1)).current;
-  const rippleAnim = useRef(new Animated.Value(0)).current;
+  // Animated Values
+  const boxProgressAnim = useRef(new Animated.Value(0)).current;
+  const corePulseScale = useRef(new Animated.Value(1.0)).current;
+  const waveHeightAnim = useRef(new Animated.Value(0.3)).current;
+  const tapRippleAnim = useRef(new Animated.Value(0)).current;
+  const crestDrift = useRef(new Animated.Value(0)).current;
+  const scaleRef = useRef(1);
 
-  // Box Breathing 4-4-4-4 Tactical Respiration Pattern
+  // Level math
+  const level = Math.floor(totalXp / XP_PER_LEVEL);
+  const levelTitle = LEVEL_TITLES[Math.min(level, LEVEL_TITLES.length - 1)];
+  const levelPct = ((totalXp % XP_PER_LEVEL) / XP_PER_LEVEL) * 100;
+
+  // Slow ambient loop (water crest drift)
+  useEffect(() => {
+    const crest = Animated.loop(
+      Animated.sequence([
+        Animated.timing(crestDrift, { toValue: 1, duration: 5000, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(crestDrift, { toValue: 0, duration: 5000, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ])
+    );
+    crest.start();
+    return () => crest.stop();
+  }, []);
+
+  // Floating reward popup (soft, short, never alarming)
+  const triggerXpPopup = (amountText, xp = 0, customX = null, customY = null) => {
+    const id = Date.now() + Math.random();
+    const newPopup = {
+      id,
+      text: amountText,
+      anim: new Animated.Value(0),
+      x: customX !== null ? customX : width * 0.28 + (Math.random() * 40 - 20),
+      y: customY !== null ? customY : 90 + (Math.random() * 24 - 12),
+    };
+
+    if (xp > 0) setTotalXp((t) => t + xp);
+    setXpPopups((prev) => [...prev.slice(-3), newPopup]);
+
+    Animated.timing(newPopup.anim, {
+      toValue: 1,
+      duration: 1600,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start(() => {
+      setXpPopups((prev) => prev.filter((p) => p.id !== id));
+    });
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 1. STARLIGHT BOX ENGINE (4-4-4-4 perimeter trace)
+  // ═══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
     if (activeMode !== 'box_meditation' || isPaused) return;
 
-    let step = 0;
-    const runBoxCycle = () => {
-      const edge = step % 4;
-      if (edge === 0) {
-        setPhaseTitle('1. INHALE (4s)');
-        setPhaseInstruction('Inhale deeply into lower lungs through nose');
-        setScientificTip('Inhaling expands lung volume, preparing for vagal equilibrium.');
-        setSecondsLeft(4);
-      } else if (edge === 1) {
-        setPhaseTitle('2. HOLD TOP (4s)');
-        setPhaseInstruction('Hold breath calmly with relaxed shoulders');
-        setScientificTip('Holding breath balances O2 and CO2 levels in blood plasma.');
-        setSecondsLeft(4);
-      } else if (edge === 2) {
-        setPhaseTitle('3. EXHALE (4s)');
-        setPhaseInstruction('Release breath smoothly through mouth');
-        setScientificTip('Exhaling stimulates the Vagus nerve, slowing heart rate.');
-        setSecondsLeft(4);
-      } else {
-        setPhaseTitle('4. REST HOLD (4s)');
-        setPhaseInstruction('Pause empty before next breath cycle');
-        setScientificTip('Resting empty resets sympathetic cardiac drive to baseline.');
-        setSecondsLeft(4);
-      }
+    let currentPhase = 0;
+    let sec = 4;
+    setSecondsLeft(4);
+    setPhaseIdx(0);
 
-      boxLaserProgress.setValue(edge * 0.25);
-      Animated.timing(boxLaserProgress, {
-        toValue: (edge + 1) * 0.25,
-        duration: 4000,
+    const runBoxAnimation = () => {
+      boxProgressAnim.setValue(0);
+      Animated.timing(boxProgressAnim, {
+        toValue: 4,
+        duration: 16000,
         easing: Easing.linear,
         useNativeDriver: false,
-      }).start();
-
-      step++;
-      if (step % 4 === 0) {
-        setCyclesCompleted(c => c + 1);
-        setVagalBoost(v => Math.min(95, v + 8));
-      }
+      }).start(({ finished }) => {
+        if (finished && !isPaused) {
+          setCyclesCompleted((c) => c + 1);
+          triggerXpPopup('Full cycle  +100', 100);
+          runBoxAnimation();
+        }
+      });
     };
 
-    runBoxCycle();
-    const interval = setInterval(runBoxCycle, 4000);
-    return () => clearInterval(interval);
+    runBoxAnimation();
+
+    const updatePhaseScale = (phase) => {
+      const targets = [1.3, 1.33, 0.85, 1.0];
+      const easings = [Easing.inOut(Easing.ease), Easing.linear, Easing.inOut(Easing.ease), Easing.linear];
+      Animated.timing(corePulseScale, {
+        toValue: targets[phase],
+        duration: 4000,
+        easing: easings[phase],
+        useNativeDriver: true,
+      }).start();
+    };
+
+    updatePhaseScale(0);
+
+    const interval = setInterval(() => {
+      sec -= 1;
+      if (sec <= 0) {
+        currentPhase = (currentPhase + 1) % 4;
+        setPhaseIdx(currentPhase);
+        updatePhaseScale(currentPhase);
+        sec = 4;
+      }
+      setSecondsLeft(sec);
+    }, 1000);
+
+    return () => {
+      clearInterval(interval);
+      boxProgressAnim.stopAnimation();
+    };
   }, [activeMode, isPaused]);
 
-  // Deep Belly Pacing 4s Inhale / 6s Exhale Pattern
+  // Tapping the glowing node of the current phase = "in flow" reward.
+  // Tapping another node is never punished, only gently redirected.
+  const handleBoxTap = (nodePhase) => {
+    if (Platform.OS !== 'web') Vibration.vibrate(10);
+    if (nodePhase === 'CENTER' || nodePhase === phaseIdx) {
+      triggerXpPopup('In flow  +25', 25);
+      setRhythmStreak((st) => st + 1);
+      setTapHint('');
+    } else {
+      setTapHint('Follow the glowing star. No rush.');
+    }
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 2. TIDE POOL PACING ENGINE (4s inhale / 6s extended exhale)
+  // ═══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
     if (activeMode !== 'diaphragmatic_pace' || isPaused) return;
 
     let isInhale = true;
-    const runBellyCycle = () => {
+    let sec = 4;
+    setSecondsLeft(4);
+    setPhaseIdx(0);
+
+    const updateWave = () => {
       if (isInhale) {
-        setPhaseTitle('BELLY INHALE (4s)');
-        setPhaseInstruction('Expand lower abdomen outward slowly through nose');
-        setScientificTip('Diaphragmatic expansion engages phrenic nerve abdominal receptors.');
-        setSecondsLeft(4);
-        Animated.timing(bellyCylinderHeight, {
-          toValue: 0.95,
+        setPhaseIdx(0);
+        sec = 4;
+        Animated.timing(waveHeightAnim, {
+          toValue: 0.85,
           duration: 4000,
           easing: Easing.inOut(Easing.ease),
           useNativeDriver: false,
         }).start();
+        Animated.timing(corePulseScale, {
+          toValue: 1.3,
+          duration: 4000,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }).start();
       } else {
-        setPhaseTitle('EXTENDED EXHALE (6s)');
-        setPhaseInstruction('Soften stomach inward toward spine slowly through mouth');
-        setScientificTip('6-second extended exhalation produces maximum HRV vagal recovery.');
-        setSecondsLeft(6);
-        Animated.timing(bellyCylinderHeight, {
-          toValue: 0.25,
+        setPhaseIdx(2);
+        sec = 6;
+        Animated.timing(waveHeightAnim, {
+          toValue: 0.15,
           duration: 6000,
           easing: Easing.inOut(Easing.ease),
           useNativeDriver: false,
         }).start();
-        setCyclesCompleted(c => c + 1);
-        setVagalBoost(v => Math.min(95, v + 10));
+        Animated.timing(corePulseScale, {
+          toValue: 0.85,
+          duration: 6000,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }).start();
       }
-      isInhale = !isInhale;
     };
 
-    runBellyCycle();
-    const interval = setInterval(runBellyCycle, isInhale ? 6000 : 4000);
+    updateWave();
+
+    const interval = setInterval(() => {
+      sec -= 1;
+      if (sec <= 0) {
+        isInhale = !isInhale;
+        if (isInhale) {
+          setCyclesCompleted((c) => c + 1);
+          triggerXpPopup('Tide rolled in  +100', 100);
+        }
+        updateWave();
+      }
+      setSecondsLeft(sec > 0 ? sec : isInhale ? 4 : 6);
+    }, 1000);
+
     return () => clearInterval(interval);
   }, [activeMode, isPaused]);
 
-  // Mindful Body Scan Somatic Tension Sweep
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 3. LIGHT JOURNEY BODY SCAN ENGINE
+  // ═══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
     if (activeMode !== 'body_scan_mindful' || isPaused) return;
 
-    const regions = [
-      { name: 'CROWN & FOREHEAD', instruction: 'Unclamp jaw & smooth forehead tension', tip: 'Releasing jaw muscles drops trigeminal nerve tension signal.' },
-      { name: 'SHOULDERS & NECK', instruction: 'Drop shoulder blades downward away from ears', tip: 'Trapezius relaxation reduces cervical sympathetic trunk tightness.' },
-      { name: 'CHEST & HEART', instruction: 'Breathe warm light directly into heart center', tip: 'Heart center focus increases cardiac vagal tone.' },
-      { name: 'ABDOMEN & CORE', instruction: 'Release deep stomach muscle tightness', tip: 'Somatic core relaxation decreases abdominal cortisol pooling.' },
-      { name: 'FEET & ANKLES', instruction: 'Feel heavy grounding connection into floor', tip: 'Peripheral limb awareness diverts blood flow away from anxious brain centers.' },
-    ];
-
-    let rIdx = 0;
-    const runBodyCycle = () => {
-      const reg = regions[rIdx % regions.length];
-      setActiveBodyRegion(rIdx % regions.length);
-      setPhaseTitle(reg.name);
-      setPhaseInstruction(reg.instruction);
-      setScientificTip(reg.tip);
-      setSecondsLeft(6);
-      rIdx++;
-      if (rIdx % regions.length === 0) {
-        setCyclesCompleted(c => c + 1);
-        setVagalBoost(v => Math.min(95, v + 7));
-      }
-    };
-
-    runBodyCycle();
-    const interval = setInterval(runBodyCycle, 6000);
-    return () => clearInterval(interval);
-  }, [activeMode, isPaused]);
-
-  // Silent Zen Open Monitoring Chime Pattern
-  useEffect(() => {
-    if (activeMode !== 'silent_zen_timer' || isPaused) return;
-
-    setPhaseTitle('SILENT OPEN MONITORING');
-    setPhaseInstruction('Unguided silent awareness • Rest in natural presence');
-    setScientificTip('Open Monitoring meditation quiets Default Mode Network (DMN) rumination loops.');
-    setSecondsLeft(8);
-
+    let regionIdx = 0;
     const interval = setInterval(() => {
-      setCyclesCompleted(c => c + 1);
-      setVagalBoost(v => Math.min(95, v + 6));
-    }, 8000);
+      regionIdx = (regionIdx + 1) % BODY_SCAN_REGIONS.length;
+      setActiveBodyRegion(regionIdx);
+      if (regionIdx === 0) {
+        setCyclesCompleted((c) => c + 1);
+        setSoftenedZones([]);
+        triggerXpPopup('Body journey done  +100', 100);
+      }
+    }, 6000);
+
     return () => clearInterval(interval);
   }, [activeMode, isPaused]);
 
-  const handleStrikeBowl = () => {
-    if (Platform.OS !== 'web') Vibration.vibrate(20);
-    zenBowlStrike.setValue(1);
-    Animated.sequence([
-      Animated.timing(zenBowlStrike, { toValue: 1.35, duration: 200, useNativeDriver: true }),
-      Animated.timing(zenBowlStrike, { toValue: 1.0, duration: 600, useNativeDriver: true }),
-    ]).start();
+  const handleSoftenZone = () => {
+    const reg = BODY_SCAN_REGIONS[activeBodyRegion];
+    if (softenedZones.includes(reg.id)) {
+      triggerXpPopup('Already soft and warm', 0);
+      return;
+    }
+    if (Platform.OS !== 'web') Vibration.vibrate(10);
+    setSoftenedZones((z) => [...z, reg.id]);
+    triggerXpPopup(`${reg.name} softened  +50`, 50);
+  };
 
-    rippleAnim.setValue(0);
-    Animated.timing(rippleAnim, {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 4. HEARTBEAT GLOW ENGINE (tap with the pulse)
+  // ═══════════════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    if (activeMode !== 'bio_rhythm_tap' || isPaused) return;
+
+    const listenerId = corePulseScale.addListener(({ value }) => {
+      scaleRef.current = value;
+    });
+
+    const pulseAnim = Animated.loop(
+      Animated.sequence([
+        Animated.timing(corePulseScale, { toValue: 1.35, duration: 2500, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(corePulseScale, { toValue: 0.9, duration: 2500, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      ])
+    );
+    pulseAnim.start();
+
+    return () => {
+      pulseAnim.stop();
+      corePulseScale.removeListener(listenerId);
+    };
+  }, [activeMode, isPaused]);
+
+  // Every tap is rewarded. Tapping near the glow's peak earns a little more.
+  const handleRhythmTap = () => {
+    if (Platform.OS !== 'web') Vibration.vibrate(10);
+    const nearPeak = scaleRef.current > 1.2;
+    setRhythmStreak((st) => st + 1);
+    setCoherenceScore((prev) => Math.min(100, prev + 1));
+    triggerXpPopup(nearPeak ? 'In sync  +30' : 'Gentle beat  +15', nearPeak ? 30 : 15);
+
+    tapRippleAnim.setValue(0);
+    Animated.timing(tapRippleAnim, {
       toValue: 1,
-      duration: 1200,
+      duration: 1100,
       easing: Easing.out(Easing.quad),
       useNativeDriver: true,
     }).start();
   };
 
-  // Serene Minimalist Palette (Teal & Slate)
-  const getThemeDetails = () => {
-    switch (activeMode) {
-      case 'box_meditation':
-        return { title: 'Box Breathing', badge: 'WESAD Score: 0.86 · 4-4-4-4 Square', icon: '🧊' };
-      case 'diaphragmatic_pace':
-        return { title: 'Deep Belly Pacing', badge: 'WESAD Score: 0.88 · 4s/6s Ratio', icon: '🫁' };
-      case 'body_scan_mindful':
-        return { title: 'Mindful Body Scan', badge: 'WESAD Score: 0.74 · Somatic Sweep', icon: '🧘‍♂️' };
-      case 'silent_zen_timer':
+  // Perimeter orb interpolation (frame is 220 wide, corners inset by 22)
+  const orbX = boxProgressAnim.interpolate({
+    inputRange: [0, 1, 2, 3, 4],
+    outputRange: [22, 198, 198, 22, 22],
+  });
+  const orbY = boxProgressAnim.interpolate({
+    inputRange: [0, 1, 2, 3, 4],
+    outputRange: [22, 22, 198, 198, 22],
+  });
+
+  const getBoxPhaseDetails = () => {
+    switch (phaseIdx) {
+      case 0:
+        return { title: 'Inhale', cue: 'Breathe in slowly, like drawing in starlight.', color: '#7DD3FC' };
+      case 1:
+        return { title: 'Hold', cue: 'Rest in the stillness. Nothing to do.', color: '#A5B4FC' };
+      case 2:
+        return { title: 'Exhale', cue: 'Let the breath leave, and let stress drift off with it.', color: '#6EE7B7' };
+      case 3:
       default:
-        return { title: 'Silent Zen Presence', badge: 'WESAD Score: 0.55 · Zen Presence', icon: '⛩️' };
+        return { title: 'Rest', cue: 'Pause softly before the next cycle.', color: '#F9A8D4' };
     }
   };
 
-  const techInfo = getThemeDetails();
-  const primaryTeal = '#0D9488';
-  const textColor = isDarkMode ? '#FFFFFF' : '#0F172A';
-  const subTextColor = isDarkMode ? 'rgba(255,255,255,0.7)' : '#475569';
-  const bgGradient = isDarkMode ? ['#061D1A', '#0B2925'] : ['#F8FAFC', '#F0FDFA'];
-  const cardBg = isDarkMode ? 'rgba(13, 148, 136, 0.15)' : '#FFFFFF';
-  const borderColor = isDarkMode ? 'rgba(13, 148, 136, 0.35)' : '#CBD5E1';
+  const boxPhase = getBoxPhaseDetails();
+  const currentRegion = BODY_SCAN_REGIONS[activeBodyRegion] || BODY_SCAN_REGIONS[0];
+  const goalDone = cyclesCompleted >= CYCLE_GOAL;
 
-  const bodyRegions = [
-    { name: 'Head & Jaw', icon: '🧠' },
-    { name: 'Shoulders & Neck', icon: '💆‍♂️' },
-    { name: 'Chest & Heart', icon: '🫁' },
-    { name: 'Abdomen & Core', icon: '✨' },
-    { name: 'Feet & Grounding', icon: '👣' },
-  ];
+  const gradientColors =
+    activeMode === 'box_meditation'
+      ? ['#0B1026', '#17204A', '#2A2F6B'] // Night sky
+      : activeMode === 'diaphragmatic_pace'
+        ? ['#073B4C', '#0E6E8C', '#58B8C8'] // Shallow sea
+        : activeMode === 'body_scan_mindful'
+          ? ['#1F1235', '#3B2A66', '#6A4FA3'] // Twilight
+          : ['#0E2A2F', '#1A5A5F', '#7BA89A']; // Sage mist
+
+  const accent =
+    activeMode === 'box_meditation'
+      ? boxPhase.color
+      : activeMode === 'diaphragmatic_pace'
+        ? '#7DD3FC'
+        : activeMode === 'body_scan_mindful'
+          ? currentRegion.color
+          : '#99F6E4';
+
+  // Shared progress header: level, XP bar, and a soft goal tracker
+  const renderHeader = (extraChip) => (
+    <View style={styles.headerCard}>
+      <View style={styles.headerTopRow}>
+        <View>
+          <Text style={styles.levelLabel}>LEVEL {level + 1}</Text>
+          <Text style={styles.levelTitle}>{levelTitle}</Text>
+        </View>
+        <View style={styles.goalDotsWrap}>
+          <View style={styles.goalDotsRow}>
+            {Array.from({ length: CYCLE_GOAL }).map((_, i) => (
+              <View
+                key={i}
+                style={[
+                  styles.goalDot,
+                  i < cyclesCompleted && { backgroundColor: accent, borderColor: accent },
+                ]}
+              />
+            ))}
+          </View>
+          <Text style={styles.goalText}>
+            {goalDone ? 'Calm goal reached' : `${cyclesCompleted}/${CYCLE_GOAL} calm cycles`}
+          </Text>
+        </View>
+      </View>
+      <View style={styles.xpTrack}>
+        <View style={[styles.xpFill, { width: `${Math.max(levelPct, 3)}%`, backgroundColor: accent }]} />
+      </View>
+      <View style={styles.headerChipsRow}>
+        <View style={styles.statChip}>
+          <Text style={styles.statChipText}>{totalXp} calm points</Text>
+        </View>
+        {extraChip}
+      </View>
+    </View>
+  );
 
   return (
-    <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false} bounces={false}>
-      <LinearGradient colors={bgGradient} style={styles.gradientWrapper}>
-        {/* Top Header Card */}
-        <View style={[styles.headerCard, { backgroundColor: cardBg, borderColor }]}>
-          <View style={[styles.headerIconRing, { backgroundColor: 'rgba(13, 148, 136, 0.2)' }]}>
-            <Text style={styles.headerIcon}>{techInfo.icon}</Text>
-          </View>
-          <View style={styles.headerTextWrap}>
-            <Text style={[styles.headerTitle, { color: textColor }]}>{techInfo.title}</Text>
-            <Text style={[styles.headerBadge, { color: primaryTeal }]}>{techInfo.badge}</Text>
-          </View>
-          <View style={[styles.cycleBadge, { backgroundColor: primaryTeal }]}>
-            <Text style={styles.cycleBadgeTxt}>{cyclesCompleted} Cycles</Text>
-          </View>
-        </View>
+    <View style={styles.outerContainer}>
+      <LinearGradient colors={gradientColors} style={styles.gradientBackground}>
+        <AmbientMotes
+          color={isDarkMode ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.8)'}
+          count={activeMode === 'diaphragmatic_pace' ? 10 : 14}
+        />
 
-        {/* Live Vagal Activation Recovery Bar */}
-        <View style={[styles.vagalMeterCard, { backgroundColor: cardBg, borderColor }]}>
-          <View style={styles.vagalMeterHeader}>
-            <Text style={[styles.vagalMeterTitle, { color: primaryTeal }]}>🌿 PHYSIOLOGICAL RECOVERY</Text>
-            <Text style={[styles.vagalMeterVal, { color: primaryTeal }]}>+{vagalBoost}% Vagal Tone</Text>
+        {isPaused && (
+          <View style={styles.pausedPill} pointerEvents="none">
+            <Text style={styles.pausedText}>Paused. Breathe naturally.</Text>
           </View>
-          <View style={styles.vagalTrack}>
-            <View style={[styles.vagalFill, { width: `${vagalBoost}%`, backgroundColor: primaryTeal }]} />
-          </View>
-        </View>
+        )}
 
-        {/* ═══════════════════════════════════════════════════════════════════
-            PATTERN 1: BOX BREATHING 4-4-4-4 TACTICAL SQUARE
-           ═══════════════════════════════════════════════════════════════════ */}
+        {/* Floating reward popups */}
+        {xpPopups.map((popup) => {
+          const translateY = popup.anim.interpolate({ inputRange: [0, 1], outputRange: [0, -50] });
+          const opacity = popup.anim.interpolate({ inputRange: [0, 0.2, 0.75, 1], outputRange: [0, 1, 1, 0] });
+          return (
+            <Animated.View
+              key={popup.id}
+              style={[styles.xpPopupContainer, { left: popup.x, top: popup.y, opacity, transform: [{ translateY }] }]}
+              pointerEvents="none"
+            >
+              <View style={[styles.xpPopupPill, { borderColor: accent }]}>
+                <Text style={styles.xpPopupText}>{popup.text}</Text>
+              </View>
+            </Animated.View>
+          );
+        })}
+
+        {/* ═══════════════ MODE 1: STARLIGHT BOX ═══════════════ */}
         {activeMode === 'box_meditation' && (
-          <View style={styles.canvasContainer}>
-            <View style={[styles.laserSquareFrame, { borderColor: isDarkMode ? '#0D9488' : '#94A3B8' }]}>
-              <View style={[styles.laserCornerNode, styles.cTL, phaseTitle.includes('1.') && styles.nodeActive]}>
-                <Text style={styles.cNodeTxt}>Inhale 4s</Text>
+          <ScrollView contentContainerStyle={styles.modeScrollContent} showsVerticalScrollIndicator={false}>
+            {renderHeader(
+              <View style={styles.statChip}>
+                <Text style={styles.statChipText}>In-flow streak {rhythmStreak}</Text>
               </View>
-              <View style={[styles.laserCornerNode, styles.cTR, phaseTitle.includes('2.') && styles.nodeActive]}>
-                <Text style={styles.cNodeTxt}>Hold 4s</Text>
-              </View>
-              <View style={[styles.laserCornerNode, styles.cBR, phaseTitle.includes('3.') && styles.nodeActive]}>
-                <Text style={styles.cNodeTxt}>Exhale 4s</Text>
-              </View>
-              <View style={[styles.laserCornerNode, styles.cBL, phaseTitle.includes('4.') && styles.nodeActive]}>
-                <Text style={styles.cNodeTxt}>Rest 4s</Text>
-              </View>
+            )}
 
-              <View style={styles.laserCenterContent}>
-                <Text style={styles.centerEmoji}>🧊</Text>
-                <Text style={[styles.centerTimer, { color: textColor }]}>{secondsLeft}s</Text>
-                <Text style={[styles.centerPhaseTag, { color: primaryTeal }]}>{phaseTitle}</Text>
-              </View>
-            </View>
+            <View style={styles.boxArena}>
+              <View style={[styles.squareFrame, { borderColor: boxPhase.color + '66' }]}>
+                {[
+                  { p: 0, label: 'Inhale', pos: styles.cornerTL },
+                  { p: 1, label: 'Hold', pos: styles.cornerTR },
+                  { p: 2, label: 'Exhale', pos: styles.cornerBR },
+                  { p: 3, label: 'Rest', pos: styles.cornerBL },
+                ].map((n) => {
+                  const on = phaseIdx === n.p;
+                  return (
+                    <TouchableOpacity
+                      key={n.p}
+                      activeOpacity={0.75}
+                      style={[
+                        styles.cornerNode,
+                        n.pos,
+                        on && { backgroundColor: boxPhase.color + '33', borderColor: boxPhase.color },
+                      ]}
+                      onPress={() => handleBoxTap(n.p)}
+                    >
+                      <View style={[styles.cornerStar, on && { backgroundColor: boxPhase.color }]} />
+                      <Text style={[styles.cornerNodeTxt, on && { color: '#FFFFFF' }]}>{n.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
 
-            <View style={styles.edgeStatusRow}>
-              <View style={[styles.edgePill, phaseTitle.includes('1.') && styles.edgePillActive]}>
-                <Text style={styles.edgePillTxt}>Inhale</Text>
-              </View>
-              <View style={[styles.edgePill, phaseTitle.includes('2.') && styles.edgePillActive]}>
-                <Text style={styles.edgePillTxt}>Hold</Text>
-              </View>
-              <View style={[styles.edgePill, phaseTitle.includes('3.') && styles.edgePillActive]}>
-                <Text style={styles.edgePillTxt}>Exhale</Text>
-              </View>
-              <View style={[styles.edgePill, phaseTitle.includes('4.') && styles.edgePillActive]}>
-                <Text style={styles.edgePillTxt}>Rest</Text>
-              </View>
-            </View>
-          </View>
-        )}
-
-        {/* ═══════════════════════════════════════════════════════════════════
-            PATTERN 2: DEEP BELLY PACING 4s INHALE / 6s EXTENDED EXHALE
-           ═══════════════════════════════════════════════════════════════════ */}
-        {activeMode === 'diaphragmatic_pace' && (
-          <View style={styles.canvasContainer}>
-            <View style={styles.diaphragmGaugeRow}>
-              <View style={styles.ribcageTicks}>
-                <Text style={[styles.tickTxt, { color: subTextColor }]}>— 100% Full</Text>
-                <Text style={[styles.tickTxt, { color: subTextColor }]}>— Mid Lungs</Text>
-                <Text style={[styles.tickTxt, { color: subTextColor }]}>— Diaphragm</Text>
-              </View>
-
-              <View style={[styles.cylinderFrame, { borderColor: primaryTeal, backgroundColor: isDarkMode ? 'rgba(13, 148, 136, 0.1)' : '#F0FDFA' }]}>
+                {/* Light orb gliding along the edges */}
                 <Animated.View
+                  pointerEvents="none"
                   style={[
-                    styles.cylinderLiquidFill,
-                    {
-                      backgroundColor: primaryTeal,
-                      height: bellyCylinderHeight.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: ['0%', '100%'],
-                      }),
-                    }
+                    styles.perimeterOrb,
+                    { left: orbX, top: orbY, backgroundColor: boxPhase.color, shadowColor: boxPhase.color },
                   ]}
-                />
-                <View style={styles.cylinderOverlayContent}>
-                  <Text style={styles.centerEmoji}>🫁</Text>
-                  <Text style={[styles.centerTimer, { color: textColor }]}>{secondsLeft}s</Text>
-                  <Text style={[styles.centerPhaseTag, { color: '#FFFFFF' }]}>{phaseTitle}</Text>
-                </View>
-              </View>
-            </View>
-          </View>
-        )}
+                >
+                  <View style={styles.perimeterOrbCore} />
+                </Animated.View>
 
-        {/* ═══════════════════════════════════════════════════════════════════
-            PATTERN 3: MINDFUL BODY SCAN SOMATIC SWEEP
-           ═══════════════════════════════════════════════════════════════════ */}
-        {activeMode === 'body_scan_mindful' && (
-          <View style={styles.canvasContainer}>
-            <View style={styles.anatomicalMapCard}>
-              <View style={styles.anatomicalSilhouette}>
-                {bodyRegions.map((reg, idx) => (
-                  <TouchableOpacity
-                    key={idx}
-                    activeOpacity={0.8}
+                {/* Breathing core */}
+                <TouchableOpacity activeOpacity={0.9} onPress={() => handleBoxTap('CENTER')}>
+                  <Animated.View
                     style={[
-                      styles.somaticZonePill,
-                      { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.06)' : '#FFFFFF', borderColor },
-                      activeBodyRegion === idx && {
-                        backgroundColor: primaryTeal,
-                        borderColor: primaryTeal,
-                      }
+                      styles.coreOrb,
+                      { borderColor: boxPhase.color, transform: [{ scale: corePulseScale }] },
                     ]}
-                    onPress={() => setActiveBodyRegion(idx)}
                   >
-                    <Text style={styles.somaticZoneIcon}>{reg.icon}</Text>
-                    <Text style={[styles.somaticZoneName, { color: isDarkMode ? '#FFFFFF' : '#0F172A' }, activeBodyRegion === idx && styles.zoneTxtActive]}>
-                      {reg.name}
-                    </Text>
-                    {activeBodyRegion === idx && <Text style={styles.activeDot}>🟢 Active Zone</Text>}
-                  </TouchableOpacity>
-                ))}
+                    <Text style={styles.coreTimer}>{secondsLeft}</Text>
+                    <Text style={[styles.corePhaseLabel, { color: boxPhase.color }]}>{boxPhase.title}</Text>
+                  </Animated.View>
+                </TouchableOpacity>
               </View>
             </View>
-          </View>
+
+            <View style={styles.guidanceBanner}>
+              <Text style={[styles.guidanceBannerTitle, { color: boxPhase.color }]}>{boxPhase.title}</Text>
+              <Text style={styles.guidanceBannerCue}>{boxPhase.cue}</Text>
+              <Text style={styles.tapPromptTxt}>
+                {tapHint || 'Tap the glowing star to collect calm points.'}
+              </Text>
+            </View>
+          </ScrollView>
         )}
 
-        {/* ═══════════════════════════════════════════════════════════════════
-            PATTERN 4: SILENT ZEN TIBETAN SINGING BOWL INSTRUMENT
-           ═══════════════════════════════════════════════════════════════════ */}
-        {activeMode === 'silent_zen_timer' && (
-          <View style={styles.canvasContainer}>
-            <TouchableOpacity activeOpacity={0.85} style={styles.zenInstrumentArea} onPress={handleStrikeBowl}>
+        {/* ═══════════════ MODE 2: TIDE POOL ═══════════════ */}
+        {activeMode === 'diaphragmatic_pace' && (
+          <ScrollView contentContainerStyle={styles.modeScrollContent} showsVerticalScrollIndicator={false}>
+            {renderHeader(
+              <View style={styles.statChip}>
+                <Text style={styles.statChipText}>Belly breathing</Text>
+              </View>
+            )}
+
+            <View style={styles.oceanArena}>
               <Animated.View
                 style={[
-                  styles.singingBowlContainer,
+                  styles.oceanWaveContainer,
                   {
-                    borderColor: primaryTeal,
-                    backgroundColor: isDarkMode ? 'rgba(13, 148, 136, 0.15)' : '#CCFBF1',
-                    transform: [{ scale: zenBowlStrike }],
-                  }
+                    height: waveHeightAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: ['20%', '90%'],
+                    }),
+                  },
                 ]}
               >
                 <Animated.View
                   style={[
-                    styles.bowlAcousticRipple,
+                    styles.waveCrest,
                     {
-                      borderColor: '#2DD4BF',
-                      opacity: rippleAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 0] }),
-                      transform: [{ scale: rippleAnim.interpolate({ inputRange: [0, 1], outputRange: [0.7, 2.3] }) }],
-                    }
+                      transform: [
+                        { translateX: crestDrift.interpolate({ inputRange: [0, 1], outputRange: [-30, 30] }) },
+                      ],
+                    },
                   ]}
                 />
-                <Text style={styles.bowlEmojiIcon}>🥣</Text>
-                <Text style={[styles.bowlTitleTxt, { color: textColor }]}>TIBETAN SINGING BOWL</Text>
-                <Text style={[styles.bowlActionTag, { color: primaryTeal }]}>🔔 TAP TO STRIKE BOWL</Text>
+                <LinearGradient colors={['#38BDF8AA', '#0284C7CC', '#075985EE']} style={styles.oceanWaveFill} />
               </Animated.View>
-            </TouchableOpacity>
-          </View>
+
+              <CalmBubble
+                style={{ position: 'absolute', top: 30, right: 36 }}
+                onPop={() => triggerXpPopup('Bubble popped  +15', 15)}
+              />
+              <CalmBubble
+                size={26}
+                delay={500}
+                style={{ position: 'absolute', top: 70, left: 28 }}
+                onPop={() => triggerXpPopup('Bubble popped  +15', 15)}
+              />
+              <CalmBubble
+                size={20}
+                delay={900}
+                style={{ position: 'absolute', bottom: 38, right: 46 }}
+                onPop={() => triggerXpPopup('Bubble popped  +15', 15)}
+              />
+
+              <Animated.View style={[styles.waveCenterOrb, { transform: [{ scale: corePulseScale }] }]}>
+                <Text style={styles.waveTimerTxt}>{secondsLeft}</Text>
+                <Text style={styles.wavePhaseTag}>{phaseIdx === 0 ? 'Breathe in' : 'Long slow out'}</Text>
+              </Animated.View>
+            </View>
+
+            <View style={styles.guidanceBanner}>
+              <Text style={[styles.guidanceBannerTitle, { color: '#7DD3FC' }]}>
+                {phaseIdx === 0 ? 'Fill your belly (4s)' : 'Release like a receding tide (6s)'}
+              </Text>
+              <Text style={styles.guidanceBannerCue}>
+                {phaseIdx === 0
+                  ? 'Let your belly rise outward like a peaceful swell.'
+                  : 'Let the air flow out smooth and long. The longer exhale tells your body it is safe.'}
+              </Text>
+              <Text style={styles.tapPromptTxt}>Pop the drifting bubbles whenever you like.</Text>
+            </View>
+          </ScrollView>
         )}
 
-        {/* Guidance Display Card */}
-        <View style={[styles.guidanceCard, { backgroundColor: cardBg, borderColor }]}>
-          <Text style={[styles.guidanceTitle, { color: primaryTeal }]}>{phaseTitle}</Text>
-          <Text style={[styles.guidanceInstruction, { color: textColor }]}>{phaseInstruction}</Text>
-          <Text style={[styles.scientificTipTxt, { color: subTextColor }]}>💡 {scientificTip}</Text>
-        </View>
+        {/* ═══════════════ MODE 3: LIGHT JOURNEY BODY SCAN ═══════════════ */}
+        {activeMode === 'body_scan_mindful' && (
+          <ScrollView contentContainerStyle={styles.modeScrollContent} showsVerticalScrollIndicator={false}>
+            {renderHeader(
+              <View style={styles.statChip}>
+                <Text style={styles.statChipText}>
+                  {softenedZones.length}/{BODY_SCAN_REGIONS.length} zones softened
+                </Text>
+              </View>
+            )}
 
-        {/* Session Controls */}
-        <TouchableOpacity
-          style={[styles.sessionControlBtn, { backgroundColor: primaryTeal }]}
-          onPress={() => setIsPaused(p => !p)}
-          activeOpacity={0.85}
-        >
-          <Text style={styles.sessionControlBtnTxt}>{isPaused ? '▶  Resume Session' : '⏸  Pause Session'}</Text>
-        </TouchableOpacity>
+            <View style={styles.bodyScanArenaRow}>
+              <View style={styles.silhouetteCard}>
+                <Text style={[styles.silhouetteTitle, { color: currentRegion.color }]}>BODY MAP</Text>
+                <View style={styles.svgContainer}>
+                  <Svg width="120" height="210" viewBox="0 0 120 210">
+                    <Circle cx="60" cy="28" r="14" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="2" />
+                    <Line x1="60" y1="42" x2="60" y2="52" stroke="rgba(255,255,255,0.25)" strokeWidth="2" />
+                    <Line x1="32" y1="58" x2="88" y2="58" stroke="rgba(255,255,255,0.25)" strokeWidth="2" strokeLinecap="round" />
+                    <Line x1="60" y1="52" x2="60" y2="135" stroke="rgba(255,255,255,0.25)" strokeWidth="2" />
+                    <Line x1="32" y1="58" x2="22" y2="115" stroke="rgba(255,255,255,0.25)" strokeWidth="2" strokeLinecap="round" />
+                    <Line x1="88" y1="58" x2="98" y2="115" stroke="rgba(255,255,255,0.25)" strokeWidth="2" strokeLinecap="round" />
+                    <Line x1="60" y1="135" x2="42" y2="195" stroke="rgba(255,255,255,0.25)" strokeWidth="2" strokeLinecap="round" />
+                    <Line x1="60" y1="135" x2="78" y2="195" stroke="rgba(255,255,255,0.25)" strokeWidth="2" strokeLinecap="round" />
+
+                    {BODY_SCAN_REGIONS.map((reg, idx) => {
+                      const isActive = activeBodyRegion === idx;
+                      const softened = softenedZones.includes(reg.id);
+                      return (
+                        <G key={reg.id}>
+                          {(isActive || softened) && (
+                            <Ellipse
+                              cx="60"
+                              cy={reg.nodeY}
+                              rx={isActive ? 26 : 16}
+                              ry={isActive ? 20 : 12}
+                              fill={reg.color}
+                              opacity={isActive ? 0.28 : 0.16}
+                            />
+                          )}
+                          <Circle
+                            cx="60"
+                            cy={reg.nodeY}
+                            r={isActive ? 8 : 5}
+                            fill={softened || isActive ? reg.color : 'rgba(255,255,255,0.35)'}
+                            stroke="#FFFFFF"
+                            strokeWidth={isActive ? 2 : 1}
+                          />
+                        </G>
+                      );
+                    })}
+                  </Svg>
+                </View>
+              </View>
+
+              <View style={styles.detailsRightCol}>
+                <View style={[styles.activeZoneDetailCard, { borderColor: currentRegion.color + '99' }]}>
+                  <View style={styles.activeZoneTopRow}>
+                    <Text style={styles.activeZoneEmoji}>{currentRegion.icon}</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.activeZoneTitle}>{currentRegion.name}</Text>
+                      <Text style={[styles.activeZoneNerve, { color: currentRegion.color }]}>{currentRegion.nerve}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.activeZoneCue}>{currentRegion.cue}</Text>
+                  <View style={styles.activeZoneMechanismBox}>
+                    <Text style={styles.activeZoneMechanismTxt}>{currentRegion.benefit}</Text>
+                  </View>
+
+                  <TouchableOpacity
+                    activeOpacity={0.8}
+                    onPress={handleSoftenZone}
+                    style={[
+                      styles.softenBtn,
+                      {
+                        backgroundColor: softenedZones.includes(currentRegion.id)
+                          ? currentRegion.color + '33'
+                          : currentRegion.color,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.softenBtnTxt,
+                        { color: softenedZones.includes(currentRegion.id) ? '#FFFFFF' : '#1F1235' },
+                      ]}
+                    >
+                      {softenedZones.includes(currentRegion.id) ? 'Softened' : 'Tap to soften this zone'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.zoneSelectorPillRow}>
+                  {BODY_SCAN_REGIONS.map((reg, idx) => {
+                    const isActive = activeBodyRegion === idx;
+                    const softened = softenedZones.includes(reg.id);
+                    return (
+                      <TouchableOpacity
+                        key={reg.id}
+                        activeOpacity={0.8}
+                        style={[
+                          styles.zoneSelectorPill,
+                          softened && { borderColor: reg.color },
+                          isActive && { backgroundColor: reg.color + '55', borderColor: reg.color },
+                        ]}
+                        onPress={() => setActiveBodyRegion(idx)}
+                      >
+                        <Text style={styles.zonePillIcon}>{softened ? '✓' : reg.icon}</Text>
+                        <Text style={[styles.zonePillTxt, { color: isActive ? '#FFFFFF' : 'rgba(255,255,255,0.75)' }]}>
+                          {reg.name.split(' ')[0]}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            </View>
+          </ScrollView>
+        )}
+
+        {/* ═══════════════ MODE 4: HEARTBEAT GLOW ═══════════════ */}
+        {activeMode === 'bio_rhythm_tap' && (
+          <ScrollView contentContainerStyle={styles.modeScrollContent} showsVerticalScrollIndicator={false}>
+            {renderHeader(
+              <View style={styles.statChip}>
+                <Text style={styles.statChipText}>
+                  {rhythmStreak} beats  ·  {coherenceScore}% coherence
+                </Text>
+              </View>
+            )}
+
+            <View style={styles.rhythmTapCenterWrap}>
+              {/* Fixed target ring: tap when the glow reaches it */}
+              <View style={styles.rhythmTargetRing} pointerEvents="none" />
+              <TouchableOpacity activeOpacity={0.9} onPress={handleRhythmTap}>
+                <Animated.View style={[styles.rhythmPulseContainer, { transform: [{ scale: corePulseScale }] }]}>
+                  <Animated.View
+                    style={[
+                      styles.rhythmRippleRing,
+                      {
+                        opacity: tapRippleAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 0] }),
+                        transform: [
+                          { scale: tapRippleAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 1.9] }) },
+                        ],
+                      },
+                    ]}
+                  />
+                  <View style={styles.rhythmInnerGlow} />
+                  <Text style={styles.rhythmTitleTxt}>Heartbeat Glow</Text>
+                  <Text style={styles.rhythmActionTag}>tap as it brightens</Text>
+                </Animated.View>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.guidanceBanner}>
+              <Text style={[styles.guidanceBannerTitle, { color: '#99F6E4' }]}>Match the glow</Text>
+              <Text style={styles.guidanceBannerCue}>
+                Breathe in as it grows, out as it fades. Every tap counts, so there is no wrong beat.
+              </Text>
+            </View>
+          </ScrollView>
+        )}
       </LinearGradient>
-    </ScrollView>
+    </View>
   );
 };
 
+const GLASS = 'rgba(255,255,255,0.08)';
+const GLASS_BORDER = 'rgba(255,255,255,0.18)';
+
 const styles = StyleSheet.create({
-  scrollContainer: { flexGrow: 1 },
-  gradientWrapper: {
+  outerContainer: {
     flex: 1,
-    paddingTop: 14,
-    paddingBottom: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 520,
-  },
-  headerCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    width: width * 0.9,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 18,
-    borderWidth: 1.5,
-    marginBottom: 6,
-    gap: 12,
-  },
-  headerIconRing: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
-  headerIcon: { fontSize: 24 },
-  headerTextWrap: { flex: 1 },
-  headerTitle: { fontSize: 16, fontWeight: '800', letterSpacing: -0.3 },
-  headerBadge: { fontSize: 11, fontWeight: '700', marginTop: 2 },
-  cycleBadge: { paddingVertical: 4, paddingHorizontal: 10, borderRadius: 12 },
-  cycleBadgeTxt: { color: '#FFFFFF', fontSize: 11, fontWeight: '800' },
-
-  vagalMeterCard: {
-    width: width * 0.9,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 14,
-    borderWidth: 1.5,
-    marginBottom: 8,
-  },
-  vagalMeterHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 },
-  vagalMeterTitle: { fontSize: 10, fontWeight: '800', letterSpacing: 0.8 },
-  vagalMeterVal: { fontSize: 11, fontWeight: '800' },
-  vagalTrack: { width: '100%', height: 6, borderRadius: 3, backgroundColor: 'rgba(0,0,0,0.08)', overflow: 'hidden' },
-  vagalFill: { height: '100%', borderRadius: 3 },
-
-  canvasContainer: {
-    width: width * 0.9,
-    height: Math.min(width * 0.68, 250),
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginVertical: 6,
-  },
-
-  // Box Breathing Laser Frame
-  laserSquareFrame: {
-    width: 180,
-    height: 180,
-    borderRadius: 22,
-    borderWidth: 2.5,
-    position: 'relative',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  laserCornerNode: {
-    position: 'absolute',
-    paddingVertical: 2,
-    paddingHorizontal: 6,
-    borderRadius: 8,
-    backgroundColor: 'rgba(15, 23, 42, 0.75)',
-  },
-  cTL: { top: -10, left: -10 },
-  cTR: { top: -10, right: -10 },
-  cBR: { bottom: -10, right: -10 },
-  cBL: { bottom: -10, left: -10 },
-  cNodeTxt: { color: '#FFFFFF', fontSize: 9, fontWeight: '800' },
-  nodeActive: { backgroundColor: '#0D9488' },
-  laserCenterContent: { alignItems: 'center', justifyContent: 'center' },
-  edgeStatusRow: { flexDirection: 'row', gap: 6, marginTop: 10 },
-  edgePill: { paddingVertical: 3, paddingHorizontal: 8, borderRadius: 8, backgroundColor: 'rgba(0,0,0,0.06)' },
-  edgePillActive: { backgroundColor: '#0D9488' },
-  edgePillTxt: { color: '#FFFFFF', fontSize: 9, fontWeight: '800' },
-
-  // Deep Belly Cylinder
-  diaphragmGaugeRow: { flexDirection: 'row', alignItems: 'center', gap: 18 },
-  ribcageTicks: { gap: 14 },
-  tickTxt: { fontSize: 10, fontWeight: '700' },
-  cylinderFrame: {
-    width: 120,
-    height: 190,
     borderRadius: 24,
-    borderWidth: 2.5,
     overflow: 'hidden',
-    justifyContent: 'flex-end',
-    position: 'relative',
   },
-  cylinderLiquidFill: { width: '100%', borderRadius: 20 },
-  cylinderOverlayContent: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
+  gradientBackground: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'relative',
   },
-
-  // Mindful Body Scan Map
-  anatomicalMapCard: { width: '100%', height: '100%', justifyContent: 'center' },
-  anatomicalSilhouette: { width: '100%', gap: 5 },
-  somaticZonePill: {
-    flexDirection: 'row',
+  modeScrollContent: {
+    flexGrow: 1,
     alignItems: 'center',
-    paddingVertical: 6,
+    justifyContent: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    width: '100%',
+  },
+  pausedPill: {
+    position: 'absolute',
+    top: 10,
+    alignSelf: 'center',
+    zIndex: 50,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    paddingVertical: 4,
     paddingHorizontal: 12,
     borderRadius: 12,
-    borderWidth: 1.5,
-    gap: 8,
   },
-  somaticZoneIcon: { fontSize: 15 },
-  somaticZoneName: { flex: 1, fontSize: 11, fontWeight: '700' },
-  zoneTxtActive: { color: '#FFFFFF', fontWeight: '800' },
-  activeDot: { color: '#FFFFFF', fontSize: 9, fontWeight: '800' },
+  pausedText: { color: '#E2E8F0', fontSize: 11, fontWeight: '600' },
 
-  // Tibetan Singing Bowl
-  zenInstrumentArea: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' },
-  singingBowlContainer: {
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    borderWidth: 3,
+  // Reward popups
+  xpPopupContainer: { position: 'absolute', zIndex: 999, elevation: 10 },
+  xpPopupPill: {
+    paddingVertical: 5,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
+  },
+  xpPopupText: { color: '#FFFFFF', fontSize: 12, fontWeight: '600', letterSpacing: 0.3 },
+
+  // Header / progress
+  headerCard: {
+    width: '100%',
+    backgroundColor: GLASS,
+    borderWidth: 1,
+    borderColor: GLASS_BORDER,
+    borderRadius: 20,
+    padding: 12,
+    marginBottom: 12,
+  },
+  headerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  levelLabel: { color: 'rgba(255,255,255,0.6)', fontSize: 9, fontWeight: '700', letterSpacing: 1.2 },
+  levelTitle: { color: '#FFFFFF', fontSize: 15, fontWeight: '700', marginTop: 1 },
+  goalDotsWrap: { alignItems: 'flex-end' },
+  goalDotsRow: { flexDirection: 'row', gap: 5 },
+  goalDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.4)',
+    backgroundColor: 'transparent',
+  },
+  goalText: { color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: '600', marginTop: 4 },
+  xpTrack: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    overflow: 'hidden',
+  },
+  xpFill: { height: 6, borderRadius: 3 },
+  headerChipsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 8,
+  },
+  statChip: {
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+  },
+  statChipText: { color: '#F1F5F9', fontSize: 11, fontWeight: '600' },
+
+  // Box arena
+  boxArena: {
+    width: 250,
+    height: 250,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 10,
+    marginVertical: 8,
   },
-  bowlAcousticRipple: {
-    position: 'absolute',
-    width: 180,
-    height: 180,
-    borderRadius: 90,
+  squareFrame: {
+    width: 220,
+    height: 220,
+    borderRadius: 30,
     borderWidth: 2,
-  },
-  bowlEmojiIcon: { fontSize: 40, marginBottom: 4 },
-  bowlTitleTxt: { fontSize: 11, fontWeight: '800', letterSpacing: 0.8, textAlign: 'center' },
-  bowlActionTag: { fontSize: 9, fontWeight: '800', marginTop: 4, letterSpacing: 0.5 },
-
-  // Shared Typography
-  centerEmoji: { fontSize: 30, marginBottom: 2 },
-  centerTimer: { fontSize: 24, fontWeight: '800', letterSpacing: -0.5 },
-  centerPhaseTag: { fontSize: 10, fontWeight: '800', letterSpacing: 1.2, marginTop: 2, textTransform: 'uppercase' },
-
-  // Guidance Card
-  guidanceCard: {
-    width: width * 0.9,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 16,
-    borderWidth: 1.5,
-    alignItems: 'center',
-    marginVertical: 6,
-  },
-  guidanceTitle: { fontSize: 16, fontWeight: '800', letterSpacing: 0.5, textAlign: 'center' },
-  guidanceInstruction: { fontSize: 12, fontWeight: '600', textAlign: 'center', marginTop: 3 },
-  scientificTipTxt: { fontSize: 10, fontWeight: '600', textAlign: 'center', marginTop: 6 },
-
-  // Session Control Button
-  sessionControlBtn: {
-    width: width * 0.9,
-    paddingVertical: 14,
-    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 4,
   },
-  sessionControlBtnTxt: { color: '#FFFFFF', fontSize: 15, fontWeight: '800', letterSpacing: 0.5 },
+  cornerNode: {
+    position: 'absolute',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingVertical: 5,
+    paddingHorizontal: 9,
+    borderRadius: 14,
+    backgroundColor: 'rgba(15,23,42,0.75)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
+  },
+  cornerStar: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: 'rgba(255,255,255,0.45)',
+  },
+  cornerNodeTxt: { color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: '700' },
+  cornerTL: { top: -15, left: -12 },
+  cornerTR: { top: -15, right: -12 },
+  cornerBR: { bottom: -15, right: -12 },
+  cornerBL: { bottom: -15, left: -12 },
+
+  perimeterOrb: {
+    position: 'absolute',
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    marginLeft: -10,
+    marginTop: -10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  perimeterOrbCore: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#FFFFFF' },
+
+  coreOrb: {
+    width: 104,
+    height: 104,
+    borderRadius: 52,
+    borderWidth: 2,
+    backgroundColor: 'rgba(15, 23, 42, 0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  coreTimer: { color: '#FFFFFF', fontSize: 30, fontWeight: '300' },
+  corePhaseLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase', marginTop: 1 },
+
+  // Tide pool
+  oceanArena: {
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    borderWidth: 2,
+    borderColor: 'rgba(125, 211, 252, 0.6)',
+    backgroundColor: 'rgba(7, 59, 76, 0.4)',
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    marginVertical: 8,
+  },
+  oceanWaveContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    width: '100%',
+  },
+  waveCrest: {
+    position: 'absolute',
+    top: -12,
+    left: -100,
+    width: 420,
+    height: 28,
+    borderRadius: 200,
+    backgroundColor: 'rgba(255,255,255,0.22)',
+  },
+  oceanWaveFill: { flex: 1 },
+  bubble: {
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.7)',
+    alignItems: 'flex-start',
+    justifyContent: 'flex-start',
+    padding: 5,
+  },
+  bubbleShine: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: 'rgba(255,255,255,0.85)',
+  },
+  waveCenterOrb: { alignItems: 'center', justifyContent: 'center', zIndex: 10 },
+  waveTimerTxt: { color: '#FFFFFF', fontSize: 34, fontWeight: '300' },
+  wavePhaseTag: { color: '#FFFFFF', fontSize: 11, fontWeight: '700', letterSpacing: 0.5, marginTop: 2 },
+
+  // Body scan
+  bodyScanArenaRow: {
+    flexDirection: 'row',
+    width: '100%',
+    gap: 10,
+    marginVertical: 4,
+  },
+  silhouetteCard: {
+    width: 124,
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: GLASS_BORDER,
+    backgroundColor: 'rgba(15, 23, 42, 0.4)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  silhouetteTitle: { fontSize: 9, fontWeight: '700', letterSpacing: 1.2, marginBottom: 4 },
+  svgContainer: { width: 120, height: 210, alignItems: 'center', justifyContent: 'center' },
+  detailsRightCol: { flex: 1, gap: 8, justifyContent: 'space-between' },
+  activeZoneDetailCard: {
+    flex: 1,
+    padding: 12,
+    borderRadius: 20,
+    borderWidth: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.4)',
+    justifyContent: 'center',
+  },
+  activeZoneTopRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  activeZoneEmoji: { fontSize: 22 },
+  activeZoneTitle: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
+  activeZoneNerve: { fontSize: 11, fontWeight: '600', marginTop: 1 },
+  activeZoneCue: { color: '#E2E8F0', fontSize: 12, lineHeight: 17, marginBottom: 6 },
+  activeZoneMechanismBox: {
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    padding: 8,
+    borderRadius: 12,
+    marginBottom: 8,
+  },
+  activeZoneMechanismTxt: { color: '#CBD5E1', fontSize: 10, lineHeight: 14 },
+  softenBtn: {
+    paddingVertical: 8,
+    borderRadius: 14,
+    alignItems: 'center',
+  },
+  softenBtnTxt: { fontSize: 11, fontWeight: '700' },
+  zoneSelectorPillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
+  zoneSelectorPill: {
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  zonePillIcon: { fontSize: 11, color: '#FFFFFF' },
+  zonePillTxt: { fontSize: 9, fontWeight: '700' },
+
+  // Heartbeat glow
+  rhythmTapCenterWrap: {
+    width: 240,
+    height: 240,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 8,
+  },
+  rhythmTargetRing: {
+    position: 'absolute',
+    width: 170 * 1.35,
+    height: 170 * 1.35,
+    borderRadius: (170 * 1.35) / 2,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: 'rgba(153, 246, 228, 0.45)',
+  },
+  rhythmPulseContainer: {
+    width: 170,
+    height: 170,
+    borderRadius: 85,
+    borderWidth: 2,
+    borderColor: '#99F6E4',
+    backgroundColor: 'rgba(153, 246, 228, 0.14)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rhythmInnerGlow: {
+    position: 'absolute',
+    width: 110,
+    height: 110,
+    borderRadius: 55,
+    backgroundColor: 'rgba(153, 246, 228, 0.18)',
+  },
+  rhythmRippleRing: {
+    position: 'absolute',
+    width: 170,
+    height: 170,
+    borderRadius: 85,
+    borderWidth: 2,
+    borderColor: '#C4B5FD',
+  },
+  rhythmTitleTxt: { color: '#FFFFFF', fontSize: 14, fontWeight: '700', letterSpacing: 0.6 },
+  rhythmActionTag: { color: '#99F6E4', fontSize: 11, fontWeight: '600', marginTop: 3 },
+
+  // Guidance
+  guidanceBanner: {
+    width: '100%',
+    backgroundColor: 'rgba(15, 23, 42, 0.4)',
+    padding: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: GLASS_BORDER,
+    alignItems: 'center',
+    marginTop: 6,
+  },
+  guidanceBannerTitle: { fontSize: 15, fontWeight: '700', letterSpacing: 0.4, marginBottom: 4 },
+  guidanceBannerCue: {
+    color: '#F1F5F9',
+    fontSize: 12,
+    fontWeight: '500',
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  tapPromptTxt: {
+    marginTop: 8,
+    color: 'rgba(255,255,255,0.65)',
+    fontSize: 11,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
 });
+
+export const MeditationGame = MindfulMeditationEngine;
+export default MindfulMeditationEngine;

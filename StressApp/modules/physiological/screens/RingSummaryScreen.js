@@ -10,6 +10,7 @@
 // Watching" control still stay Admin-app only (modules/admin/) -- just not
 // the drift/deviation view, which the user explicitly asked to see here.
 // ============================================================
+import { getContentWidth } from '../../shared/theme/layout';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
 import axios from 'axios';
@@ -17,8 +18,11 @@ import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
 import StatusDot from '../../shared/StatusDot';
 import Icon, { NAMES } from '../../shared/Icon';
-import MoodBadge from '../../shared/MoodBadge';
+import Badge from '../../shared/Badge';
+import BalanceRing from '../../shared/BalanceRing';
 import LineChart from '../../shared/LineChart';
+import { levelOf, LEVEL_COLOR, BODY_WORDS, DEFAULT_RING_THRESHOLD } from '../../shared/levels';
+import { TYPE, SPACE, RADIUS } from '../../shared/theme/tokens';
 import { useCalibrationSummary } from '../../shared/CalibrationGate';
 import { useTheme } from '../config/ThemeContext';
 import { COLORS } from '../config/theme';
@@ -27,7 +31,17 @@ import { API_BASE, DEVICE_ID, STRESS_DECISION_THRESHOLD_PERCENT } from '../confi
 import api from '../api/client';
 
 const POLL_INTERVAL_MS = 5000;
-const TREND_CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
+// Screen gutter (SPACE.xl) + Card padding (18) on each side.
+const TREND_CHART_WIDTH = Math.max(260, getContentWidth() - 2 * 20 - 2 * 18);
+// A "session" is one login-to-logout span (AuthContext.js), not "how far
+// back the trend chart should remember" -- without this, logging out and
+// back in reset the chart to empty even though the earlier data is still
+// sitting in Firebase. This backfills the PRIOR few sessions once (see
+// the historicalWindows effect below, keyed off sessionCount so it only
+// re-runs when a new session actually starts, not on every 5s poll) and
+// merges them with the live-polled current session.
+const RECENT_SESSIONS_FOR_CHART = 4;
+const CHART_POINTS_MAX = 40;
 
 function DistBar({ label, value, total, color, muted }) {
   const pct = total > 0 ? (value / total) * 100 : 0;
@@ -78,6 +92,7 @@ export default function RingSummaryScreen({ navigation }) {
   const [sessionDist, setSessionDist] = useState({ normal: 0, stress: 0 });
   const [sessionCount, setSessionCount] = useState(0);
   const [driftWeeks, setDriftWeeks] = useState(null);
+  const [historicalWindows, setHistoricalWindows] = useState([]);
   const intervalRef = useRef(null);
 
   useEffect(() => {
@@ -162,12 +177,61 @@ export default function RingSummaryScreen({ navigation }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, sessionCount]);
 
+  // Backfills the trend charts with the PRIOR few sessions' own
+  // predictions, so logging out and back in doesn't reset the chart to
+  // empty -- the current/latest session is already covered by the live
+  // 5s poll above (chartWindows); this only needs to run when a new
+  // session actually starts (sessionCount changes), same efficient
+  // pattern the Session Distribution effect above already uses.
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const h = await api.get(`/history/${userId}`);
+        const sessionIds = Object.keys(h.data?.sessions || {});
+        const priorSessionIds = sessionIds.slice(0, -1).slice(-RECENT_SESSIONS_FOR_CHART);
+        const results = await Promise.all(
+          priorSessionIds.map((sid) => api.get(`/history/${userId}/${sid}`).catch(() => null))
+        );
+        if (cancelled) return;
+        const preds = results
+          .filter(Boolean)
+          .flatMap((s) => Object.values(s.data?.predictions || {}));
+        setHistoricalWindows(preds);
+      } catch {
+        // leave last-known historical backfill showing
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, sessionCount]);
+
+  // Merges the live current-session poll with the prior-sessions backfill
+  // into one chronological series, most-recent-first, capped so the chart
+  // doesn't grow unbounded across many logins. De-duped by timestamp +
+  // window_idx as a guard (the two sources shouldn't overlap since prior
+  // sessions explicitly excludes the current one, but a session rotating
+  // mid-fetch is possible).
+  const combinedWindows = useMemo(() => {
+    const merged = [...chartWindows, ...historicalWindows];
+    const seen = new Set();
+    const deduped = merged.filter((w) => {
+      const key = `${w.timestamp}_${w.window_idx}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    deduped.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    return deduped.slice(0, CHART_POINTS_MAX);
+  }, [chartWindows, historicalWindows]);
+
   const trend = useMemo(() => {
-    return [...chartWindows]
+    return [...combinedWindows]
       .reverse()
       .filter((w) => w.timestamp && w.prob_stress !== undefined && w.prob_stress !== null)
       .map((w) => ({ value: Math.round(w.prob_stress * 100), date: new Date(w.timestamp) }));
-  }, [chartWindows]);
+  }, [combinedWindows]);
 
   // Raw heart-rate/GSR trends -- same `features` object already fetched per
   // window (backend/physiological/firebase_service.py::save_prediction()),
@@ -176,207 +240,148 @@ export default function RingSummaryScreen({ navigation }) {
   // AVNN/SDHR/pNN20/etc set Admin shows -- that fuller feature-level detail
   // stays Admin-only, per this screen's original design (see file header).
   const heartRateTrend = useMemo(() => {
-    return [...chartWindows]
+    return [...combinedWindows]
       .reverse()
       .filter((w) => w.timestamp && w.features?.MeanHR)
       .map((w) => ({ value: Math.round(w.features.MeanHR), date: new Date(w.timestamp) }));
-  }, [chartWindows]);
+  }, [combinedWindows]);
 
   const gsrTrend = useMemo(() => {
-    return [...chartWindows]
+    return [...combinedWindows]
       .reverse()
       .filter((w) => w.timestamp && w.features?.SCL_mean !== undefined && w.features?.SCL_mean !== null)
       .map((w) => ({ value: Number(w.features.SCL_mean.toFixed(2)), date: new Date(w.timestamp) }));
-  }, [chartWindows]);
+  }, [combinedWindows]);
 
-  const t = theme;
+  const [chartTab, setChartTab] = useState('stress');
+
   const connected = status === 'online';
-  const statusColor = connected ? COLORS.normal : COLORS.stress;
-  const stateColor = latest?.label === 'Stress'
-    ? COLORS.stress
-    : latest?.trending_toward_stress ? COLORS.warning : COLORS.normal;
+  const bodyP = latest?.prob_stress ?? null;
+  const bodyThr = ring?.personal_stress_threshold ?? DEFAULT_RING_THRESHOLD;
+  const level = latest?.trending_toward_stress && levelOf(bodyP, bodyThr) === 'low'
+    ? 'moderate' : levelOf(bodyP, bodyThr);
+  const levelColor = level ? LEVEL_COLOR[level] : COLORS.hrv;
+  const lastMs = latest?.timestamp ? new Date(latest.timestamp).getTime() : null;
+  const isFresh = lastMs != null && Date.now() - lastMs < 3 * 60 * 1000;
+
+  const hr = latest?.features?.MeanHR;
+  const scl = latest?.features?.SCL_mean;
+  const driftFlag = ring?.drift?.checked && ring.drift.drift_detected;
+
+  const series = {
+    stress: { points: trend, color: levelColor, unit: '', title: 'Stress', sub: 'Higher means more stress · dashed line is your limit' },
+    heart:  { points: heartRateTrend, color: COLORS.hrv, unit: ' bpm', title: 'Heart', sub: 'Average heart rate per minute' },
+    skin:   { points: gsrTrend, color: COLORS.gsr, unit: ' µS', title: 'Skin', sub: 'Skin response — rises with tension or excitement' },
+  };
+  const active = series[chartTab];
+  const totalSessions = sessionDist.normal + sessionDist.stress;
 
   return (
-    <ScreenBackground>
+    <ScreenBackground edges={['left', 'right']}>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        {/* Device Status Card */}
-        <Card accentColor={statusColor} elevated style={styles.statusCard}>
-          <View style={styles.rowBetween}>
-            <View style={styles.rowGap}>
-              <Icon name={NAMES.device} size={18} color={statusColor} />
-              <Text style={[styles.cardTitle, { color: t.text, marginBottom: 0 }]}>Hardware Status</Text>
-            </View>
-            <View style={[styles.statusPill, { backgroundColor: connected ? COLORS.normalSoft : COLORS.stressSoft }]}>
-              <StatusDot color={statusColor} active={connected} size={8} />
-              <Text style={[styles.statusPillText, { color: connected ? COLORS.normalDark : COLORS.stressDark }]}>
-                {connected ? 'Connected' : 'Offline'}
-              </Text>
-            </View>
-          </View>
-          <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 10 }]}>
-            {connected
-              ? `Streaming live biometric data packets from sensor ID: ${DEVICE_ID}`
-              : `Put on the smart ring to begin continuous streaming (${DEVICE_ID})`}
-          </Text>
-          {/* Live finger-contact feedback -- the single biggest cause of
-              "insufficient data" windows is the pulse sensor not actually
-              touching skin; this surfaces that immediately instead of only
-              being discoverable after the fact in server logs. */}
-          {connected && fingerDetected !== null && (
-            <View style={[styles.contactBanner, { backgroundColor: fingerDetected ? COLORS.normalSoft : COLORS.warningSoft }]}>
-              <Icon
-                name={fingerDetected ? 'check-circle-outline' : 'alert-circle-outline'}
-                size={16}
-                color={fingerDetected ? COLORS.normalDark : COLORS.warningDark}
-              />
-              <Text style={[styles.contactBannerText, { color: fingerDetected ? COLORS.normalDark : COLORS.warningDark }]}>
-                {fingerDetected ? 'Good finger contact' : 'No finger detected — adjust the ring for a clean reading'}
-              </Text>
-            </View>
+        {/* Connection */}
+        <View style={styles.connRow}>
+          <Badge label={connected ? 'Ring connected' : 'Ring offline'} color={connected ? COLORS.normal : COLORS.light.textMuted} size="sm" />
+          {connected && fingerDetected === false && (
+            <Badge label="Adjust ring — no finger contact" color={COLORS.warning} size="sm" />
           )}
-        </Card>
+        </View>
 
-        {/* Never-calibrated -- predictions exist server-side (the raw,
-            non-personalized fallback model) but aren't shown as if they
-            were trustworthy. Everything below this point is skipped
-            entirely in that case. */}
         {neverCalibrated ? (
-          <Card accentColor={COLORS.warning} elevated style={styles.readingCard}>
-            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 4 }]}>Calibrate to see predictions</Text>
-            <Text style={[styles.cardSub, { color: t.textMuted, marginBottom: 14 }]}>
-              Your Ring hasn't been calibrated yet. Predictions before that would use a generic model with no personal baseline, so they're hidden until you calibrate.
+          <Card style={styles.block}>
+            <Text style={styles.blockTitle}>Let's get to know you first</Text>
+            <Text style={styles.blockSub}>
+              A 2-minute calm calibration teaches the ring what "relaxed" looks like for you. Readings appear after that.
             </Text>
-            <TouchableOpacity
-              onPress={() => navigation.navigate('Physiological', { screen: 'Fusion' })}
-              activeOpacity={0.85}
-              style={[styles.calibrateCta, { backgroundColor: COLORS.brandSoft, borderColor: COLORS.brand + '30' }]}
-            >
-              <Text style={{ color: COLORS.brandDark, fontWeight: '800' }}>Calibrate now →</Text>
+            <TouchableOpacity onPress={() => navigation.navigate('Profile')} activeOpacity={0.85} style={styles.cta}>
+              <Text style={styles.ctaText}>Calibrate now</Text>
+              <Icon name="arrow-right" size={16} color="#FFFFFF" />
             </TouchableOpacity>
           </Card>
         ) : (
-        <>
-        {/* Live Session Trend Chart */}
-        {trend.length > 1 && (
-          <Card accentColor={stateColor} elevated style={styles.readingCard}>
-            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 4 }]}>Live HRV & EDA Stress Curve</Text>
-            <Text style={[styles.cardSub, { color: t.textMuted, marginBottom: 12 }]}>
-              Continuous telemetry windows with stress decision boundary
-            </Text>
-            <LineChart
-              points={trend}
-              color={stateColor}
-              width={TREND_CHART_WIDTH}
-              height={145}
-              maxValue={100}
-              hideValues
-              baselineValue={effectiveThresholdPct}
-              baselineLabel={personalRingPct != null ? 'Your stress threshold' : 'Stress threshold'}
-              colorZones
-            />
-          </Card>
-        )}
-
-        {/* Calibration Drift -- weekly mean predicted-stress vs. the
-            resting baseline captured at calibration time (see
-            compute_baseline_drift_history(), backend/physiological/
-            firebase_service.py). Weeks with too few predictions to be
-            meaningful are dropped server-side (mean_prob_stress: null),
-            not shown as zero. */}
-        {Array.isArray(driftWeeks) && driftWeeks.some((w) => w.mean_prob_stress != null) && (
-          <Card accentColor={COLORS.brand} elevated style={styles.readingCard}>
-            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 4 }]}>Calibration Drift</Text>
-            <Text style={[styles.cardSub, { color: t.textMuted, marginBottom: 12 }]}>
-              {ring?.drift?.checked && ring.drift.drift_detected
-                ? 'Your recent readings have shifted from your original calibration — recalibrating is recommended.'
-                : 'How your recent readings compare to your original resting calibration, week by week.'}
-            </Text>
-            <LineChart
-              points={driftWeeks
-                .filter((w) => w.mean_prob_stress != null)
-                .map((w) => ({ value: Math.round(w.mean_prob_stress * 100), date: w.week_start }))}
-              width={TREND_CHART_WIDTH}
-              height={140}
-              color={COLORS.brand}
-              maxValue={100}
-              suffix="%"
-              baselineValue={ring?.drift?.original_resting_mean != null
-                ? Math.round(ring.drift.original_resting_mean * 100) : undefined}
-              baselineLabel="Your original calibration"
-              baselineColor={COLORS.normal}
-            />
-          </Card>
-        )}
-
-        {/* Heart Rate Trend */}
-        {heartRateTrend.length > 1 && (
-          <Card accentColor={COLORS.hrv} elevated style={styles.readingCard}>
-            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 4 }]}>Heart Rate</Text>
-            <Text style={[styles.cardSub, { color: t.textMuted, marginBottom: 12 }]}>
-              Beats per minute, per telemetry window
-            </Text>
-            <LineChart
-              points={heartRateTrend}
-              color={COLORS.hrv}
-              width={TREND_CHART_WIDTH}
-              height={120}
-              suffix=" bpm"
-            />
-          </Card>
-        )}
-
-        {/* GSR / Skin Conductance Trend */}
-        {gsrTrend.length > 1 && (
-          <Card accentColor={COLORS.gsr} elevated style={styles.readingCard}>
-            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 4 }]}>Skin Conductance (GSR)</Text>
-            <Text style={[styles.cardSub, { color: t.textMuted, marginBottom: 12 }]}>
-              Electrodermal activity level, per telemetry window
-            </Text>
-            <LineChart
-              points={gsrTrend}
-              color={COLORS.gsr}
-              width={TREND_CHART_WIDTH}
-              height={120}
-              suffix=" µS"
-            />
-          </Card>
-        )}
-
-        {/* Session Distribution */}
-        {(sessionDist.normal + sessionDist.stress) > 0 && (
-          <Card style={styles.historyCard}>
-            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 6 }]}>Session Distribution</Text>
-            <DistBar label="Normal" value={sessionDist.normal} total={sessionDist.normal + sessionDist.stress} color={COLORS.normal} muted={t.textMuted} />
-            <DistBar label="Stress" value={sessionDist.stress} total={sessionDist.normal + sessionDist.stress} color={COLORS.stress} muted={t.textMuted} />
-          </Card>
-        )}
-
-        {/* Recent Windows */}
-        {recent.length > 0 && (
-          <Card style={styles.historyCard}>
-            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 6 }]}>Recent Readings</Text>
-            {recent.map((w, i) => {
-              const color = w.label === 'Stress' ? COLORS.stress : COLORS.normal;
-              return (
-                <View key={i} style={[styles.activityRow, i === recent.length - 1 && { borderBottomWidth: 0 }, { borderBottomColor: t.border }]}>
-                  <MoodBadge stressed={w.label === 'Stress'} color={color} size={36} />
-                  <View style={{ flex: 1, marginLeft: 12 }}>
-                    <Text style={[styles.activityLabel, { color: t.text }]}>
-                      {w.label === 'Stress' ? 'Elevated Load' : 'Normal State'}
-                    </Text>
-                    <Text style={[styles.activitySub, { color: t.textMuted }]}>
-                      {w.timestamp ? new Date(w.timestamp).toLocaleTimeString() : ''}
-                    </Text>
-                  </View>
-                  <View style={[styles.windowBadge, { backgroundColor: color + '15' }]}>
-                    <Text style={[styles.windowBadgeText, { color }]}>{w.label}</Text>
-                  </View>
+          <>
+            {/* Hero ring */}
+            <Card style={styles.block}>
+              <View style={styles.heroRow}>
+                <BalanceRing
+                  title="Body stress"
+                  value={bodyP != null ? bodyP * 100 : null}
+                  word={level ? BODY_WORDS[level] : ''}
+                  color={levelColor}
+                  size={124}
+                  stroke={12}
+                />
+                <View style={styles.heroText}>
+                  <Text style={styles.heroWord}>{level ? BODY_WORDS[level] : 'Waiting'}</Text>
+                  <Text style={styles.heroLine}>
+                    {level === 'high' ? 'Your body is showing signs of stress.'
+                      : level === 'moderate' ? 'A little more active than your usual.'
+                      : level === 'low' ? 'Your body is relaxed.'
+                      : 'Wear the ring for a minute to get a reading.'}
+                  </Text>
+                  <Text style={styles.heroWhen}>
+                    {lastMs ? (isFresh ? 'Updated just now' : `Last reading ${new Date(lastMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`) : ''}
+                  </Text>
                 </View>
-              );
-            })}
-          </Card>
-        )}
-        </>
+              </View>
+            </Card>
+
+            {/* Two simple numbers */}
+            <View style={styles.statRow}>
+              <View style={[styles.stat, { backgroundColor: COLORS.hrv + '12', borderColor: COLORS.hrv + '26' }]}>
+                <Icon name="heart-pulse" size={20} color={COLORS.hrv} />
+                <Text style={styles.statValue}>{hr != null ? Math.round(hr) : '—'}<Text style={styles.statUnit}> bpm</Text></Text>
+                <Text style={styles.statLabel}>Heart rate</Text>
+              </View>
+              <View style={{ width: SPACE.md }} />
+              <View style={[styles.stat, { backgroundColor: COLORS.gsr + '12', borderColor: COLORS.gsr + '26' }]}>
+                <Icon name="water-outline" size={20} color={COLORS.gsr} />
+                <Text style={styles.statValue}>{scl != null ? scl.toFixed(1) : '—'}<Text style={styles.statUnit}> µS</Text></Text>
+                <Text style={styles.statLabel}>Skin response</Text>
+              </View>
+            </View>
+
+            {driftFlag && (
+              <TouchableOpacity activeOpacity={0.85} onPress={() => navigation.navigate('Profile')}
+                style={[styles.banner, { backgroundColor: COLORS.warningSoft, borderColor: COLORS.warning + '40' }]}>
+                <Icon name="tune-variant" size={18} color={COLORS.warningDark} />
+                <Text style={[styles.bannerText, { color: COLORS.warningDark }]}>
+                  Your readings have shifted lately — a quick recalibration keeps them accurate.
+                </Text>
+                <Icon name={NAMES.chevronRight} size={18} color={COLORS.warningDark} />
+              </TouchableOpacity>
+            )}
+
+            {/* One chart, three views */}
+            {(trend.length > 1 || heartRateTrend.length > 1 || gsrTrend.length > 1) && (
+              <Card style={styles.block}>
+                <View style={styles.segment}>
+                  {Object.entries(series).map(([key, s]) => (
+                    <TouchableOpacity key={key} onPress={() => setChartTab(key)} activeOpacity={0.8}
+                      style={[styles.segItem, chartTab === key && styles.segItemOn]}>
+                      <Text style={[styles.segText, chartTab === key && styles.segTextOn]}>{s.title}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <Text style={styles.blockSub}>{active.sub}</Text>
+                <View style={{ marginTop: SPACE.md }}>
+                  {active.points.length > 1 ? (
+                    // key={chartTab}: each tab is its own chart, so switching
+                    // opens fresh on the newest readings with no stale pop-up.
+                    chartTab === 'stress' ? (
+                      <LineChart key="stress" points={active.points} color={active.color} width={TREND_CHART_WIDTH} height={170}
+                        maxValue={100} suffix="%" baselineValue={effectiveThresholdPct} baselineLabel="Your limit" colorZones />
+                    ) : (
+                      <LineChart key={chartTab} points={active.points} color={active.color} width={TREND_CHART_WIDTH} height={170} suffix={active.unit} />
+                    )
+                  ) : (
+                    <Text style={styles.empty}>Not enough readings yet.</Text>
+                  )}
+                </View>
+              </Card>
+            )}
+
+          </>
         )}
       </ScrollView>
     </ScreenBackground>
@@ -384,35 +389,47 @@ export default function RingSummaryScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  header: { flexDirection: 'row', alignItems: 'center', marginBottom: 18 },
-  headerIconCircle: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
-  title: { fontSize: 22, fontWeight: '900', letterSpacing: -0.2 },
-  subtitle: { fontSize: 12, marginTop: 2 },
-  statusCard: { marginHorizontal: 20, marginBottom: 14, padding: 18, borderRadius: 22 },
-  readingCard: { marginHorizontal: 20, marginBottom: 14, padding: 20, borderRadius: 24 },
-  historyCard: { marginHorizontal: 20, marginBottom: 14, padding: 18, borderRadius: 22 },
-  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  rowGap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  cardTitle: { fontSize: 15, fontWeight: '800' },
-  cardSub: { fontSize: 12 },
-  statusPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
-  statusPillText: { fontSize: 11, fontWeight: '800' },
-  contactBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 12, padding: 10, marginTop: 10 },
-  contactBannerText: { fontSize: 12, fontWeight: '700', flex: 1 },
-  calibrateCta: { padding: 14, borderRadius: 14, alignItems: 'center', borderWidth: 1 },
-  stateLabel: { fontSize: 19, fontWeight: '900', letterSpacing: -0.2 },
-  readingSub: { fontSize: 12, marginTop: 2 },
-  waitingBlock: { paddingVertical: 10 },
-  hint: { fontSize: 12 },
-  readingRow: { flexDirection: 'row', alignItems: 'center', marginTop: 10 },
-  distRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 },
-  distBarBg: { flex: 1, height: 8, borderRadius: 4, overflow: 'hidden' },
-  distBarFill: { height: 8, borderRadius: 4 },
-  distValue: { width: 22, fontSize: 13, fontWeight: '800', textAlign: 'right' },
-  distLabel: { minWidth: 55, fontSize: 11, fontWeight: '600' },
-  activityRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1 },
-  activityLabel: { fontSize: 13, fontWeight: '700' },
-  activitySub: { fontSize: 11, marginTop: 1 },
-  windowBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
-  windowBadgeText: { fontSize: 11, fontWeight: '700' },
+  scroll: { paddingTop: SPACE.lg, paddingBottom: SPACE.xxxl },
+  connRow: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.sm, marginHorizontal: SPACE.xl, marginBottom: SPACE.md },
+
+  block: { marginHorizontal: SPACE.xl, marginBottom: SPACE.md, borderRadius: RADIUS.xl },
+  blockTitle: { ...TYPE.title, color: COLORS.light.text },
+  blockSub: { fontSize: 12, color: COLORS.light.textMuted, marginTop: 4, lineHeight: 17 },
+
+  heroRow: { flexDirection: 'row', alignItems: 'center' },
+  heroText: { flex: 1.3, paddingLeft: SPACE.md },
+  heroWord: { fontSize: 26, fontWeight: '800', color: COLORS.light.text, letterSpacing: -0.5 },
+  heroLine: { ...TYPE.body, color: COLORS.light.textSub, marginTop: 4 },
+  heroWhen: { fontSize: 11, fontWeight: '600', color: COLORS.light.textMuted, marginTop: SPACE.sm },
+
+  statRow: { flexDirection: 'row', marginHorizontal: SPACE.xl, marginBottom: SPACE.md },
+  stat: { flex: 1, padding: SPACE.lg, borderRadius: RADIUS.xl, borderWidth: 1 },
+  statValue: { fontSize: 26, fontWeight: '800', color: COLORS.light.text, marginTop: SPACE.sm, letterSpacing: -0.5 },
+  statUnit: { fontSize: 13, fontWeight: '600', color: COLORS.light.textMuted },
+  statLabel: { ...TYPE.caption, color: COLORS.light.textMuted, marginTop: 2 },
+
+  banner: {
+    flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
+    marginHorizontal: SPACE.xl, marginBottom: SPACE.md, padding: 14, borderRadius: RADIUS.md, borderWidth: 1,
+  },
+  bannerText: { flex: 1, fontSize: 13, fontWeight: '700', lineHeight: 18 },
+
+  segment: { flexDirection: 'row', backgroundColor: COLORS.light.pillBg, borderRadius: RADIUS.pill, padding: 3 },
+  segItem: { flex: 1, paddingVertical: 8, borderRadius: RADIUS.pill, alignItems: 'center' },
+  segItemOn: { backgroundColor: COLORS.light.card, shadowColor: '#1E293B', shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
+  segText: { fontSize: 13, fontWeight: '700', color: COLORS.light.textMuted },
+  segTextOn: { color: COLORS.light.text },
+  empty: { fontSize: 13, color: COLORS.light.textMuted, textAlign: 'center', paddingVertical: SPACE.xl },
+
+  timeline: { flexDirection: 'row', justifyContent: 'space-between', marginTop: SPACE.md },
+  tlItem: { alignItems: 'center', flex: 1 },
+  tlDot: { width: 36, height: 36, borderRadius: 18, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
+  tlTime: { fontSize: 10, fontWeight: '600', color: COLORS.light.textMuted, marginTop: 4 },
+  sessionLine: { fontSize: 12, color: COLORS.light.textSub, marginTop: SPACE.md },
+
+  cta: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    marginTop: SPACE.md, paddingVertical: 13, borderRadius: RADIUS.md, backgroundColor: COLORS.brand,
+  },
+  ctaText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
 });

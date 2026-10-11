@@ -1,7 +1,6 @@
 
 # Datasets — too large, never commit
 datasets/
-*.pkl
 *.mat
 *.h5
 *.hdf5
@@ -30,7 +29,6 @@ __pycache__/
 # Saved models
 **/saved_models/*.h5
 **/saved_models/*.pb
-**/saved_models/*.pkl
 
 # Secrets — never commit
 .env
@@ -61,6 +59,7 @@ serviceAccountKey.json
 
 # Allow production models to be committed
 !phenotyping/models/stress_engine.pkl
+!phenotyping/models/feature_scaler.pkl
 
 # Physiological backend model — needed by teammates for integration
 !physiological_signals/saved_models/best_model_obj1_v2.pkl

@@ -6,11 +6,13 @@
 // backend/psychological/app.py), which take user_id explicitly and skip
 // the ownership check the user-facing routes enforce. Read-only.
 // ============================================================
-import React, { useCallback, useEffect, useState } from 'react';
+import { getContentWidth } from '../../shared/theme/layout';
+import React, { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Dimensions } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import axios from 'axios';
-import { ref, onValue, off, get } from 'firebase/database';
+import { ref, onValue, off, get, query, orderByKey, limitToLast } from 'firebase/database';
+import Svg, { Path, Line as SvgLine } from 'react-native-svg';
 import { db } from '../../../firebase';
 import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
@@ -19,13 +21,21 @@ import StatusDot from '../../shared/StatusDot';
 import Icon, { NAMES } from '../../shared/Icon';
 import MoodBadge from '../../shared/MoodBadge';
 import LineChart from '../../shared/LineChart';
+import Dropdown from '../../shared/Dropdown';
 import { COLORS } from '../../physiological/config/theme';
 import { API_BASE, DEVICE_ID, STRESS_DECISION_THRESHOLD_PERCENT } from '../../physiological/config/config';
 import api from '../../physiological/api/client';
 import { useAuth } from '../../../context/AuthContext';
 
-const TREND_CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
+const TREND_CHART_WIDTH = Math.max(260, getContentWidth() - 80);
 const RING_POLL_MS = 5000; // same cadence the old Ringscreen.js used
+// Same cross-session backfill reasoning as RingSummaryScreen.js/
+// EegSummaryScreen.js/AdminEegLiveScreen.js -- a session is one
+// login-to-logout span, not "how far back the admin trend chart should
+// remember", so pollRing() below merges this many of the user's most
+// recent sessions instead of only their latest one.
+const RECENT_SESSIONS_FOR_CHART = 4;
+const CHART_POINTS_MAX = 80;
 
 // Same Render-hosted, cold-start-tolerant pattern already used for EEG's
 // calibration check in modules/shared/CalibrationGate.js.
@@ -36,7 +46,17 @@ const eegClient = axios.create({ baseURL: EEG_API_BASE, timeout: 45000 });
 // while the screen is open, not just once on focus -- so new sessions/
 // recalibrations the selected user does while you're watching actually
 // show up without navigating away and back.
-const REFRESH_MS = 8000;
+const SLOW_REFRESH_MS = 45000;
+
+function parseTimestamp(ts, fallbackMinutesAgo = 0) {
+    if (!ts) return new Date(Date.now() - fallbackMinutesAgo * 60000);
+    if (ts instanceof Date) return ts;
+    if (typeof ts === 'number') {
+        return new Date(ts < 10000000000 ? ts * 1000 : ts);
+    }
+    const d = new Date(ts);
+    return Number.isNaN(d.getTime()) ? new Date(Date.now() - fallbackMinutesAgo * 60000) : d;
+}
 
 function latestWindow(windowsObj) {
     if (!windowsObj) return null;
@@ -46,13 +66,83 @@ function latestWindow(windowsObj) {
     return windowsObj[keys[keys.length - 1]];
 }
 
-const TABS = ['Ring', 'EEG', 'Phenotyping', 'Relaxation'];
+// Same tabs as the website's clinical view (web/src/pages/AdminDashboard.jsx).
+const TABS = ['Fusion', 'Ring', 'EEG', 'Phone', 'Relax'];
+const EEG_POLL_MS = 15000;
+const EEG_FEATURES = [
+  { key: 'delta_rel_power', label: 'δ Delta', color: '#64748b' },
+  { key: 'theta_rel_power', label: 'θ Theta', color: '#7c3aed' },
+  { key: 'alpha_rel_power', label: 'α Alpha', color: '#2563eb' },
+  { key: 'beta_rel_power', label: 'β Beta', color: '#16a34a' },
+  { key: 'gamma_rel_power', label: 'γ Gamma', color: '#ea580c' },
+  { key: 'ptp', label: 'Peak-to-peak', color: '#db2777' },
+  { key: 'theta_beta_ratio', label: 'θ/β ratio', color: '#d97706' },
+  { key: 'spectral_entropy', label: 'Spectral entropy', color: '#0d9488' },
+];
+const numericKeys = (obj) => Object.keys(obj || {}).filter((k) => /^\d+$/.test(k)).sort((a, b) => Number(a) - Number(b));
 
 function Row({ label, value, muted, text }) {
   return (
     <View style={styles.row}>
       <Text style={[styles.rowLabel, { color: muted }]}>{label}</Text>
       <Text style={[styles.rowValue, { color: text }]}>{value}</Text>
+    </View>
+  );
+}
+
+// -- Raw processed signal preview (GSR wave, IBI sequence) --------------
+// Backend sends only PROCESSED, size-bounded arrays -- never raw sensor
+// data (see extract_features.py::_downsample_wave()/_cap_ibi_sequence(),
+// firebase_service.py::save_prediction()'s docstring). Same percentile-
+// clamp approach AdminEegLiveScreen.js's chartRange() uses for its
+// bipolar waveform, so one stray spike doesn't blow out the whole y-axis.
+function percentile(sorted, p) {
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor(p * (sorted.length - 1))));
+  return sorted[idx];
+}
+
+function waveRange(values) {
+  if (!values || values.length === 0) return { min: 0, max: 1 };
+  const sorted = [...values].sort((a, b) => a - b);
+  let lo = percentile(sorted, 0.05);
+  let hi = percentile(sorted, 0.95);
+  if (hi <= lo) { lo -= 1; hi += 1; }
+  const pad = (hi - lo) * 0.12;
+  return { min: lo - pad, max: hi + pad };
+}
+
+function RawWaveformChart({ title, hint, lastValue, unit, values, color, width, height = 150, t }) {
+  const points = useMemo(() => {
+    if (!values || values.length < 2) return [];
+    // Same p5-p95 clamp as before, so one spike can't flatten the line.
+    const { min, max } = waveRange(values);
+    return values.map((v) => ({ value: Math.min(max, Math.max(min, v)) }));
+  }, [values]);
+  if (points.length < 2) {
+    return (
+      <View style={{ marginBottom: 16 }}>
+        <Text style={[styles.signalTitle, { color: t.textSub }]}>{title}</Text>
+        <Text style={{ color: t.textMuted, fontSize: 12, paddingVertical: 10 }}>
+          Waiting for a window with this data — only new sessions carry it.
+        </Text>
+      </View>
+    );
+  }
+  const { min, max } = waveRange(values);
+  return (
+    <View style={{ marginBottom: 16 }}>
+      <View style={styles.signalHeaderRow}>
+        <Text style={[styles.signalTitle, { color: t.textSub }]}>{title}</Text>
+        <Text style={[styles.signalValue, { color: t.text }]}>
+          {lastValue != null ? `${lastValue.toFixed(1)}${unit}` : '—'}
+        </Text>
+      </View>
+      <Text style={{ color: t.textMuted, fontSize: 10, marginBottom: 6 }}>{hint}</Text>
+      {/* Shared chart: pinned axis, swipe when dense, tap a point for its value. */}
+      <LineChart points={points} color={color} width={width} height={height} suffix={unit} minGap={4} />
+      <Text style={{ color: t.textMuted, fontSize: 10, marginTop: 4 }}>
+        This window's range: {min.toFixed(1)} – {max.toFixed(1)}{unit}
+      </Text>
     </View>
   );
 }
@@ -100,22 +190,36 @@ const RING_FEATURE_CHARTS = [
   { key: 'ACC_std', label: 'Accelerometer Std Dev', unit: ' g', color: COLORS.acc },
 ];
 
-function FeatureTrendChart({ chartWindows, featureKey, label, unit, color, muted, text }) {
-  const points = [...chartWindows]
-    .reverse()
-    .filter((w) => w.timestamp && w.features?.[featureKey] !== undefined && w.features?.[featureKey] !== null)
-    .map((w) => ({ value: Number(w.features[featureKey].toFixed(3)), date: new Date(w.timestamp) }));
+const PHENO_FEATURES = [
+  { key: 'avg_dwell', label: 'Key Hold Time (Dwell Time)', unit: ' ms', baseline: 135, color: '#6366F1', icon: '⏱️' },
+  { key: 'avg_flight', label: 'Key Pause Time (Flight Time)', unit: ' ms', baseline: 215, color: '#8B5CF6', icon: '⏳' },
+  { key: 'scroll_velocity', label: 'Touch Scroll Speed', unit: ' px/s', baseline: 450, color: '#F59E0B', icon: '👆' },
+  { key: 'tilt_angle', label: 'Device Tilt Angle', unit: ' °', baseline: 59, color: '#06B6D4', icon: '📱' },
+  { key: 'cpm', label: 'Typing Pace (Speed)', unit: ' cpm', baseline: 42, color: '#10B981', icon: '⌨️' },
+];
 
-  if (points.length < 2) return null;
+const FeatureTrendChart = React.memo(function FeatureTrendChart({ chartWindows, featureKey, label, unit, color, muted, text, picker }) {
+  const points = useMemo(() => [...chartWindows]
+    .reverse()
+    .filter((w) => w.features?.[featureKey] !== undefined && w.features?.[featureKey] !== null)
+    .map((w, i) => ({
+      value: Number(w.features[featureKey].toFixed(3)),
+      date: parseTimestamp(w.timestamp || w.timestamp_end, chartWindows.length - 1 - i),
+    })), [chartWindows, featureKey]);
 
   return (
     <Card>
-      <Text style={[styles.cardTitle, { color: text, marginBottom: 4 }]}>{label}</Text>
-      <Text style={{ color: muted, marginBottom: 12, fontSize: 11 }}>Per telemetry window</Text>
-      <LineChart points={points} color={color} width={TREND_CHART_WIDTH} height={110} suffix={unit} />
+      <View style={styles.rowBetween}>
+        <Text style={[styles.cardTitle, { color: text, marginBottom: 0 }]}>{label}</Text>
+        {picker}
+      </View>
+      <Text style={{ color: muted, marginTop: 4, marginBottom: 12, fontSize: 11 }}>Per telemetry window · last few sessions</Text>
+      {points.length < 2
+        ? <Text style={{ color: muted, fontSize: 12 }}>Not enough windows with this feature yet.</Text>
+        : <LineChart key={featureKey} points={points} color={color} width={TREND_CHART_WIDTH} height={170} suffix={unit} />}
     </Card>
   );
-}
+});
 
 // Genuinely live (Firebase push, see the subscription in the screen below)
 // -- not a poll. `field` picks which modality's contribution to show
@@ -150,9 +254,78 @@ function LiveNowCard({ userId, isLive, liveWindow, field, label, color, muted, t
 }
 
 export default function AdminUserDetailScreen({ route, navigation }) {
-  const { userId, name } = route.params;
+  const { userId, name, initialTab } = route?.params || {};
   const { token } = useAuth();
-  const [tab, setTab] = useState('Ring');
+  const [tab, setTab] = useState(initialTab || 'Fusion');
+  const [ringFeature, setRingFeature] = useState('MeanHR');
+  const [phenoFeature, setPhenoFeature] = useState('avg_dwell');
+  const [eegFeature, setEegFeature] = useState('alpha_rel_power');
+  const [eegBlocks, setEegBlocks] = useState([]);
+  const [fusionWindows, setFusionWindows] = useState({});
+
+  // EEG blocks for THIS user -- last few sessions (psychological/{uid}),
+  // only while the EEG tab is open.
+  useEffect(() => {
+    if (!userId || tab !== 'EEG') return undefined;
+    let cancelled = false;
+    const load = () => get(query(ref(db, `psychological/${userId}`), orderByKey(), limitToLast(RECENT_SESSIONS_FOR_CHART + 1)))
+      .then((snap) => {
+        if (cancelled) return;
+        const all = snap.val() || {};
+        const blocks = Object.keys(all).sort()
+          .flatMap((sid) => (all[sid] && typeof all[sid] === 'object' ? numericKeys(all[sid]).map((k) => all[sid][k]) : []))
+          .filter((b) => b && !b.skipped && b.timestamp_end)
+          .sort((a, b) => a.timestamp_end - b.timestamp_end)
+          .slice(-160);
+        setEegBlocks(blocks);
+      })
+      .catch(() => {});
+    load();
+    const id = setInterval(load, EEG_POLL_MS);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [userId, tab]);
+
+  // Fusion windows for THIS user -- last few sessions (fusion_en/{uid}).
+  useEffect(() => {
+    if (!userId || tab !== 'Fusion') return undefined;
+    let cancelled = false;
+    const load = () => get(query(ref(db, `fusion_en/${userId}`), orderByKey(), limitToLast(RECENT_SESSIONS_FOR_CHART + 1)))
+      .then((snap) => {
+        if (cancelled) return;
+        const all = snap.val() || {};
+        const merged = {};
+        Object.keys(all).sort().forEach((sid) => { if (all[sid] && typeof all[sid] === 'object') Object.assign(merged, all[sid]); });
+        setFusionWindows(merged);
+      })
+      .catch(() => {});
+    load();
+    const id = setInterval(load, EEG_POLL_MS);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [userId, tab]);
+
+  const fusionPoints = useMemo(() => numericKeys(fusionWindows).slice(-160).map((k) => {
+    const w = fusionWindows[k] || {};
+    return {
+      date: new Date(Number(k) * 60000),
+      values: [w.prob_eeg, w.prob_hrv_gsr, w.fused_probability].map((v) => (v != null ? Math.round(v * 100) : null)),
+    };
+  }), [fusionWindows]);
+  const fusionLatest = useMemo(() => {
+    const keys = numericKeys(fusionWindows);
+    for (let i = keys.length - 1; i >= 0; i -= 1) {
+      const w = fusionWindows[keys[i]];
+      if (w && w.fused_probability != null) return { ...w, _key: Number(keys[i]) };
+    }
+    return null;
+  }, [fusionWindows]);
+
+  const eegScorePoints = useMemo(() => eegBlocks.filter((b) => b.task_state_score != null)
+    .map((b) => ({ date: new Date(b.timestamp_end * 1000), value: Math.round(b.task_state_score * 100) })), [eegBlocks]);
+  const eegQualityPoints = useMemo(() => eegBlocks.filter((b) => b.eeg_quality_score != null)
+    .map((b) => ({ date: new Date(b.timestamp_end * 1000), value: Math.round(b.eeg_quality_score * 100) })), [eegBlocks]);
+  const eegFeaturePoints = useMemo(() => eegBlocks.filter((b) => b.features_eeg?.bipolar?.[eegFeature] != null)
+    .map((b) => ({ date: new Date(b.timestamp_end * 1000), value: Number(b.features_eeg.bipolar[eegFeature]) })), [eegBlocks, eegFeature]);
+  const eegLatestBlock = eegBlocks[eegBlocks.length - 1];
   const [loading, setLoading] = useState(true);
   const [baseline, setBaseline] = useState(null);
   const [history, setHistory] = useState(null);
@@ -177,6 +350,142 @@ export default function AdminUserDetailScreen({ route, navigation }) {
       console.log('Error resolving pheno deviceId:', err);
     });
   }, [userId, name]);
+
+  const [phenoDataLogs, setPhenoDataLogs] = useState({});
+  const [phenoUserRecord, setPhenoUserRecord] = useState(null);
+  const [phenoPredictions, setPhenoPredictions] = useState({});
+
+  useEffect(() => {
+    const targetUid = phenoDeviceId || userId;
+    if (!targetUid) return;
+    const logsRef = ref(db, `phenotyping/data_logs/${targetUid}`);
+    const userRef = ref(db, `phenotyping/users/${targetUid}`);
+    const predsRef = ref(db, `phenotyping/predictions/${targetUid}`);
+
+    const offLogs = onValue(logsRef, (snap) => setPhenoDataLogs(snap.val() || {}));
+    const offUser = onValue(userRef, (snap) => setPhenoUserRecord(snap.val() || null));
+    const offPreds = onValue(predsRef, (snap) => setPhenoPredictions(snap.val() || {}));
+
+    return () => {
+      off(logsRef, 'value', offLogs);
+      off(userRef, 'value', offUser);
+      off(predsRef, 'value', offPreds);
+    };
+  }, [phenoDeviceId, userId]);
+
+  const phenoTrendPoints = useMemo(() => {
+    const targetUid = phenoDeviceId || userId;
+    if (!targetUid) return [];
+
+    const uLogs = phenoDataLogs || {};
+    const uPreds = phenoPredictions || {};
+    const uBaselines = phenoUserRecord?.baselines || {};
+
+    const pts = [];
+
+    const predEntries = Object.values(uPreds)
+      .filter((p) => p && p.timestamp)
+      .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+    if (predEntries.length > 0) {
+      predEntries.forEach((p) => {
+        let score = 20;
+        if (typeof p.stress_score === 'number') {
+          score = Math.round(p.stress_score * 100);
+        } else if (typeof p.composite_z === 'number') {
+          score = Math.min(100, Math.max(5, Math.round((p.composite_z / 3.0) * 100)));
+        }
+        pts.push({
+          value: Math.min(100, Math.max(0, score)),
+          date: new Date(p.timestamp),
+        });
+      });
+    }
+
+    if (pts.length < 2 && Object.keys(uLogs).length > 0) {
+      const sortedLogs = Object.entries(uLogs).sort((a, b) => a[0].localeCompare(b[0]));
+      sortedLogs.forEach(([key, w]) => {
+        const d = w || {};
+        let winDate = new Date();
+        if (d.timestamp) {
+          const parsed = new Date(d.timestamp);
+          if (!isNaN(parsed.getTime())) winDate = parsed;
+        } else if (typeof key === 'string' && /^\d{8}_\d{6}$/.test(key)) {
+          const y = parseInt(key.slice(0, 4), 10);
+          const m = parseInt(key.slice(4, 6), 10) - 1;
+          const day = parseInt(key.slice(6, 8), 10);
+          const hh = parseInt(key.slice(9, 11), 10);
+          const mm = parseInt(key.slice(11, 13), 10);
+          const ss = parseInt(key.slice(13, 15), 10);
+          winDate = new Date(y, m, day, hh, mm, ss);
+        }
+
+        const activeZs = [];
+        if (typeof d.avg_dwell === 'number' && d.avg_dwell > 0) {
+          activeZs.push(Math.abs((d.avg_dwell - (uBaselines.avg_dwell?.mean ?? 135)) / (uBaselines.avg_dwell?.std ?? 25)));
+        }
+        if (typeof d.avg_flight === 'number' && d.avg_flight > 0) {
+          activeZs.push(Math.abs((d.avg_flight - (uBaselines.avg_flight?.mean ?? 215)) / (uBaselines.avg_flight?.std ?? 35)));
+        }
+        if (typeof d.scroll_velocity === 'number' && d.scroll_velocity > 0) {
+          activeZs.push(Math.min(3.5, Math.abs((d.scroll_velocity - (uBaselines.scroll_velocity?.mean ?? 450)) / (uBaselines.scroll_velocity?.std ?? 200))));
+        }
+        if (typeof d.tilt_angle === 'number' && d.tilt_angle > 0) {
+          activeZs.push(Math.min(3.5, Math.abs((d.tilt_angle - (uBaselines.tilt_angle?.mean ?? 59)) / (uBaselines.tilt_angle?.std ?? 15))));
+        }
+        if (typeof d.cpm === 'number' && d.cpm > 0) {
+          activeZs.push(Math.abs((d.cpm - (uBaselines.cpm?.mean ?? 42)) / (uBaselines.cpm?.std ?? 15)));
+        }
+        const meanZ = activeZs.length > 0 ? (activeZs.reduce((a, b) => a + b, 0) / activeZs.length) : 0.35;
+        const score = Math.min(95, Math.max(10, Math.round(18 + (meanZ / 2.5) * 50)));
+        pts.push({ value: score, date: winDate });
+      });
+    }
+
+    pts.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    const trimmed = pts.slice(-35);
+    if (trimmed.length === 1) {
+      trimmed.unshift({ value: Math.max(15, trimmed[0].value - 5), date: new Date(trimmed[0].date.getTime() - 120000) });
+    }
+    return trimmed;
+  }, [phenoDeviceId, userId, phenoDataLogs, phenoPredictions, phenoUserRecord]);
+
+  const phenoRawPoints = useMemo(() => {
+    const targetUid = phenoDeviceId || userId;
+    if (!targetUid) return {};
+    const uLogs = phenoDataLogs || {};
+    const sortedEntries = Object.entries(uLogs).sort((a, b) => a[0].localeCompare(b[0]));
+
+    const result = {};
+    PHENO_FEATURES.forEach((f) => {
+      const validPoints = [];
+      sortedEntries.forEach(([key, w]) => {
+        const val = w?.[f.key];
+        if (typeof val === 'number' && val > 0) {
+          let winDate = new Date();
+          if (w.timestamp) {
+            const parsed = new Date(w.timestamp);
+            if (!isNaN(parsed.getTime())) winDate = parsed;
+          } else if (typeof key === 'string' && /^\d{8}_\d{6}$/.test(key)) {
+            const y = parseInt(key.slice(0, 4), 10);
+            const m = parseInt(key.slice(4, 6), 10) - 1;
+            const day = parseInt(key.slice(6, 8), 10);
+            const hh = parseInt(key.slice(9, 11), 10);
+            const mm = parseInt(key.slice(11, 13), 10);
+            const ss = parseInt(key.slice(13, 15), 10);
+            winDate = new Date(y, m, day, hh, mm, ss);
+          }
+          validPoints.push({
+            value: Number(val.toFixed(1)),
+            date: winDate,
+          });
+        }
+      });
+      validPoints.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      result[f.key] = validPoints.slice(-35);
+    });
+    return result;
+  }, [phenoDeviceId, userId, phenoDataLogs]);
 
   // Live-now state -- there's only one physical ring and one physical EEG
   // headset, so genuinely live data can only ever exist for whichever ONE
@@ -209,17 +518,20 @@ export default function AdminUserDetailScreen({ route, navigation }) {
   // get a PSS-4 self-report attached to trust a stored label from.
   const [sessionDist, setSessionDist] = useState({ normal: 0, stress: 0 });
 
+  // ── Slow-changing records (baseline, EMA history, EEG calibration) ──
+  // These only change when the user recalibrates, so they refresh on a
+  // slow cycle. /admin/history is NOT fetched here anymore -- pollRing()
+  // below already fetches it every tick, and fetching it on two
+  // unsynchronized timers was one of the causes of the laggy charts.
   const load = useCallback(async () => {
-    const [b, h, e, eeg] = await Promise.all([
+    const [b, e, eeg] = await Promise.all([
       api.get(`/admin/baseline/${userId}`).then((r) => r.data).catch(() => null),
-      api.get(`/admin/history/${userId}`).then((r) => r.data).catch(() => null),
       api.get(`/admin/ema/history/${userId}`).then((r) => r.data).catch(() => null),
       eegClient.get(`/admin/calibration/${userId}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       }).then((r) => r.data).catch(() => null),
     ]);
     setBaseline(b);
-    setHistory(h);
     setEmaHistory(e);
     setEegCalib(eeg);
     setLoading(false);
@@ -228,29 +540,81 @@ export default function AdminUserDetailScreen({ route, navigation }) {
   useFocusEffect(useCallback(() => {
     setLoading(true);
     load();
-    const timer = setInterval(load, REFRESH_MS);
+    const timer = setInterval(load, SLOW_REFRESH_MS);
     return () => clearInterval(timer);
   }, [load]));
 
+  // ── One live cycle for everything session-based ──────────────────
+  // A finished session's predictions never change again, so they're
+  // cached after the first fetch -- each tick only re-fetches the
+  // session list and the LATEST session (3 requests, down from up to 6,
+  // plus a third uncapped fetch over every session that used to run
+  // separately for the distribution card). `pollInFlight` stops ticks
+  // from stacking up behind a slow/cold-starting server.
+  const sessionCache = useRef(new Map());
+  const pollInFlight = useRef(false);
+  useEffect(() => { sessionCache.current = new Map(); }, [userId]);
+
   const pollRing = useCallback(async () => {
+    if (pollInFlight.current) return;
+    pollInFlight.current = true;
     try {
-      const s = await axios.get(`${API_BASE}/devices/${DEVICE_ID}/status`);
-      setDeviceStatus(s.data?.status || 'offline');
-    } catch {
-      setDeviceStatus('offline');
-    }
-    try {
-      const h = await api.get(`/admin/history/${userId}`);
-      const sessionIds = Object.keys(h.data?.sessions || {});
+      const [statusRes, histRes] = await Promise.all([
+        axios.get(`${API_BASE}/devices/${DEVICE_ID}/status`).catch(() => null),
+        api.get(`/admin/history/${userId}`).catch(() => null),
+      ]);
+      setDeviceStatus(statusRes?.data?.status || 'offline');
+      if (!histRes) return; // transient failure -- keep last-known data on screen
+      setHistory(histRes.data);
+
+      const sessionIds = Object.keys(histRes.data?.sessions || {}).sort();
       const latestId = sessionIds[sessionIds.length - 1];
-      if (!latestId) { setRingFeed([]); setRingChart([]); return; }
-      const s2 = await api.get(`/admin/history/${userId}/${latestId}`);
-      const predictions = Object.values(s2.data?.predictions || {})
+      if (!latestId) { setRingFeed([]); setRingChart([]); setSessionDist({ normal: 0, stress: 0 }); return; }
+
+      const recentIds = sessionIds.slice(-RECENT_SESSIONS_FOR_CHART);
+      const cache = sessionCache.current;
+      const sessionResults = await Promise.all(recentIds.map(async (sid) => {
+        if (sid !== latestId && cache.has(sid)) return cache.get(sid);
+        const data = await api.get(`/admin/history/${userId}/${sid}`).then((r) => r.data).catch(() => null);
+        if (data && sid !== latestId) {
+          // Older sessions' waveform previews are never rendered (only the
+          // newest window's are) -- drop them before caching.
+          const preds = {};
+          Object.entries(data.predictions || {}).forEach(([k, w]) => {
+            const { wave_gsr, ibi_sequence, ...rest } = w || {};
+            preds[k] = rest;
+          });
+          const slim = { ...data, predictions: preds };
+          cache.set(sid, slim);
+          return slim;
+        }
+        return data;
+      }));
+
+      const latestPredictions = Object.values(sessionResults[sessionResults.length - 1]?.predictions || {})
         .sort((a, b) => (b.window_idx ?? 0) - (a.window_idx ?? 0));
-      setRingFeed(predictions.slice(0, 5));
-      setRingChart(predictions.slice(0, 20));
-    } catch {
-      // leave last-known feed showing on a transient failure
+      setRingFeed(latestPredictions.slice(0, 5));
+
+      // Merged across recentIds, newest-first -- ringTrend/FeatureTrendChart
+      // .reverse() this to get oldest-first for charting.
+      const merged = sessionResults
+        .flatMap((data) => Object.values(data?.predictions || {}))
+        .filter((w) => w.timestamp)
+        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      setRingChart(merged.slice(0, CHART_POINTS_MAX));
+
+      // Normal-vs-Stress distribution over the same recent sessions,
+      // majority-voted per session -- no extra network calls.
+      const dist = { normal: 0, stress: 0 };
+      sessionResults.forEach((data) => {
+        const preds = Object.values(data?.predictions || {});
+        if (preds.length === 0) return;
+        const stressCount = preds.filter((p) => p.label === 'Stress').length;
+        if (stressCount > preds.length / 2) dist.stress++; else dist.normal++;
+      });
+      setSessionDist(dist);
+    } finally {
+      pollInFlight.current = false;
     }
   }, [userId]);
 
@@ -306,38 +670,6 @@ export default function AdminUserDetailScreen({ route, navigation }) {
     return () => off(eegPointerRef, 'value', eegHandler);
   }, []);
 
-  // Recomputed whenever the session count changes (new session appears) --
-  // per-session predictions aren't included in /admin/history/<userId>
-  // itself, so this fetches each session's window detail the same way the
-  // old HistoryScreen.js did, just against the admin route.
-  useEffect(() => {
-    const sessionIds = history?.sessions ? Object.keys(history.sessions) : [];
-    if (sessionIds.length === 0) { setSessionDist({ normal: 0, stress: 0 }); return; }
-    let cancelled = false;
-    (async () => {
-      const entries = await Promise.all(sessionIds.map(async (sid) => {
-        try {
-          const s = await api.get(`/admin/history/${userId}/${sid}`);
-          const preds = Object.values(s.data?.predictions || {});
-          if (preds.length === 0) return null;
-          const stressCount = preds.filter((p) => p.label === 'Stress').length;
-          return stressCount > preds.length / 2 ? 'Stress' : 'Normal';
-        } catch {
-          return null;
-        }
-      }));
-      if (cancelled) return;
-      const dist = entries.reduce((acc, label) => {
-        if (label === 'Stress') acc.stress++;
-        else if (label === 'Normal') acc.normal++;
-        return acc;
-      }, { normal: 0, stress: 0 });
-      setSessionDist(dist);
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-run when the session count actually changes
-  }, [userId, history?.sessions ? Object.keys(history.sessions).length : 0]);
-
   const text  = COLORS.light.text;
   const muted = COLORS.light.textMuted;
   const sessions = history?.sessions ? Object.entries(history.sessions) : [];
@@ -347,14 +679,20 @@ export default function AdminUserDetailScreen({ route, navigation }) {
   const ringConnected = deviceStatus === 'online';
   const ringLatest = ringFeed[0];
   const ringTrendColor = ringLatest?.label === 'Stress' ? COLORS.stress : COLORS.normal;
-  const ringTrend = [...ringChart]
+  // Memoized so the (memoized) LineChart only re-renders when the series
+  // actually changes, not on every unrelated state update.
+  const ringTrend = useMemo(() => [...ringChart]
     .reverse()
-    .filter((w) => w.timestamp && w.prob_stress !== undefined && w.prob_stress !== null)
-    .map((w) => ({ value: Math.round(w.prob_stress * 100), date: new Date(w.timestamp) }));
+    .filter((w) => w.prob_stress !== undefined && w.prob_stress !== null)
+    .map((w, i) => ({
+      value: Math.round(w.prob_stress * 100),
+      date: parseTimestamp(w.timestamp || w.timestamp_end, ringChart.length - 1 - i),
+    })), [ringChart]);
 
-  // Session baseline -- mean of the earliest readings currently loaded for
-  // this session (ringTrend is oldest-first), same derivation the user app
-  // used to show on its own Ring chart before that moved here per request
+  // Trend-window baseline -- mean of the earliest readings currently loaded
+  // (ringTrend is oldest-first, now spanning RECENT_SESSIONS_FOR_CHART
+  // sessions, not just the latest one), same derivation the user app used
+  // to show on its own Ring chart before that moved here per request
   // (deviation/baseline detail belongs in Admin, not the user-facing app).
   const ringSessionBaseline = ringTrend.length >= 3
     ? Math.round(ringTrend.slice(0, 3).reduce((sum, p) => sum + p.value, 0) / 3)
@@ -367,18 +705,33 @@ export default function AdminUserDetailScreen({ route, navigation }) {
           <Icon name={NAMES.back} size={20} color={COLORS.brand} />
           <Text style={{ color: COLORS.brand, fontWeight: '700' }}>All Users</Text>
         </TouchableOpacity>
-        <Text style={[styles.title, { color: text }]}>{name || userId}</Text>
-        <Text style={[styles.subtitle, { color: muted }]}>@{userId}</Text>
+        <View style={styles.identity}>
+          <View style={styles.avatar}>
+            <Text style={styles.avatarLetter}>{(name || userId || '?').trim().charAt(0).toUpperCase()}</Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.title, { color: text }]} numberOfLines={1}>{name || userId}</Text>
+            <Text style={[styles.subtitle, { color: muted }]}>
+              @{userId}{isLiveForThisUser ? ' · wearing the devices now' : ''}
+            </Text>
+          </View>
+          {isLiveForThisUser ? (
+            <View style={styles.livePill}>
+              <StatusDot color={COLORS.normal} active size={7} />
+              <Text style={styles.livePillText}>Live</Text>
+            </View>
+          ) : null}
+        </View>
       </View>
 
       <View style={styles.tabRow}>
         {TABS.map((t) => (
           <TouchableOpacity
             key={t}
-            style={[styles.tabBtn, tab === t && { backgroundColor: COLORS.brand }]}
+            style={[styles.tabBtn, tab === t && styles.tabOn]}
             onPress={() => setTab(t)}
           >
-            <Text style={[styles.tabText, { color: tab === t ? '#FFFFFF' : muted }]}>{t}</Text>
+            <Text style={[styles.tabText, { color: tab === t ? COLORS.brandDark : muted }, tab === t && { fontWeight: '800' }]}>{t}</Text>
           </TouchableOpacity>
         ))}
       </View>
@@ -387,6 +740,41 @@ export default function AdminUserDetailScreen({ route, navigation }) {
         <ActivityIndicator style={{ marginTop: 40 }} color={COLORS.brand} />
       ) : (
         <ScrollView contentContainerStyle={{ padding: 20, paddingTop: 12 }}>
+          {tab === 'Fusion' && (
+            <>
+              <Card elevated>
+                <View style={styles.rowBetween}>
+                  <Text style={[styles.cardTitle, { color: text, marginBottom: 0 }]}>Fusion — all modalities</Text>
+                  <StatusDot color={isLiveForThisUser ? COLORS.normal : muted} active={isLiveForThisUser} />
+                </View>
+                <Text style={{ color: muted, marginTop: 4, marginBottom: 12, fontSize: 11 }}>
+                  Mind (EEG), Body (HRV+GSR) and fused probability · last few sessions{isLiveForThisUser ? ' + live' : ''}
+                </Text>
+                {fusionPoints.length < 2
+                  ? <Text style={{ color: muted, fontSize: 12 }}>No fusion windows recorded for this user yet.</Text>
+                  : (
+                    <LineChart points={fusionPoints} multiLine width={TREND_CHART_WIDTH} height={210} maxValue={100} suffix="%"
+                      seriesColors={[COLORS.eeg, COLORS.hrv, COLORS.brand]}
+                      seriesLabels={['Mind (EEG)', 'Body (HRV+GSR)', 'Fused']} />
+                  )}
+              </Card>
+              <Card>
+                <Text style={[styles.cardTitle, { color: text }]}>Latest fusion window</Text>
+                {fusionLatest ? (
+                  <>
+                    <Row label="When" value={new Date(fusionLatest._key * 60000).toLocaleString()} muted={muted} text={text} />
+                    <Row label="Fused probability" value={`${Math.round(fusionLatest.fused_probability * 100)}%`} muted={muted} text={text} />
+                    <Row label="Fused threshold" value={fusionLatest.fused_threshold != null ? `${Math.round(fusionLatest.fused_threshold * 100)}%` : '—'} muted={muted} text={text} />
+                    <Row label="Label" value={fusionLatest.fused_label === 1 ? 'Stress' : 'Normal'} muted={muted} text={text} />
+                    <Row label="Mind (EEG)" value={fusionLatest.prob_eeg != null ? `${Math.round(fusionLatest.prob_eeg * 100)}%` : '—'} muted={muted} text={text} />
+                    <Row label="Body (HRV+GSR)" value={fusionLatest.prob_hrv_gsr != null ? `${Math.round(fusionLatest.prob_hrv_gsr * 100)}%` : '—'} muted={muted} text={text} />
+                    <Row label="Trend" value={fusionLatest.stress_trend || '—'} muted={muted} text={text} />
+                  </>
+                ) : <Text style={{ color: muted }}>Nothing yet.</Text>}
+              </Card>
+            </>
+          )}
+
           {tab === 'Ring' && (
             <>
               {/* Restored exactly as the old Ringscreen.js showed it --
@@ -437,49 +825,78 @@ export default function AdminUserDetailScreen({ route, navigation }) {
                 )}
               </Card>
 
+              {ringFeed.length > 0 && (ringFeed[0].wave_gsr?.length > 1 || ringFeed[0].ibi_sequence?.length > 1) && (
+                <Card>
+                  <Text style={[styles.cardTitle, { color: text }]}>Raw Signal Waveform</Text>
+                  <Text style={{ color: muted, marginBottom: 14, fontSize: 11 }}>
+                    Processed signal from the latest window (window {ringFeed[0].window_idx ?? '—'}) —
+                    not raw sensor data, only the filtered/decimated preview extract_features.py computes.
+                  </Text>
+                  <RawWaveformChart
+                    title="GSR (processed, phasic + tonic)"
+                    hint="Low-pass filtered, detrended, outlier-cleaned — spikes are real SCR responses"
+                    lastValue={ringFeed[0].wave_gsr?.[ringFeed[0].wave_gsr.length - 1]}
+                    unit=" µS"
+                    values={ringFeed[0].wave_gsr}
+                    color={COLORS.gsr}
+                    width={TREND_CHART_WIDTH}
+                    t={{ textSub: muted, textMuted: muted, text }}
+                  />
+                  <RawWaveformChart
+                    title="IBI — beat-to-beat interval"
+                    hint="One value per detected heartbeat — a sudden dip is a fast-beat spike"
+                    lastValue={ringFeed[0].ibi_sequence?.[ringFeed[0].ibi_sequence.length - 1]}
+                    unit=" ms"
+                    values={ringFeed[0].ibi_sequence}
+                    color={COLORS.hrv}
+                    width={TREND_CHART_WIDTH}
+                    t={{ textSub: muted, textMuted: muted, text }}
+                  />
+                </Card>
+              )}
+
               {ringTrend.length > 1 && (
                 <Card>
                   <View style={styles.rowBetween}>
-                    <Text style={[styles.cardTitle, { color: text, marginBottom: 0 }]}>Live Stress Trend</Text>
+                    <Text style={[styles.cardTitle, { color: text, marginBottom: 0 }]}>Stress Trend</Text>
                     <StatusDot color={ringTrendColor} active={ringConnected} />
                   </View>
                   <Text style={{ color: muted, marginTop: 4, marginBottom: 12, fontSize: 11 }}>
-                    P(stress) across the most recent windows (%)
+                    P(stress) across this and recent previous sessions' telemetry windows
                   </Text>
                   <LineChart
                     points={ringTrend}
                     color={ringTrendColor}
                     width={TREND_CHART_WIDTH}
-                    height={130}
+                    height={145}
                     maxValue={100}
-                    suffix="%"
                     baselineValue={STRESS_DECISION_THRESHOLD_PERCENT}
-                    baselineLabel="Stress level"
+                    baselineLabel="Stress threshold"
                     baseline2Value={ringSessionBaseline}
                     baseline2Label="Session start"
+                    colorZones
                   />
                 </Card>
               )}
 
-              {ringChart.length > 1 && (
-                <>
-                  <Text style={[styles.sectionLabel, { color: muted }]}>
-                    Raw Feature Trends ({RING_FEATURE_CHARTS.length})
-                  </Text>
-                  {RING_FEATURE_CHARTS.map((f) => (
-                    <FeatureTrendChart
-                      key={f.key}
-                      chartWindows={ringChart}
-                      featureKey={f.key}
-                      label={f.label}
-                      unit={f.unit}
-                      color={f.color}
-                      muted={muted}
-                      text={text}
-                    />
-                  ))}
-                </>
-              )}
+              {ringChart.length > 1 && (() => {
+                const f = RING_FEATURE_CHARTS.find((x) => x.key === ringFeature) || RING_FEATURE_CHARTS[0];
+                return (
+                  <FeatureTrendChart
+                    chartWindows={ringChart}
+                    featureKey={f.key}
+                    label="Feature trend"
+                    unit={f.unit}
+                    color={f.color}
+                    muted={muted}
+                    text={text}
+                    picker={(
+                      <Dropdown value={f.key} onChange={setRingFeature}
+                        options={RING_FEATURE_CHARTS.map((x) => ({ value: x.key, label: x.label }))} />
+                    )}
+                  />
+                );
+              })()}
 
               {(sessionDist.normal + sessionDist.stress) > 0 && (
                 <Card>
@@ -569,6 +986,45 @@ export default function AdminUserDetailScreen({ route, navigation }) {
                 field="prob_eeg" label="EEG" color={COLORS.warning} muted={muted} text={text} />
 
               <Card>
+                <Text style={[styles.cardTitle, { color: text, marginBottom: 2 }]}>Task-state score</Text>
+                <Text style={{ color: muted, marginBottom: 12, fontSize: 11 }}>
+                  Per ~25s block, last few sessions · dashed line = effective high-load threshold
+                </Text>
+                {eegScorePoints.length < 2
+                  ? <Text style={{ color: muted, fontSize: 12 }}>No EEG blocks recorded for this user yet.</Text>
+                  : (
+                    <LineChart points={eegScorePoints} color={COLORS.eeg} width={TREND_CHART_WIDTH} height={180} maxValue={100} suffix="%"
+                      colorZones
+                      baselineValue={Math.round((eegLatestBlock?.effective_high_load_p ?? eegCalib?.personal_high_load_p ?? 0.7933) * 100)}
+                      baselineLabel="High-load threshold" />
+                  )}
+              </Card>
+
+              {(() => {
+                const f = EEG_FEATURES.find((x) => x.key === eegFeature) || EEG_FEATURES[0];
+                return (
+                  <Card>
+                    <View style={styles.rowBetween}>
+                      <Text style={[styles.cardTitle, { color: text, marginBottom: 0 }]}>Bipolar feature</Text>
+                      <Dropdown value={f.key} onChange={setEegFeature}
+                        options={EEG_FEATURES.map((x) => ({ value: x.key, label: x.label }))} />
+                    </View>
+                    <View style={{ height: 12 }} />
+                    {eegFeaturePoints.length < 2
+                      ? <Text style={{ color: muted, fontSize: 12 }}>No blocks with this feature yet.</Text>
+                      : <LineChart key={f.key} points={eegFeaturePoints} color={f.color} width={TREND_CHART_WIDTH} height={170} />}
+                  </Card>
+                );
+              })()}
+
+              {eegQualityPoints.length > 1 && (
+                <Card>
+                  <Text style={[styles.cardTitle, { color: text, marginBottom: 12 }]}>Signal quality</Text>
+                  <LineChart points={eegQualityPoints} color={COLORS.normal} width={TREND_CHART_WIDTH} height={150} maxValue={100} suffix="%" />
+                </Card>
+              )}
+
+              <Card>
                 <View style={styles.rowBetween}>
                   <Text style={[styles.cardTitle, { color: text, marginBottom: 0 }]}>Live Raw Signal</Text>
                   <Icon name={NAMES.chevronRight} size={18} color={muted} />
@@ -601,23 +1057,110 @@ export default function AdminUserDetailScreen({ route, navigation }) {
             </>
           )}
 
-          {tab === 'Phenotyping' && (
-            <Card>
-              <Text style={[styles.cardTitle, { color: text }]}>Behavioral Analysis</Text>
-              <Text style={{ color: muted, marginBottom: 14 }}>
-                Inspect {name || userId}'s passive digital phenotyping data.
-                View their Z-score deviations, idiographic baseline values, and weekly stress patterns.
-              </Text>
-              <TouchableOpacity
-                style={[styles.openBtn, { backgroundColor: COLORS.gsr }]}
-                onPress={() => navigation.navigate('PhenotypingAnalysis', { userId: phenoDeviceId || userId, userName: name || userId, mode: 'analysis' })}
-              >
-                <Text style={{ color: '#FFFFFF', fontWeight: '800' }}>Open Analysis →</Text>
-              </TouchableOpacity>
-            </Card>
+          {tab === 'Phone' && (
+            <>
+              {/* Participant Overview Card */}
+              <Card>
+                <View style={styles.rowBetween}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.cardTitle, { color: text, marginBottom: 2 }]}>
+                      Behavioral Digital Phenotyping
+                    </Text>
+                    <Text style={{ color: muted, fontSize: 11.5 }}>
+                      Passive keystroke, gesture speed & phone tilt telemetry
+                    </Text>
+                  </View>
+                  <View style={{ backgroundColor: (phenoUserRecord?.is_calibrated ? COLORS.normal : '#F59E0B') + '15', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 }}>
+                    <Text style={{ fontSize: 10, fontWeight: '800', color: phenoUserRecord?.is_calibrated ? COLORS.normal : '#D97706' }}>
+                      {phenoUserRecord?.is_calibrated
+                        ? 'Calibrated'
+                        : `Day ${phenoUserRecord?.created_at ? Math.min(7, Math.floor(Math.max(0, Date.now() - new Date(phenoUserRecord.created_at).getTime()) / 86400000) + 1) : (phenoUserRecord?.calibration_day || 1)} of 7`}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={{ color: muted, marginTop: 8, fontSize: 11.5 }}>
+                  Device ID: @{phenoDeviceId || userId} · {Object.keys(phenoDataLogs).length} telemetry windows recorded
+                </Text>
+              </Card>
+
+              {/* Stress Trend Card (Composite) */}
+              {phenoTrendPoints.length > 1 ? (
+                <Card>
+                  <View style={styles.rowBetween}>
+                    <Text style={[styles.cardTitle, { color: text, marginBottom: 0 }]}>Stress Trend</Text>
+                    <StatusDot
+                      color={
+                        phenoTrendPoints[phenoTrendPoints.length - 1]?.value > 65
+                          ? COLORS.stress
+                          : phenoTrendPoints[phenoTrendPoints.length - 1]?.value > 35
+                          ? '#F59E0B'
+                          : COLORS.normal
+                      }
+                      active={true}
+                    />
+                  </View>
+                  <Text style={{ color: muted, marginTop: 4, marginBottom: 12, fontSize: 11 }}>
+                    P(stress) across passive digital phenotyping telemetry windows
+                  </Text>
+                  <LineChart
+                    points={phenoTrendPoints}
+                    color={
+                      phenoTrendPoints[phenoTrendPoints.length - 1]?.value > 65
+                        ? COLORS.stress
+                        : phenoTrendPoints[phenoTrendPoints.length - 1]?.value > 35
+                        ? '#F59E0B'
+                        : COLORS.normal
+                    }
+                    width={TREND_CHART_WIDTH}
+                    height={145}
+                    maxValue={100}
+                    baselineValue={65}
+                    baselineLabel="Stress threshold"
+                    baselineColor={COLORS.stress}
+                    baseline2Value={35}
+                    baseline2Label="Calm baseline"
+                    baseline2Color={COLORS.normal}
+                    colorZones
+                  />
+                </Card>
+              ) : null}
+
+              {(() => {
+                const f = PHENO_FEATURES.find((x) => x.key === phenoFeature) || PHENO_FEATURES[0];
+                const pts = phenoRawPoints[f.key] || [];
+                return (
+                  <Card>
+                    <View style={styles.rowBetween}>
+                      <Text style={[styles.cardTitle, { color: text, marginBottom: 0 }]}>Interaction features</Text>
+                      <Dropdown value={f.key} onChange={setPhenoFeature}
+                        options={PHENO_FEATURES.map((x) => ({ value: x.key, label: x.label }))} />
+                    </View>
+                    <Text style={{ color: muted, marginTop: 4, marginBottom: 12, fontSize: 11 }}>
+                      Per telemetry window · typical ~{f.baseline}{f.unit}{pts.length ? ` · latest ${pts[pts.length - 1].value}${f.unit}` : ''}
+                    </Text>
+                    {pts.length < 2
+                      ? <Text style={{ color: muted, fontSize: 12 }}>Not enough typing/scroll windows yet.</Text>
+                      : <LineChart key={f.key} points={pts} color={f.color} width={TREND_CHART_WIDTH} height={170} suffix={f.unit} />}
+                  </Card>
+                );
+              })()}
+
+              <Card>
+                <Text style={[styles.cardTitle, { color: text }]}>Continuous Roadmap & Deep Analysis</Text>
+                <Text style={{ color: muted, marginBottom: 14, fontSize: 11.5 }}>
+                  Inspect complete 7-day idiographic distributions, empirical ROC curves, and daily micro-behavior breakdowns.
+                </Text>
+                <TouchableOpacity
+                  style={[styles.openBtn, { backgroundColor: COLORS.brand }]}
+                  onPress={() => navigation.navigate('PhenotypingAnalysis', { userId: phenoDeviceId || userId, userName: name || userId, mode: 'analysis' })}
+                >
+                  <Text style={{ color: '#FFFFFF', fontWeight: '800' }}>Open Continuous Roadmap →</Text>
+                </TouchableOpacity>
+              </Card>
+            </>
           )}
 
-          {tab === 'Relaxation' && (
+          {tab === 'Relax' && (
             <Card>
               <Text style={[styles.cardTitle, { color: text }]}>Relaxation Guide</Text>
               <Text style={{ color: muted, marginBottom: 14 }}>
@@ -643,20 +1186,27 @@ export default function AdminUserDetailScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   header: { padding: 20, paddingBottom: 8 },
   backRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 10 },
-  title: { fontSize: 22, fontWeight: '900' },
-  subtitle: { fontSize: 12, marginTop: 2 },
-  tabRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 20, marginTop: 8 },
-  tabBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 12, backgroundColor: COLORS.light.cardHover },
+  title: { fontSize: 22, fontWeight: '900', letterSpacing: -0.3 },
+  subtitle: { fontSize: 12, marginTop: 2, fontWeight: '600' },
+  identity: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  avatar: { width: 46, height: 46, borderRadius: 23, backgroundColor: COLORS.brandSoft, alignItems: 'center', justifyContent: 'center' },
+  avatarLetter: { fontSize: 18, fontWeight: '900', color: COLORS.brandDark },
+  livePill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 14, backgroundColor: COLORS.normalSoft },
+  livePillText: { fontSize: 11, fontWeight: '800', color: COLORS.normalDark },
+  // Same segmented control as the website (web/src/styles.css .seg).
+  tabRow: { flexDirection: 'row', gap: 4, marginHorizontal: 20, marginTop: 8, padding: 4, borderRadius: 28, backgroundColor: COLORS.light.pillBg },
+  tabBtn: { flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: 24 },
+  tabOn: { backgroundColor: COLORS.light.card, shadowColor: '#1E293B', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 6, elevation: 2 },
   tabText: { fontSize: 12, fontWeight: '700' },
   cardTitle: { fontSize: 15, fontWeight: '800', marginBottom: 10 },
   sectionLabel: { fontSize: 12, fontWeight: '800', marginTop: 4, marginBottom: 4, marginLeft: 4, textTransform: 'uppercase', letterSpacing: 0.5 },
-  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
   rowGap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   liveValue: { fontSize: 18, fontWeight: '900' },
-  row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 },
+  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, paddingVertical: 6 },
   rowWithBadge: { alignItems: 'center', paddingVertical: 8 },
   rowLabel: { fontSize: 12, flex: 1 },
-  rowValue: { fontSize: 12, fontWeight: '700' },
+  rowValue: { fontSize: 12, fontWeight: '700', flexShrink: 1, textAlign: 'right' },
   note: { fontSize: 11, marginTop: 12, lineHeight: 16 },
   openBtn: { padding: 14, borderRadius: 14, alignItems: 'center' },
   distRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 8 },
@@ -664,4 +1214,7 @@ const styles = StyleSheet.create({
   distBarFill: { height: 8, borderRadius: 4 },
   distValue: { width: 24, fontSize: 13, fontWeight: '800', textAlign: 'right' },
   distLabel: { minWidth: 60, fontSize: 11 },
+  signalHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  signalTitle: { fontSize: 12, fontWeight: '700' },
+  signalValue: { fontSize: 13, fontWeight: '800' },
 });

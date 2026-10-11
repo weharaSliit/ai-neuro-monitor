@@ -1,27 +1,63 @@
+import { getContentWidth } from '../../shared/theme/layout';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     View, Text, StyleSheet, Dimensions,
     TouchableOpacity, ScrollView,
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
 import StatusDot from '../../shared/StatusDot';
 import Icon, { NAMES } from '../../shared/Icon';
-import MoodBadge from '../../shared/MoodBadge';
+import Badge from '../../shared/Badge';
 import AvatarButton from '../../shared/AvatarButton';
+import BalanceRing from '../../shared/BalanceRing';
+import LevelSlider from '../../shared/LevelSlider';
+import ActionTile from '../../shared/ActionTile';
 import { useCalibrationSummary, useDeviceStatus } from '../../shared/CalibrationGate';
 import LineChart from '../../shared/LineChart';
-import FreudHeroBanner from '../../shared/FreudHeroBanner';
-import { ref, onValue, off } from 'firebase/database';
+import BaselineDriftCard from '../../shared/BaselineDriftCard';
+import {
+    levelOf, LEVEL_COLOR, MIND_WORDS, BODY_WORDS, OVERALL_WORDS, sliderPosition,
+    DEFAULT_RING_THRESHOLD, DEFAULT_EEG_THRESHOLD,
+} from '../../shared/levels';
+import { TYPE, SPACE, RADIUS } from '../../shared/theme/tokens';
+import { ref, onValue, off, get } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import { COLORS } from '../../physiological/config/theme';
 import { useAuth } from '../../../context/AuthContext';
 import api from '../../physiological/api/client';
 import { STRESS_DECISION_THRESHOLD_PERCENT } from '../../physiological/config/config';
-import { FUSION_TREND_LABELS } from '../config/config';
 
-const CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
+const CHART_WIDTH = Math.max(260, getContentWidth() - 2 * SPACE.xl - 2 * 18);
+// A window older than this is "last reading", not "live".
+const LIVE_WINDOW_MS = 3 * 60 * 1000;
+
+// Plain-language hero copy -- what a non-technical user actually needs
+// to know, instead of probabilities/thresholds.
+const HERO = {
+    calm:   { word: 'Calm',          line: 'Your mind and body are settled.',                     tip: 'All good — keep going',        icon: 'emoticon-happy-outline' },
+    rising: { word: 'Rising',        line: 'Stress is building up a little.',                     tip: 'A short pause would help',     icon: 'emoticon-neutral-outline' },
+    high:   { word: 'Stressed',      line: 'Your body and mind are under strain right now.',      tip: 'Try a 1-minute breathing break', icon: 'emoticon-sad-outline' },
+    idle:   { word: 'Not connected', line: 'Put on your ring or headband to see how you’re doing.', tip: 'Waiting for devices',  icon: 'power-plug-off-outline' },
+};
+
+function timeAgo(ms) {
+    const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    if (s < 60) return 'just now';
+    const m = Math.round(s / 60);
+    if (m < 60) return `${m} min ago`;
+    const h = Math.round(m / 60);
+    if (h < 24) return `${h} h ago`;
+    return new Date(ms).toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+}
+// Same cross-session reasoning as RingSummaryScreen.js/EegSummaryScreen.js:
+// a session is one login-to-logout span, not "how far back these charts
+// should remember" -- backfills this many of the user's own PRIOR sessions
+// alongside whatever's currently live/last-known.
+const RECENT_SESSIONS_FOR_CHART = 4;
+const CHART_POINTS_MAX = 160;
 
 function getGreeting() {
     const h = new Date().getHours();
@@ -34,8 +70,6 @@ function getDateStr() {
     return new Date().toLocaleDateString('en-US', { weekday: 'short', day: 'numeric', month: 'short' });
 }
 
-const TREND_ICON = { increasing: NAMES.trendUp, decreasing: NAMES.trendDown, stable: NAMES.trendFlat };
-
 function sortedWindowKeys(windowsObj) {
     if (!windowsObj) return [];
     return Object.keys(windowsObj)
@@ -43,39 +77,50 @@ function sortedWindowKeys(windowsObj) {
         .sort((a, b) => Number(a) - Number(b));
 }
 
+// Newest window satisfying `ok`. A new minute's window is created the moment
+// the FIRST device reports (prob_eeg or prob_hrv_gsr), and the fusion engine
+// only adds fused_label/fused_probability a moment later -- reading the raw
+// newest window in that gap made the hero fall back to "calm" for a second
+// and then jump back. So every reading is taken from the newest window that
+// actually HAS that reading.
+function latestWindowWith(windowsObj, ok) {
+    const keys = sortedWindowKeys(windowsObj);
+    for (let i = keys.length - 1; i >= 0; i -= 1) {
+        const w = windowsObj[keys[i]];
+        if (w && ok(w)) return w;
+    }
+    return null;
+}
+
 function latestWindow(windowsObj) {
     const keys = sortedWindowKeys(windowsObj);
     return keys.length ? windowsObj[keys[keys.length - 1]] : null;
 }
 
-function SectionCard({ icon, iconColor, title, statusText, statusColor, summary, onPress, t }) {
+// Compact device tile: icon, name, online/offline -- tap for that
+// device's own detail screen.
+function DeviceChip({ icon, tint, name, online, onPress }) {
     return (
-        <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
-            <Card style={styles.sectionCard}>
-                <View style={styles.sectionRow}>
-                    <View style={[styles.sectionIconCircle, { backgroundColor: iconColor + '18' }]}>
-                        <Icon name={icon} size={22} color={iconColor} />
-                    </View>
-                    <View style={{ flex: 1, marginLeft: 12 }}>
-                        <View style={styles.sectionTopRow}>
-                            <Text style={[styles.sectionTitle, { color: t.text }]}>{title}</Text>
-                            <View style={styles.sectionStatusRow}>
-                                <StatusDot color={statusColor} active={statusColor !== t.border} size={7} />
-                                <Text style={[styles.sectionStatusText, { color: statusColor }]}>{statusText}</Text>
-                            </View>
-                        </View>
-                        <Text style={[styles.sectionSummary, { color: t.textMuted }]} numberOfLines={1}>
-                            {summary}
-                        </Text>
-                    </View>
-                    <Icon name={NAMES.chevronRight} size={18} color={t.textMuted} />
-                </View>
-            </Card>
+        <TouchableOpacity onPress={onPress} activeOpacity={0.85} style={styles.deviceChip}>
+            <View style={[styles.deviceIcon, { backgroundColor: tint + '18' }]}>
+                <Icon name={icon} size={20} color={tint} />
+            </View>
+            <Text style={styles.deviceName} numberOfLines={1}>{name}</Text>
+            <View style={styles.deviceStatusRow}>
+                <StatusDot color={online ? COLORS.normal : COLORS.light.textMuted} active={online} size={6} />
+                <Text style={[styles.deviceStatus, { color: online ? COLORS.normalDark : COLORS.light.textMuted }]}>
+                    {online ? 'Live' : 'Off'}
+                </Text>
+            </View>
         </TouchableOpacity>
     );
 }
 
-export default function FusionSessionScreen({ navigation }) {
+export default function FusionSessionScreen({ navigation, route }) {
+    // Same screen is mounted inside the Admin stack as "AdminFusion" --
+    // the clinical view keeps the technical extras (thresholds, the
+    // 3-series modality chart) that the user-facing hub deliberately hides.
+    const isAdminView = route?.name === 'AdminFusion';
     const { theme: t, COLORS } = useTheme();
     const { user, token } = useAuth();
     const userId = user?.userId;
@@ -108,6 +153,7 @@ export default function FusionSessionScreen({ navigation }) {
     // whether it was actually streaming.
     const { ringOnline: ringConnected, eegOnline: eegConnected } = useDeviceStatus(userId, db);
     const [lastKnown, setLastKnown] = useState(null);
+    const [historicalWindows, setHistoricalWindows] = useState({});
     const listenerRef = useRef(null);
 
     const startWatching = useCallback((idOverride) => {
@@ -157,14 +203,52 @@ export default function FusionSessionScreen({ navigation }) {
         })();
     }, [userId]);
 
-    const latest = useMemo(() => latestWindow(windows), [windows]);
+    // One-time backfill of this user's own PRIOR fusion_en sessions, merged
+    // alongside whatever fusion_en_sessions/current_session_id is live right
+    // now -- so the charts below don't reset to empty every new session.
+    // fusion_window_key() (backend/common/fusion.py) buckets by ABSOLUTE
+    // epoch time, not session-relative index, so window keys from different
+    // sessions never collide and can just be merged directly, no
+    // renumbering needed. Re-runs when sessionId changes so a just-ended
+    // live session gets folded into history once a new one starts.
+    useEffect(() => {
+        if (!userId) return;
+        let cancelled = false;
+        get(ref(db, `fusion_en/${userId}`)).then((snapshot) => {
+            if (cancelled) return;
+            const all = snapshot.val() || {};
+            const sids = Object.keys(all)
+                .filter((k) => all[k] && typeof all[k] === 'object' && k !== sessionId)
+                .sort();
+            const priorSids = sids.slice(-RECENT_SESSIONS_FOR_CHART);
+            const merged = {};
+            priorSids.forEach((sid) => Object.assign(merged, all[sid]));
+            setHistoricalWindows(merged);
+        }).catch(() => {});
+        return () => { cancelled = true; };
+    }, [userId, sessionId]);
+
+    const combinedWindows = useMemo(
+        () => ({ ...historicalWindows, ...(windows || {}) }),
+        [historicalWindows, windows]
+    );
+
+    // Fully fused window (falls back to the raw newest only if none is fused yet).
+    const latest = useMemo(
+        () => latestWindowWith(windows, (w) => w.fused_label != null && w.fused_probability != null)
+            || latestWindow(windows),
+        [windows]
+    );
+    const latestMind = useMemo(() => latestWindowWith(windows, (w) => w.prob_eeg != null), [windows]);
+    const latestBody = useMemo(() => latestWindowWith(windows, (w) => w.prob_hrv_gsr != null), [windows]);
     const fusedHistory = useMemo(() => {
-        const keys = sortedWindowKeys(windows);
+        const keys = sortedWindowKeys(combinedWindows);
         return keys
-            .map((k) => ({ v: windows[k]?.fused_probability, key: k }))
+            .map((k) => ({ v: combinedWindows[k]?.fused_probability, key: k }))
             .filter(({ v }) => v !== undefined && v !== null)
-            .map(({ v, key }) => ({ value: Math.round(v * 100), date: new Date(Number(key) * 60000) }));
-    }, [windows]);
+            .map(({ v, key }) => ({ value: Math.round(v * 100), date: new Date(Number(key) * 60000) }))
+            .slice(-CHART_POINTS_MAX);
+    }, [combinedWindows]);
 
     // Cognitive load (EEG), autonomic arousal (HRV/GSR), and the fused
     // probability -- all three already live on the SAME fusion_en/{window}
@@ -177,9 +261,9 @@ export default function FusionSessionScreen({ navigation }) {
     // modality reported that block) -- MultiLineChart breaks the line there
     // instead of interpolating across missing data.
     const multiSeriesPoints = useMemo(() => {
-        const keys = sortedWindowKeys(windows);
+        const keys = sortedWindowKeys(combinedWindows).slice(-CHART_POINTS_MAX);
         return keys.map((k) => {
-            const w = windows[k] || {};
+            const w = combinedWindows[k] || {};
             return {
                 date: new Date(Number(k) * 60000),
                 values: [
@@ -189,389 +273,329 @@ export default function FusionSessionScreen({ navigation }) {
                 ],
             };
         });
-    }, [windows]);
+    }, [combinedWindows]);
     const hasMultiSeriesData = multiSeriesPoints.filter((p) => p.values.some((v) => v != null)).length > 1;
 
+    // ── Live freshness -- re-evaluated every 20s so "just now" ages
+    // honestly even when no new window arrives. ─────────────────────────
+    const [, setTick] = useState(0);
+    useEffect(() => {
+        const id = setInterval(() => setTick((n) => n + 1), 20000);
+        return () => clearInterval(id);
+    }, []);
+    const latestKey = useMemo(() => {
+        const keys = sortedWindowKeys(windows);
+        return keys.length ? Number(keys[keys.length - 1]) : null;
+    }, [windows]);
+    const lastUpdateMs = latestKey != null ? latestKey * 60000 : null;
+    const isLive = lastUpdateMs != null && Date.now() - lastUpdateMs < LIVE_WINDOW_MS;
+
+    // ── Overall state (fused) ───────────────────────────────────────────
     const label = latest?.fused_label;
     const trend = latest?.stress_trend;
-    const stateColor = label === 1
-        ? COLORS.stress
-        : trend === 'increasing' ? COLORS.warning : COLORS.normal;
-
-    const heroStateLabel = hasAnyWindow
-        ? (label === 1 ? 'Stress' : trend === 'increasing' ? 'Trending' : 'Calm')
-        : (lastKnown ? (lastKnown.label === 'Stress' ? 'Stress' : 'Calm') : 'Calm');
-
-    // stress_phase/stress_alert_message: fusion_live_session.py's
-    // _compute_stress_phase() -- ADDITIVE to fused_label/heroStateLabel
-    // above, not a replacement. Recomputed fresh every window server-side
-    // (not sticky), so this banner disappears on its own the moment
-    // stress_phase stops being 'increasing_stress_alert', with no extra
-    // client-side state to clear it.
     const stressPhase = latest?.stress_phase;
     const stressAlertMessage = latest?.stress_alert_message;
 
-    // fused_relative_index: comparable-across-modalities/users alternative
-    // to fused_probability (see fusion_engin.py's compute_realtime_
-    // multimodal_fusion() docstring) -- 0 = exactly at this window's
-    // combined personal threshold, so unlike fused_probability's raw 0-100%
-    // (which has no fixed meaning: EEG's and Ring's own population
-    // thresholds differ, before any personal calibration adds more spread
-    // on top), this number means the same thing for every user. Shown as
-    // "X% above/below your personal baseline" -- *100 turns "1.0 index
-    // unit" (as elevated as the biggest shift either modality's own
-    // calibration considers meaningful) into a familiar percent-style
-    // figure, not a literal fraction of anything. ADDITIVE -- every other
-    // field on this screen (heroStateLabel, fusedHistory, multiSeriesPoints)
-    // keeps reading fused_probability/fused_label exactly as before.
-    const relativeIndex = latest?.fused_relative_index;
-    const relativePct = relativeIndex != null ? Math.round(relativeIndex * 100) : null;
-    const relativeElevated = relativeIndex != null && relativeIndex >= 0;
+    let heroKey;
+    if (hasAnyWindow && latest) {
+        if (label === 1) heroKey = 'high';
+        else if (trend === 'increasing' || stressPhase === 'trending_towards_stress') heroKey = 'rising';
+        else heroKey = 'calm';
+    } else if (lastKnown) {
+        heroKey = lastKnown.label === 'Stress' ? 'high' : 'calm';
+    } else {
+        heroKey = ringConnected || eegConnected ? 'calm' : 'idle';
+    }
+    const hero = HERO[heroKey];
+    const heroColor = heroKey === 'high' ? COLORS.stress
+        : heroKey === 'rising' ? COLORS.warning
+        : heroKey === 'idle' ? COLORS.light.textMuted
+        : COLORS.normal;
+    const heroWhen = isLive ? 'Live · updated just now'
+        : lastUpdateMs ? `Last reading ${timeAgo(lastUpdateMs)}`
+        : lastKnown?.timestamp ? `Last reading ${timeAgo(new Date(lastKnown.timestamp).getTime())}`
+        : 'No readings yet';
+
+    // ── Mind (EEG) / Body (HRV+GSR) rings, each judged against that
+    // person's OWN threshold the backend already stamps on the window. ──
+    const mindP = latestMind?.prob_eeg ?? null;
+    const mindThr = latestMind?.threshold_eeg ?? latest?.threshold_eeg ?? eegCalibration?.personal_high_load_p ?? DEFAULT_EEG_THRESHOLD;
+    const mindLevel = levelOf(mindP, mindThr);
+
+    const bodyP = latestBody?.prob_hrv_gsr ?? (hasAnyWindow ? null : lastKnown?.prob_stress ?? null);
+    const bodyThr = latestBody?.threshold_hrv_gsr ?? latest?.threshold_hrv_gsr ?? ringCalibration?.personal_stress_threshold ?? DEFAULT_RING_THRESHOLD;
+    const bodyLevel = levelOf(bodyP, bodyThr);
+
+    const fusedP = latest?.fused_probability ?? null;
+    const fusedThr = latest?.fused_threshold ?? DEFAULT_RING_THRESHOLD;
+    const fusedLevel = levelOf(fusedP, fusedThr);
+    const fusedLimitPct = latest?.fused_threshold != null
+        ? Math.round(latest.fused_threshold * 100) : STRESS_DECISION_THRESHOLD_PERCENT;
+
+    const firstName = (userName || '').split(/[\s_.]/)[0];
+    const displayName = firstName ? firstName.charAt(0).toUpperCase() + firstName.slice(1) : 'there';
 
     return (
         <ScreenBackground>
+            {/* Soft state-tinted glow behind the top of the screen. */}
+            <LinearGradient
+                colors={[heroColor + '26', heroColor + '00']}
+                style={styles.topGlow}
+                pointerEvents="none"
+            />
             <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-                {/* Top Profile / Greeting Bar */}
+                {/* ── Greeting ── */}
                 <View style={styles.topHeader}>
-                    <View>
-                        <Text style={[styles.dateStr, { color: t.textMuted }]}>{getDateStr()}</Text>
-                        <Text style={[styles.greeting, { color: t.text }]}>{getGreeting()}, {userName}</Text>
+                    <View style={{ flex: 1 }}>
+                        <Text style={styles.hey}>
+                            Hey, <Text style={styles.heyName}>{displayName}</Text>
+                        </Text>
+                        <Text style={styles.howAreYou}>How are you doing today?</Text>
                     </View>
                     <AvatarButton userId={userId} onPress={() => navigation.navigate('Profile')} />
                 </View>
 
-                {/* Freud v2 Signature Curved Organic Hero Banner */}
-                <FreudHeroBanner
-                    stateLabel={heroStateLabel}
-                    color={stateColor}
-                />
+                {/* ── State hero ── */}
+                <View style={styles.heroCard}>
+                    <View style={[styles.heroOrb, { backgroundColor: heroColor + '1F', borderColor: heroColor + '40' }]}>
+                        <Icon name={hero.icon} size={38} color={heroColor} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                        <Text style={styles.heroCaption}>Right now you feel</Text>
+                        <Text style={[styles.heroWord, { color: heroKey === 'idle' ? COLORS.light.textSub : COLORS.light.text }]}>
+                            {hero.word}
+                        </Text>
+                        <Text style={styles.heroLine}>{hero.line}</Text>
+                        <View style={styles.heroFooter}>
+                            <TouchableOpacity
+                                activeOpacity={heroKey === 'high' || heroKey === 'rising' ? 0.8 : 1}
+                                onPress={heroKey === 'high' || heroKey === 'rising'
+                                    ? () => navigation.navigate('RelaxationGuide') : undefined}
+                            >
+                                <Badge label={hero.tip} color={heroColor} size="sm" />
+                            </TouchableOpacity>
+                        </View>
+                        <View style={styles.heroWhenRow}>
+                            {isLive && <StatusDot color={COLORS.normal} active size={6} />}
+                            <Text style={styles.heroWhen}>{heroWhen}</Text>
+                        </View>
+                    </View>
+                </View>
 
-                {/* increasing_stress_alert: at/above threshold AND still
-                    rising -- distinct from heroStateLabel's plain "Stress"
-                    (which fires on being above threshold regardless of
-                    direction). Gone on its own the next window trend stops
-                    increasing -- see stress_phase's own comment above. */}
                 {stressPhase === 'increasing_stress_alert' && stressAlertMessage && (
-                    <View style={[styles.alertBanner, { backgroundColor: COLORS.stressSoft, borderColor: COLORS.stress + '40' }]}>
+                    <TouchableOpacity
+                        activeOpacity={0.85}
+                        onPress={() => navigation.navigate('RelaxationGuide')}
+                        style={[styles.alertBanner, { backgroundColor: COLORS.stressSoft, borderColor: COLORS.stress + '40' }]}
+                    >
                         <Icon name={NAMES.trendUp} size={18} color={COLORS.stressDark} />
                         <Text style={[styles.alertBannerText, { color: COLORS.stressDark }]}>{stressAlertMessage}</Text>
-                    </View>
-                )}
-                {stressPhase === 'trending_towards_stress' && (
-                    <View style={[styles.alertBanner, { backgroundColor: COLORS.warningSoft, borderColor: COLORS.warning + '40' }]}>
-                        <Icon name={NAMES.trendUp} size={18} color={COLORS.warningDark} />
-                        <Text style={[styles.alertBannerText, { color: COLORS.warningDark }]}>
-                            Trending toward your high-load threshold — worth a moment to check in.
-                        </Text>
-                    </View>
-                )}
-
-                {/* Personalized thresholds: only rendered once at least one
-                    side has actually separated Rest from Task (see
-                    _baseline_response()/get_calibration_status() above) --
-                    a user who's only done resting-baseline calibration
-                    still sees nothing here rather than a premature
-                    "Standard" placeholder for a task they haven't run yet. */}
-                {(personalEegPct != null || personalRingPct != null) && (
-                    <Card style={styles.thresholdCard} accentColor={COLORS.brand}>
-                        <Text style={[styles.cardTitle, { color: t.text }]}>Your Personalized Thresholds</Text>
-                        <View style={styles.thresholdRow}>
-                            <Text style={[styles.thresholdLabel, { color: t.textMuted }]}>EEG high-load</Text>
-                            <Text style={[styles.thresholdValue, { color: t.text }]}>
-                                {personalEegPct != null ? `${personalEegPct}%` : 'Standard'}
-                            </Text>
-                        </View>
-                        <View style={styles.thresholdRow}>
-                            <Text style={[styles.thresholdLabel, { color: t.textMuted }]}>Ring stress</Text>
-                            <Text style={[styles.thresholdValue, { color: t.text }]}>
-                                {personalRingPct != null ? `${personalRingPct}%` : 'Standard'}
-                            </Text>
-                        </View>
-                    </Card>
-                )}
-
-                {/* Session Progression Line Chart */}
-                {fusedHistory.length > 1 && (
-                    <Card elevated style={styles.chartCard}>
-                        <View style={styles.chartHeader}>
-                            <View style={styles.chartHeaderLeft}>
-                                <Text style={[styles.chartTitle, { color: t.text }]} numberOfLines={1}>Real-Time Stress Progression</Text>
-                                <Text style={[styles.chartSub, { color: t.textMuted }]}>
-                                    {fusedHistory.length} live fusion readings
-                                </Text>
-                            </View>
-                            {trend && TREND_ICON[trend] && (
-                                <View style={[styles.trendChip, { backgroundColor: COLORS.light.pillBg }]}>
-                                    <Icon name={TREND_ICON[trend]} size={13} color={t.textSub} />
-                                    <Text style={[styles.trendChipText, { color: t.textSub }]}>
-                                        {FUSION_TREND_LABELS[trend] || trend}
-                                    </Text>
-                                </View>
-                            )}
-                        </View>
-                        <LineChart
-                            points={fusedHistory}
-                            color={stateColor}
-                            width={CHART_WIDTH}
-                            height={145}
-                            maxValue={100}
-                            hideValues
-                            baselineValue={STRESS_DECISION_THRESHOLD_PERCENT}
-                            baselineLabel="Stress threshold"
-                            colorZones
-                            fallback={<Text style={[styles.waiting, { color: t.textMuted }]}>Loading chart…</Text>}
-                        />
-                    </Card>
-                )}
-
-                {/* Multi-modal physiological curve */}
-                {hasMultiSeriesData && (
-                    <Card elevated style={styles.chartCard}>
-                        <Text style={[styles.chartTitle, { color: t.text }]}>Multi-Modal Physiological Curve</Text>
-                        <Text style={[styles.chartSub, { color: t.textMuted, marginBottom: 10 }]}>
-                            Synchronized cognitive load (EEG), autonomic arousal (HRV/GSR) & fused stress
-                        </Text>
-                        <LineChart
-                            points={multiSeriesPoints}
-                            multiLine
-                            seriesColors={[COLORS.eeg, COLORS.hrv, COLORS.brand]}
-                            seriesLabels={['Cognitive load (EEG)', 'Autonomic arousal (HRV/GSR)', 'Fused probability']}
-                            width={CHART_WIDTH}
-                            height={160}
-                            maxValue={100}
-                            baselineValue={STRESS_DECISION_THRESHOLD_PERCENT}
-                            baselineLabel="Stress threshold"
-                            fallback={<Text style={[styles.waiting, { color: t.textMuted }]}>Loading chart…</Text>}
-                        />
-                    </Card>
-                )}
-
-                {/* Quick PSS-4 self check-in */}
-                <Card style={styles.pss4Card} accentColor={COLORS.brand}>
-                    <Text style={[styles.cardTitle, { color: t.text }]}>How are you feeling?</Text>
-                    <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 4 }]}>
-                        Take 30 seconds for a quick self check-in
-                    </Text>
-                    <TouchableOpacity onPress={() => navigation.navigate('PSS4')} activeOpacity={0.85} style={{ marginTop: 10 }}>
-                        <View style={[styles.actionTile, { backgroundColor: COLORS.brandSoft, borderColor: COLORS.brand + '30' }]}>
-                            <Text style={{ color: COLORS.brandDark, fontWeight: '800' }}>Fill in PSS-4 →</Text>
-                        </View>
+                        <Icon name={NAMES.chevronRight} size={18} color={COLORS.stressDark} />
                     </TouchableOpacity>
+                )}
+
+                {/* ── Balance: Mind / Body rings + overall slider ── */}
+                <Card style={styles.block}>
+                    <View style={styles.blockHead}>
+                        <Text style={styles.blockTitle}>Your balance</Text>
+                        {isLive ? <Badge label="Live" color={COLORS.normal} size="sm" /> : null}
+                    </View>
+                    <View style={styles.ringRow}>
+                        <BalanceRing
+                            title="Mind"
+                            value={mindP != null ? mindP * 100 : null}
+                            word={mindLevel ? MIND_WORDS[mindLevel] : ''}
+                            color={mindLevel ? LEVEL_COLOR[mindLevel] : COLORS.eeg}
+                        />
+                        <View style={styles.ringDivider} />
+                        <BalanceRing
+                            title="Body"
+                            value={bodyP != null ? bodyP * 100 : null}
+                            word={bodyLevel ? BODY_WORDS[bodyLevel] : ''}
+                            color={bodyLevel ? LEVEL_COLOR[bodyLevel] : COLORS.hrv}
+                        />
+                    </View>
+                    <View style={styles.sliderWrap}>
+                        <LevelSlider
+                            title="Overall stress"
+                            position={sliderPosition(fusedP, fusedThr)}
+                            word={fusedLevel ? OVERALL_WORDS[fusedLevel] : ''}
+                            color={fusedLevel ? LEVEL_COLOR[fusedLevel] : COLORS.brand}
+                        />
+                    </View>
                 </Card>
 
-                {/* Connected Devices Section */}
-                <Text style={[styles.sectionsLabel, { color: t.textSub }]}>Hardware & Sensor Stream</Text>
+                {/* ── Quick actions ── */}
+                <View style={styles.actionRow}>
+                    <ActionTile
+                        lead="Breathe in, " bold="breathe out" tail=" for calm"
+                        caption="Guided relaxation"
+                        icon={NAMES.breathe} tint={COLORS.brand}
+                        onPress={() => navigation.navigate('RelaxationGuide')}
+                    />
+                    <View style={{ width: SPACE.md }} />
+                    <ActionTile
+                        lead="How are you " bold="feeling" tail="?"
+                        caption="30-second check-in"
+                        icon={NAMES.pss4} tint={COLORS.secondary}
+                        onPress={() => navigation.navigate('PSS4')}
+                    />
+                </View>
+                {/* Phone tracking + its quick check-in -- moved here from Profile. */}
+                <View style={[styles.actionRow, { marginTop: SPACE.md }]}>
+                    <ActionTile
+                        lead="Your " bold="phone habits" tail=""
+                        caption="Typing & scrolling"
+                        icon={NAMES.phenotyping} tint={COLORS.gsr}
+                        onPress={() => navigation.navigate('Phenotyping')}
+                        style={{ minHeight: 0 }}
+                    />
+                </View>
 
-                <SectionCard
-                    icon={NAMES.my} iconColor={COLORS.brand} title="Smart Ring Telemetry"
-                    statusText={ringConnected ? 'Streaming' : 'Offline'}
-                    statusColor={ringConnected ? COLORS.normal : t.border}
-                    summary={ringConnected ? 'Streaming continuous HRV & GSR readings' : 'Slip on your ring to stream telemetry'}
-                    onPress={() => navigation.navigate('RingSummary')} t={t}
-                />
-                <SectionCard
-                    icon={NAMES.eeg} iconColor={COLORS.warning} title="EEG Neural Headband"
-                    statusText={eegConnected ? 'Streaming' : 'Offline'}
-                    statusColor={eegConnected ? COLORS.normal : t.border}
-                    summary={eegConnected ? 'Reading cognitive workload live' : 'Wear the headband to measure mental load'}
-                    onPress={() => navigation.navigate('EegSummary')} t={t}
-                />
-                <SectionCard
-                    icon={NAMES.phenotyping} iconColor={COLORS.gsr} title="Digital Phenotyping"
-                    statusText="Active" statusColor={COLORS.normal}
-                    summary="Passive smartphone keystroke & interaction cadence"
-                    onPress={() => navigation.navigate('Phenotyping')} t={t}
-                />
+                {/* ── Today's rhythm ── */}
+                {fusedHistory.length > 1 && (
+                    <Card style={styles.block}>
+                        <Text style={styles.blockTitle}>Your stress rhythm</Text>
+                        <Text style={styles.blockSub}>Higher means more stress · dashed line is your limit</Text>
+                        <View style={{ marginTop: SPACE.md }}>
+                            <LineChart
+                                points={fusedHistory}
+                                color={heroKey === 'idle' ? COLORS.brand : heroColor}
+                                width={CHART_WIDTH}
+                                height={150}
+                                maxValue={100}
+                                hideValues
+                                baselineValue={fusedLimitPct}
+                                baselineLabel="Your limit"
+                                colorZones
+                                fallback={<Text style={styles.waiting}>Loading chart…</Text>}
+                            />
+                        </View>
+                    </Card>
+                )}
 
-                <View style={{ height: 24 }} />
+                {/* ── Devices ── */}
+                {/* Moved here from Profile -- same card as the website's main page. */}
+                <BaselineDriftCard userId={userId} ring={ringCalibration} style={styles.block} />
+
+                <Text style={styles.sectionLabel}>Your devices</Text>
+                <View style={styles.deviceRow}>
+                    <DeviceChip icon={NAMES.my} tint={COLORS.hrv} name="Ring"
+                        online={ringConnected} onPress={() => navigation.navigate('RingSummary')} />
+                    <DeviceChip icon={NAMES.eeg} tint={COLORS.warning} name="Headband"
+                        online={eegConnected} onPress={() => navigation.navigate('EegSummary')} />
+                    <DeviceChip icon={NAMES.phenotyping} tint={COLORS.gsr} name="Phone"
+                        online onPress={() => navigation.navigate('Phenotyping')} />
+                </View>
+
+                {/* ── Clinical extras: only in the Admin stack's view ── */}
+                {isAdminView && (personalEegPct != null || personalRingPct != null) && (
+                    <Card style={styles.block}>
+                        <Text style={styles.blockTitle}>Personal thresholds</Text>
+                        <View style={styles.thresholdRow}>
+                            <Text style={styles.thresholdLabel}>EEG high-load</Text>
+                            <Text style={styles.thresholdValue}>{personalEegPct != null ? `${personalEegPct}%` : 'Population'}</Text>
+                        </View>
+                        <View style={styles.thresholdRow}>
+                            <Text style={styles.thresholdLabel}>Ring stress</Text>
+                            <Text style={styles.thresholdValue}>{personalRingPct != null ? `${personalRingPct}%` : 'Population'}</Text>
+                        </View>
+                    </Card>
+                )}
+                {isAdminView && hasMultiSeriesData && (
+                    <Card style={styles.block}>
+                        <Text style={styles.blockTitle}>Modality curves</Text>
+                        <Text style={styles.blockSub}>Cognitive load (EEG), autonomic arousal (HRV/GSR) & fused probability</Text>
+                        <View style={{ marginTop: SPACE.md }}>
+                            <LineChart
+                                points={multiSeriesPoints}
+                                multiLine
+                                seriesColors={[COLORS.eeg, COLORS.hrv, COLORS.brand]}
+                                seriesLabels={['EEG', 'HRV/GSR', 'Fused']}
+                                width={CHART_WIDTH}
+                                height={160}
+                                maxValue={100}
+                                baselineValue={fusedLimitPct}
+                                baselineLabel="Fused limit"
+                                fallback={<Text style={styles.waiting}>Loading chart…</Text>}
+                            />
+                        </View>
+                    </Card>
+                )}
+
+                <View style={{ height: SPACE.xxl }} />
             </ScrollView>
         </ScreenBackground>
     );
 }
 
 const styles = StyleSheet.create({
-    scroll: {
-        paddingBottom: 40,
-    },
-    topHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'flex-start',
-        paddingHorizontal: 20,
-        paddingTop: 12,
-        paddingBottom: 10,
-    },
-    dateStr: {
-        fontSize: 12,
-        fontWeight: '700',
-    },
-    greeting: {
-        fontSize: 22,
-        fontWeight: '900',
-        letterSpacing: -0.3,
-    },
-    chartCard: {
-        marginVertical: 6,
-    },
-    chartHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 12,
-        gap: 8,
-    },
-    chartHeaderLeft: {
-        flex: 1,
-        marginRight: 6,
-    },
-    chartTitle: {
-        fontSize: 15,
-        fontWeight: '800',
-        letterSpacing: -0.2,
-    },
-    chartSub: {
-        fontSize: 11,
-        marginTop: 2,
-    },
-    trendChip: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        flexShrink: 0,
-        gap: 4,
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 10,
-    },
-    trendChipText: {
-        fontSize: 11,
-        fontWeight: '700',
-    },
-    waiting: {
-        fontSize: 13,
-        fontStyle: 'italic',
-        textAlign: 'center',
-        paddingVertical: 20,
-    },
-    alertBanner: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 10,
-        marginHorizontal: 20,
-        marginTop: 10,
-        padding: 14,
-        borderRadius: 16,
-        borderWidth: 1,
-    },
-    alertBannerText: {
-        flex: 1,
-        fontSize: 13,
-        fontWeight: '700',
-        lineHeight: 18,
-    },
-    thresholdCard: {
-        marginHorizontal: 20,
-        marginVertical: 10,
-        padding: 18,
-        borderRadius: 22,
-    },
-    thresholdRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        paddingVertical: 6,
-    },
-    thresholdLabel: {
-        fontSize: 13,
-        fontWeight: '700',
-    },
-    thresholdValue: {
-        fontSize: 14,
-        fontWeight: '900',
-    },
-    relativeCard: {
-        marginHorizontal: 20,
-        marginVertical: 10,
-        padding: 18,
-        borderRadius: 22,
-    },
-    relativeValue: {
-        fontSize: 28,
-        fontWeight: '900',
-        letterSpacing: -0.3,
-    },
-    relativeCaption: {
-        fontSize: 12,
-        fontWeight: '600',
-        marginTop: 2,
-    },
-    pss4Card: {
-        marginHorizontal: 20,
-        marginVertical: 8,
-        padding: 18,
-        borderRadius: 22,
-    },
-    cardTitle: {
-        fontSize: 15,
-        fontWeight: '800',
-    },
-    cardSub: {
-        fontSize: 12,
-    },
-    actionTile: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderRadius: 16,
-        borderWidth: 1,
-        padding: 14,
-    },
-    sectionsLabel: {
-        fontSize: 12,
-        fontWeight: '800',
-        letterSpacing: 0.5,
-        textTransform: 'uppercase',
-        marginHorizontal: 20,
-        marginTop: 14,
-        marginBottom: 10,
-    },
-    sectionCard: {
-        marginHorizontal: 20,
-        padding: 16,
-        borderRadius: 22,
-        marginBottom: 10,
-    },
-    sectionRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    sectionIconCircle: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    sectionTopRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-    },
-    sectionTitle: {
-        fontSize: 15,
-        fontWeight: '800',
-    },
-    sectionStatusRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 5,
-    },
-    sectionStatusText: {
-        fontSize: 11,
-        fontWeight: '700',
-    },
-    sectionSummary: {
-        fontSize: 12,
-        marginTop: 3,
-    },
-});
+    scroll: { paddingBottom: SPACE.xxxl },
+    topGlow: { position: 'absolute', top: 0, left: 0, right: 0, height: 340 },
 
+    topHeader: {
+        flexDirection: 'row', alignItems: 'flex-start',
+        paddingHorizontal: SPACE.xl, paddingTop: SPACE.md, paddingBottom: SPACE.lg,
+    },
+    hey: { fontSize: 28, fontWeight: '400', color: COLORS.light.text, letterSpacing: -0.5 },
+    heyName: { fontWeight: '800' },
+    howAreYou: { fontSize: 20, fontWeight: '400', color: COLORS.light.textSub, marginTop: 2, letterSpacing: -0.3 },
+
+    heroCard: {
+        flexDirection: 'row', alignItems: 'center',
+        marginHorizontal: SPACE.xl, marginBottom: SPACE.md,
+        padding: SPACE.lg, borderRadius: RADIUS.xl,
+        backgroundColor: '#FFFFFFE6', borderWidth: 1, borderColor: '#FFFFFF',
+        shadowColor: '#1E293B', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.06, shadowRadius: 18, elevation: 3,
+    },
+    heroOrb: {
+        width: 76, height: 76, borderRadius: 38, borderWidth: 1,
+        alignItems: 'center', justifyContent: 'center', marginRight: SPACE.lg,
+    },
+    heroCaption: { ...TYPE.caption, color: COLORS.light.textMuted },
+    heroWord: { fontSize: 26, fontWeight: '800', letterSpacing: -0.5, marginTop: 1 },
+    heroLine: { ...TYPE.body, color: COLORS.light.textSub, marginTop: 2 },
+    heroFooter: { flexDirection: 'row', marginTop: SPACE.sm },
+    heroWhenRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: SPACE.sm },
+    heroWhen: { fontSize: 11, fontWeight: '600', color: COLORS.light.textMuted },
+
+    alertBanner: {
+        flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
+        marginHorizontal: SPACE.xl, marginBottom: SPACE.md,
+        padding: 14, borderRadius: RADIUS.md, borderWidth: 1,
+    },
+    alertBannerText: { flex: 1, fontSize: 13, fontWeight: '700', lineHeight: 18 },
+
+    block: { marginHorizontal: SPACE.xl, marginBottom: SPACE.md, borderRadius: RADIUS.xl },
+    blockHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    blockTitle: { ...TYPE.title, color: COLORS.light.text },
+    blockSub: { fontSize: 12, color: COLORS.light.textMuted, marginTop: 3 },
+    ringRow: { flexDirection: 'row', alignItems: 'center', marginTop: SPACE.lg },
+    ringDivider: { width: 1, height: 90, backgroundColor: COLORS.light.borderSoft },
+    sliderWrap: {
+        marginTop: SPACE.lg, paddingTop: SPACE.lg,
+        borderTopWidth: 1, borderTopColor: COLORS.light.borderSoft,
+    },
+
+    actionRow: { flexDirection: 'row', marginHorizontal: SPACE.xl, marginBottom: SPACE.md },
+
+    sectionLabel: {
+        ...TYPE.micro, color: COLORS.light.textMuted,
+        marginHorizontal: SPACE.xl, marginTop: SPACE.sm, marginBottom: SPACE.sm,
+    },
+    deviceRow: { flexDirection: 'row', gap: SPACE.sm, marginHorizontal: SPACE.xl, marginBottom: SPACE.md },
+    deviceChip: {
+        flex: 1, alignItems: 'flex-start', padding: SPACE.md, borderRadius: RADIUS.lg,
+        backgroundColor: COLORS.light.card, borderWidth: 1, borderColor: COLORS.light.border,
+    },
+    deviceIcon: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', marginBottom: SPACE.sm },
+    deviceName: { fontSize: 13, fontWeight: '700', color: COLORS.light.text },
+    deviceStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 3 },
+    deviceStatus: { fontSize: 11, fontWeight: '700' },
+
+    thresholdRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, marginTop: 4 },
+    thresholdLabel: { fontSize: 13, fontWeight: '600', color: COLORS.light.textSub },
+    thresholdValue: { fontSize: 14, fontWeight: '800', color: COLORS.light.text },
+
+    waiting: { fontSize: 13, fontStyle: 'italic', textAlign: 'center', paddingVertical: 20, color: COLORS.light.textMuted },
+});

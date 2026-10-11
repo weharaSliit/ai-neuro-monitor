@@ -5,7 +5,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
-import { ref, onValue, off, get } from 'firebase/database';
+import { ref, onValue, off, get, query, orderByKey, startAt } from 'firebase/database';
 import { db } from '../firebase';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import Icon, { NAMES } from '../../shared/Icon';
@@ -25,7 +25,7 @@ const SIGNAL_DETAILS_CONFIG = {
         title: '📜 Screen Scrolling',
         unit: 'px/s',
         measures: [
-            { id: 'scroll_velocity', name: 'Scroll Velocity', unit: 'px/s', baselineKey: 'scroll_velocity', fallbackBaseline: 922, colorZone: 'scroll', explanation: "How fast you scroll through content. Faster scrolling than usual can indicate impatience, frustration, or difficulty focusing — a subtle pre-stress marker." }
+            { id: 'scroll_velocity', name: 'Scroll Velocity', unit: 'px/s', baselineKey: 'scroll_velocity', fallbackBaseline: 450, colorZone: 'scroll', explanation: "How fast you scroll through content. Faster scrolling than usual can indicate impatience, frustration, or difficulty focusing — a subtle pre-stress marker." }
         ]
     },
     tilt: {
@@ -33,13 +33,6 @@ const SIGNAL_DETAILS_CONFIG = {
         unit: '°',
         measures: [
             { id: 'tilt_angle', name: 'Tilt Angle', unit: '°', baselineKey: 'tilt_angle', fallbackBaseline: 59, colorZone: 'tilt', explanation: "The angle at which you hold your phone, measured by the accelerometer. Studies show people hunch over their phone (higher tilt angle) when stressed or anxious. Population mean ≈59° when calm." }
-        ]
-    },
-    cpm: {
-        title: '🔡 Typing Speed',
-        unit: 'cpm',
-        measures: [
-            { id: 'cpm', name: 'Typing Speed', unit: 'cpm', baselineKey: 'cpm', fallbackBaseline: 39, colorZone: 'cpm', explanation: "How fast you type in this window. A significant drop in typing speed compared to your personal baseline can signal cognitive fatigue or mental overload, even before you consciously feel it." }
         ]
     },
     app_switch: {
@@ -57,18 +50,6 @@ const SIGNAL_DETAILS_CONFIG = {
         ]
     }
 };
-
-// The 5 real behavioral features the model actually tracks (see
-// predictor.py) -- used by "Today's Overview" below so that section always
-// shows a live cross-feature snapshot, regardless of which single signal
-// category (keyboard/scroll/tilt/...) the rest of this screen is focused on.
-const ALL_FEATURES = [
-    { id: 'avg_dwell', name: 'Dwell', unit: 'ms', icon: '⌨️', decimals: 0 },
-    { id: 'avg_flight', name: 'Flight', unit: 'ms', icon: '✈️', decimals: 0 },
-    { id: 'scroll_velocity', name: 'Scroll', unit: 'px/s', icon: '📜', decimals: 0 },
-    { id: 'tilt_angle', name: 'Tilt', unit: '°', icon: '📐', decimals: 1 },
-    { id: 'cpm', name: 'Typing', unit: 'cpm', icon: '🔡', decimals: 0 },
-];
 
 function parseDbKeyToDate(key) {
     try {
@@ -119,6 +100,11 @@ function StatusBadge({ status, COLORS, styles }) {
             bg = COLORS.warningSoft || (COLORS.warning + '20');
             fg = COLORS.warningDark || COLORS.warning;
             label = 'PRE-STRESS';
+            break;
+        case 'no-data':
+            bg = 'transparent';
+            fg = '#9CA3AF';
+            label = 'NO DATA';
             break;
         case 'normal':
             bg = COLORS.normalSoft || (COLORS.normal + '20');
@@ -247,8 +233,19 @@ export default function PhenotypingSignalHistoryScreen({ navigation, route }) {
     useEffect(() => {
         if (!deviceId) return;
         setLoading(true);
-        const logsRef = ref(db, `phenotyping/data_logs/${deviceId}`);
-        const handler = onValue(logsRef, (snapshot) => {
+        // This screen only ever needs the last 7 calendar days (Weekly Overview
+        // + Day-by-Day History), but was previously fetching the ENTIRE
+        // data_logs tree for the device unbounded -- fine for a fresh account,
+        // but for a well-used one (thousands of real windows) that's a large,
+        // slow, unnecessary download just to compute 7 day buckets. Keys are
+        // "YYYYMMDD_HHMMSS" (see parseDbKeyToDate below), which sorts
+        // chronologically as plain strings, so a startAt() key-range query
+        // bounds this properly instead of a heuristic row-count cap.
+        const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        const pad = (n) => String(n).padStart(2, '0');
+        const cutoffKey = `${cutoff.getFullYear()}${pad(cutoff.getMonth() + 1)}${pad(cutoff.getDate())}_000000`;
+        const logsQuery = query(ref(db, `phenotyping/data_logs/${deviceId}`), orderByKey(), startAt(cutoffKey));
+        const handler = onValue(logsQuery, (snapshot) => {
             const raw = snapshot.val();
             if (raw) {
                 const entries = Object.entries(raw).map(([key, value]) => ({
@@ -256,10 +253,12 @@ export default function PhenotypingSignalHistoryScreen({ navigation, route }) {
                     dbKey: key,
                 }));
                 setLogs(entries);
+            } else {
+                setLogs([]);
             }
             setLoading(false);
         }, () => setLoading(false));
-        return () => off(logsRef, 'value', handler);
+        return () => off(logsQuery, 'value', handler);
     }, [deviceId]);
 
     const processedDays = useMemo(() => {
@@ -356,21 +355,17 @@ export default function PhenotypingSignalHistoryScreen({ navigation, route }) {
 
     const primaryMeasureData = measuresData[0];
 
-    // Live cross-feature snapshot for "Today's Overview" -- reads all 5 real
-    // fields directly off the most recent real data_logs entry for the
-    // selected day (chronologically last in activeDay.entries), instead of
-    // repeating just the 1-3 measures this particular signal page tracks.
-    const liveFeatureValues = useMemo(() => {
+    // Tilt is shown in "Today's Overview" on every signal page (not just the
+    // dedicated Tilt page) since device posture is useful context alongside
+    // whichever specific signal you're viewing. Skipped when the page's own
+    // measures already include it (the Tilt page itself) to avoid showing it twice.
+    const showsTiltAlready = config.measures.some((m) => m.id === 'tilt_angle');
+    const tiltOverviewVal = useMemo(() => {
+        if (showsTiltAlready) return null;
         const latestEntry = activeDay.entries.length ? activeDay.entries[activeDay.entries.length - 1] : null;
-        return ALL_FEATURES.map((f) => {
-            const raw = latestEntry ? latestEntry[f.id] : null;
-            const val = typeof raw === 'number' ? raw : null;
-            return {
-                ...f,
-                displayVal: val !== null ? `${f.decimals === 0 ? Math.round(val) : val.toFixed(f.decimals)} ${f.unit}` : 'pending',
-            };
-        });
-    }, [activeDay]);
+        const raw = latestEntry ? latestEntry.tilt_angle : null;
+        return typeof raw === 'number' ? `${raw.toFixed(1)} °` : 'pending';
+    }, [activeDay, showsTiltAlready]);
 
     const formattedBaseline = (key, unit, fallback) => {
         const mean = baselines?.[key]?.mean;
@@ -535,14 +530,22 @@ export default function PhenotypingSignalHistoryScreen({ navigation, route }) {
                         />
                     </View>
                     <View style={styles.todaySubrow}>
-                        {liveFeatureValues.map((f) => (
-                            <View key={f.id} style={[styles.todaySubCard, { backgroundColor: t.pillBg }]}>
-                                <Text style={[styles.todaySubLabel, { color: t.textMuted }]}>{f.icon} {f.name}</Text>
+                        {measuresData.map(({ measure, displayVal }) => (
+                            <View key={measure.id} style={[styles.todaySubCard, { backgroundColor: t.pillBg }]}>
+                                <Text style={[styles.todaySubLabel, { color: t.textMuted }]}>{measure.name.toUpperCase()}</Text>
                                 <Text style={[styles.todaySubVal, { color: t.text }]}>
-                                    {f.displayVal}
+                                    {displayVal}
                                 </Text>
                             </View>
                         ))}
+                        {!showsTiltAlready && (
+                            <View style={[styles.todaySubCard, { backgroundColor: t.pillBg }]}>
+                                <Text style={[styles.todaySubLabel, { color: t.textMuted }]}>TILT</Text>
+                                <Text style={[styles.todaySubVal, { color: t.text }]}>
+                                    {tiltOverviewVal}
+                                </Text>
+                            </View>
+                        )}
                     </View>
                     <Text style={[styles.todaySummaryText, { color: t.textSub }]}>
                         Avg: <Text style={{ color: t.text, fontWeight: '800' }}>{activeDay.avg !== null ? `${activeDay.avg} ${config.unit}` : <Text style={{ color: t.textMuted, fontSize: 11 }}>pending</Text>}</Text>  •  Min: <Text style={{ color: t.text }}>{activeDay.min !== null ? activeDay.min : <Text style={{ color: t.textMuted, fontSize: 11 }}>pending</Text>}</Text>  •  Max: <Text style={{ color: t.text }}>{activeDay.max !== null ? activeDay.max : <Text style={{ color: t.textMuted, fontSize: 11 }}>pending</Text>}</Text>
@@ -578,33 +581,46 @@ export default function PhenotypingSignalHistoryScreen({ navigation, route }) {
                                 return i >= offset ? dayPrimary[i - offset] : null;
                             });
                             
+                            // Every card here is a COMPLETED past day (today is shown
+                            // separately above) -- "pending" would wrongly imply more
+                            // data is still coming for that day, when really none was
+                            // ever recorded.
+                            const hasData = day.avg !== null;
                             return (
                                 <View key={idx} style={[styles.dayCard, { backgroundColor: t.surface, borderColor: t.border }]}>
                                     <View style={styles.rowBetween}>
                                         <Text style={[styles.dayDateLabel, { color: t.text }]}>{day.label}</Text>
-                                        <StatusBadge status={day.status} COLORS={COLORS} styles={styles} />
+                                        <StatusBadge status={hasData ? day.status : 'no-data'} COLORS={COLORS} styles={styles} />
                                     </View>
-                                    <View style={styles.dayChartWrap}>
-                                        <SparkChart
-                                            data={dayChartData}
-                                            color={COLORS.brandLight}
-                                            height={15}
-                                            signalType={config.measures[0].colorZone}
-                                            COLORS={COLORS}
-                                            t={t}
-                                        />
-                                    </View>
-                                    <View style={styles.dayStatsGrid}>
-                                        <Text style={[styles.dayGridStatText, { color: t.textMuted }]}>
-                                            Avg <Text style={{ color: t.text, fontWeight: '800' }}>{day.avg !== null ? `${day.avg} ${config.unit}` : 'pending'}</Text>
+                                    {hasData ? (
+                                        <>
+                                            <View style={styles.dayChartWrap}>
+                                                <SparkChart
+                                                    data={dayChartData}
+                                                    color={COLORS.brandLight}
+                                                    height={15}
+                                                    signalType={config.measures[0].colorZone}
+                                                    COLORS={COLORS}
+                                                    t={t}
+                                                />
+                                            </View>
+                                            <View style={styles.dayStatsGrid}>
+                                                <Text style={[styles.dayGridStatText, { color: t.textMuted }]}>
+                                                    Avg <Text style={{ color: t.text, fontWeight: '800' }}>{day.avg} {config.unit}</Text>
+                                                </Text>
+                                                <Text style={[styles.dayGridStatText, { color: t.textMuted }]}>
+                                                    Min <Text style={{ color: t.text }}>{day.min}</Text>
+                                                </Text>
+                                                <Text style={[styles.dayGridStatText, { color: t.textMuted }]}>
+                                                    Max <Text style={{ color: t.text }}>{day.max}</Text>
+                                                </Text>
+                                            </View>
+                                        </>
+                                    ) : (
+                                        <Text style={[styles.dayGridStatText, { color: t.textMuted, marginTop: 8 }]}>
+                                            No behavioral windows recorded this day.
                                         </Text>
-                                        <Text style={[styles.dayGridStatText, { color: t.textMuted }]}>
-                                            Min <Text style={{ color: t.text }}>{day.min !== null ? day.min : 'pending'}</Text>
-                                        </Text>
-                                        <Text style={[styles.dayGridStatText, { color: t.textMuted }]}>
-                                            Max <Text style={{ color: t.text }}>{day.max !== null ? day.max : 'pending'}</Text>
-                                        </Text>
-                                    </View>
+                                    )}
                                 </View>
                             );
                         })}

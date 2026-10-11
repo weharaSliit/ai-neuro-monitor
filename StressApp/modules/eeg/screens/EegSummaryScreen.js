@@ -7,7 +7,8 @@
 // child per session, the same pattern fusion_en/{userId}/... uses). No raw
 // µV charts or the 29-feature bipolar grid -- that detail lives in Admin.
 // ============================================================
-import React, { useState, useEffect, useCallback } from 'react';
+import { getContentWidth } from '../../shared/theme/layout';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { View, Text, ScrollView, StyleSheet, Dimensions } from 'react-native';
 import { ref, onValue, off, get } from 'firebase/database';
 import { db } from '../firebase';
@@ -15,7 +16,10 @@ import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
 import StatusDot from '../../shared/StatusDot';
 import Icon, { NAMES } from '../../shared/Icon';
-import MoodBadge from '../../shared/MoodBadge';
+import Badge from '../../shared/Badge';
+import BalanceRing from '../../shared/BalanceRing';
+import { levelOf, LEVEL_COLOR, MIND_WORDS, DEFAULT_EEG_THRESHOLD } from '../../shared/levels';
+import { TYPE, SPACE, RADIUS } from '../../shared/theme/tokens';
 import LineChart from '../../shared/LineChart';
 import { useCalibrationSummary } from '../../shared/CalibrationGate';
 import { eegClient } from '../../shared/eegApiClient';
@@ -43,8 +47,13 @@ const FEATURE_TREND_CONFIG = [
     { key: 'theta_beta_ratio', label: 'θ/β ratio', color: '#d97706' },
     { key: 'spectral_entropy', label: 'Spectral entropy', color: '#0d9488' },
 ];
-const TREND_CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
+const TREND_CHART_WIDTH = Math.max(260, getContentWidth() - 2 * 20 - 2 * 18);
 const TREND_CHART_HEIGHT = 70;
+// A "session" is one login-to-logout span, not "how far back Feature
+// Trends should remember" -- see RingSummaryScreen.js's identical
+// constant/reasoning. Backfills this many PRIOR sessions' own blocks
+// alongside the live current-session listener.
+const RECENT_SESSIONS_FOR_CHART = 4;
 
 function sortedWindows(windowsObj) {
     if (!windowsObj) return [];
@@ -137,6 +146,7 @@ export default function EegSummaryScreen() {
   const [recentSessions, setRecentSessions] = useState([]);
   const [sessionDist, setSessionDist] = useState({ normal: 0, stress: 0 });
   const [driftWeeks, setDriftWeeks] = useState(null);
+  const [historicalWindowsList, setHistoricalWindowsList] = useState([]);
 
   useEffect(() => {
     if (!userId) return;
@@ -163,7 +173,15 @@ export default function EegSummaryScreen() {
   // Per-feature time series across this session's blocks (~25s cadence,
   // see BLOCK_SEC in realtime/pipeline.py) -- sessionWindows already holds
   // the full session, not just the latest block, from the listener above.
-  const windowsList = sortedWindows(sessionWindows);
+  // Merged with historicalWindowsList (the prior few sessions, backfilled
+  // below) and re-sorted by real timestamp -- window_idx alone would
+  // clash across sessions since it's each session's own local counter
+  // restarting from 0, not a global ordering.
+  const windowsList = useMemo(() => {
+    const merged = [...sortedWindows(sessionWindows), ...historicalWindowsList];
+    merged.sort((a, b) => (a.timestamp_end ?? 0) - (b.timestamp_end ?? 0));
+    return merged;
+  }, [sessionWindows, historicalWindowsList]);
   const featureSeries = FEATURE_TREND_CONFIG.map(({ key, label, color }) => {
     const points = windowsList
       .filter((w) => !w.skipped && w.features_eeg?.bipolar?.[key] != null)
@@ -179,7 +197,11 @@ export default function EegSummaryScreen() {
     const userRef = ref(db, `psychological/${userId}`);
     get(userRef).then((snap) => {
       const all = snap.val() || {};
-      const sids = Object.keys(all);
+      // Session ids are ISO timestamps (AuthContext.js), lexicographically
+      // sortable -- Object.keys() on Firebase's JSON response isn't
+      // guaranteed chronological, so sort explicitly rather than trust
+      // insertion order.
+      const sids = Object.keys(all).sort();
       let nNorm = 0;
       let nStress = 0;
       const recents = [];
@@ -200,164 +222,150 @@ export default function EegSummaryScreen() {
       });
       setSessionDist({ normal: nNorm, stress: nStress });
       setRecentSessions(recents.slice(-5).reverse());
-    }).catch(() => {});
-  }, [userId, hasSession]);
 
-  const t = theme;
+      // Backfill for Feature Trends: the PRIOR few sessions' own blocks
+      // (excluding the current live one, already covered by the
+      // sessionWindows listener) -- reuses this same already-fetched
+      // `all` rather than a second Firebase read, so logging out and
+      // back in doesn't reset the chart to empty.
+      const priorSids = sids.filter((sid) => sid !== currentSessionId).slice(-RECENT_SESSIONS_FOR_CHART);
+      setHistoricalWindowsList(priorSids.flatMap((sid) => sortedWindows(all[sid])));
+    }).catch(() => {});
+  }, [userId, hasSession, currentSessionId]);
+
+  const score = latest && !latest.skipped ? latest.task_state_score : null;
+  const thr = latest?.effective_high_load_p ?? eegCalibration?.personal_high_load_p ?? DEFAULT_EEG_THRESHOLD;
+  // "High" only when the backend's persistence-gated high_load_alert says
+  // so -- a single noisy block over the limit reads as "Focused", not
+  // "Overloaded" (same reasoning as currentStateLabel above).
+  let level = levelOf(score, thr);
+  if (level === 'high' && !latest?.high_load_alert) level = 'moderate';
+  if (latest?.high_load_alert) level = 'high';
+  const levelColor = level ? LEVEL_COLOR[level] : COLORS.eeg;
   const qualityScore = latest?.eeg_quality_score;
-  const qualityTrusted = latest?.eeg_quality_flag;
-  const stateLabel = currentStateLabel(latest);
+  const goodContact = latest?.eeg_quality_flag;
+
+  const loadSeries = useMemo(() => windowsList
+    .filter((w) => !w.skipped && w.task_state_score != null && w.timestamp_end)
+    .map((w) => ({ value: Math.round(w.task_state_score * 100), date: new Date(w.timestamp_end * 1000) }))
+    .slice(-120), [windowsList]);
+
+  // Relative band powers already sum to ~1 -- shown as one friendly bar.
+  const bands = BANDS.map((b) => ({ ...b, v: latest?.features_eeg?.bipolar?.[b.key] }))
+    .filter((b) => b.v != null && b.v > 0);
+  const bandTotal = bands.reduce((s, b) => s + b.v, 0);
+  const topBand = bands.length ? bands.reduce((a, b) => (b.v > a.v ? b : a)) : null;
+  const totalSessions = sessionDist.normal + sessionDist.stress;
 
   return (
-    <ScreenBackground>
+    <ScreenBackground edges={['left', 'right']}>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        {/* Device Status */}
-        <Card accentColor={hasSession ? COLORS.normal : COLORS.warning} elevated style={styles.card}>
-          <View style={styles.rowBetween}>
-            <View style={styles.rowGap}>
-              <Icon name={NAMES.device} size={18} color={hasSession ? COLORS.normal : COLORS.warning} />
-              <Text style={[styles.cardTitle, { color: t.text, marginBottom: 0 }]}>Headband Telemetry</Text>
-            </View>
-            <View style={[styles.statusPill, { backgroundColor: hasSession ? COLORS.normalSoft : COLORS.warningSoft }]}>
-              <StatusDot color={hasSession ? COLORS.normal : COLORS.warning} active={hasSession} size={8} />
-              <Text style={[styles.statusPillText, { color: hasSession ? COLORS.normalDark : COLORS.warningDark }]}>
-                {hasSession ? 'Streaming' : 'Standby'}
+        <View style={styles.connRow}>
+          <Badge label={hasSession ? 'Headband streaming' : 'Headband offline'}
+            color={hasSession ? COLORS.normal : COLORS.light.textMuted} size="sm" />
+          {hasSession && qualityScore != null && (
+            <Badge label={goodContact ? 'Good contact' : 'Adjust headband for better contact'}
+              color={goodContact ? COLORS.normal : COLORS.warning} size="sm" />
+          )}
+        </View>
+
+        <Card style={styles.block}>
+          <View style={styles.heroRow}>
+            <BalanceRing
+              title="Mental load"
+              value={score != null ? score * 100 : null}
+              word={level ? MIND_WORDS[level] : ''}
+              color={levelColor}
+              size={124}
+              stroke={12}
+            />
+            <View style={styles.heroText}>
+              <Text style={styles.heroWord}>{level ? MIND_WORDS[level] : (hasSession ? 'Reading…' : 'Waiting')}</Text>
+              <Text style={styles.heroLine}>
+                {level === 'high' ? 'Your mind has been working hard for a while. A short break will help.'
+                  : level === 'moderate' ? 'You’re focused — your mind is busy but coping.'
+                  : level === 'low' ? 'Your mind is calm and rested.'
+                  : hasSession ? 'The first reading takes about 25 seconds.' : 'Put on the headband to see your mental load.'}
               </Text>
             </View>
           </View>
-          <Text style={[styles.cardSub, { color: t.textMuted, marginTop: 10 }]}>
-            {hasSession ? 'EEG headband actively streaming neural channels (wearable02)' : 'Put on the headband to begin measuring mental workload'}
-          </Text>
         </Card>
 
-        {/* Current State: Relaxed / High Load, gated on high_load_alert (not
-            the noisy raw per-block label) -- plus which way it's trending. */}
-        {hasSession && stateLabel && (
-          <Card accentColor={latest.high_load_alert ? COLORS.stress : COLORS.normal} elevated style={styles.card}>
-            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 8 }]}>Current State</Text>
-            <View style={styles.readingRow}>
-              <MoodBadge stressed={!!latest.high_load_alert} color={latest.high_load_alert ? COLORS.stress : COLORS.normal} size={40} />
-              <View style={{ marginLeft: 12, flex: 1 }}>
-                <Text style={[styles.stateLabel, { color: latest.high_load_alert ? COLORS.stress : COLORS.normal }]}>
-                  {stateLabel}
-                </Text>
-                {latest.task_state_score != null && (
-                  <Text style={[styles.readingSub, { color: t.textMuted }]}>
-                    {(latest.task_state_score * 100).toFixed(0)}% cognitive load
-                    {latest.task_state_trend ? ` · ${EEG_TREND_LABELS[latest.task_state_trend] || latest.task_state_trend}` : ''}
-                  </Text>
-                )}
-              </View>
-            </View>
-          </Card>
-        )}
-
-        {/* Current State & Quality */}
-        {hasSession && qualityScore !== undefined && qualityScore !== null && (
-          <Card accentColor={qualityTrusted ? COLORS.normal : COLORS.warning} elevated style={styles.card}>
-            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 8 }]}>Electrode Contact Quality</Text>
-            <View style={[styles.qualityBox, { backgroundColor: qualityTrusted ? COLORS.normalSoft : COLORS.warningSoft }]}>
-              <Icon name={NAMES.signal} size={18} color={qualityTrusted ? COLORS.normalDark : COLORS.warningDark} />
-              <Text style={[styles.qualityText, { color: qualityTrusted ? COLORS.normalDark : COLORS.warningDark }]}>
-                Electrode Contact Quality: {qualityScore.toFixed(0)}% · {qualityTrusted ? 'Optimal Signal' : 'Adjust Placement'}
-              </Text>
-            </View>
-          </Card>
-        )}
-
-        {/* Calibration Drift -- weekly mean task_state_score vs. this
-            user's own earliest live EEG samples after calibration (see
-            compute_eeg_baseline_drift_history(), backend/psychological/
-            firebase_service.py, for why EEG's reference point differs from
-            Ring's resting-calibration mean). Weeks with too few windows to
-            be meaningful are dropped server-side, not shown as zero. */}
-        {Array.isArray(driftWeeks) && driftWeeks.some((w) => w.mean_task_state_score != null) && (
-          <Card accentColor={COLORS.brand} elevated style={styles.card}>
-            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 4 }]}>Calibration Drift</Text>
-            <Text style={[styles.cardSub, { color: t.textMuted, marginBottom: 12 }]}>
-              {eegCalibration?.drift?.checked && eegCalibration.drift.drift_detected
-                ? 'Your recent readings have shifted from your original calibration — recalibrating is recommended.'
-                : 'How your recent cognitive-load readings compare to your earliest readings after calibration, week by week.'}
+        {bands.length >= 3 && bandTotal > 0 && (
+          <Card style={styles.block}>
+            <Text style={styles.blockTitle}>Your brainwaves now</Text>
+            <Text style={styles.blockSub}>
+              Mostly <Text style={{ fontWeight: '800', color: topBand.color }}>{topBand.name.toLowerCase()}</Text> — {topBand.meaning}
             </Text>
-            <LineChart
-              points={driftWeeks
-                .filter((w) => w.mean_task_state_score != null)
-                .map((w) => ({ value: Math.round(w.mean_task_state_score * 100), date: w.week_start }))}
-              width={TREND_CHART_WIDTH}
-              height={140}
-              color={COLORS.brand}
-              maxValue={100}
-              suffix="%"
-              baselineValue={eegCalibration?.drift?.original_resting_mean != null
-                ? Math.round(eegCalibration.drift.original_resting_mean * 100) : undefined}
-              baselineLabel="Your earliest reading"
-              baselineColor={COLORS.normal}
-            />
-          </Card>
-        )}
-
-        {/* Feature Trends: how the extracted signal features are moving
-            block-to-block (~25s cadence) across this live session. */}
-        {hasSession && hasFeatureTrends && (
-          <Card style={styles.card}>
-            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 2 }]}>Feature Trends</Text>
-            <Text style={[styles.cardSub, { color: t.textMuted, marginBottom: 10 }]}>
-              Extracted EEG features over this session, updated every block
-            </Text>
-            {featureSeries.map(({ key, label, color, points, last }, i) => (
-              <View key={key} style={[styles.trendBlock, i === featureSeries.length - 1 ? null : { marginBottom: 14 }]}>
-                <View style={styles.trendHeaderRow}>
-                  <Text style={[styles.trendLabel, { color: t.textSub }]}>{label}</Text>
-                  <Text style={[styles.trendValue, { color: t.text }]}>
-                    {last !== undefined ? last.toFixed(key.includes('rel_power') ? 3 : 2) : '—'}
-                  </Text>
+            <View style={styles.bandBar}>
+              {bands.map((b) => (
+                <View key={b.key} style={{ flex: b.v / bandTotal, backgroundColor: b.color }} />
+              ))}
+            </View>
+            <View style={styles.bandLegend}>
+              {bands.map((b) => (
+                <View key={b.key} style={styles.bandItem}>
+                  <View style={[styles.bandSwatch, { backgroundColor: b.color }]} />
+                  <Text style={styles.bandName}>{b.name}</Text>
+                  <Text style={styles.bandPct}>{Math.round((b.v / bandTotal) * 100)}%</Text>
                 </View>
-                {points.length > 1 ? (
-                  <LineChart
-                    points={points}
-                    color={color}
-                    width={TREND_CHART_WIDTH}
-                    height={TREND_CHART_HEIGHT}
-                    hideValues
-                  />
-                ) : (
-                  <Text style={[styles.waiting, { color: t.textMuted, paddingVertical: 4 }]}>
-                    Collecting more blocks…
-                  </Text>
-                )}
-              </View>
-            ))}
+              ))}
+            </View>
           </Card>
         )}
 
-        {/* Session Distribution */}
-        {(sessionDist.normal + sessionDist.stress) > 0 && (
-          <Card style={styles.card}>
-            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 6 }]}>Session Distribution</Text>
-            <DistBar label="Low Load" value={sessionDist.normal} total={sessionDist.normal + sessionDist.stress} color={COLORS.normal} muted={t.textMuted} />
-            <DistBar label="High Load" value={sessionDist.stress} total={sessionDist.normal + sessionDist.stress} color={COLORS.stress} muted={t.textMuted} />
+        {loadSeries.length > 1 && (
+          <Card style={styles.block}>
+            <Text style={styles.blockTitle}>Mental load over time</Text>
+            <Text style={styles.blockSub}>Higher means a busier mind · dashed line is your limit</Text>
+            <View style={{ marginTop: SPACE.md }}>
+              <LineChart
+                points={loadSeries}
+                color={levelColor}
+                width={TREND_CHART_WIDTH}
+                height={150}
+                maxValue={100}
+                hideValues
+                baselineValue={Math.round(thr * 100)}
+                baselineLabel="Your limit"
+                colorZones
+              />
+            </View>
           </Card>
         )}
 
-        {/* Recent Sessions */}
+        {eegCalibration?.drift?.checked && eegCalibration.drift.drift_detected && (
+          <View style={[styles.banner, { backgroundColor: COLORS.warningSoft, borderColor: COLORS.warning + '40' }]}>
+            <Icon name="tune-variant" size={18} color={COLORS.warningDark} />
+            <Text style={[styles.bannerText, { color: COLORS.warningDark }]}>
+              Your readings have shifted lately — recalibrating from your Profile keeps them accurate.
+            </Text>
+          </View>
+        )}
+
         {recentSessions.length > 0 && (
-          <Card style={styles.card}>
-            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 6 }]}>Recent Sessions</Text>
-            {recentSessions.map((s, i) => {
-              const color = s.label === 1 ? COLORS.stress : COLORS.normal;
-              return (
-                <View key={s.sid} style={[styles.activityRow, i === recentSessions.length - 1 && { borderBottomWidth: 0 }, { borderBottomColor: t.border }]}>
-                  <MoodBadge stressed={s.label === 1} color={color} size={36} />
-                  <View style={{ flex: 1, marginLeft: 12 }}>
-                    <Text style={[styles.activityLabel, { color: t.text }]}>{TASK_STATE_LABELS[s.label]}</Text>
-                    <Text style={[styles.activitySub, { color: t.textMuted }]}>{s.windowCount} windows captured</Text>
+          <Card style={styles.block}>
+            <Text style={styles.blockTitle}>Recent sessions</Text>
+            <View style={styles.timeline}>
+              {[...recentSessions].reverse().map((s) => {
+                const busy = s.label === 1;
+                const c = busy ? COLORS.stress : COLORS.normal;
+                return (
+                  <View key={s.sid} style={styles.tlItem}>
+                    <View style={[styles.tlDot, { backgroundColor: c + '22', borderColor: c }]}>
+                      <Icon name={busy ? 'brain' : 'leaf'} size={16} color={c} />
+                    </View>
+                    <Text style={styles.tlTime}>{busy ? 'Busy' : 'Calm'}</Text>
                   </View>
-                  <View style={[styles.windowBadge, { backgroundColor: color + '15' }]}>
-                    <Text style={[styles.windowBadgeText, { color }]}>{s.label === 1 ? 'High' : 'Low'}</Text>
-                  </View>
-                </View>
-              );
-            })}
+                );
+              })}
+            </View>
+            {totalSessions > 0 && (
+              <Text style={styles.sessionLine}>
+                Across your sessions: <Text style={{ color: COLORS.normalDark, fontWeight: '800' }}>{sessionDist.normal} calm</Text>
+                {' · '}<Text style={{ color: COLORS.stressDark, fontWeight: '800' }}>{sessionDist.stress} high-load</Text>
+              </Text>
+            )}
           </Card>
         )}
       </ScrollView>
@@ -365,39 +373,43 @@ export default function EegSummaryScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  scroll: { paddingBottom: 40 },
-  header: { flexDirection: 'row', alignItems: 'center', marginBottom: 18 },
-  headerIconCircle: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
-  title: { fontSize: 22, fontWeight: '900', letterSpacing: -0.2 },
-  card: { marginVertical: 6 },
-  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  rowGap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  cardTitle: { fontSize: 15, fontWeight: '800' },
-  cardSub: { fontSize: 12 },
-  statusPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
-  statusPillText: { fontSize: 11, fontWeight: '800' },
-  stateLabel: { fontSize: 19, fontWeight: '900', letterSpacing: -0.2 },
-  readingSub: { fontSize: 12, marginTop: 2 },
-  waitingBlock: { paddingVertical: 10 },
-  readingRow: { flexDirection: 'row', alignItems: 'center', marginTop: 10 },
-  qualityBox: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, borderRadius: 14, marginTop: 14 },
-  qualityText: { fontSize: 12, fontWeight: '700' },
-  waiting: { fontSize: 12, textAlign: 'center' },
-  trendBlock: {},
-  trendHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 2 },
-  trendLabel: { fontSize: 12, fontWeight: '700' },
-  trendValue: { fontSize: 12, fontWeight: '800' },
-  distRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 },
-  distBarBg: { flex: 1, height: 8, borderRadius: 4, overflow: 'hidden' },
-  distBarFill: { height: 8, borderRadius: 4 },
-  distVal: { fontSize: 12, fontWeight: '800', minWidth: 60, textAlign: 'right' },
-  distValue: { width: 22, fontSize: 13, fontWeight: '800', textAlign: 'right' },
-  distLabel: { minWidth: 65, fontSize: 11, fontWeight: '600' },
-  activityRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1 },
-  activityLabel: { fontSize: 13, fontWeight: '700' },
-  activitySub: { fontSize: 11, marginTop: 1 },
-  windowBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
-  windowBadgeText: { fontSize: 11, fontWeight: '700' },
-});
+// Friendly names for the 5 relative band powers.
+const BANDS = [
+  { key: 'delta_rel_power', name: 'Deep rest',  color: '#94A3B8', meaning: 'very slow waves, typical of deep relaxation or drowsiness.' },
+  { key: 'theta_rel_power', name: 'Daydream',   color: '#A78BFA', meaning: 'slow waves linked to drifting thoughts and light rest.' },
+  { key: 'alpha_rel_power', name: 'Relaxed',    color: '#5E935A', meaning: 'calm, awake and relaxed.' },
+  { key: 'beta_rel_power',  name: 'Focused',    color: '#E8A238', meaning: 'active thinking and concentration.' },
+  { key: 'gamma_rel_power', name: 'Intense',    color: '#E56B4E', meaning: 'fast waves seen during heavy mental effort.' },
+];
 
+const styles = StyleSheet.create({
+  scroll: { paddingTop: SPACE.lg, paddingBottom: SPACE.xxxl },
+  connRow: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.sm, marginHorizontal: SPACE.xl, marginBottom: SPACE.md },
+  block: { marginHorizontal: SPACE.xl, marginBottom: SPACE.md, borderRadius: RADIUS.xl },
+  blockTitle: { ...TYPE.title, color: COLORS.light.text },
+  blockSub: { fontSize: 12, color: COLORS.light.textMuted, marginTop: 4, lineHeight: 17 },
+
+  heroRow: { flexDirection: 'row', alignItems: 'center' },
+  heroText: { flex: 1.3, paddingLeft: SPACE.md },
+  heroWord: { fontSize: 26, fontWeight: '800', color: COLORS.light.text, letterSpacing: -0.5 },
+  heroLine: { ...TYPE.body, color: COLORS.light.textSub, marginTop: 4 },
+
+  bandBar: { flexDirection: 'row', height: 14, borderRadius: 7, overflow: 'hidden', marginTop: SPACE.md },
+  bandLegend: { flexDirection: 'row', flexWrap: 'wrap', marginTop: SPACE.md, rowGap: SPACE.sm },
+  bandItem: { width: '33%', flexDirection: 'row', alignItems: 'center', gap: 5 },
+  bandSwatch: { width: 10, height: 10, borderRadius: 5 },
+  bandName: { fontSize: 12, fontWeight: '600', color: COLORS.light.textSub },
+  bandPct: { fontSize: 12, fontWeight: '800', color: COLORS.light.text },
+
+  banner: {
+    flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
+    marginHorizontal: SPACE.xl, marginBottom: SPACE.md, padding: 14, borderRadius: RADIUS.md, borderWidth: 1,
+  },
+  bannerText: { flex: 1, fontSize: 13, fontWeight: '700', lineHeight: 18 },
+
+  timeline: { flexDirection: 'row', justifyContent: 'space-between', marginTop: SPACE.md },
+  tlItem: { alignItems: 'center', flex: 1 },
+  tlDot: { width: 36, height: 36, borderRadius: 18, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
+  tlTime: { fontSize: 10, fontWeight: '600', color: COLORS.light.textMuted, marginTop: 4 },
+  sessionLine: { fontSize: 12, color: COLORS.light.textSub, marginTop: SPACE.md },
+});
