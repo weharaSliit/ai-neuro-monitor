@@ -21,7 +21,7 @@ import Badge from '../../shared/Badge';
 import StatusDot from '../../shared/StatusDot';
 import Icon, { NAMES } from '../../shared/Icon';
 import { COLORS } from '../../physiological/config/theme';
-import { TYPE, SPACE, RADIUS } from '../../shared/theme/tokens';
+import { TYPE, SPACE, RADIUS, ELEVATION } from '../../shared/theme/tokens';
 import api from '../../physiological/api/client';
 import { API_BASE, DEVICE_ID } from '../../physiological/config/config';
 import { useAuth } from '../../../context/AuthContext';
@@ -41,11 +41,11 @@ function joinedAgo(iso) {
 }
 
 const TABS = [
-  { id: 'hrv',         label: 'Ring HRV/GSR', icon: NAMES.my,           tint: COLORS.hrv },
-  { id: 'eeg',         label: 'EEG',          icon: NAMES.eeg,          tint: COLORS.warning },
-  { id: 'phenotyping', label: 'Phenotyping',  icon: NAMES.phenotyping,  tint: COLORS.gsr },
-  { id: 'relaxation',  label: 'Relaxation',   icon: NAMES.intervention, tint: COLORS.secondary },
-  { id: 'overall',     label: 'Fusion',       icon: NAMES.overview,     tint: COLORS.brand },
+  { id: 'hrv', label: 'Ring HRV/GSR', icon: NAMES.my, tint: COLORS.hrv },
+  { id: 'eeg', label: 'EEG', icon: NAMES.eeg, tint: COLORS.warning },
+  { id: 'phenotyping', label: 'Phenotyping', icon: NAMES.phenotyping, tint: COLORS.gsr },
+  { id: 'relaxation', label: 'Relaxation', icon: NAMES.intervention, tint: COLORS.secondary },
+  { id: 'overall', label: 'Fusion', icon: NAMES.overview, tint: COLORS.brand },
 ];
 
 function Kpi({ icon, tint, value, label }) {
@@ -105,6 +105,8 @@ function UserListRow({ uid, record, tint, subtitle, isLive, onPress }) {
   );
 }
 
+const DEFAULT_VISIBLE_USERS = 10;
+
 export default function AdminUserListScreen({ navigation }) {
   const { logout } = useAuth();
   const [showPhoneHub, setShowPhoneHub] = useState(false);
@@ -112,6 +114,7 @@ export default function AdminUserListScreen({ navigation }) {
   const [refreshing, setRefreshing] = useState(false);
   const [liveUserId, setLiveUserId] = useState(null);
   const [search, setSearch] = useState('');
+  const [expandedUsers, setExpandedUsers] = useState(false);
   const inFlight = useRef(false);
 
   const load = useCallback(async () => {
@@ -164,8 +167,8 @@ export default function AdminUserListScreen({ navigation }) {
     return (
       <ScreenBackground>
         <TouchableOpacity style={styles.hubBack} onPress={() => setShowPhoneHub(false)}>
-          <Icon name={NAMES.back} size={20} color={COLORS.brand} />
-          <Text style={styles.hubBackText}>All users</Text>
+          <Icon name={NAMES.back} size={20} color="#0F172A" />
+          <Text style={[styles.hubBackText, { color: '#0F172A' }]}>All users</Text>
         </TouchableOpacity>
         <View style={styles.body}><PhenotypingAdminHub navigation={navigation} /></View>
       </ScreenBackground>
@@ -201,40 +204,135 @@ export default function AdminUserListScreen({ navigation }) {
         <View style={styles.body}>
           <TextInput style={styles.search} placeholder="Search users…" placeholderTextColor={COLORS.light.textMuted}
             value={search} onChangeText={setSearch} autoCapitalize="none" autoCorrect={false} />
-          <Text style={styles.listTitle}>Users · live first, then newest</Text>
+
+          {/* List Title Row with User Count & Expand/Compact Toggle */}
+          <View style={styles.listHeaderRow}>
+            <View style={styles.listHeaderLeft}>
+              <Text style={styles.listTitle}>Users · live first, then newest</Text>
+              {sorted.length > 0 ? (
+                <View style={styles.userCountBadge}>
+                  <Text style={styles.userCountBadgeText}>{sorted.length}</Text>
+                </View>
+              ) : null}
+            </View>
+            {sorted.length > DEFAULT_VISIBLE_USERS ? (
+              <TouchableOpacity
+                style={styles.expandToggleBtn}
+                onPress={() => setExpandedUsers((prev) => !prev)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.expandToggleBtnText}>
+                  {expandedUsers ? 'Compact (10)' : `View all (${sorted.length})`}
+                </Text>
+                <Icon
+                  name={expandedUsers ? 'chevron-up' : 'chevron-down'}
+                  size={14}
+                  color={COLORS.brand}
+                />
+              </TouchableOpacity>
+            ) : null}
+          </View>
 
           {users === null ? (
             <ActivityIndicator style={{ marginTop: SPACE.xxl }} color={COLORS.brand} />
           ) : sorted.length === 0 ? (
             <Card><Text style={styles.empty}>{q ? 'No users match your search.' : 'No registered users yet.'}</Text></Card>
+          ) : !expandedUsers && sorted.length > DEFAULT_VISIBLE_USERS ? (
+            /* Scrollable box displaying 10 default items with inner scrolling */
+            <View style={styles.userListScrollBox}>
+              <ScrollView
+                nestedScrollEnabled={true}
+                showsVerticalScrollIndicator={true}
+                style={styles.userListScroll}
+                contentContainerStyle={styles.userListScrollContent}
+              >
+                {sorted.map(([uid, record]) => (
+                  <UserListRow
+                    key={uid}
+                    uid={uid}
+                    record={record}
+                    tint={COLORS.brand}
+                    subtitle={[`${record?.session_count ?? 0} sessions`, joinedAgo(record?.created_at)].filter(Boolean).join(' · ')}
+                    isLive={uid === liveUserId}
+                    onPress={() => navigation.navigate('AdminUserDetail', { userId: uid, name: record?.name, initialTab: 'Fusion' })}
+                  />
+                ))}
+              </ScrollView>
+            </View>
           ) : (
-            sorted.map(([uid, record]) => (
-              <UserListRow
-                key={uid}
-                uid={uid}
-                record={record}
-                tint={COLORS.brand}
-                subtitle={[`${record?.session_count ?? 0} sessions`, joinedAgo(record?.created_at)].filter(Boolean).join(' · ')}
-                isLive={uid === liveUserId}
-                onPress={() => navigation.navigate('AdminUserDetail', { userId: uid, name: record?.name, initialTab: 'Fusion' })}
-              />
-            ))
+            <View style={styles.userListDirect}>
+              {sorted.map(([uid, record]) => (
+                <UserListRow
+                  key={uid}
+                  uid={uid}
+                  record={record}
+                  tint={COLORS.brand}
+                  subtitle={[`${record?.session_count ?? 0} sessions`, joinedAgo(record?.created_at)].filter(Boolean).join(' · ')}
+                  isLive={uid === liveUserId}
+                  onPress={() => navigation.navigate('AdminUserDetail', { userId: uid, name: record?.name, initialTab: 'Fusion' })}
+                />
+              ))}
+            </View>
           )}
 
-          <Text style={[styles.listTitle, { marginTop: SPACE.xl }]}>More tools</Text>
+          {/* MORE TOOLS - 3 CARDS IN ONE SINGLE LINE, ENLARGED & HIGHLIGHTED */}
+          <View style={styles.moreToolsHeaderRow}>
+            <Text style={styles.listTitle}>More tools</Text>
+            <View style={styles.toolsCountBadge}>
+              <Text style={styles.toolsCountBadgeText}>3 Modules</Text>
+            </View>
+          </View>
+
           <View style={styles.toolsRow}>
-            <TouchableOpacity style={styles.tool} activeOpacity={0.85}
-              onPress={() => navigation.navigate('AdminEegLive', liveUserId ? { userId: liveUserId } : undefined)}>
-              <Icon name={NAMES.eeg} size={18} color={COLORS.warning} />
-              <Text style={styles.toolText}>Live EEG stream</Text>
+            {/* Tool 1: Live EEG Stream */}
+            <TouchableOpacity
+              style={[styles.tool, styles.toolEeg]}
+              activeOpacity={0.82}
+              onPress={() => navigation.navigate('AdminEegLive', liveUserId ? { userId: liveUserId } : undefined)}
+            >
+              <View style={[styles.toolIconWrap, { backgroundColor: COLORS.warning + '1A' }]}>
+                <Icon name={NAMES.eeg} size={20} color={COLORS.warning} />
+              </View>
+              <View style={styles.toolTextCol}>
+                <View style={styles.toolTitleRow}>
+                  <Text style={styles.toolText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
+                    Live EEG stream
+                  </Text>
+                  {liveUserId ? <StatusDot color={COLORS.normal} size={7} /> : null}
+                </View>
+              </View>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.tool} activeOpacity={0.85} onPress={() => setShowPhoneHub(true)}>
-              <Icon name={NAMES.phenotyping} size={18} color={COLORS.gsr} />
-              <Text style={styles.toolText}>Phone research hub</Text>
+
+            {/* Tool 2: Phone Research Hub */}
+            <TouchableOpacity
+              style={[styles.tool, styles.toolPheno]}
+              activeOpacity={0.82}
+              onPress={() => setShowPhoneHub(true)}
+            >
+              <View style={[styles.toolIconWrap, { backgroundColor: '#0284C71A' }]}>
+                <Icon name={NAMES.phenotyping} size={20} color="#0284C7" />
+              </View>
+              <View style={styles.toolTextCol}>
+                <Text style={styles.toolText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
+                  Phone research hub
+                </Text>
+              </View>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.tool} activeOpacity={0.85} onPress={() => navigation.navigate('AdminRelaxation')}>
-              <Icon name={NAMES.intervention} size={18} color={COLORS.secondary} />
-              <Text style={styles.toolText}>Relaxation suite</Text>
+
+            {/* Tool 3: Relaxation Suite */}
+            <TouchableOpacity
+              style={[styles.tool, styles.toolRelax]}
+              activeOpacity={0.82}
+              onPress={() => navigation.navigate('AdminRelaxation')}
+            >
+              <View style={[styles.toolIconWrap, { backgroundColor: COLORS.secondary + '1A' }]}>
+                <Icon name={NAMES.intervention} size={20} color={COLORS.secondary} />
+              </View>
+              <View style={styles.toolTextCol}>
+                <Text style={styles.toolText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
+                  Relaxation suite
+                </Text>
+              </View>
             </TouchableOpacity>
           </View>
         </View>
@@ -262,12 +360,94 @@ const styles = StyleSheet.create({
   kpiValue: { flexShrink: 1, fontSize: 20, fontWeight: '800', color: COLORS.light.text, letterSpacing: -0.4 },
   kpiLabel: { ...TYPE.caption, color: COLORS.light.textMuted, marginTop: 1 },
 
-  toolsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.sm },
-  tool: {
-    flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 11,
-    borderRadius: RADIUS.md, backgroundColor: COLORS.light.card, borderWidth: 1, borderColor: COLORS.light.borderSoft,
+  // User list scrollable box for > 10 items
+  userListScrollBox: {
+    maxHeight: 640,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1.5,
+    borderColor: COLORS.light.border,
+    backgroundColor: '#FAF8F4',
+    padding: 8,
+    marginBottom: SPACE.xs,
+    overflow: 'hidden',
   },
-  toolText: { fontSize: 13, fontWeight: '700', color: COLORS.light.textSub },
+  userListScroll: {
+    maxHeight: 590,
+  },
+  userListScrollContent: { paddingBottom: 4 },
+  userListDirect: { marginBottom: SPACE.xs },
+  listHeaderRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginBottom: SPACE.sm,
+  },
+  listHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  userCountBadge: {
+    backgroundColor: COLORS.brandSoft, paddingHorizontal: 7, paddingVertical: 2, borderRadius: RADIUS.pill,
+  },
+  userCountBadgeText: { fontSize: 10, fontWeight: '800', color: COLORS.brand },
+  expandToggleBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: COLORS.light.card, borderWidth: 1, borderColor: COLORS.light.border,
+    paddingHorizontal: 10, paddingVertical: 4, borderRadius: RADIUS.pill,
+  },
+  expandToggleBtnText: { fontSize: 11, fontWeight: '700', color: COLORS.brand },
+
+  // More tools - 3 cards in ONE line, enlarged & highlighted
+  moreToolsHeaderRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginTop: SPACE.xl, marginBottom: SPACE.sm,
+  },
+  toolsCountBadge: {
+    backgroundColor: COLORS.brandSoft, paddingHorizontal: 8, paddingVertical: 2.5, borderRadius: RADIUS.pill,
+  },
+  toolsCountBadgeText: { fontSize: 10, fontWeight: '800', color: COLORS.brand, letterSpacing: 0.3 },
+  toolsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACE.sm,
+  },
+  tool: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 10, paddingVertical: 14,
+    borderRadius: RADIUS.lg, backgroundColor: '#FFFFFF',
+    borderWidth: 2, borderColor: COLORS.light.border,
+    shadowColor: '#1E293B',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  toolEeg: {
+    borderColor: COLORS.warning,
+    backgroundColor: '#FFFFFF',
+  },
+  toolPheno: {
+    borderColor: '#0284C7',
+    backgroundColor: '#FFFFFF',
+  },
+  toolRelax: {
+    borderColor: COLORS.secondary,
+    backgroundColor: '#FFFFFF',
+  },
+  toolIconWrap: {
+    width: 34, height: 34, borderRadius: 12,
+    alignItems: 'center', justifyContent: 'center',
+    flexShrink: 0,
+  },
+  toolTextCol: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
+  },
+  toolTitleRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+  },
+  toolText: {
+    fontSize: 13, fontWeight: '800', color: COLORS.light.text, letterSpacing: -0.2,
+  },
+
   hubBack: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: SPACE.xl, paddingTop: SPACE.lg, paddingBottom: SPACE.sm },
   hubBackText: { color: COLORS.brand, fontWeight: '700' },
   tabStrip: {
@@ -301,7 +481,7 @@ const styles = StyleSheet.create({
   },
   bannerBtnText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
 
-  listTitle: { ...TYPE.micro, color: COLORS.light.textMuted, marginBottom: SPACE.sm },
+  listTitle: { ...TYPE.micro, color: COLORS.light.textMuted },
   userCard: { marginBottom: SPACE.sm, padding: 14 },
   row: { flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm },

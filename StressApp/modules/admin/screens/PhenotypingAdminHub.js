@@ -123,6 +123,8 @@ export default function PhenotypingAdminHub({ navigation }) {
 
   // Search filter for participants in Users section
   const [searchQuery, setSearchQuery] = useState('');
+  // 4 Split Filters for Users section: 'user' (User wise) | 'day' (Day count) | 'learning' | 'calibrated'
+  const [userSortFilter, setUserSortFilter] = useState('day');
 
   // Selected participant for Analytics section
   const [selectedUserId, setSelectedUserId] = useState(null);
@@ -349,15 +351,55 @@ export default function PhenotypingAdminHub({ navigation }) {
     };
   }, [participantTrackStats]);
 
-  // Filtered participants list for search
+  // Filtered participants list for search & 4 split filters
   const filteredUserEntries = useMemo(() => {
-    if (!searchQuery.trim()) return userEntries;
-    const q = searchQuery.toLowerCase().trim();
-    return userEntries.filter(([uid, record]) => {
-      const name = (record?.display_name || record?.name || '').toLowerCase();
-      return uid.toLowerCase().includes(q) || name.includes(q);
-    });
-  }, [userEntries, searchQuery]);
+    let list = [...userEntries];
+
+    // 1. Text Search Filter
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      list = list.filter(([uid, record]) => {
+        const name = (record?.display_name || record?.name || '').toLowerCase();
+        return uid.toLowerCase().includes(q) || name.includes(q);
+      });
+    }
+
+    // 2. 4 Split Filters: 'user' (User wise) | 'day' (Day count) | 'learning' | 'calibrated'
+    if (userSortFilter === 'learning') {
+      list = list.filter(([, record]) => !record?.is_calibrated);
+    } else if (userSortFilter === 'calibrated') {
+      list = list.filter(([, record]) => !!record?.is_calibrated);
+    } else if (userSortFilter === 'day') {
+      // Sort: Calibrated users first, then by calibration day count (Day 7 down to Day 1)
+      list.sort(([uidA, a], [uidB, b]) => {
+        const isCalibA = !!a?.is_calibrated;
+        const isCalibB = !!b?.is_calibrated;
+        if (isCalibA !== isCalibB) {
+          return isCalibA ? -1 : 1;
+        }
+
+        const dayA = a?.created_at
+          ? Math.min(7, Math.floor(Math.max(0, Date.now() - new Date(a.created_at).getTime()) / 86400000) + 1)
+          : (a?.calibration_day || 1);
+        const dayB = b?.created_at
+          ? Math.min(7, Math.floor(Math.max(0, Date.now() - new Date(b.created_at).getTime()) / 86400000) + 1)
+          : (b?.calibration_day || 1);
+        if (dayB !== dayA) return dayB - dayA;
+        const logsA = dataLogs[uidA] ? Object.keys(dataLogs[uidA]).length : 0;
+        const logsB = dataLogs[uidB] ? Object.keys(dataLogs[uidB]).length : 0;
+        return logsB - logsA;
+      });
+    } else {
+      // 'user' - User wise (alphabetical by name or ID)
+      list.sort(([uidA, a], [uidB, b]) => {
+        const nameA = (a?.display_name || a?.name || uidA).toLowerCase();
+        const nameB = (b?.display_name || b?.name || uidB).toLowerCase();
+        return nameA.localeCompare(nameB);
+      });
+    }
+
+    return list;
+  }, [userEntries, searchQuery, userSortFilter, dataLogs]);
 
   // -------------------------------------------------------------
   // Dynamic Realtime Composite Trend Data for Selected User
@@ -578,7 +620,7 @@ export default function PhenotypingAdminHub({ navigation }) {
       subtitle: `${cohortStats.totalUsers} participants · ${cohortStats.totalWindows} logs recorded`,
       emoji: '👥',
       badgeText: `${cohortStats.totalUsers} Users`,
-      badgeColor: COLORS.brand,
+      badgeColor: '#0284C7',
     },
     {
       id: 'analytics',
@@ -586,7 +628,7 @@ export default function PhenotypingAdminHub({ navigation }) {
       subtitle: 'Real-time composite stress drift line chart & feature waveforms',
       emoji: '📊',
       badgeText: 'LineChart',
-      badgeColor: '#8B5CF6',
+      badgeColor: '#0284C7',
     },
     {
       id: 'surveys',
@@ -627,21 +669,29 @@ export default function PhenotypingAdminHub({ navigation }) {
   // -------------------------------------------------------------
   const renderUsersSection = () => (
     <View>
-      {/* Participant Stats Bar (Simple & Clean) */}
+      {/* 4 KPI Summary Cards (Total Users, Still Calibrating, Calibrated, Online Live) */}
       <Card style={styles.metricRowCard}>
         <View style={styles.metricCol}>
-          <Text style={styles.metricVal}>{cohortStats.totalUsers}</Text>
+          <Text style={[styles.metricVal, { color: '#0F172A' }]}>{cohortStats.totalUsers}</Text>
           <Text style={styles.metricLbl}>Total Users</Text>
         </View>
         <View style={styles.metricDivider} />
         <View style={styles.metricCol}>
-          <Text style={[styles.metricVal, { color: COLORS.brand }]}>{cohortStats.totalWindows}</Text>
-          <Text style={styles.metricLbl}>Data Logs</Text>
+          <Text style={[styles.metricVal, { color: '#D97706' }]}>{cohortStats.learningCount}</Text>
+          <Text style={styles.metricLbl}>Still Calibrating</Text>
         </View>
         <View style={styles.metricDivider} />
         <View style={styles.metricCol}>
-          <Text style={[styles.metricVal, { color: '#F59E0B' }]}>{cohortStats.learningCount}</Text>
-          <Text style={styles.metricLbl}>Learning Phase</Text>
+          <Text style={[styles.metricVal, { color: '#059669' }]}>{cohortStats.calibratedCount}</Text>
+          <Text style={styles.metricLbl}>Calibrated</Text>
+        </View>
+        <View style={styles.metricDivider} />
+        <View style={styles.metricCol}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <StatusDot color="#0284C7" active size={6} />
+            <Text style={[styles.metricVal, { color: '#0284C7' }]}>{trackCounts.sensorOn}</Text>
+          </View>
+          <Text style={styles.metricLbl}>Online Live</Text>
         </View>
       </Card>
 
@@ -663,6 +713,101 @@ export default function PhenotypingAdminHub({ navigation }) {
         )}
       </View>
 
+      {/* 4 Split Filter Pills: User wise | Day count | Learning | Calibrated */}
+      <View style={styles.userFilterSplitRow}>
+        <TouchableOpacity
+          style={[
+            styles.userFilterSplitBtn,
+            userSortFilter === 'user' && styles.userFilterSplitBtnActive,
+          ]}
+          onPress={() => setUserSortFilter('user')}
+          activeOpacity={0.75}
+        >
+          <Icon
+            name="account-outline"
+            size={13}
+            color={userSortFilter === 'user' ? '#FFFFFF' : '#475569'}
+          />
+          <Text
+            style={[
+              styles.userFilterSplitText,
+              userSortFilter === 'user' && styles.userFilterSplitTextActive,
+            ]}
+          >
+            User wise
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            styles.userFilterSplitBtn,
+            userSortFilter === 'day' && styles.userFilterSplitBtnActive,
+          ]}
+          onPress={() => setUserSortFilter('day')}
+          activeOpacity={0.75}
+        >
+          <Icon
+            name="calendar-clock-outline"
+            size={13}
+            color={userSortFilter === 'day' ? '#FFFFFF' : '#475569'}
+          />
+          <Text
+            style={[
+              styles.userFilterSplitText,
+              userSortFilter === 'day' && styles.userFilterSplitTextActive,
+            ]}
+          >
+            Day count
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            styles.userFilterSplitBtn,
+            userSortFilter === 'learning' && styles.userFilterSplitBtnActiveAmber,
+          ]}
+          onPress={() => setUserSortFilter('learning')}
+          activeOpacity={0.75}
+        >
+          <StatusDot
+            color={userSortFilter === 'learning' ? '#FFFFFF' : '#D97706'}
+            active
+            size={6}
+          />
+          <Text
+            style={[
+              styles.userFilterSplitText,
+              userSortFilter === 'learning' && styles.userFilterSplitTextActive,
+            ]}
+          >
+            Learning ({cohortStats.learningCount})
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            styles.userFilterSplitBtn,
+            userSortFilter === 'calibrated' && styles.userFilterSplitBtnActiveEmerald,
+          ]}
+          onPress={() => setUserSortFilter('calibrated')}
+          activeOpacity={0.75}
+        >
+          <Icon
+            name="check-circle-outline"
+            size={13}
+            color={userSortFilter === 'calibrated' ? '#FFFFFF' : '#059669'}
+          />
+          <Text
+            style={[
+              styles.userFilterSplitText,
+              userSortFilter === 'calibrated' && styles.userFilterSplitTextActive,
+            ]}
+          >
+            Calibrated ({cohortStats.calibratedCount})
+          </Text>
+        </TouchableOpacity>
+      </View>
+
       <Text style={styles.sectionHeading}>
         Participants ({filteredUserEntries.length}{filteredUserEntries.length !== userEntries.length ? ` of ${userEntries.length}` : ''})
       </Text>
@@ -674,7 +819,7 @@ export default function PhenotypingAdminHub({ navigation }) {
           </Text>
         </Card>
       ) : (
-        filteredUserEntries.map(([uid, record]) => {
+        filteredUserEntries.map(([uid, record], index) => {
           const displayName = record?.display_name || record?.name || uid;
           const isCalibrated = !!record?.is_calibrated;
           const userLogs = dataLogs[uid] ? Object.keys(dataLogs[uid]).length : 0;
@@ -684,71 +829,92 @@ export default function PhenotypingAdminHub({ navigation }) {
             dayNum = Math.min(7, Math.floor(Math.max(0, Date.now() - new Date(record.created_at).getTime()) / 86400000) + 1);
           }
 
-          return (
-            <Card key={uid} style={{ marginBottom: 10 }}>
-              <TouchableOpacity
-                style={styles.userCardRow}
-                onPress={() => {
-                  if (navigation) {
-                    navigation.navigate('AdminUserDetail', {
-                      userId: uid,
-                      name: displayName,
-                      initialTab: 'Phenotyping',
-                    });
-                  } else {
-                    setSelectedUserId(uid);
-                    setActiveSection('analytics');
-                  }
-                }}
-                activeOpacity={0.7}
-              >
-                <View style={[styles.avatarCircle, { backgroundColor: isCalibrated ? '#10B98118' : '#8B5CF618' }]}>
-                  <Icon name={NAMES.phenotyping} size={20} color={isCalibrated ? COLORS.normal : '#8B5CF6'} />
-                </View>
-                <View style={{ flex: 1, paddingRight: 6 }}>
-                  <Text style={styles.userCardName} numberOfLines={1}>{displayName}</Text>
-                  <Text style={styles.userCardSub} numberOfLines={1}>
-                    @{uid} · {userLogs} logs recorded
-                  </Text>
-                </View>
-                <View style={[styles.statusPill, { backgroundColor: isCalibrated ? '#10B98118' : '#8B5CF618' }]}>
-                  <StatusDot color={isCalibrated ? COLORS.normal : '#8B5CF6'} active size={7} />
-                  <Text style={[styles.statusPillText, { color: isCalibrated ? '#059669' : '#7C3AED' }]}>
-                    {isCalibrated ? 'Calibrated' : `Learning (Day ${dayNum})`}
-                  </Text>
-                </View>
-                <Icon name={NAMES.chevronRight} size={20} color={COLORS.light.textMuted} />
-              </TouchableOpacity>
+          const uTrack = participantTrackStats.find((p) => p.uid === uid);
+          const isOnline = !!uTrack?.sensorOn;
 
-              {/* Action Shortcuts */}
-              <View style={{ flexDirection: 'row', gap: 8, marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#F1F5F9' }}>
-                <TouchableOpacity
-                  style={styles.inspectTelemetryBtn}
-                  onPress={() => {
-                    setSelectedUserId(uid);
-                    setActiveSection('analytics');
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.inspectTelemetryBtnText}>Inspect Telemetry Trends →</Text>
-                </TouchableOpacity>
-                {navigation && (
+          return (
+            <Card
+              key={uid}
+              style={[
+                { marginBottom: 10 },
+                isCalibrated && {
+                  borderColor: '#10B98155',
+                  borderWidth: 1.5,
+                },
+              ]}
+            >
+                <View style={styles.userCardRow}>
                   <TouchableOpacity
-                    style={styles.inspectProfileBtn}
+                    style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
                     onPress={() => {
-                      navigation.navigate('AdminUserDetail', {
+                      if (navigation) {
+                        navigation.navigate('AdminUserDetail', {
+                          userId: uid,
+                          name: displayName,
+                          initialTab: 'Phone',
+                        });
+                      } else {
+                        setSelectedUserId(uid);
+                        setActiveSection('analytics');
+                      }
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    {/* Avatar Icon (Teal for learning, Emerald for calibrated - NO PURPLE) */}
+                    <View style={[styles.avatarCircle, { backgroundColor: isCalibrated ? '#10B98118' : '#0284C718' }]}>
+                      <Icon name={NAMES.phenotyping} size={20} color={isCalibrated ? '#059669' : '#0284C7'} />
+                    </View>
+
+                    {/* Name & Subtitle */}
+                    <View style={{ flex: 1, paddingRight: 6 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Text style={styles.userCardName} numberOfLines={1}>{displayName}</Text>
+                        {isOnline && <StatusDot color="#10B981" active size={6} />}
+                      </View>
+                      <Text style={styles.userCardSub} numberOfLines={1}>
+                        @{uid} · {userLogs} logs recorded · {isCalibrated ? 'Day 7 Complete' : `Day ${dayNum} of 7`}
+                      </Text>
+                    </View>
+
+                    {/* Status Pill (Emerald with check-circle for Calibrated, Amber for Learning) */}
+                    <View
+                      style={[
+                        styles.statusPill,
+                        {
+                          backgroundColor: isCalibrated ? '#10B98120' : '#F59E0B18',
+                          borderColor: isCalibrated ? '#05966960' : '#D9770640',
+                          borderWidth: 1,
+                        },
+                      ]}
+                    >
+                      <Icon
+                        name={isCalibrated ? 'check-circle' : 'clock-outline'}
+                        size={12}
+                        color={isCalibrated ? '#059669' : '#D97706'}
+                      />
+                      <Text style={[styles.statusPillText, { color: isCalibrated ? '#059669' : '#D97706', fontWeight: '800' }]}>
+                        {isCalibrated ? 'Calibrated (Day 7)' : `Learning (Day ${dayNum})`}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+
+                  {/* Clean View Profile Icon Button */}
+                  <TouchableOpacity
+                    style={styles.profileIconCircleBtn}
+                    onPress={() => {
+                      navigation?.navigate('AdminUserDetail', {
                         userId: uid,
                         name: displayName,
-                        initialTab: 'Phenotyping',
+                        initialTab: 'Phone',
                       });
                     }}
-                    activeOpacity={0.8}
+                    activeOpacity={0.7}
+                    accessibilityLabel="View profile"
                   >
-                    <Text style={styles.inspectProfileBtnText}>View Full Profile</Text>
+                    <Icon name="account-arrow-right-outline" size={18} color="#0284C7" />
                   </TouchableOpacity>
-                )}
-              </View>
-            </Card>
+                </View>
+              </Card>
           );
         })
       )}
@@ -1179,7 +1345,7 @@ export default function PhenotypingAdminHub({ navigation }) {
             <Text style={{ fontSize: 28, textAlign: 'center' }}>👆</Text>
             <Text style={styles.interactiveHintTitle}>View Ready</Text>
             <Text style={styles.interactiveHintSub}>
-            
+
             </Text>
             {trackCounts.urgentAlerts > 0 && (
               <TouchableOpacity
@@ -1267,8 +1433,8 @@ export default function PhenotypingAdminHub({ navigation }) {
                             u.sensorState === 'online'
                               ? '#10B98115'
                               : u.sensorState === 'offline_has_logs'
-                              ? '#F59E0B15'
-                              : '#EF444415',
+                                ? '#F59E0B15'
+                                : '#EF444415',
                         },
                       ]}
                     >
@@ -1280,16 +1446,16 @@ export default function PhenotypingAdminHub({ navigation }) {
                               u.sensorState === 'online'
                                 ? '#059669'
                                 : u.sensorState === 'offline_has_logs'
-                                ? '#D97706'
-                                : '#DC2626',
+                                  ? '#D97706'
+                                  : '#DC2626',
                           },
                         ]}
                       >
                         {u.sensorState === 'online'
                           ? '🟢 Sensor Online'
                           : u.sensorState === 'offline_has_logs'
-                          ? `🟡 Offline · ${u.hoursSinceLastLog != null ? `${u.hoursSinceLastLog}h ago` : 'Idle'} (No Wi-Fi/Data)`
-                          : '🔴 Sensor Not Enabled'}
+                            ? `🟡 Offline · ${u.hoursSinceLastLog != null ? `${u.hoursSinceLastLog}h ago` : 'Idle'} (No Wi-Fi/Data)`
+                            : '🔴 Sensor Not Enabled'}
                       </Text>
                     </View>
 
@@ -1304,8 +1470,8 @@ export default function PhenotypingAdminHub({ navigation }) {
                         {u.logCount === 0
                           ? '❌ 0 logs recorded'
                           : u.hoursSinceLastLog != null && u.hoursSinceLastLog <= 3
-                          ? `💾 ${u.logCount} logs (Live Stream)`
-                          : `💾 ${u.logCount} logs (Last: ${u.hoursSinceLastLog}h ago)`}
+                            ? `💾 ${u.logCount} logs (Live Stream)`
+                            : `💾 ${u.logCount} logs (Last: ${u.hoursSinceLastLog}h ago)`}
                       </Text>
                     </View>
 
@@ -1326,32 +1492,23 @@ export default function PhenotypingAdminHub({ navigation }) {
                     </View>
                   )}
 
-                  {/* Action Shortcuts */}
-                  <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
-                    <TouchableOpacity
-                      style={styles.inspectTelemetryBtn}
-                      onPress={() => {
-                        setSelectedUserId(u.uid);
-                        setActiveSection('analytics');
-                      }}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={styles.inspectTelemetryBtnText}>Inspect Telemetry Trends →</Text>
-                    </TouchableOpacity>
-                    {navigation && (
+                  {/* Action Shortcut */}
+                  {navigation && (
+                    <View style={{ marginTop: 10 }}>
                       <TouchableOpacity
-                        style={styles.inspectProfileBtn}
+                        style={styles.cleanActionBtnSmall}
                         onPress={() => navigation.navigate('AdminUserDetail', {
                           userId: u.uid,
                           name: u.displayName,
-                          initialTab: 'Phenotyping',
+                          initialTab: 'Phone',
                         })}
                         activeOpacity={0.8}
                       >
-                        <Text style={styles.inspectProfileBtnText}>View Full Profile</Text>
+                        <Icon name="account-arrow-right-outline" size={16} color="#FFFFFF" />
+                        <Text style={{ fontSize: 11, fontWeight: '800', color: '#FFFFFF' }}>View Phenotyping Profile →</Text>
                       </TouchableOpacity>
-                    )}
-                  </View>
+                    </View>
+                  )}
                 </Card>
               ))
             )}
@@ -1454,6 +1611,7 @@ export default function PhenotypingAdminHub({ navigation }) {
           {/* Render Composite LineChart */}
           <View style={{ marginTop: 14 }}>
             <LineChart
+              variant="phenotyping"
               points={compositeTrendData.points}
               color={trendColor}
               width={TREND_CHART_WIDTH}
@@ -1464,7 +1622,7 @@ export default function PhenotypingAdminHub({ navigation }) {
               baselineColor={COLORS.stress}
               baseline2Value={35}
               baseline2Label="Calm baseline"
-              baseline2Color={COLORS.normal}
+              baseline2Color={COLORS.warning}
               colorZones
             />
           </View>
@@ -1560,6 +1718,7 @@ export default function PhenotypingAdminHub({ navigation }) {
 
                 <View style={{ marginTop: 12 }}>
                   <LineChart
+                    variant="phenotyping"
                     points={points}
                     color={f.color}
                     width={TREND_CHART_WIDTH}
@@ -2429,8 +2588,8 @@ export default function PhenotypingAdminHub({ navigation }) {
         // MAIN HUB: HEADER CARD + 5 EQUAL-SIZED VERTICAL SUB-CARDS
         // -------------------------------------------------------------
         <ScrollView contentContainerStyle={{ paddingBottom: 50 }} showsVerticalScrollIndicator={false}>
-          {/* Header Banner Card (matching physiological style) */}
-          <Card style={styles.bannerCard} accentColor={COLORS.brand}>
+          {/* Header Banner Card (matching physiological style, clean Teal/Blue accent) */}
+          <Card style={styles.bannerCard} accentColor="#0284C7">
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
               <Text style={{ fontSize: 24 }}>📱</Text>
               <View style={{ flex: 1 }}>
@@ -2479,8 +2638,8 @@ export default function PhenotypingAdminHub({ navigation }) {
               onPress={() => setActiveSection(null)}
               activeOpacity={0.75}
             >
-              <Icon name="arrow-left" size={16} color={COLORS.brand} />
-              <Text style={styles.backButtonText}>Phenotyping Hub</Text>
+              <Icon name="arrow-left" size={16} color="#0F172A" />
+              <Text style={[styles.backButtonText, { color: '#0F172A' }]}>Phenotyping Hub</Text>
             </TouchableOpacity>
             <View style={styles.activeSectionTitleBox}>
               <Text style={styles.activeSectionTitleText}>
@@ -3131,5 +3290,77 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
     color: COLORS.light.text,
+  },
+  userFilterSplitRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 12,
+  },
+  userFilterSplitBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingVertical: 7,
+    paddingHorizontal: 4,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  userFilterSplitBtnActive: {
+    backgroundColor: '#0F172A',
+    borderColor: '#0F172A',
+  },
+  userFilterSplitBtnActiveAmber: {
+    backgroundColor: '#D97706',
+    borderColor: '#D97706',
+  },
+  userFilterSplitBtnActiveEmerald: {
+    backgroundColor: '#059669',
+    borderColor: '#059669',
+  },
+  userFilterSplitText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#64748B',
+  },
+  userFilterSplitTextActive: {
+    color: '#FFFFFF',
+  },
+  profileIconCircleBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 6,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  cleanActionBtnSmall: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#0284C7',
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  groupHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 4,
+    marginBottom: 8,
+    paddingHorizontal: 2,
+  },
+  groupHeaderText: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: '#059669',
+    letterSpacing: 0.4,
   },
 });
