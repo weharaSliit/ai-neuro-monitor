@@ -175,7 +175,6 @@ function StatBlock({ label, value, color, t }) {
     );
 }
 
-function RocChart({ roc, best, width, COLORS, t }) {
 // Plain SVG ROC plot -- no charting library needed, matches the rest of
 // this app's hand-rolled SVG chart approach (see LineChart.js).
 function RocChart({ roc, best, width: boxWidth, COLORS, t }) {
@@ -189,22 +188,15 @@ function RocChart({ roc, best, width: boxWidth, COLORS, t }) {
     const pathPoints = roc.map((p) => `${toX(p.fpr)},${toY(p.tpr)}`).join(' ');
 
     return (
-        <Svg width={width} height={width}>
-            <SvgLine x1={PAD} y1={PAD + plotSize} x2={PAD + plotSize} y2={PAD} stroke={t.border || '#334155'} strokeWidth={1} strokeDasharray="4,4" />
-            <SvgLine x1={PAD} y1={PAD} x2={PAD} y2={PAD + plotSize} stroke={t.border || '#334155'} strokeWidth={1} />
-            <SvgLine x1={PAD} y1={PAD + plotSize} x2={PAD + plotSize} y2={PAD + plotSize} stroke={t.border || '#334155'} strokeWidth={1} />
-            <Polyline fill="none" stroke={COLORS.brand} strokeWidth={2.5} points={pathPoints} />
-            {best && (
-                <SvgCircle cx={toX(best.fpr)} cy={toY(best.tpr)} r={5} fill={COLORS.stress} stroke="#FFFFFF" strokeWidth={2} />
-            )}
-        </Svg>
         <View style={{ width, alignSelf: 'center' }}>
             <Svg width={width} height={PAD * 2 + plotSize}>
                 <SvgLine x1={PAD} y1={PAD} x2={PAD} y2={PAD + plotSize} stroke={t.border} strokeWidth={1} />
                 <SvgLine x1={PAD} y1={PAD + plotSize} x2={PAD + plotSize} y2={PAD + plotSize} stroke={t.border} strokeWidth={1} />
                 <SvgLine x1={PAD} y1={PAD + plotSize} x2={PAD + plotSize} y2={PAD} stroke={t.textMuted} strokeWidth={1} strokeDasharray="4,4" />
                 <Polyline points={pathPoints} fill="none" stroke={COLORS.brand} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
-                <SvgCircle cx={toX(best.fpr)} cy={toY(best.tpr)} r={5.5} fill={COLORS.stress} stroke="#fff" strokeWidth={1.5} />
+                {best && (
+                    <SvgCircle cx={toX(best.fpr)} cy={toY(best.tpr)} r={5.5} fill={COLORS.stress} stroke="#fff" strokeWidth={1.5} />
+                )}
             </Svg>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 2 }}>
                 <Text style={{ fontSize: 9, color: t.textMuted }}>0</Text>
@@ -214,6 +206,7 @@ function RocChart({ roc, best, width: boxWidth, COLORS, t }) {
         </View>
     );
 }
+
 
 export default function PhenotypingValidationScreen({ navigation }) {
     const { theme: t } = useTheme();
