@@ -499,6 +499,7 @@ def predict():
             "skipped": record.get("skipped"),
             "task_state_score": record.get("task_state_score"),
             "task_state_label": record.get("task_state_label"),
+            "task_state_z": record.get("task_state_z"),
             "task_state_trend": record.get("task_state_trend"),
             "eeg_quality_score": record.get("eeg_quality_score"),
             "eeg_quality_flag": record.get("eeg_quality_flag"),
