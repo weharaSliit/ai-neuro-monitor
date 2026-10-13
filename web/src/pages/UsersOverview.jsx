@@ -5,7 +5,7 @@ import { db } from '../lib/firebase';
 import { api, eegApi } from '../lib/api';
 import { useLivePointer } from '../hooks/useLive';
 import {
-  COLORS, DEFAULT_EEG_THRESHOLD, DEFAULT_RING_THRESHOLD, LEVEL_COLOR, OVERALL_WORDS, fusionKeyToMs,
+  COLORS, DEFAULT_EEG_THRESHOLD, DEFAULT_RING_THRESHOLD, EEG_BASIS, LEVEL_COLOR, OVERALL_WORDS, fusionKeyToMs,
   levelOf, sortedWindowKeys, timeAgo,
 } from '../lib/levels';
 import { Badge, Card, CardHead, Spinner } from '../components/ui';
@@ -219,12 +219,12 @@ export default function UsersOverview() {
                 <thead>
                   <tr>
                     <th>Time</th><th>Mind (EEG)</th><th>Mind limit</th><th>Body (HRV/GSR)</th><th>Body limit</th>
-                    <th>Fused</th><th>Fused limit</th><th>Result</th><th>Agreement</th><th>EEG left out because</th>
+                    <th>Fused</th><th>Fused limit</th><th>Result</th><th>Agreement</th><th>EEG basis</th>
                   </tr>
                 </thead>
                 <tbody>
                   {[...sel.fusion.rows].reverse()
-                    .filter((w) => w.prob_eeg != null || w.prob_hrv_gsr != null || w.eeg_excluded_reason)
+                    .filter((w) => w.prob_eeg != null || w.prob_hrv_gsr != null || w.eeg_excluded_reason || w.eeg_untrusted_reason)
                     .map((w) => (
                       <tr key={w.key}>
                         <td>{new Date(w.ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</td>
@@ -238,7 +238,10 @@ export default function UsersOverview() {
                           : <Badge color={w.fused_label === 1 ? COLORS.stress : COLORS.normal}>{w.fused_label === 1 ? 'High' : 'Normal'}</Badge>}</td>
                         <td className={!w.modality_concordance || w.modality_concordance === 'insufficient_data' ? 'muted-cell' : ''}>
                           {w.modality_concordance === 'insufficient_data' ? 'one signal' : (w.modality_concordance || '—')}</td>
-                        <td className={w.eeg_excluded_reason ? '' : 'muted-cell'}>{(w.eeg_excluded_reason || '—').replace(/_/g, ' ')}</td>
+                        <td className={w.eeg_basis && w.eeg_basis !== 'calibrated' ? '' : 'muted-cell'}
+                          title={EEG_BASIS[w.eeg_basis]?.note || (w.eeg_excluded_reason ? `left out: ${w.eeg_excluded_reason.replace(/_/g, ' ')}` : '')}>
+                          {w.eeg_basis ? `${EEG_BASIS[w.eeg_basis]?.word || w.eeg_basis}${w.eeg_weight_factor != null && w.eeg_weight_factor < 1 ? ` (×${w.eeg_weight_factor})` : ''}`
+                            : w.eeg_excluded_reason ? `left out: ${w.eeg_excluded_reason.replace(/_/g, ' ')}` : '—'}</td>
                       </tr>
                     ))}
                 </tbody>

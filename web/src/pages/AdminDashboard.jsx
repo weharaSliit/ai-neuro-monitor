@@ -111,6 +111,7 @@ function OverviewTab({ userId, liveSid, isLive }) {
       <Card>
         <CardHead title="Latest fusion window" sub={fusion.latestMs ? `Live · ${timeAgo(fusion.latestMs)}` : fusion.lastAnyMs ? `Last seen ${timeAgo(fusion.lastAnyMs)}` : ''} />
         <KV obj={l} keys={['fused_probability', 'fused_threshold', 'fused_label', 'prob_eeg', 'threshold_eeg',
+          'eeg_basis', 'eeg_weight_factor', 'eeg_untrusted_reason', 'eeg_fusion_policy',
           'prob_hrv_gsr', 'threshold_hrv_gsr', 'stress_trend', 'stress_phase', 'stress_alert_message']} />
       </Card>
     </div>
@@ -251,8 +252,18 @@ function EegTab({ userId, isLiveUser }) {
   const latest = blocks[blocks.length - 1] || null;
   const newestRejected = !!newest?.skipped;
   const thr = latest?.effective_high_load_p ?? calib?.personal_high_load_p ?? DEFAULT_EEG_THRESHOLD;
-  const score = useMemo(() => toRows(blocks.filter((b) => b.task_state_score != null)
-    .map((b) => ({ date: new Date(b.timestamp_end * 1000), value: Math.round(b.task_state_score * 100) }))), [blocks]);
+  // Trusted scores + provisional (soft-rejected, weak-signal) scores as two
+  // series -- provisional ones are untrusted and never drive alerts.
+  const score = useMemo(() => eeg.blocks
+    .filter((b) => b.timestamp_end && (b.task_state_score != null || b.provisional_task_state_score != null))
+    .map((b) => ({
+      date: new Date(b.timestamp_end * 1000),
+      values: [
+        b.task_state_score != null ? Math.round(b.task_state_score * 100) : null,
+        b.task_state_score == null ? Math.round(b.provisional_task_state_score * 100) : null,
+      ],
+    })), [eeg.blocks]);
+  const lastReason = newest?.skipped ? (newest.eeg_quality_reason || 'rejected by the quality gate') : null;
   // eeg_quality_score is already 0-100 (quality_gate.py's gate score).
   const quality = useMemo(() => toRows(blocks.filter((b) => b.eeg_quality_score != null)
     .map((b) => ({ date: new Date(b.timestamp_end * 1000), value: Math.round(b.eeg_quality_score) }))), [blocks]);
@@ -280,8 +291,10 @@ function EegTab({ userId, isLiveUser }) {
           </div></Card>
       </div>
       <Card>
-        <CardHead title="Task-state score" sub="Per ~25s block · dashed line = effective high-load threshold" />
-        <Chart rows={score} series={[{ name: 'Score', color: COLORS.eeg }]} limit={Math.round(thr * 100)}
+        <CardHead title="Task-state score" sub="Per ~25s block · dashed line = effective high-load threshold · grey = provisional (weak signal, reduced fusion weight, no alerts)" />
+        {lastReason && <p className="caption" style={{ margin: '0 0 8px' }}>Newest block rejected: {lastReason}
+          {newest.provisional_task_state_score != null ? ` · provisional score ${Math.round(newest.provisional_task_state_score * 100)}%` : ''}</p>}
+        <Chart rows={score} series={[{ name: 'Score', color: COLORS.eeg }, { name: 'Provisional', color: COLORS.textMuted }]} limit={Math.round(thr * 100)}
           limitLabel="High-load p" domain={[0, 100]} suffix="%" height={240} />
       </Card>
       <div className="grid grid-2">
