@@ -3248,7 +3248,7 @@ const styles = StyleSheet.create({
     },
     backBtn: { padding: 4 },
     headerTitle: { fontSize: 15, fontWeight: '800' },
-    scroll: { padding: 16, paddingTop: 6, paddingBottom: 40 },
+    scroll: { padding: 16, paddingTop: 6, paddingBottom: 60 },
     titleText: { fontSize: 19, fontWeight: '900', letterSpacing: -0.4, marginTop: 4 },
     subTitleText: { fontSize: 11, marginTop: 2, marginBottom: 8 },
     card: { marginVertical: 6, padding: 16, borderRadius: 18 },

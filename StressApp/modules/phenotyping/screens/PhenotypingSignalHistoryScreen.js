@@ -635,7 +635,7 @@ export default function PhenotypingSignalHistoryScreen({ navigation, route }) {
 
 const styles = StyleSheet.create({
     loadingCenter: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-    scroll: { padding: 20, paddingBottom: 40 },
+    scroll: { padding: 20, paddingBottom: 60 },
     header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 10 },
     backBtn: { padding: 4 },
     headerTitle: { fontSize: 16, fontWeight: '900', letterSpacing: -0.2 },

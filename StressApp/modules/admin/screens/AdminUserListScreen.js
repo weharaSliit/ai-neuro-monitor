@@ -291,14 +291,14 @@ export default function AdminUserListScreen({ navigation }) {
               onPress={() => navigation.navigate('AdminEegLive', liveUserId ? { userId: liveUserId } : undefined)}
             >
               <View style={[styles.toolIconWrap, { backgroundColor: COLORS.warning + '1A' }]}>
-                <Icon name={NAMES.eeg} size={20} color={COLORS.warning} />
+                <Icon name={NAMES.eeg} size={22} color={COLORS.warning} />
               </View>
               <View style={styles.toolTextCol}>
                 <View style={styles.toolTitleRow}>
-                  <Text style={styles.toolText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
-                    Live EEG stream
+                  <Text style={styles.toolText} numberOfLines={1}>
+                    Live EEG
                   </Text>
-                  {liveUserId ? <StatusDot color={COLORS.normal} size={7} /> : null}
+                  {liveUserId ? <StatusDot color={COLORS.normal} size={6} /> : null}
                 </View>
               </View>
             </TouchableOpacity>
@@ -310,11 +310,11 @@ export default function AdminUserListScreen({ navigation }) {
               onPress={() => setShowPhoneHub(true)}
             >
               <View style={[styles.toolIconWrap, { backgroundColor: '#0284C71A' }]}>
-                <Icon name={NAMES.phenotyping} size={20} color="#0284C7" />
+                <Icon name={NAMES.phenotyping} size={22} color="#0284C7" />
               </View>
               <View style={styles.toolTextCol}>
-                <Text style={styles.toolText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
-                  Phone research hub
+                <Text style={styles.toolText} numberOfLines={1}>
+                  Phenocare
                 </Text>
               </View>
             </TouchableOpacity>
@@ -326,11 +326,11 @@ export default function AdminUserListScreen({ navigation }) {
               onPress={() => navigation.navigate('AdminRelaxation')}
             >
               <View style={[styles.toolIconWrap, { backgroundColor: COLORS.secondary + '1A' }]}>
-                <Icon name={NAMES.intervention} size={20} color={COLORS.secondary} />
+                <Icon name={NAMES.intervention} size={22} color={COLORS.secondary} />
               </View>
               <View style={styles.toolTextCol}>
-                <Text style={styles.toolText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
-                  Relaxation suite
+                <Text style={styles.toolText} numberOfLines={1}>
+                  Relaxation
                 </Text>
               </View>
             </TouchableOpacity>
@@ -362,7 +362,7 @@ const styles = StyleSheet.create({
 
   // User list scrollable box for > 10 items
   userListScrollBox: {
-    maxHeight: 640,
+    maxHeight: 400,
     borderRadius: RADIUS.lg,
     borderWidth: 1.5,
     borderColor: COLORS.light.border,
@@ -372,7 +372,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   userListScroll: {
-    maxHeight: 590,
+    maxHeight: 360,
   },
   userListScrollContent: { paddingBottom: 4 },
   userListDirect: { marginBottom: SPACE.xs },
@@ -409,10 +409,16 @@ const styles = StyleSheet.create({
   tool: {
     flex: 1,
     minWidth: 0,
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingHorizontal: 10, paddingVertical: 14,
-    borderRadius: RADIUS.lg, backgroundColor: '#FFFFFF',
-    borderWidth: 2, borderColor: COLORS.light.border,
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 4,
+    paddingVertical: 12,
+    borderRadius: RADIUS.lg,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: COLORS.light.border,
     shadowColor: '#1E293B',
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.08,
@@ -432,20 +438,29 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   toolIconWrap: {
-    width: 34, height: 34, borderRadius: 12,
-    alignItems: 'center', justifyContent: 'center',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
     flexShrink: 0,
+    marginBottom: 2,
   },
   toolTextCol: {
-    flex: 1,
-    minWidth: 0,
+    alignItems: 'center',
     justifyContent: 'center',
   },
   toolTitleRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    justifyContent: 'center',
   },
   toolText: {
-    fontSize: 13, fontWeight: '800', color: COLORS.light.text, letterSpacing: -0.2,
+    fontSize: 11,
+    fontWeight: '800',
+    color: COLORS.light.text,
+    textAlign: 'center',
   },
 
   hubBack: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: SPACE.xl, paddingTop: SPACE.lg, paddingBottom: SPACE.sm },
@@ -470,7 +485,7 @@ const styles = StyleSheet.create({
   tabLabel: { fontSize: 12, fontWeight: '700', color: COLORS.light.textSub },
 
   body: { flex: 1, paddingHorizontal: SPACE.xl },
-  scroll: { paddingBottom: SPACE.xxxl },
+  scroll: { paddingBottom: SPACE.xxxl + 60 },
 
   banner: { marginBottom: SPACE.lg },
   bannerTitle: { ...TYPE.title, color: COLORS.light.text },
