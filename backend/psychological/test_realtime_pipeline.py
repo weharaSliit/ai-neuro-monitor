@@ -289,6 +289,44 @@ def main() -> bool:
     except Exception as e:
         check("Unclamped quality-gate checks raised no exception", False, repr(e))
 
+    # 10. Electrode drift across a block doesn't ring at the block edges ------
+    print("\n[10] linear detrend + edge padding on a drifting block")
+    try:
+        rng10 = np.random.default_rng(10)
+        n10 = int(BLOCK_SEC * SOURCE_FS)
+        t10 = np.arange(n10) / SOURCE_FS
+        eeg10 = 6 * np.sin(2 * np.pi * 10 * t10) + rng10.normal(0, 8, n10)
+        codes10 = microvolts_to_bipolar_code(eeg10 + 3000 * t10 / BLOCK_SEC)   # 3 mV drift over the block
+        u10 = preprocess_bipolar_block_unclamped([BipolarRawSample(i * 4, int(c)) for i, c in enumerate(codes10)])
+        flat10 = preprocess_bipolar_block_unclamped(
+            [BipolarRawSample(i * 4, int(c)) for i, c in enumerate(microvolts_to_bipolar_code(eeg10))])
+        check("a 3 mV drift leaves no samples beyond +-100 uV", np.mean(np.abs(u10) > 100) == 0.0,
+              f"{np.mean(np.abs(u10) > 100) * 100:.2f}% beyond")
+        check("drift barely changes RMS (within 25% of the drift-free block)",
+              abs(u10.std() - flat10.std()) / flat10.std() < 0.25, f"rms {u10.std():.1f} vs {flat10.std():.1f} uV")
+    except Exception as e:
+        check("Drift/edge checks raised no exception", False, repr(e))
+
+    # 11. Sparse glitch samples don't reject a block; whole-block faults do --
+    print("\n[11] raw magnitude check: sparse glitches vs whole-block faults")
+    try:
+        rng11 = np.random.default_rng(11)
+        n11 = int(BLOCK_SEC * SOURCE_FS)
+        clean11 = 6 * np.sin(2 * np.pi * 10 * np.arange(n11) / SOURCE_FS) + rng11.normal(0, 8, n11) + 2000
+        codes11 = microvolts_to_bipolar_code(clean11)
+        glitchy = codes11.copy(); glitchy[[500, 2600, 4100]] = 0x67BFF3      # 3 isolated ~245 mV samples
+        railed = codes11.copy(); railed[: n11 // 2] = 8388607                # half the block pinned at full scale
+        check("3 isolated glitch samples pass the raw magnitude check",
+              raw_magnitude_ok(bipolar_code_to_microvolts(glitchy)))
+        check("a half-railed block is still rejected", not raw_magnitude_ok(bipolar_code_to_microvolts(railed)))
+        ug = preprocess_bipolar_block_unclamped([BipolarRawSample(i * 4, int(c)) for i, c in enumerate(glitchy)])
+        uc = preprocess_bipolar_block_unclamped([BipolarRawSample(i * 4, int(c)) for i, c in enumerate(codes11)])
+        check("glitches are removed: filtered signal matches the glitch-free block (RMS within 10%)",
+              abs(ug.std() - uc.std()) / uc.std() < 0.10 and np.mean(np.abs(ug) > 100) == 0.0,
+              f"rms {ug.std():.1f} vs {uc.std():.1f} uV")
+    except Exception as e:
+        check("Raw magnitude checks raised no exception", False, repr(e))
+
     print("\n" + "=" * 60)
     print("ALL CHECKS PASSED" if all_passed else "SOME CHECKS FAILED")
     print("=" * 60)

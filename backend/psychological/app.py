@@ -208,15 +208,25 @@ def calibrate():
     firebase.push_calibration_result({"status": "capturing", "updated_at": time.time()})
 
     engine = RealtimeInference(MODEL_DIR, disable_quality_gate=DISABLE_QUALITY_GATE)
+    block_reports = []
     for i, block in enumerate(blocks):
         try:
             samples = _samples_from_payload(block)
         except ValueError as e:
             return jsonify({"error": f"block {i}: {e}"}), 400
         log_raw_block_bipolar(csv_logger, samples)
-        engine.calibrate_bipolar_block(samples)
+        q = engine.calibrate_bipolar_block(samples)
+        # Why each rest block was (not) accepted -- returned so the bridge
+        # can say what to fix instead of only "no block passed".
+        block_reports.append({
+            "block": i, "trusted": bool(q.get("is_trusted")), "gate_rating": q.get("gate_rating"),
+            "quality_score": q.get("quality_score"), "reason": q.get("reason"),
+            "ptp_uV_unclamped": q.get("ptp_uV_unclamped"), "std_uV_unclamped": q.get("std_uV_unclamped"),
+            "out_of_range_fraction": q.get("out_of_range_fraction"),
+        })
 
     outcome = engine.finalize_calibration_bipolar(allow_degraded=bool(data.get("allow_degraded", False)))
+    outcome["block_reports"] = block_reports
 
     # Personal Scale: this session's own rest blocks set mu_rest (never
     # reused across sessions); only the user's onboarding responsiveness
@@ -244,8 +254,9 @@ def calibrate():
                     "success": False,
                     "status": "failed",
                     "message": "No calibration block reached the required quality bar "
-                    "(GOOD by default) -- check electrode contact, or retry with "
+                    "-- check electrode contact, or retry with "
                     "allow_degraded=true to proceed with a flagged degraded baseline.",
+                    "block_reports": block_reports,
                 }
             ),
             400,
