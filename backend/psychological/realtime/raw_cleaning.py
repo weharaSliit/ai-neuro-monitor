@@ -44,6 +44,25 @@ def max_gap_sec(millis: np.ndarray) -> float:
     return float(np.max(np.diff(millis)) / 1000.0)
 
 
+def start_after_last_gap(millis, max_gap_sec: float = None) -> tuple[int, float]:
+    """(index, gap_sec): index of the first sample after the LAST break in
+    `millis` -- a gap wider than max_gap_sec (default MAX_GAP_SEC) or a
+    device reboot (millis going backwards) -- and that gap's length (-1 for
+    a reboot). (0, 0.0) if the run is continuous. Used to start a block
+    after a stream interruption instead of building one that spans it,
+    which timing_ok() would then reject whole."""
+    limit_ms = (MAX_GAP_SEC if max_gap_sec is None else max_gap_sec) * 1000.0
+    m = np.asarray(millis, dtype=float)
+    if m.size < 2:
+        return 0, 0.0
+    dt = np.diff(m)
+    breaks = np.nonzero((dt > limit_ms) | (dt < 0))[0]
+    if breaks.size == 0:
+        return 0, 0.0
+    i = int(breaks[-1])
+    return i + 1, (float(dt[i]) / 1000.0 if dt[i] >= 0 else -1.0)
+
+
 def timing_ok(millis: np.ndarray) -> bool:
     """True if this block has no dropped-packet gap wider than MAX_GAP_SEC."""
     return max_gap_sec(millis) <= MAX_GAP_SEC

@@ -310,6 +310,17 @@ def run():
                     time.sleep(0.5)
                     continue
 
+                # A block must be one continuous 25 s run: if the stream broke
+                # (Wi-Fi drop, device reboot) inside the next 25 s, drop the
+                # samples before the break and wait for a full block after it,
+                # instead of sending a block the server rejects whole.
+                dropped, gap = buffer.discard_before_gap(BLOCK_SAMPLES)
+                if dropped:
+                    what = "device reboot" if gap < 0 else f"{gap:.1f}s gap (Wi-Fi drop?)"
+                    print(f"[bridge] stream break: {what} -- discarded {dropped / SOURCE_FS:.1f}s "
+                          f"before it, starting a fresh block")
+                    continue
+
                 samples = buffer.drain(BLOCK_SAMPLES)
 
                 if USER_ID is None:

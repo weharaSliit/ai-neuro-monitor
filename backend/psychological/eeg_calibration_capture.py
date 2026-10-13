@@ -59,6 +59,7 @@ from backend.psychological.mqtt_bridge import (
     EEG_MQTT_PORT, EEG_MQTT_TOPIC, EEG_MQTT_USER, N_CALIBRATION_BLOCKS, N_THRESHOLD_TASK_BLOCKS,
 )
 from backend.psychological.realtime.mqtt_client import parse_bipolar_payload
+from backend.psychological.realtime.raw_cleaning import start_after_last_gap
 
 # Electrode contact settles faster than the ring's GSR strap (whose own
 # SETTLE_SEC is 30) -- 10s is enough for the amplifier/contact to stabilize
@@ -165,6 +166,14 @@ def _shared_drain(n: int) -> list:
         taken = _shared_buf[:n]
         del _shared_buf[:n]
         return taken
+
+
+def _shared_discard_before_gap(n: int) -> tuple[int, float]:
+    """Same as RawSampleBuffer.discard_before_gap(), for the shared list."""
+    with _shared_buf_lock:
+        idx, gap = start_after_last_gap([s.millis for s in _shared_buf[:n]])
+        del _shared_buf[:idx]
+        return idx, gap
 
 
 def _shared_clear() -> None:
@@ -297,6 +306,8 @@ def run_eeg_calibration_capture(user_id, session_id, on_progress=None):
                 f'Check the headband is still on and in range, then try again.'
             ))
             return None
+        if _shared_buffered_count() >= BLOCK_SAMPLES and _shared_discard_before_gap(BLOCK_SAMPLES)[0]:
+            continue  # stream break inside the next block -- start after it
         if _shared_buffered_count() < BLOCK_SAMPLES:
             time.sleep(0.5)
             continue
@@ -375,6 +386,8 @@ def run_eeg_threshold_capture(session_state: dict, on_progress=None):
                 f'Check the headband is still on and in range, then try again.'
             ))
             return None
+        if _shared_buffered_count() >= BLOCK_SAMPLES and _shared_discard_before_gap(BLOCK_SAMPLES)[0]:
+            continue  # stream break inside the next block -- start after it
         if _shared_buffered_count() < BLOCK_SAMPLES:
             time.sleep(0.5)
             continue
