@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+import os
 from typing import Optional
 
 import numpy as np
@@ -83,7 +85,7 @@ def _is_implausibly_extreme(prob: float) -> bool:
     return prob < EXTREME_PROB_EPS or prob > (1.0 - EXTREME_PROB_EPS)
 
 
-def compute_realtime_multimodal_fusion(modalities_data: dict) -> dict:
+def _fuse_raw(modalities_data: dict) -> dict:
     """
     Reliability-weighted fusion of one already-bucketed fusion_en window
     (see fusion_window_key()) across EEG and HRV/GSR streams, for
@@ -283,6 +285,94 @@ def compute_realtime_multimodal_fusion(modalities_data: dict) -> dict:
         "modality_elevated": modality_elevated,
         "implausible_modalities": implausible_modalities,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  ALIGNED-SCALE FUSION (default)
+#
+#  _fuse_raw() averages each model's RAW probability. The two models' raw
+#  scales aren't comparable: on wearable02 the EEG model outputs ~0.001 at
+#  rest (its own alert limit ~0.14), HRV/GSR ~0.9 under stress (limit ~0.71)
+#  -- averaging those drags the fused value to whichever model happens to
+#  output small numbers, regardless of where each sits relative to ITS OWN
+#  limit. Its confidence max(p, 1-p) also rewards a saturated output (0.001
+#  reads as "99.9% confident"), giving that model MORE weight exactly when
+#  its number means least.
+#
+#  Aligned fusion first puts every model on one scale: its distance from its
+#  own (personal or population) limit, in units of its own spread
+#  (threshold_scale: EEG = the Personal Scale sigma, HRV/GSR =
+#  PERSONAL_THRESHOLD_MIN_SEPARATION), mapped through a logistic:
+#      p' = sigmoid((p - threshold) / threshold_scale)
+#  so every model's limit sits at 0.5 and one spread above it at 0.73. The
+#  usual quality x confidence x prior weighting then runs on p' (confidence
+#  = max(p', 1-p')), and the fused limit is 0.5. A modality without a
+#  threshold/scale makes the whole window fall back to raw fusion rather
+#  than mix scales.
+#
+#  The function's own default stays "raw", so the paper's analysis scripts
+#  (paper/analysis/revision*_analyses.py) reproduce their published numbers;
+#  the LIVE system (fusion_live_session.py) passes FUSION_SCALE, which
+#  defaults to "aligned" (set FUSION_SCALE=raw to go back).
+# ═══════════════════════════════════════════════════════════════════
+
+FUSION_SCALE = os.environ.get("FUSION_SCALE", "aligned").strip().lower()
+
+
+def _sigmoid(x: float) -> float:
+    if x >= 0:
+        return 1.0 / (1.0 + math.exp(-x))
+    e = math.exp(x)
+    return e / (1.0 + e)
+
+
+def compute_realtime_multimodal_fusion(modalities_data: dict, scale: str | None = None) -> dict:
+    """Reliability-weighted fusion of one window -- see the ALIGNED-SCALE
+    FUSION note above and _fuse_raw()'s docstring for the weighting itself.
+    Returns _fuse_raw()'s fields; under the aligned scale,
+    fused_stress_probability/threshold/label/modality_weights are the aligned
+    ones (threshold 0.5), and fused_probability_raw/fused_threshold_raw keep
+    the raw-scale result for comparison."""
+    scale = "raw" if scale is None else scale
+    raw = _fuse_raw(modalities_data)
+    out = {**raw, "fused_scale": "raw",
+           "fused_probability_raw": raw["fused_stress_probability"],
+           "fused_threshold_raw": raw["fused_stress_threshold"], "aligned_probs": {}}
+    if scale != "aligned" or raw["fused_stress_probability"] is None:
+        return out
+
+    aligned = {}
+    for m in MODALITIES:
+        info = modalities_data.get(m) or {}
+        p, thr, sc = info.get("prob"), info.get("threshold"), info.get("threshold_scale")
+        if p is None or m in raw["implausible_modalities"]:
+            aligned[m] = {"prob": None}
+            continue
+        if thr is None or not sc or sc <= 0:
+            return out                       # can't align this one: don't mix scales
+        pa = _sigmoid((float(p) - float(thr)) / float(sc))
+        aligned[m] = {**info, "prob": pa, "confidence": max(pa, 1.0 - pa),
+                      "threshold": 0.5, "threshold_scale": None}
+    res = _fuse_raw(aligned)
+    if res["fused_stress_probability"] is None:
+        return out
+
+    # Comparable-units margin, weighted by the ALIGNED weights.
+    w = res["modality_weights"]
+    rel = sum(
+        w[m] * (float(modalities_data[m]["prob"]) - float(modalities_data[m]["threshold"]))
+        / float(modalities_data[m]["threshold_scale"])
+        for m in MODALITIES if w.get(m, 0) > 0
+    )
+    return {**out,
+            "fused_stress_probability": res["fused_stress_probability"],
+            "fused_stress_threshold": 0.5,
+            "fused_stress_label": "HIGH_STRESS" if res["fused_stress_probability"] >= 0.5 else "NORMAL",
+            "modality_weights": res["modality_weights"],
+            "active_modalities": res["active_modalities"],
+            "fused_relative_index": rel,
+            "fused_scale": "aligned",
+            "aligned_probs": {m: a["prob"] for m, a in aligned.items() if a["prob"] is not None}}
 
 
 # ═══════════════════════════════════════════════════════════════════
