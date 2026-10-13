@@ -22,12 +22,14 @@ const HERO = {
   rising: { word: 'Rising',        line: 'Stress is building up a little.',                       tip: 'A short pause would help',       icon: '😐' },
   high:   { word: 'Stressed',      line: 'Your body and mind are under strain right now.',        tip: 'Try a 1-minute breathing break', icon: '😟' },
   idle:   { word: 'Not connected', line: 'Put on your ring or headband to see how you’re doing.', tip: 'Waiting for devices',            icon: '🔌' },
+  stale:  { word: 'Recalibrate',   line: 'Your skin signal is far from your saved calm level, so the stress reading can’t be trusted.', tip: 'Recalibrate to fix this', icon: '🔄' },
 };
 const HERO_GRAD = {
   calm: 'linear-gradient(135deg, #7CB878 0%, #5E935A 100%)',
   rising: 'linear-gradient(135deg, #F2BC62 0%, #E8A238 100%)',
   high: 'linear-gradient(135deg, #EE8A71 0%, #E56B4E 100%)',
   idle: 'linear-gradient(135deg, #A29DD4 0%, #6E68B2 100%)',
+  stale: 'linear-gradient(135deg, #B9B3A6 0%, #8C8678 100%)',
 };
 
 const BANDS = [
@@ -76,6 +78,10 @@ export default function UserDashboard() {
   } else {
     heroKey = ringOnline || eegOnline ? 'calm' : 'idle';
   }
+  // The ring's newest reading is far from the saved baseline: the stress
+  // label would be unreliable, so say so instead of showing "Stressed".
+  const baselineStale = (fusion.latestBody?.baseline_stale ?? ringLatest?.baseline_stale) === true;
+  if (baselineStale && heroKey !== 'idle') heroKey = 'stale';
   const hero = HERO[heroKey];
   const lastMs = fusion.latestMs ?? fusion.lastAnyMs ?? (ringLatest ? new Date(ringLatest.timestamp).getTime() : null);
   const heroWhen = isLive ? 'Live · updated just now' : lastMs ? `Last reading ${timeAgo(lastMs)}` : 'No readings yet';

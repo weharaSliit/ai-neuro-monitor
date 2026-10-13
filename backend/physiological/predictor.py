@@ -46,6 +46,16 @@ except FileNotFoundError as e:
 # units), which cancels the scale.
 PNN20_TRAIN_SCALE = 100.0
 
+# A feature only votes "rising/falling" when it moved by more than ordinary
+# calm variability over the whole window, not merely in the right direction
+# in 3 of 4 steps. Without this, a slow steady drift (skin conductance
+# creeping up while sitting still, five skin features voting together) kept
+# the flag on in ~half of calm live windows. The net change must exceed
+# TREND_MIN_RISE_SD of this user's baseline standard deviation, and at least
+# TREND_MIN_RISE_REL of the baseline value.
+TREND_MIN_RISE_REL = 0.05
+TREND_MIN_RISE_SD = 0.5
+
 # ── Feature type definitions ──────────────────────────────────
 EDA_FEATURES = [
     'SCL_mean', 'SCL_std', 'SCL_slope',
@@ -202,6 +212,7 @@ def predict_window(features_array, baseline_mean, baseline_std,
 
     trending_toward_stress = False
     if state_machine is not None and feat_dict is not None:
+        state_machine.baseline_std = baseline_std
         state_machine.history.append(feat_dict)
         if len(state_machine.history) > state_machine.window_size + 3:
             state_machine.history.pop(0)
@@ -276,17 +287,31 @@ class StressStateMachine:
     def __init__(self, feature_cols_list,
                  baseline_mean=None,
                  window_size=5,
-                 trend_threshold=0.35):
+                 trend_threshold=0.35,
+                 baseline_std=None):
 
         self.feature_cols    = feature_cols_list
         self.baseline_mean   = baseline_mean
+        self.baseline_std    = baseline_std
         self.window_size     = window_size
         self.trend_threshold = trend_threshold
 
         self.history          = []
 
-    def update_baseline(self, baseline_mean):
+    def update_baseline(self, baseline_mean, baseline_std=None):
         self.baseline_mean = baseline_mean
+        if baseline_std is not None:
+            self.baseline_std = baseline_std
+
+    def _min_change(self, feature, vals):
+        """Smallest net change over the window that counts as a real move."""
+        if self.baseline_mean is not None and feature in self.feature_cols:
+            i = self.feature_cols.index(feature)
+            scale = TREND_MIN_RISE_REL * abs(float(self.baseline_mean[i]))
+            if self.baseline_std is not None:
+                scale = max(scale, TREND_MIN_RISE_SD * float(self.baseline_std[i]))
+            return scale
+        return TREND_MIN_RISE_REL * abs(sum(vals) / len(vals))
 
     # ── Direction helpers ─────────────────────────────────────
 
@@ -298,7 +323,8 @@ class StressStateMachine:
                  for w in self.history[-self.window_size:]]
         diffs = [vals[i]-vals[i-1]
                  for i in range(1, len(vals))]
-        return sum(1 for d in diffs if d > 0) >= min_count
+        return (sum(1 for d in diffs if d > 0) >= min_count
+                and vals[-1] - vals[0] > self._min_change(feature, vals))
 
     def _falling(self, feature, min_count=3):
         """3 of last 4 windows show negative change."""
@@ -308,7 +334,8 @@ class StressStateMachine:
                  for w in self.history[-self.window_size:]]
         diffs = [vals[i]-vals[i-1]
                  for i in range(1, len(vals))]
-        return sum(1 for d in diffs if d < 0) >= min_count
+        return (sum(1 for d in diffs if d < 0) >= min_count
+                and vals[0] - vals[-1] > self._min_change(feature, vals))
 
     def _above_baseline(self, feat_dict, feature,
                         threshold=0.10):
