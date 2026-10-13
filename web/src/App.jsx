@@ -5,6 +5,8 @@ import LoginPage from './pages/LoginPage';
 import UserDashboard from './pages/UserDashboard';
 import AdminDashboard from './pages/AdminDashboard';
 import SetupPage from './pages/SetupPage';
+import PhenotypingPage from './pages/PhenotypingPage';
+import RelaxPage from './pages/RelaxPage';
 
 function RequireAuth({ children }) {
   const { user } = useAuth();
@@ -17,6 +19,8 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route element={<RequireAuth><Layout /></RequireAuth>}>
         <Route index element={<UserDashboard />} />
+        <Route path="phone" element={<PhenotypingPage />} />
+        <Route path="relax" element={<RelaxPage />} />
         <Route path="setup" element={<SetupPage />} />
         <Route path="clinical" element={<AdminDashboard />} />
         <Route path="clinical/:userId" element={<AdminDashboard />} />
