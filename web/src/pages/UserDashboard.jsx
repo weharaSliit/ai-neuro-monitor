@@ -104,19 +104,23 @@ export default function UserDashboard() {
   const fusedLevel = levelOf(fusedP, fusedT);
 
   // ── Rhythm chart (fused / mind / body), each against its own limit ──
+  // Windows fused on the aligned scale (fusion_engin.py) carry each model's
+  // value with its own limit at 0.5 -- plot Mind/Body on that same scale so
+  // all three tabs are comparable and the limit is 50 for each.
+  const aligned = fusion.rows.some((r) => r.w.fused_scale === 'aligned');
   const rhythm = useMemo(() => {
     const pick = {
       overall: { f: 'fused_probability', t: 'fused_threshold', fb: DEFAULT_RING_THRESHOLD },
-      mind: { f: 'prob_eeg', t: 'threshold_eeg', fb: eegThr },
-      body: { f: 'prob_hrv_gsr', t: 'threshold_hrv_gsr', fb: ringThr },
+      mind: aligned ? { f: 'eeg_aligned', t: null, fb: 0.5 } : { f: 'prob_eeg', t: 'threshold_eeg', fb: eegThr },
+      body: aligned ? { f: 'hrv_gsr_aligned', t: null, fb: 0.5 } : { f: 'prob_hrv_gsr', t: 'threshold_hrv_gsr', fb: ringThr },
     }[rhythmTab];
     const pts = fusion.rows
       .filter((r) => r.w[pick.f] != null)
       .map((r) => ({ date: r.date, value: Math.round(r.w[pick.f] * 100) }));
-    const lastWithThr = [...fusion.rows].reverse().find((r) => r.w[pick.t] != null);
+    const lastWithThr = pick.t ? [...fusion.rows].reverse().find((r) => r.w[pick.t] != null) : null;
     const limit = Math.round((lastWithThr?.w[pick.t] ?? pick.fb) * 100);
     return { rows: toRows(pts), limit };
-  }, [fusion.rows, rhythmTab, eegThr, ringThr]);
+  }, [fusion.rows, rhythmTab, eegThr, ringThr, aligned]);
 
   // ── Body detail (ring) -- same Stress / Heart / Skin tabs as the app's Ring screen ──
   const BODY_TABS = {

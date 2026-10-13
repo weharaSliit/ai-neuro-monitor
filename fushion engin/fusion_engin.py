@@ -318,6 +318,22 @@ def _fuse_raw(modalities_data: dict) -> dict:
 
 FUSION_SCALE = os.environ.get("FUSION_SCALE", "aligned").strip().lower()
 
+# Saturated outputs (outside EXTREME_PROB_EPS) under the ALIGNED scale.
+# _fuse_raw() drops them because raw confidence max(p, 1-p) would read a
+# saturated 1e-7 as ~100% certain. The aligned scale doesn't have that
+# problem: p is bounded in [0, 1], so its distance (p - threshold)/scale is
+# bounded too (EEG at p=0 sits at -threshold/sigma, about -1 for a typical
+# personal limit), and its confidence comes from p', not p. Dropping it only
+# throws away a reading that does say "well below this person's limit". So
+# the aligned path keeps it, clipped to [EPS, 1-EPS], with its weight scaled
+# by this factor (it is still an out-of-training-range output) and listed in
+# saturated_modalities. FUSION_SATURATED_WEIGHT=0 restores the old drop.
+SATURATED_WEIGHT = float(os.environ.get("FUSION_SATURATED_WEIGHT", "0.5"))
+
+# Cap on any one modality's aligned distance (in its own spreads), so one
+# far-out reading can't pin p' at 0 or 1 on its own.
+ALIGNED_Z_CAP = 3.0
+
 
 def _sigmoid(x: float) -> float:
     if x >= 0:
@@ -335,36 +351,49 @@ def compute_realtime_multimodal_fusion(modalities_data: dict, scale: str | None 
     the raw-scale result for comparison."""
     scale = "raw" if scale is None else scale
     raw = _fuse_raw(modalities_data)
-    out = {**raw, "fused_scale": "raw",
+    out = {**raw, "fused_scale": "raw", "saturated_modalities": [],
            "fused_probability_raw": raw["fused_stress_probability"],
            "fused_threshold_raw": raw["fused_stress_threshold"], "aligned_probs": {}}
-    if scale != "aligned" or raw["fused_stress_probability"] is None:
+    if scale != "aligned":
         return out
 
     aligned = {}
+    dist = {}
+    saturated = []
     for m in MODALITIES:
         info = modalities_data.get(m) or {}
         p, thr, sc = info.get("prob"), info.get("threshold"), info.get("threshold_scale")
-        if p is None or m in raw["implausible_modalities"]:
+        if p is None:
             aligned[m] = {"prob": None}
             continue
         if thr is None or not sc or sc <= 0:
             return out                       # can't align this one: don't mix scales
-        pa = _sigmoid((float(p) - float(thr)) / float(sc))
+        p = float(p)
+        quality = info.get("signal_quality")
+        if m in raw["implausible_modalities"]:
+            if SATURATED_WEIGHT <= 0:
+                aligned[m] = {"prob": None}
+                continue
+            p = min(max(p, EXTREME_PROB_EPS), 1.0 - EXTREME_PROB_EPS)
+            quality = None if quality is None else float(quality) * SATURATED_WEIGHT
+            saturated.append(m)
+        d = max(-ALIGNED_Z_CAP, min(ALIGNED_Z_CAP, (p - float(thr)) / float(sc)))
+        dist[m] = d
+        pa = _sigmoid(d)
         aligned[m] = {**info, "prob": pa, "confidence": max(pa, 1.0 - pa),
-                      "threshold": 0.5, "threshold_scale": None}
+                      "signal_quality": quality, "threshold": 0.5, "threshold_scale": None}
     res = _fuse_raw(aligned)
     if res["fused_stress_probability"] is None:
         return out
 
     # Comparable-units margin, weighted by the ALIGNED weights.
     w = res["modality_weights"]
-    rel = sum(
-        w[m] * (float(modalities_data[m]["prob"]) - float(modalities_data[m]["threshold"]))
-        / float(modalities_data[m]["threshold_scale"])
-        for m in MODALITIES if w.get(m, 0) > 0
-    )
+    rel = sum(w[m] * dist[m] for m in MODALITIES if w.get(m, 0) > 0)
     return {**out,
+            "implausible_modalities": [m for m in raw["implausible_modalities"] if m not in saturated],
+            "saturated_modalities": saturated,
+            "modality_concordance": res["modality_concordance"],
+            "modality_elevated": res["modality_elevated"],
             "fused_stress_probability": res["fused_stress_probability"],
             "fused_stress_threshold": 0.5,
             "fused_stress_label": "HIGH_STRESS" if res["fused_stress_probability"] >= 0.5 else "NORMAL",

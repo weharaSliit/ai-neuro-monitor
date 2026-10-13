@@ -194,6 +194,9 @@ def poll_once(session_ref, session_meta_ref) -> dict:
             # a domain-shift-style artifact worth investigating, not a
             # silent exclusion.
             "implausible_modalities": fused["implausible_modalities"],
+            # Saturated but kept at reduced weight (aligned scale only; see
+            # fusion_engin.py's SATURATED_WEIGHT).
+            "saturated_modalities": fused.get("saturated_modalities", []),
             # Comparable-across-modalities/users alternative to fused_
             # probability -- see compute_realtime_multimodal_fusion()'s own
             # docstring for the normalization. 0 = exactly at this window's
