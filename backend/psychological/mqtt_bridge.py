@@ -157,6 +157,21 @@ def _post_json_retrying(url: str, payload: dict, headers, timeout: float, label:
     return data
 
 
+def _latest_block_reason(data: dict | None) -> str:
+    """The newest rest block's verdict from /calibrate's block_reports --
+    what to fix right now (electrode off, out of range, artefact...)."""
+    reports = (data or {}).get("block_reports") or []
+    if not reports:
+        return ""
+    r = reports[-1]
+    if r.get("trusted"):
+        return " | newest block: passed"
+    parts = [r.get("reason") or f"rated {r.get('gate_rating')} ({r.get('quality_score')})"]
+    if r.get("std_uV_unclamped") is not None:
+        parts.append(f"RMS {r['std_uV_unclamped']} uV")
+    return " | newest block: " + ", ".join(parts)
+
+
 def _post_calibrate(blocks: list[dict], allow_degraded: bool) -> tuple[str, dict | None]:
     """One /calibrate attempt -> ('ok', body) on success, ('rejected', body)
     when the server answered but no block met the quality bar (a 400 --
@@ -326,11 +341,11 @@ def run():
                                       "out of fusion. Check electrode/bias contact and restart the session.")
                         elif outcome == "ok":
                             print(f"[calibrate] only {n_trusted} usable rest block(s) so far "
-                                  f"(need {MIN_TRUSTED_REST_BLOCKS}) -- collecting more")
+                                  f"(need {MIN_TRUSTED_REST_BLOCKS}) -- collecting more{_latest_block_reason(data)}")
                         elif outcome == "rejected":
                             print(f"[calibrate] no rest block passed the quality gate yet "
                                   f"({calibration_blocks_seen}/{DEGRADED_FALLBACK_AFTER_BLOCKS} before fallback) "
-                                  f"-- check electrode and bias contact; collecting more")
+                                  f"-- check electrode and bias contact; collecting more{_latest_block_reason(data)}")
                         else:
                             print("[calibrate] server unreachable after retries -- will try again with the next block")
                     continue

@@ -72,9 +72,25 @@ def microvolts_to_bipolar_code(uv: np.ndarray | float) -> np.ndarray:
 # EEG. Always use alongside, never instead of, the tighter checks.
 MAX_RAW_UV = 100_000.0
 
+# Share of samples allowed beyond MAX_RAW_UV before the whole block counts
+# as a hardware fault. Was effectively 0 (np.max -> one sample rejected the
+# block): real wearable02 streams carry occasional single-sample glitches
+# (e.g. a recurring 0x67BFF3 = ~245 mV code) inside otherwise normal blocks,
+# and those threw away 25 s of good data each. The faults this check exists
+# for -- railed or floating inputs at 350,000-655,000 uV, or pinned at full
+# scale -- put most of the block out of range, so 1% still catches them;
+# sparse glitches are interpolated over (pipeline.py) and then go through
+# the normal spike removal and quality gate.
+MAX_RAW_OUT_FRACTION = 0.01
+
+
+def raw_out_of_range_mask(uv: np.ndarray) -> np.ndarray:
+    return np.abs(np.asarray(uv, dtype=np.float64)) > MAX_RAW_UV
+
 
 def raw_magnitude_ok(uv: np.ndarray) -> bool:
-    """True if this block's raw (pre-filter) signal doesn't have an
-    unambiguous, extreme hardware-fault magnitude -- see MAX_RAW_UV above."""
+    """True unless more than MAX_RAW_OUT_FRACTION of this block's raw
+    (pre-filter) samples exceed MAX_RAW_UV -- an unambiguous hardware fault.
+    A few isolated glitch samples pass (see MAX_RAW_OUT_FRACTION)."""
     arr = np.asarray(uv, dtype=np.float64)
-    return bool(arr.size > 0 and np.max(np.abs(arr)) <= MAX_RAW_UV)
+    return bool(arr.size > 0 and np.mean(raw_out_of_range_mask(arr)) <= MAX_RAW_OUT_FRACTION)
