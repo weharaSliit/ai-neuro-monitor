@@ -331,6 +331,10 @@ def calibrate_start():
             }
         else:  # 'settling' / 'saving'
             entry = {"status": status, "session_id": session_id, "n_blocks": N_CALIBRATION_BLOCKS}
+        # Keep the live per-block scores across later status updates.
+        prev = _calibration_sessions.get(user_id, {})
+        if "scores" not in entry and prev.get("scores"):
+            entry["scores"] = prev["scores"]
         _calibration_sessions[user_id] = entry
 
     def worker():
@@ -429,6 +433,10 @@ def calibrate_threshold_start():
             entry = {"status": "done", "session_id": session_id, **extra}
         else:  # 'saving'
             entry = {"status": status, "session_id": session_id}
+        prev = _threshold_sessions.get(user_id, {})
+        for k in ("scores", "resting_scores"):
+            if k not in entry and prev.get(k):
+                entry[k] = prev[k]
         _threshold_sessions[user_id] = entry
 
     def worker():

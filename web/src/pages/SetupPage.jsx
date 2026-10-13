@@ -6,6 +6,7 @@ import { COLORS } from '../lib/levels';
 import { Card, CardHead, DeviceChip, Badge } from '../components/ui';
 import BreathingCalibration from '../components/BreathingCalibration';
 import ThresholdTask from '../components/ThresholdTask';
+import LiveCalibrationGraphs from '../components/LiveCalibrationGraphs';
 
 // Same three steps as the app's AccountSetupScreen -> EegThresholdTaskScreen:
 // 1) devices on, 2) calm-breathing baseline, 3) the ~8 min limit test.
@@ -63,8 +64,11 @@ export default function SetupPage() {
 
       <Step n={2} title="Calm-breathing calibration" done={baselineDone} active={current === 'baseline'}>
         {current === 'baseline' ? (
-          <BreathingCalibration ringOnline={ringOnline} eegOnline={eegOnline} eegSessionId={eegSessionId} ringCal={cal.ring} eegCal={cal.eeg}
-            disabled={otherUserLive} onComplete={() => { cal.refresh(); setStep('task'); }} />
+          <>
+            <BreathingCalibration ringOnline={ringOnline} eegOnline={eegOnline} eegSessionId={eegSessionId} ringCal={cal.ring} eegCal={cal.eeg}
+              disabled={otherUserLive} onComplete={() => { cal.refresh(); setStep('task'); }} />
+            <LiveCalibrationGraphs phase="baseline" ringOnline={ringOnline} eegOnline={eegOnline} />
+          </>
         ) : (
           <div className="between">
             <span className="body">{baselineDone ? 'Your calm baseline is saved.' : 'Not done yet.'}</span>
@@ -75,9 +79,12 @@ export default function SetupPage() {
 
       <Step n={3} title="Personal limit test (≈ 8 min)" done={personalised} active={current === 'task'}>
         {current === 'task' ? (
-          <ThresholdTask eegSessionId={eegSessionId} alreadyPersonalized={personalised}
-            ringCal={cal.ring} eegCal={cal.eeg} disabled={otherUserLive || cal.loading}
-            onFinish={() => navigate('/', { replace: true })} />
+          <>
+            <ThresholdTask eegSessionId={eegSessionId} alreadyPersonalized={personalised}
+              ringCal={cal.ring} eegCal={cal.eeg} disabled={otherUserLive || cal.loading}
+              onFinish={() => navigate('/', { replace: true })} />
+            <LiveCalibrationGraphs phase="task" ringOnline={ringOnline} eegOnline={eegOnline} />
+          </>
         ) : (
           <p className="body">Unlocks after step 2 — it needs your calm baseline to compare against.</p>
         )}

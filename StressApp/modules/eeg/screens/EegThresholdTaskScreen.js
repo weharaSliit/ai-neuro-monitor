@@ -5,6 +5,7 @@ import { db } from '../firebase';
 import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
 import Button from '../../shared/Button';
+import LiveCalibrationGraphs from '../../shared/LiveCalibrationGraphs';
 import Icon, { NAMES } from '../../shared/Icon';
 import { eegClient } from '../../shared/eegApiClient';
 import physiologicalApi from '../../physiological/api/client';
@@ -1097,6 +1098,16 @@ export default function EegThresholdTaskScreen({ navigation }) {
               <Text style={styles.doneButtonText}>Done</Text>
             </TouchableOpacity>
           </Card>
+        )}
+
+        {phase !== 'intro' && (
+          <LiveCalibrationGraphs
+            key={phase === 'review' ? 'review' : 'task'}
+            phase="task"
+            token={token}
+            collapsible={phase !== 'review'}
+            defaultOpen={phase === 'review'}
+          />
         )}
       </View>
     </ScreenBackground>
