@@ -96,13 +96,17 @@ function OverviewTab({ userId, liveSid, isLive }) {
   const fusion = useFusion(userId, liveSid);
   const rows = useMemo(() => fusion.rows.map((r) => ({
     date: r.date,
-    values: [r.w.prob_eeg, r.w.prob_hrv_gsr, r.w.fused_probability].map((v) => (v != null ? Math.round(v * 100) : null)),
+    // Aligned-scale windows: each model's value with its own limit at 50, so
+    // the three lines are comparable (raw values are on different scales).
+    values: (r.w.fused_scale === 'aligned'
+      ? [r.w.eeg_aligned, r.w.hrv_gsr_aligned, r.w.fused_probability]
+      : [r.w.prob_eeg, r.w.prob_hrv_gsr, r.w.fused_probability]).map((v) => (v != null ? Math.round(v * 100) : null)),
   })), [fusion.rows]);
   const l = fusion.latest || fusion.lastAny;
   return (
     <div className="stack">
       <Card>
-        <CardHead title="Fusion — all modalities" sub="EEG, Ring (HRV+GSR) and fused probability, last 4 sessions + live"
+        <CardHead title="Fusion — all modalities" sub="EEG, Ring (HRV+GSR) and fused, on the aligned scale (each model's own limit = 50%), last 4 sessions + live"
           right={<LiveBadge online={isLive} offLabel="Not live" />} />
         <Chart rows={rows} domain={[0, 100]} suffix="%" height={280} series={[
           { name: 'Mind (EEG)', color: COLORS.eeg }, { name: 'Body (HRV+GSR)', color: COLORS.hrv }, { name: 'Fused', color: COLORS.brand },
@@ -112,6 +116,7 @@ function OverviewTab({ userId, liveSid, isLive }) {
         <CardHead title="Latest fusion window" sub={fusion.latestMs ? `Live · ${timeAgo(fusion.latestMs)}` : fusion.lastAnyMs ? `Last seen ${timeAgo(fusion.lastAnyMs)}` : ''} />
         <KV obj={l} keys={['fused_probability', 'fused_threshold', 'fused_label', 'prob_eeg', 'threshold_eeg',
           'eeg_basis', 'eeg_weight_factor', 'eeg_untrusted_reason', 'eeg_fusion_policy',
+          'fused_scale', 'eeg_aligned', 'hrv_gsr_aligned', 'saturated_modalities', 'fused_probability_raw',
           'prob_hrv_gsr', 'threshold_hrv_gsr', 'stress_trend', 'stress_phase', 'stress_alert_message']} />
       </Card>
     </div>
