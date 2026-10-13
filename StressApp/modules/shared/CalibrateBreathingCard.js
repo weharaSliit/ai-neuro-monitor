@@ -8,6 +8,7 @@ import { COLORS } from '../physiological/config/theme';
 import { eegClient } from './eegApiClient';
 import Icon from './Icon';
 import { useCalibrationSummary, useDeviceStatus } from './CalibrationGate';
+import LiveCalibrationGraphs from './LiveCalibrationGraphs';
 
 // ============================================================
 // CalibrateBreathingCard -- calm-breathing baseline calibration.
@@ -414,6 +415,10 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
             <Text style={styles.startBtnText}>Try again</Text>
           </TouchableOpacity>
         </>
+      )}
+
+      {stage !== 'idle' && (
+        <LiveCalibrationGraphs phase="baseline" ringOnline={ringOnline} eegOnline={eegOnline} token={token} />
       )}
     </View>
   );

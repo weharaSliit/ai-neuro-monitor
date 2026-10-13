@@ -50,7 +50,7 @@ import time
 
 import paho.mqtt.client as mqtt
 
-from backend.psychological.firebase_service import EegFirebaseSession
+from backend.psychological.firebase_service import EegFirebaseSession, save_eeg_device_heartbeat
 from backend.psychological.calibration_service import (
     CalibrationFailedError, run_eeg_calibration_from_blocks, run_eeg_threshold_from_blocks,
 )
@@ -117,6 +117,7 @@ _shared_client: mqtt.Client | None = None
 _shared_buf: list = []
 _shared_buf_lock = threading.Lock()
 _shared_last_sample_time = [None]  # None until the shared client has ever seen a real sample
+_shared_last_heartbeat = [0.0]
 
 
 def _shared_on_message(client, userdata, msg):
@@ -126,6 +127,12 @@ def _shared_on_message(client, userdata, msg):
     with _shared_buf_lock:
         _shared_buf.extend(samples)
         _shared_last_sample_time[0] = time.time()
+    # Headband heartbeat (throttled to once per 5 s) -- keeps 'Headband on'
+    # true during on-demand calibration even if the always-on bridge is down.
+    now = time.time()
+    if now - _shared_last_heartbeat[0] >= 5:
+        _shared_last_heartbeat[0] = now
+        save_eeg_device_heartbeat()
 
 
 def _get_shared_client() -> mqtt.Client:
@@ -192,6 +199,45 @@ def _shared_last_sample_age() -> float:
     return 0.0 if last is None else time.time() - last
 
 
+def _new_live_engine():
+    """A throwaway engine used only to show per-block scores on the live
+    calibration graph while blocks are still being captured. It is never
+    saved, never used for /predict, and the real calibration below still runs
+    from the raw blocks exactly as before. Returns None if it cannot be built."""
+    try:
+        from backend.psychological.calibration_service import MODEL_DIR
+        from backend.psychological.realtime.pipeline import RealtimeInference
+        return RealtimeInference(MODEL_DIR)
+    except Exception:
+        return None
+
+
+def _live_baseline_score(engine, samples):
+    """Score of one just-captured resting block (None if the block was not
+    usable) using the display-only engine."""
+    if engine is None:
+        return None
+    try:
+        before = len(engine._calibration_scores)
+        engine.calibrate_bipolar_block(samples)
+        if len(engine._calibration_scores) > before:
+            return round(float(engine._calibration_scores[-1]), 3)
+    except Exception:
+        pass
+    return None
+
+
+def _live_task_score(engine, samples):
+    if engine is None:
+        return None
+    try:
+        q = engine.score_threshold_task_block(samples)
+        sc = q.get('score')
+        return None if sc is None else round(float(sc), 3)
+    except Exception:
+        return None
+
+
 def run_eeg_calibration_capture(user_id, session_id, on_progress=None):
     """Blocking: settles (discarding whatever buffered while settling),
     captures N_CALIBRATION_BLOCKS raw bipolar blocks of BLOCK_SAMPLES each
@@ -251,6 +297,8 @@ def run_eeg_calibration_capture(user_id, session_id, on_progress=None):
     _shared_clear()
 
     blocks_samples = []
+    live_scores = []
+    live_engine = _new_live_engine()
     capture_deadline = time.time() + CAPTURE_TIMEOUT_SEC
     while len(blocks_samples) < N_CALIBRATION_BLOCKS:
         if time.time() > capture_deadline:
@@ -271,7 +319,9 @@ def run_eeg_calibration_capture(user_id, session_id, on_progress=None):
             time.sleep(0.5)
             continue
         blocks_samples.append(_shared_drain(BLOCK_SAMPLES))
-        _notify('capturing', block_idx=len(blocks_samples), n_blocks=N_CALIBRATION_BLOCKS)
+        live_scores.append(_live_baseline_score(live_engine, blocks_samples[-1]))
+        _notify('capturing', block_idx=len(blocks_samples), n_blocks=N_CALIBRATION_BLOCKS,
+                scores=list(live_scores))
 
     _notify('saving')
     try:
@@ -323,6 +373,12 @@ def run_eeg_threshold_capture(session_state: dict, on_progress=None):
     _shared_clear()
 
     blocks_samples = []
+    live_scores = []
+    live_engine = _new_live_engine()
+    try:
+        resting_scores = [round(float(v), 3) for v in session_state['engine']._calibration_scores]
+    except Exception:
+        resting_scores = []
     capture_deadline = time.time() + THRESHOLD_CAPTURE_TIMEOUT_SEC
     while len(blocks_samples) < N_THRESHOLD_TASK_BLOCKS:
         if time.time() > capture_deadline:
@@ -343,7 +399,9 @@ def run_eeg_threshold_capture(session_state: dict, on_progress=None):
             time.sleep(0.5)
             continue
         blocks_samples.append(_shared_drain(BLOCK_SAMPLES))
-        _notify('capturing', block_idx=len(blocks_samples), n_blocks=N_THRESHOLD_TASK_BLOCKS)
+        live_scores.append(_live_task_score(live_engine, blocks_samples[-1]))
+        _notify('capturing', block_idx=len(blocks_samples), n_blocks=N_THRESHOLD_TASK_BLOCKS,
+                scores=list(live_scores), resting_scores=resting_scores)
 
     _notify('saving')
     try:

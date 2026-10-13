@@ -10,6 +10,9 @@ const DEVICE_POLL_MS = 5000;
 const EEG_LATEST_WINDOW_FRESH_SEC = 60;
 // Firmware heartbeat interval is 5s; allow two missed beats.
 const EEG_HEARTBEAT_FRESH_MS = 15000;
+// The EEG service also writes eeg_devices/wearable02 about every 5 s while it
+// streams (used by the mobile app too); an extra, WebSocket-free source.
+const EEG_NODE_FRESH_SEC = 20;
 
 // Re-renders every `ms` so "x min ago"/live checks age honestly.
 export function useNow(ms = 20000) {
@@ -81,7 +84,9 @@ export function useDeviceStatus(userId) {
   // calibrate. Firebase freshness stays as the fallback.
   const beatFresh = heartbeat.at != null && Date.now() - heartbeat.at <= EEG_HEARTBEAT_FRESH_MS
     && heartbeat.drdyOk !== false;
-  const eegOnline = beatFresh || fresh(eegLastSeen) || fresh(calib?.updated_at ?? null);
+  const nodeSeen = useFirebaseValue('eeg_devices/wearable02/last_seen');
+  const nodeFresh = nodeSeen != null && (now / 1000 - nodeSeen) <= EEG_NODE_FRESH_SEC;
+  const eegOnline = beatFresh || nodeFresh || fresh(eegLastSeen) || fresh(calib?.updated_at ?? null);
   return { ringOnline, eegOnline, eegSessionId };
 }
 

@@ -57,6 +57,33 @@ from backend.physiological.firebase_service import (
     save_baseline_adaptation, save_personal_stress_threshold, save_resting_scores,
 )
 
+def _live_block(window, baseline_mean=None, baseline_std=None):
+    """Display-only summary of one just-captured window for the live
+    calibration graphs: heart variability (SD1, ms), heart rate, skin
+    conductance (uS) and, when a baseline is known (the limit test), the
+    window's stress score. Never saved and never fed to the model beyond
+    the same extract_features()/predict_window() calls the save step makes
+    anyway; any failure just returns an unusable marker."""
+    try:
+        features_2d, motion_rejected, feat_dict, hrv_is_fallback, _wave = extract_features(
+            window['ibi_array'], window['gsr_adc_array'], window['acc_array'],
+            window['gsr_calibration'], actual_fs=window['actual_fs'],
+        )
+        if motion_rejected or hrv_is_fallback:
+            return {'valid': False}
+        block = {
+            'valid': True,
+            'hrv': round(float(feat_dict.get('SD1', 0.0)), 2),
+            'hr': round(float(feat_dict.get('MeanHR', 0.0)), 1),
+            'gsr': round(float(feat_dict.get('SCL_mean', 0.0)), 3),
+        }
+        if baseline_mean is not None:
+            block['score'] = round(float(predict_window(features_2d, baseline_mean, baseline_std)['prob_stress']), 3)
+        return block
+    except Exception:
+        return {'valid': False}
+
+
 # Task-calibration capture size, in WINDOW_SEC=60 windows. Was 1 (only
 # ~1 minute of task data), then 6 (6 minutes) -- now 8 (8 minutes) to
 # match StressApp/modules/eeg/screens/EegThresholdTaskScreen.js's
@@ -329,6 +356,7 @@ def run_calibration_capture(user_id, on_progress=None):
             on_progress(status, extra)
 
     collected_windows = []
+    live_blocks = []
     state = {
         'window_start': time.time(),
         'ibi_buf': [], 'gsr_buf': [], 'acc_buf': [],
@@ -355,8 +383,9 @@ def run_calibration_capture(user_id, on_progress=None):
                 "gsr_calibration": GSR_CAL,
                 "actual_fs":       actual_fs
             })
+            live_blocks.append(_live_block(collected_windows[-1]))
             _notify('window_captured',
-                    window_idx=len(collected_windows), fs=actual_fs)
+                    window_idx=len(collected_windows), fs=actual_fs, blocks=list(live_blocks))
 
         state['ibi_buf'], state['gsr_buf'], state['acc_buf'] = [], [], []
         state['window_start'] = time.time()
@@ -488,6 +517,7 @@ def run_task_calibration_capture(user_id, on_progress=None):
         return None
 
     collected_windows = []
+    live_blocks = []
     state = {
         'window_start': time.time(), 'ibi_buf': [], 'gsr_buf': [], 'acc_buf': [],
         'last_sample_time': time.time(),
@@ -506,7 +536,9 @@ def run_task_calibration_capture(user_id, on_progress=None):
                 "ibi_array": state['ibi_buf'], "gsr_adc_array": state['gsr_buf'],
                 "acc_array": state['acc_buf'], "gsr_calibration": GSR_CAL, "actual_fs": actual_fs,
             })
-            _notify('capturing', window_idx=len(collected_windows), n_windows=N_TASK_WIN)
+            live_blocks.append(_live_block(collected_windows[-1], baseline_mean, baseline_std))
+            _notify('capturing', window_idx=len(collected_windows), n_windows=N_TASK_WIN,
+                    blocks=list(live_blocks), resting_scores=[round(float(r), 3) for r in resting_scores])
         state['ibi_buf'], state['gsr_buf'], state['acc_buf'] = [], [], []
         state['window_start'] = time.time()
 
