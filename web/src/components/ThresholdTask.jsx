@@ -193,10 +193,30 @@ export default function ThresholdTask({ eegSessionId, alreadyPersonalized, ringC
   const [ringTriggeredAt, setRingTriggeredAt] = useState(null);
   const [now, setNow] = useState(Date.now());
 
+  // EEG polling only starts once the server has ACCEPTED this run. The
+  // EEG service keeps calibrated sessions in memory, so after a Render
+  // restart the start call 400s ("not calibrated") -- polling anyway read
+  // the status route's 'idle' (or a previous run's result) and told the
+  // user their rest/task readings "weren't different enough".
+  const [eegStarted, setEegStarted] = useState(false);
+  const eegAttempt = useRef(0);
   const triggerEeg = useCallback(() => {
     if (!eegSessionId) return;
-    setEegResult(null); setEegTriggeredAt(Date.now());
-    eegApi.post('/calibrate/threshold/start', { session_id: eegSessionId }).catch(() => {});
+    const attempt = ++eegAttempt.current;
+    setEegResult(null); setEegStarted(false); setEegTriggeredAt(Date.now());
+    eegApi.post('/calibrate/threshold/start', { session_id: eegSessionId })
+      .then(() => { if (attempt === eegAttempt.current) setEegStarted(true); })
+      .catch((e) => {
+        if (attempt !== eegAttempt.current) return;
+        const code = e?.response?.status;
+        if (code === 409) { setEegStarted(true); return; } // already running -- follow that run
+        setEegResult({
+          status: 'error',
+          error: code === 400
+            ? 'The headband isn’t calibrated on the server any more (it may have restarted). Redo the calm-breathing step, then try again.'
+            : (e?.response?.data?.error || 'Couldn’t start the headband measurement — check your connection and try again.'),
+        });
+      });
   }, [eegSessionId]);
   const triggerRing = useCallback(() => {
     setRingResult(null); setRingTriggeredAt(Date.now());
@@ -417,7 +437,23 @@ export default function ThresholdTask({ eegSessionId, alreadyPersonalized, ringC
     const id = setInterval(poll, POLL_INTERVAL_MS);
     return () => clearInterval(id);
   };
-  useEffect(() => pollSide(eegTriggeredAt, eegResult, setEegResult, eegApi), [eegTriggeredAt, eegResult]);
+  useEffect(() => {
+    if (!eegStarted || eegResult != null) return undefined;
+    const poll = async () => {
+      try {
+        const res = await eegApi.get('/calibrate/threshold/status');
+        const d = res.data;
+        // 'idle' = the server has no run for this user (never a real result);
+        // a different session_id is a stale run from another session.
+        if (!d?.status || d.status === 'idle' || IN_PROGRESS.includes(d.status)) return;
+        if (d.session_id && d.session_id !== eegSessionId) return;
+        setEegResult(d);
+      } catch { /* next tick retries */ }
+    };
+    poll();
+    const id = setInterval(poll, POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [eegStarted, eegResult, eegSessionId]);
   useEffect(() => pollSide(ringTriggeredAt, ringResult, setRingResult, api), [ringTriggeredAt, ringResult]);
   useEffect(() => {
     if (!((eegTriggeredAt && !eegResult) || (ringTriggeredAt && !ringResult))) return undefined;
@@ -470,7 +506,9 @@ export default function ThresholdTask({ eegSessionId, alreadyPersonalized, ringC
         {alreadyPersonalized ? (
           <>
             <p className="body">
-              Your limits are already personalised — Mind at <b>{Math.round(eegCal.personal_high_load_p * 100)}%</b>,
+              Your limits are already set — Mind {eegCal?.personal_high_load_p != null
+                ? <>at <b>{Math.round(eegCal.personal_high_load_p * 100)}%</b></>
+                : <>on the <b>standard limit</b> (your test didn’t show a clear rest/task difference)</>},
               Body at <b>{Math.round(ringCal.personal_stress_threshold * 100)}%</b>. Keep them, or redo the ~8-minute test.
             </p>
             <div className="row" style={{ marginTop: 16, flexWrap: 'wrap' }}>

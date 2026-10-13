@@ -19,7 +19,7 @@ import LineChart from '../../shared/LineChart';
 import BaselineDriftCard from '../../shared/BaselineDriftCard';
 import {
     levelOf, LEVEL_COLOR, MIND_WORDS, BODY_WORDS, OVERALL_WORDS, sliderPosition,
-    DEFAULT_RING_THRESHOLD, DEFAULT_EEG_THRESHOLD,
+    DEFAULT_RING_THRESHOLD, DEFAULT_EEG_THRESHOLD, fusionKeyToMs,
 } from '../../shared/levels';
 import { TYPE, SPACE, RADIUS } from '../../shared/theme/tokens';
 import { ref, onValue, off, get } from 'firebase/database';
@@ -246,7 +246,7 @@ export default function FusionSessionScreen({ navigation, route }) {
         return keys
             .map((k) => ({ v: combinedWindows[k]?.fused_probability, key: k }))
             .filter(({ v }) => v !== undefined && v !== null)
-            .map(({ v, key }) => ({ value: Math.round(v * 100), date: new Date(Number(key) * 60000) }))
+            .map(({ v, key }) => ({ value: Math.round(v * 100), date: new Date(fusionKeyToMs(key)) }))
             .slice(-CHART_POINTS_MAX);
     }, [combinedWindows]);
 
@@ -265,7 +265,7 @@ export default function FusionSessionScreen({ navigation, route }) {
         return keys.map((k) => {
             const w = combinedWindows[k] || {};
             return {
-                date: new Date(Number(k) * 60000),
+                date: new Date(fusionKeyToMs(k)),
                 values: [
                     w.prob_eeg != null ? Math.round(w.prob_eeg * 100) : null,
                     w.prob_hrv_gsr != null ? Math.round(w.prob_hrv_gsr * 100) : null,
@@ -287,7 +287,7 @@ export default function FusionSessionScreen({ navigation, route }) {
         const keys = sortedWindowKeys(windows);
         return keys.length ? Number(keys[keys.length - 1]) : null;
     }, [windows]);
-    const lastUpdateMs = latestKey != null ? latestKey * 60000 : null;
+    const lastUpdateMs = latestKey != null ? fusionKeyToMs(latestKey) : null;
     const isLive = lastUpdateMs != null && Date.now() - lastUpdateMs < LIVE_WINDOW_MS;
 
     // ── Overall state (fused) ───────────────────────────────────────────

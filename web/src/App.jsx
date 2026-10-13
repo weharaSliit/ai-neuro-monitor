@@ -5,6 +5,7 @@ import LoginPage from './pages/LoginPage';
 import UserDashboard from './pages/UserDashboard';
 import AdminDashboard from './pages/AdminDashboard';
 import SetupPage from './pages/SetupPage';
+import UsersOverview from './pages/UsersOverview';
 
 function RequireAuth({ children }) {
   const { user } = useAuth();
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="setup" element={<SetupPage />} />
         <Route path="clinical" element={<AdminDashboard />} />
         <Route path="clinical/:userId" element={<AdminDashboard />} />
+        <Route path="users" element={<UsersOverview />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
-import { useCalibration, useDeviceStatus, useLivePointer } from '../hooks/useLive';
+import { useCalibration, useDeviceStatus, useFirebaseValue, useLivePointer } from '../hooks/useLive';
 import { COLORS } from '../lib/levels';
 import { Card, CardHead, DeviceChip, Badge } from '../components/ui';
 import BreathingCalibration from '../components/BreathingCalibration';
@@ -36,7 +36,14 @@ export default function SetupPage() {
   // this account's baseline.
   const otherUserLive = pointer.userId && pointer.userId !== userId;
   const baselineDone = !!cal.ring?.exists || !!cal.eeg?.exists;
-  const personalised = cal.eeg?.personal_high_load_p != null && cal.ring?.personal_stress_threshold != null;
+  // EEG's limit test often ends 'not_separated' (rest and task too close),
+  // which keeps the population limit and is never saved to the profile --
+  // so "has a personal_high_load_p" alone left step 3 undone forever. A
+  // finished run (ok or not_separated) for this session counts as done.
+  const eegThresholdResult = useFirebaseValue(userId && eegSessionId ? `psychological/${userId}/${eegSessionId}/threshold_result` : null);
+  const eegLimitDone = cal.eeg?.personal_high_load_p != null
+    || ['ok', 'not_separated'].includes(eegThresholdResult?.status);
+  const personalised = eegLimitDone && cal.ring?.personal_stress_threshold != null;
   const current = step || (baselineDone ? 'task' : 'baseline');
   const anyDevice = ringOnline || eegOnline;
 

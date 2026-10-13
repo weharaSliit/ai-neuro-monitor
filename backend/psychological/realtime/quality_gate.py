@@ -10,7 +10,9 @@ decision-state history -- see `RealtimeInference` in `pipeline.py`.
 
 Adapted from a standalone offline validator (originally tuned for an
 ADS1299/OpenBCI Cyton-style front end: VREF=4.5V, Gain=24) to this
-project's actual hardware, an ADS1292R at GAIN=12, VREF=2.42V -- see
+project's actual hardware, an ADS1292R at VREF=2.42V (GAIN=12 on the old
+2-channel path; the live wearable02 bipolar channel is gain 8 --
+adc.py BIPOLAR_GAIN, matching the firmware's CH2SET) -- see
 `adc.py`'s docstring for how those were decoded from the firmware's
 register writes. `auto_scale_adc_to_uv` below now defaults to those
 verified constants so a raw-code CSV inspected standalone (see
@@ -71,6 +73,13 @@ def auto_scale_adc_to_uv(raw_epoch, v_ref: float = VREF_VOLTS, gain: float = GAI
     return arr * scale_factor
 
 
+def _range_details(gate_details: dict) -> dict:
+    """The unclamped-signal measurements assess_epoch_single() reports,
+    passed through to the API/Firebase record (absent on the 2-channel path)."""
+    keys = ("out_of_range_fraction", "ptp_uV_unclamped", "std_uV_unclamped", "reason")
+    return {k: gate_details[k] for k in keys if k in gate_details}
+
+
 class SignalQualityGate:
     """9 signal quality factors on a block:
     1. Completeness  2. Dropout/NaNs  3. ADC Clipping  4. Flatline
@@ -108,6 +117,19 @@ class SignalQualityGate:
     # observed to only partially discount a degenerate block (e.g. an
     # 87.9 "GOOD" score with everything else passing), not exclude it.
     MIN_UNIQUE_RATIO = 0.5
+
+    # Share of the UNCLAMPED filtered signal allowed beyond +-CLIP_UV
+    # (100 uV), i.e. the share the pipeline's final clamp would alter. The
+    # model never saw clamping: all 480 SAM40 training blocks have
+    # filtered ptp <= 78 uV (median 47), so 0% of training samples exceed
+    # 100 uV. Above a few percent the 29 features come from a flat-topped
+    # signal outside the training range, and the score means nothing. 5%
+    # leaves room for a blink or a brief movement, not for sustained
+    # interference. Hard fail (like MIN_UNIQUE_RATIO), not an averaged
+    # factor: averaging one bad factor into seven is how out-of-range
+    # blocks used to score 96 and pass.
+    MAX_OUT_OF_RANGE_FRACTION = 0.05
+    RANGE_UV = 100.0  # == adc.CLIP_UV, the pipeline's final clamp
 
     def __init__(self, fs_raw=250, fs_filtered=128, max_adc_counts=1_000_000.0, max_uv=7000.0):
         self.fs_raw = fs_raw
@@ -195,7 +217,23 @@ class SignalQualityGate:
         ch_score = self._assess_channel(raw, filtered)
         if ch_score is None:
             return 0.0, "POOR", {"reason": "NaN/Inf/Incomplete epoch sample"}
-        return ch_score, self._rating_for(ch_score), {"channel_scores": [round(ch_score, 1)]}
+        # `filtered` must be the UNCLAMPED filtered signal (pipeline.py
+        # preprocess_bipolar_block_unclamped()) -- on the clamped one every
+        # block over 100 uV reads ptp=200 and fails MIN_UNIQUE_RATIO by
+        # accident instead of being measured.
+        filt = np.asarray(filtered, dtype=float).flatten()
+        out_of_range = float(np.mean(np.abs(filt) > self.RANGE_UV))
+        details = {"channel_scores": [round(ch_score, 1)],
+                   "out_of_range_fraction": round(out_of_range, 4),
+                   "ptp_uV_unclamped": round(float(np.ptp(filt)), 1),
+                   "std_uV_unclamped": round(float(np.std(filt)), 1)}
+        if out_of_range > self.MAX_OUT_OF_RANGE_FRACTION:
+            details["reason"] = (f"{out_of_range * 100:.0f}% of the filtered signal is beyond "
+                                 f"+-{self.RANGE_UV:.0f} uV (limit {self.MAX_OUT_OF_RANGE_FRACTION * 100:.0f}%; "
+                                 f"training data: 0%) -- outside the model's range, typically poor "
+                                 f"electrode/bias contact or mains interference")
+            return 0.0, "POOR", details
+        return ch_score, self._rating_for(ch_score), details
 
 
 class TraditionalEEGValidator:
@@ -485,11 +523,12 @@ class TrustedIoTEEGValidator:
         """assess_only()'s wearable02 (single hardware-differential channel)
         counterpart -- used for calibration blocks, before any clean
         baseline exists for the Itakura check."""
-        gate_score, gate_rating, _ = self.quality_gate.assess_epoch_single(raw, filtered)
+        gate_score, gate_rating, gate_details = self.quality_gate.assess_epoch_single(raw, filtered)
         return {
             "is_trusted": gate_rating != "POOR",
             "gate_rating": gate_rating,
             "quality_score": round(gate_score, 1),
+            **_range_details(gate_details),
         }
 
     def validate_epoch_single(self, raw, filtered, baseline_filtered) -> dict:
@@ -519,7 +558,8 @@ class TrustedIoTEEGValidator:
                 "is_trusted": False,
                 "gate_rating": gate_rating,
                 "quality_score": round(gate_score, 1),
-                "reason": "Failed pre-filter quality gate (POOR rating)",
+                **_range_details(gate_details),
+                "reason": gate_details.get("reason") or "Failed pre-filter quality gate (POOR rating)",
             }
 
         filt = np.asarray(filtered, dtype=float).flatten()
@@ -531,8 +571,26 @@ class TrustedIoTEEGValidator:
 
         is_trusted = bool(time_ok and (snr > -20.0) and (itakura_d < 6.0))
 
+        # Name every check that failed -- previously only the pre-filter
+        # gate gave a reason, so a block rejected here looked identical to
+        # one rejected for any other cause.
+        failed = []
+        if stats["ptp"] > self.max_amplitude:
+            failed.append(f"ptp {stats['ptp']:.0f} uV > {self.max_amplitude:.0f}")
+        if stats["std"] <= 0.01:
+            failed.append("flat signal")
+        if stats["kurtosis"] >= 12.0:
+            failed.append(f"kurtosis {stats['kurtosis']:.1f} >= 12 (spiky artefact)")
+        if stats["skew"] >= 4.0:
+            failed.append(f"skew {stats['skew']:.1f} >= 4")
+        if snr <= -20.0:
+            failed.append(f"alpha/high-band SNR {snr:.1f} dB <= -20")
+        if itakura_d >= 6.0:
+            failed.append(f"Itakura distance {itakura_d:.2f} >= 6 vs this session's reference block")
+
         return {
             "is_trusted": is_trusted,
+            **({"reason": "; ".join(failed)} if failed else {}),
             "gate_rating": gate_rating,
             "quality_score": round(gate_score, 1),
             "snr_db": round(snr, 2),
@@ -543,4 +601,5 @@ class TrustedIoTEEGValidator:
             "kurtosis": stats["kurtosis"],
             "skew": stats["skew"],
             "ml_rating": ml_rating,
+            **_range_details(gate_details),
         }

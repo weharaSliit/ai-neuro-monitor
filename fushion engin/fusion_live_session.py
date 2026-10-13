@@ -353,10 +353,9 @@ def main():
     ap.add_argument("--poll-interval-sec", type=float, default=3.0,
                      help="How often the live session's fusion_en window is recomputed and "
                           "rewritten -- kept within a 2-5s real-time range regardless of "
-                          "FUSION_WINDOW_BUCKET_SEC (backend/common/fusion.py, 60s), which "
-                          "aligns modalities' differing write cadences (EEG reports once per "
-                          "25s block) onto a shared window and is NOT this value -- shrinking "
-                          "the bucket itself would make EEG miss most windows outright.")
+                          "FUSION_WINDOW_BUCKET_SEC (backend/common/fusion.py, 25s, matching "
+                          "EEG's block length), which aligns modalities' differing write "
+                          "cadences onto a shared window and is NOT this value.")
     ap.add_argument(
         "--firebase-cred",
         default=os.environ.get("FIREBASE_CREDENTIALS"),

@@ -55,3 +55,15 @@ export function sortedWindowKeys(obj) {
   if (!obj) return [];
   return Object.keys(obj).filter((k) => /^\d+$/.test(k)).sort((a, b) => Number(a) - Number(b));
 }
+
+// fusion_en/{user}/{session}/{key}: key = floor(epoch_sec / bucket)
+// (backend/common/fusion.py::fusion_window_key). The bucket was 60s and is
+// now 25s (FUSION_WINDOW_BUCKET_SEC), and older sessions still hold 60s
+// keys -- the two eras can't overlap: a 60s key passes 5e7 only in ~2065,
+// a 25s key is above it for any date after 2009.
+const FUSION_KEY_25S_FROM = 5e7;
+export function fusionKeyToMs(key) {
+  const k = Number(key);
+  if (!Number.isFinite(k)) return null;
+  return k * (k >= FUSION_KEY_25S_FROM ? 25000 : 60000);
+}

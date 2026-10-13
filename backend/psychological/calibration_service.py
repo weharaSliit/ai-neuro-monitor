@@ -41,8 +41,8 @@ from dataclasses import replace as replace_thresholds
 from pathlib import Path
 
 from backend.psychological.firebase_service import (
-    EegFirebaseSession, load_user_calibration_profile, save_user_calibration_profile,
-    save_user_personal_threshold,
+    ADC_SCALE_TAG, EegFirebaseSession, load_user_calibration_profile, save_user_calibration_profile,
+    save_user_responsiveness,
 )
 from backend.psychological.realtime.csv_logger import CsvLogger, RAW_FIELDS_BIPOLAR, log_raw_block_bipolar
 from backend.psychological.realtime.mqtt_client import BipolarRawSample
@@ -67,6 +67,37 @@ class CalibrationFailedError(Exception):
 def raw_csv_path(session_id: str) -> Path:
     safe_id = _UNSAFE_FILENAME_CHARS.sub('_', session_id)
     return RAW_CSV_DIR / f"{safe_id}_raw.csv"
+
+
+def finish_personal_calibration(engine: RealtimeInference, user_id: str, outcome: dict) -> None:
+    """Personal Scale bookkeeping after finalize_calibration_bipolar(),
+    shared by app.py's /calibrate and run_eeg_calibration_from_blocks().
+
+    mu_rest is NEVER reused from an earlier session: electrode contact
+    changes every time the device is worn, so the rest part of onboarding
+    is repeated each session (paper Sect. "Personal EEG Threshold"). This
+    replaces the old "skip ahead" that restored a stored baseline_shift and
+    personal_high_load_p for up to 30 days. What IS carried over is the
+    user's last onboarding responsiveness (task z), so a non-responsive
+    user's EEG stays out of fusion until they redo the task."""
+    outcome["skip_ahead_used"] = False
+    if outcome["status"] not in ("ok", "degraded"):
+        return
+    stored = load_user_calibration_profile(user_id)
+    # Only reuse an onboarding result computed under the CURRENT uV scale --
+    # untagged results predate the gain-8 fix and are ignored, so the user
+    # simply redoes the task (see firebase_service.ADC_SCALE_TAG).
+    if (stored is not None and stored.get("eeg_responsive") is not None
+            and stored.get("adc_uv_per_count") == ADC_SCALE_TAG):
+        engine.eeg_responsive = bool(stored["eeg_responsive"])
+        engine.task_response_z = stored.get("task_response_z")
+    elif stored is not None and stored.get("eeg_responsive") is not None:
+        outcome["stale_onboarding_ignored"] = True
+    outcome["eeg_responsive"] = engine.eeg_responsive
+    outcome["task_response_z"] = engine.task_response_z
+    if engine.thresholds_personalized:
+        save_user_calibration_profile(user_id, engine.baseline_shift, engine.thresholds_personalized,
+                                      mu_rest=engine.mu_rest, personal_high_load_p=engine.personal_high_load_p)
 
 
 def run_eeg_calibration_from_blocks(user_id: str, session_id: str, blocks_samples: list[list[BipolarRawSample]],
@@ -101,32 +132,7 @@ def run_eeg_calibration_from_blocks(user_id: str, session_id: str, blocks_sample
 
     outcome = engine.finalize_calibration_bipolar(allow_degraded=allow_degraded)
 
-    # "You've done this before, skip ahead": a returning user (already has a
-    # recent calibration on file) reuses that baseline_shift instead of this
-    # session's own fresh 3-block estimate -- see app.py's original comment
-    # (unchanged reasoning, just relocated here).
-    if outcome["status"] == "ok":
-        stored_profile = load_user_calibration_profile(user_id)
-        if stored_profile is not None:
-            engine.baseline_shift = stored_profile["baseline_shift"]
-            engine.thresholds_personalized = stored_profile["thresholds_personalized"]
-            outcome["baseline_shift"] = engine.baseline_shift
-            outcome["thresholds_personalized"] = engine.thresholds_personalized
-            outcome["skip_ahead_used"] = True
-            # A previously-computed personal high_load_p (see
-            # run_eeg_threshold_from_blocks() below) also carries forward
-            # here -- same skip-ahead spirit as baseline_shift just above.
-            personal_high_load_p = stored_profile.get("personal_high_load_p")
-            if personal_high_load_p is not None:
-                engine.personal_high_load_p = personal_high_load_p
-                engine.thresholds = replace_thresholds(
-                    engine.thresholds, high_load_p=personal_high_load_p, cooldown_high_p=personal_high_load_p
-                )
-                outcome["personal_high_load_p"] = personal_high_load_p
-        else:
-            outcome["skip_ahead_used"] = False
-            if engine.thresholds_personalized:
-                save_user_calibration_profile(user_id, engine.baseline_shift, engine.thresholds_personalized)
+    finish_personal_calibration(engine, user_id, outcome)
 
     # updated_at so useDeviceStatus() (CalibrationGate.js) can treat a fresh
     # calibration outcome as evidence the device is alive, not just a fresh
@@ -175,8 +181,11 @@ def run_eeg_threshold_from_blocks(session_state: dict, blocks_samples: list[list
         engine.score_threshold_task_block(samples)
 
     outcome = engine.finalize_personal_threshold()
-    if outcome["status"] == "ok":
-        save_user_personal_threshold(firebase.user_id, outcome["personal_high_load_p"])
+    # Saved whether or not the user was responsive -- a 'not_separated'
+    # (non-responsive) result must also persist, so later sessions keep EEG
+    # out of fusion until the task is redone.
+    if outcome.get("task_response_z") is not None:
+        save_user_responsiveness(firebase.user_id, outcome["task_response_z"], outcome["responsive"])
 
     # Written regardless of status (including "not_separated") -- see
     # push_threshold_result()'s docstring (firebase_service.py).
