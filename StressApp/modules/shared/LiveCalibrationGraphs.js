@@ -9,29 +9,17 @@ import { COLORS } from '../physiological/config/theme';
 // LiveCalibrationGraphs -- twin of the website's
 // web/src/components/LiveCalibrationGraphs.jsx.
 //
-// While calibrating (phase 'baseline') or taking the personal-limit test
-// (phase 'task'), shows three graphs that fill in block by block:
-//   Heart variability (ring SD1), Skin response (ring SCL),
-//   Brain activity (headband load score).
-// Each shows every block as a point plus a dashed running average.
-// Polls the same status routes the calibration screens already poll:
-//   baseline -> GET /calibrate/status
-//   task     -> GET /calibrate/threshold/status
+// Real-time waves while calibrating (phase 'baseline') or taking the
+// personal-limit test (phase 'task'): heart rate (per beat), skin
+// response and brain-signal amplitude. The services expose, through the
+// status routes the screens already poll, what has arrived so far in the
+// block being captured (`live`) plus the finished blocks. Polled every
+// second; nothing is stored.
 // ============================================================
 
-const POLL_MS = 2000;
-const ACTIVE = ['settling', 'capturing', 'saving'];
-const H = 140;
-const PAD = { l: 38, r: 10, t: 12, b: 24 };
-
-function runningAverage(values) {
-  let sum = 0; let n = 0;
-  return values.map((v) => {
-    if (v == null) return n ? sum / n : null;
-    sum += v; n += 1;
-    return sum / n;
-  });
-}
+const POLL_MS = 1000;
+const H = 130;
+const PAD = { l: 38, r: 10, t: 10, b: 8 };
 
 function useStatus(fetcher, enabled, key) {
   const [state, setState] = useState(null);
@@ -52,37 +40,38 @@ function useStatus(fetcher, enabled, key) {
   return state;
 }
 
-function BlockChart({ title, unit, values, rest = [], color, fmt, refValue, refLabel, t }) {
-  const [width, setWidth] = useState(0);
-  const avg = runningAverage(values);
-  const last = [...values].reverse().find((v) => v != null);
-  const all = [...rest, ...values].filter((v) => v != null);
-  const nTotal = rest.length + values.length;
+function smooth(pts) {
+  if (pts.length < 2) return '';
+  let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+  for (let i = 1; i < pts.length; i += 1) {
+    const [x0, y0] = pts[i - 1]; const [x1, y1] = pts[i];
+    const cx = (x0 + x1) / 2;
+    d += ` C ${cx.toFixed(1)} ${y0.toFixed(1)}, ${cx.toFixed(1)} ${y1.toFixed(1)}, ${x1.toFixed(1)} ${y1.toFixed(1)}`;
+  }
+  return d;
+}
 
+function WaveCard({ title, unit, points, color, fmt, avg, minSpan, t }) {
+  const [width, setWidth] = useState(0);
+  const last = points.length ? points[points.length - 1].v : null;
   let body = null;
   if (width > 0) {
-    if (all.length === 0) {
+    if (points.length < 2) {
       body = (
         <Svg width={width} height={H}>
           <SvgText x={width / 2} y={H / 2} textAnchor="middle" fontSize="12" fill={t.textMuted}>—</SvgText>
         </Svg>
       );
     } else {
-      let lo = Math.min(...all, refValue ?? Infinity); let hi = Math.max(...all, refValue ?? -Infinity);
-      if (hi - lo < 1e-6) { lo -= 0.5; hi += 0.5; }
+      const vals = points.map((p) => p.v);
+      let lo = Math.min(...vals, avg ?? Infinity); let hi = Math.max(...vals, avg ?? -Infinity);
+      if (hi - lo < minSpan) { const m = (hi + lo) / 2; lo = m - minSpan / 2; hi = m + minSpan / 2; }
       const pad = (hi - lo) * 0.18; lo -= pad; hi += pad;
       const plotW = width - PAD.l - PAD.r; const plotH = H - PAD.t - PAD.b;
-      const x = (i) => PAD.l + (nTotal <= 1 ? plotW / 2 : (i / (nTotal - 1)) * plotW);
+      const x = (f) => PAD.l + f * plotW;
       const y = (v) => PAD.t + (1 - (v - lo) / (hi - lo)) * plotH;
-      const path = (vals, offset) => {
-        let d = ''; let open = false;
-        vals.forEach((v, i) => {
-          if (v == null) { open = false; return; }
-          d += `${open ? 'L' : 'M'} ${x(i + offset).toFixed(1)} ${y(v).toFixed(1)} `;
-          open = true;
-        });
-        return d;
-      };
+      const xy = points.map((p) => [x(p.x), y(p.v)]);
+      const lastPt = xy[xy.length - 1];
       body = (
         <Svg width={width} height={H}>
           {[0, 0.5, 1].map((f) => {
@@ -94,29 +83,16 @@ function BlockChart({ title, unit, values, rest = [], color, fmt, refValue, refL
               </React.Fragment>
             );
           })}
-          {refValue != null && (
-            <>
-              <Line x1={PAD.l} x2={width - PAD.r} y1={y(refValue)} y2={y(refValue)} stroke={t.textMuted} strokeDasharray="4 4" strokeWidth={1} />
-              <SvgText x={width - PAD.r} y={y(refValue) - 4} textAnchor="end" fontSize="10" fontWeight="800" fill={t.textMuted}>{refLabel} {fmt(refValue)}</SvgText>
-            </>
+          {avg != null && (
+            <Line x1={PAD.l} x2={width - PAD.r} y1={y(avg)} y2={y(avg)} stroke={color} strokeOpacity={0.55}
+              strokeDasharray="6 5" strokeWidth={2} />
           )}
-          <Path d={path(rest, 0)} stroke={t.border} strokeWidth={2} fill="none" />
-          {rest.map((v, i) => (v == null ? null
-            : <Circle key={`r${i}`} cx={x(i)} cy={y(v)} r={3.5} fill="#fff" stroke={t.textMuted} strokeWidth={1.6} />))}
-          <Path d={path(values, rest.length)} stroke={color} strokeWidth={2.4} fill="none" strokeLinejoin="round" />
-          <Path d={path(avg, rest.length)} stroke={color} strokeOpacity={0.55} strokeWidth={2} strokeDasharray="6 5" fill="none" />
-          {values.map((v, i) => (v == null ? null
-            : <Circle key={`v${i}`} cx={x(i + rest.length)} cy={y(v)} r={4.5} fill={color} stroke="#fff" strokeWidth={2} />))}
-          {Array.from({ length: nTotal }).map((_, i) => (
-            <SvgText key={i} x={x(i)} y={H - 7} textAnchor="middle" fontSize="10" fontWeight="700" fill={t.textMuted}>
-              {i < rest.length ? `R${i + 1}` : `${i - rest.length + 1}`}
-            </SvgText>
-          ))}
+          <Path d={smooth(xy)} stroke={color} strokeWidth={2.4} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          <Circle cx={lastPt[0]} cy={lastPt[1]} r={4.5} fill={color} stroke="#fff" strokeWidth={2} />
         </Svg>
       );
     }
   }
-
   return (
     <View style={[styles.chartCard, { borderColor: t.border, backgroundColor: t.card }]}>
       <View style={styles.chartHead}>
@@ -130,13 +106,15 @@ function BlockChart({ title, unit, values, rest = [], color, fmt, refValue, refL
   );
 }
 
+const mean = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : null);
+
 export default function LiveCalibrationGraphs({
   phase = 'baseline', ringOnline = true, eegOnline = true, token, collapsible = false, defaultOpen = true, theme,
 }) {
   const t = useMemo(() => ({
-    text: theme?.text || COLORS.text || '#231F20',
-    textMuted: theme?.textMuted || COLORS.textMuted || '#989294',
-    border: theme?.border || COLORS.border || '#EAE5DA',
+    text: theme?.text || '#231F20',
+    textMuted: theme?.textMuted || '#989294',
+    border: theme?.border || '#EAE5DA',
     card: theme?.card || '#FFFFFF',
   }), [theme]);
   const [open, setOpen] = useState(defaultOpen);
@@ -146,11 +124,41 @@ export default function LiveCalibrationGraphs({
   const ring = useStatus(() => physiologicalApi.get(path), ringOnline && open, `r${path}`);
   const eeg = useStatus(() => eegClient.get(path, { headers }), eegOnline && open, `e${path}${token}`);
 
-  const ringBlocks = ring?.blocks || [];
-  const ringValid = (key) => ringBlocks.map((b) => (b && b.valid && b[key] != null ? b[key] : null));
-  const eegScores = (eeg?.scores || []).map((v) => (v == null ? null : v * 100));
-  const eegRest = (phase === 'task' ? (eeg?.resting_scores || []) : []).map((v) => v * 100);
-  const restAvg = eegRest.length ? runningAverage(eegRest).slice(-1)[0] : undefined;
+  // Keep the last wave on screen once capture ends (the services stop
+  // sending `live` when they finish), so the graphs don't go blank.
+  const [held, setHeld] = useState({ ibi: [], gsr: [], rms: [] });
+  useEffect(() => { setHeld({ ibi: [], gsr: [], rms: [] }); }, [phase]);
+  useEffect(() => {
+    const l = ring?.live;
+    if (!l) return;
+    setHeld((h) => ({
+      ...h,
+      ibi: (l.ibi_ms || []).length >= 2 ? l.ibi_ms : h.ibi,
+      gsr: (l.gsr_us || []).length >= 2 ? l.gsr_us : h.gsr,
+    }));
+  }, [ring?.live]);
+  useEffect(() => {
+    const l = eeg?.live;
+    if (!l) return;
+    setHeld((h) => ({ ...h, rms: (l.rms_uv || []).length >= 2 ? l.rms_uv : h.rms }));
+  }, [eeg?.live]);
+
+  // Heart rate: one point per beat, spaced by the beat intervals.
+  const ibi = held.ibi;
+  let hrPoints = [];
+  if (ibi.length >= 2) {
+    const total = ibi.reduce((a, b) => a + b, 0);
+    let acc = 0;
+    hrPoints = ibi.map((m) => { acc += m; return { x: acc / total, v: 60000 / m }; });
+  }
+  const gsr = held.gsr;
+  const gsrPoints = gsr.length >= 2 ? gsr.map((v, i) => ({ x: i / (gsr.length - 1), v })) : [];
+  const rms = held.rms;
+  const rmsPoints = rms.length >= 2 ? rms.map((v, i) => ({ x: i / (rms.length - 1), v })) : [];
+
+  const blocks = (ring?.blocks || []).filter((b) => b && b.valid);
+  const hrAvg = mean(blocks.map((b) => b.hr).filter((v) => v != null && v > 0));
+  const gsrAvg = mean(blocks.map((b) => b.gsr).filter((v) => v != null));
 
   return (
     <View style={styles.wrap}>
@@ -162,13 +170,12 @@ export default function LiveCalibrationGraphs({
       )}
       {open && (
         <View style={{ gap: 10, marginTop: collapsible ? 10 : 0 }}>
-          <BlockChart t={t} title="Heart variability" unit=" ms"
-            values={ringValid('hrv')} color={COLORS.hrv} fmt={(v) => v.toFixed(1)} />
-          <BlockChart t={t} title="Skin response" unit=" µS"
-            values={ringValid('gsr')} color={COLORS.gsr} fmt={(v) => v.toFixed(2)} />
-          <BlockChart t={t} title="Brain activity" unit="%"
-            values={eegScores} rest={eegRest} color={COLORS.eeg} fmt={(v) => v.toFixed(0)}
-            refValue={restAvg} refLabel="Rest" />
+          <WaveCard t={t} title="Heart rate" unit=" bpm" points={hrPoints} color={COLORS.hrv}
+            fmt={(v) => Math.round(v)} avg={hrAvg} minSpan={10} />
+          <WaveCard t={t} title="Skin response" unit=" µS" points={gsrPoints} color={COLORS.gsr}
+            fmt={(v) => v.toFixed(2)} avg={gsrAvg} minSpan={0.1} />
+          <WaveCard t={t} title="Brain activity" unit=" µV" points={rmsPoints} color={COLORS.eeg}
+            fmt={(v) => Math.round(v)} minSpan={10} />
         </View>
       )}
     </View>
@@ -181,13 +188,7 @@ const styles = StyleSheet.create({
   title: { fontSize: 15, fontWeight: '800' },
   chev: { fontSize: 18, fontWeight: '800' },
   chartCard: { borderWidth: 1, borderRadius: 14, padding: 12 },
-  chartHead: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginBottom: 6 },
+  chartHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 },
   chartTitle: { fontSize: 13, fontWeight: '800' },
-  chartSub: { fontSize: 11, fontWeight: '600' },
   chartValue: { fontSize: 17, fontWeight: '900' },
-  legend: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 6 },
-  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  swatch: { width: 10, height: 10, borderRadius: 5 },
-  legendText: { fontSize: 10, fontWeight: '700' },
-  note: { fontSize: 13, fontWeight: '700' },
 });
