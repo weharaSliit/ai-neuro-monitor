@@ -2271,25 +2271,52 @@ void sampleTask(void*) {
 // call, and only when connected. On failure nothing is consumed -- the same
 // samples are retried next time, so a Wi-Fi drop delays data, never loses it
 // (unless it outlasts the ~32 s ring).
+// Sending has to keep up with 250 samples/s. One 25-sample message per
+// loop() pass couldn't over a weak link (seen live: RSSI -70 dBm, a ~28 s
+// backlog and 3157 batches dropped from a full ring -> stream gaps), since
+// each TLS publish carries a fixed cost. Now each message carries up to
+// PUBLISH_MAX_SAMPLES (1 s), and while a backlog exists several messages go
+// per pass (up to FLUSH_BUDGET_MS), with Wi-Fi modem sleep off until the
+// backlog drains (modem sleep delays every TCP ACK). The bridge and psy_web
+// parse any number of "millis,code;" records per message.
+#define PUBLISH_MAX_SAMPLES   250                  // 1 s per MQTT message
+#define FLUSH_BUDGET_MS       40                   // max time per loop() pass spent sending
+#define BACKLOG_SLEEP_OFF     (SOURCE_SPS)         // > 1 s queued: modem sleep off
+#define BACKLOG_SLEEP_ON      (SOURCE_SPS / 5)     // < 0.2 s queued: modem sleep back on
+#define SOURCE_SPS            250
+bool modemSleepOn = true;
+
 void flushRing() {
-  if (!mqtt.connected() || ringHead - ringTail < BATCH_SIZE) return;
-  static char payload[600];
-  int offset = 0;
-  uint32_t tail = ringTail;
-  for (uint8_t k = 0; k < BATCH_SIZE; k++) {
-    uint32_t i = (tail + k) % RING_SAMPLES;
-    int n = snprintf(payload + offset, sizeof(payload) - offset, "%lu,%ld;",
-                     (unsigned long)ringTime[i], (long)ringCode[i]);
-    if (n < 0 || offset + n >= (int)sizeof(payload)) break;
-    offset += n;
-  }
-  bool ok = mqtt.publish(MQTT_TOPIC, payload);
-  lastBatchPublish = millis();
-  if (ok) {
-    ringTail = tail + BATCH_SIZE;
-  } else {
-    pubDrops++;                                   // retried, not lost
-    Serial.println("[MQTT] Publish failed -- samples kept for retry");
+  if (!mqtt.connected()) return;
+  uint32_t backlog = ringHead - ringTail;
+  // Modem sleep only while caught up -- see the block comment above.
+  if (modemSleepOn && backlog > BACKLOG_SLEEP_OFF) { WiFi.setSleep(false); modemSleepOn = false; }
+  else if (!modemSleepOn && backlog < BACKLOG_SLEEP_ON) { WiFi.setSleep(true); modemSleepOn = true; }
+
+  static char payload[PUBLISH_MAX_SAMPLES * 20 + 1];
+  unsigned long start = millis();
+  while (ringHead - ringTail >= BATCH_SIZE && millis() - start < FLUSH_BUDGET_MS) {
+    uint32_t tail = ringTail;
+    uint32_t n = ringHead - tail;
+    if (n > PUBLISH_MAX_SAMPLES) n = PUBLISH_MAX_SAMPLES;
+    int offset = 0;
+    uint32_t k = 0;
+    for (; k < n; k++) {
+      uint32_t i = (tail + k) % RING_SAMPLES;
+      int w = snprintf(payload + offset, sizeof(payload) - offset, "%lu,%ld;",
+                       (unsigned long)ringTime[i], (long)ringCode[i]);
+      if (w < 0 || offset + w >= (int)sizeof(payload)) break;
+      offset += w;
+    }
+    bool ok = mqtt.publish(MQTT_TOPIC, payload);
+    lastBatchPublish = millis();
+    if (!ok) {
+      pubDrops++;                                   // retried, not lost
+      Serial.println("[MQTT] Publish failed -- samples kept for retry");
+      return;
+    }
+    ringTail = tail + k;
+    mqtt.loop();                                    // keep the connection serviced between messages
   }
 }
 
@@ -2379,7 +2406,8 @@ void setup() {
   mqtt.setSocketTimeout(5);          // seconds -- PubSubClient's own read/write timeout
 
   mqtt.setServer(MQTT_BROKER, MQTT_PORT);
-  mqtt.setBufferSize(1024);
+  // Room for a full PUBLISH_MAX_SAMPLES message (~20 bytes/sample + headers).
+  mqtt.setBufferSize(PUBLISH_MAX_SAMPLES * 20 + 256);
   maintainMQTT();
 
   // Created before initADS() attaches the DRDY interrupt that wakes it.

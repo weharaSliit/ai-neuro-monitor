@@ -236,6 +236,11 @@ class SignalQualityGate:
         return ch_score, self._rating_for(ch_score), details
 
 
+# Sub-window artefact check (TraditionalEEGValidator.check_time_domain_subwindows).
+SUBWINDOW_SEC = 2.0
+MAX_SPIKY_SUBWINDOW_FRACTION = 0.25   # > 3 of the 12 two-second windows of a 25 s block
+
+
 class TraditionalEEGValidator:
     def __init__(self, fs=250):
         self.fs = fs
@@ -258,6 +263,28 @@ class TraditionalEEGValidator:
             "ptp": round(ptp, 2), "std": round(std_dev, 2),
             "kurtosis": round(kurt, 2), "skew": round(skw, 2),
         }
+
+    def check_time_domain_subwindows(self, eeg_segment_filt, fs, max_amplitude=7000.0,
+                                     win_sec=SUBWINDOW_SEC, max_bad_fraction=MAX_SPIKY_SUBWINDOW_FRACTION):
+        """check_time_domain_thresholds() for single-channel live blocks, with
+        kurtosis/skew judged per win_sec sub-window instead of over the whole
+        25 s block: over 3200 samples, ONE blink or electrode pop (a handful
+        of samples) is enough to push whole-block kurtosis past 12 -- seen
+        live: kurtosis 69.8 on a block the gate rated GOOD, RMS like its clean
+        neighbour, 0.09% of samples out of range. The block now fails only if
+        more than max_bad_fraction of its sub-windows are spiky; amplitude and
+        flatness are still judged on the whole block. Whole-block kurtosis/
+        skew are still reported, for reference."""
+        seg = np.asarray(eeg_segment_filt, dtype=float).flatten()
+        valid, stats = self.check_time_domain_thresholds(seg, max_amplitude)
+        n = max(int(win_sec * fs), 8)
+        wins = [seg[i:i + n] for i in range(0, len(seg) - n + 1, n)] or [seg]
+        bad = sum(1 for w in wins if abs(kurtosis(w)) >= 12.0 or abs(skew(w)) >= 4.0)
+        bad_frac = bad / len(wins)
+        stats.update({"spiky_subwindows": bad, "subwindows": len(wins),
+                      "spiky_subwindow_fraction": round(bad_frac, 3)})
+        is_valid = (stats["ptp"] <= max_amplitude) and (stats["std"] > 0.01) and bad_frac <= max_bad_fraction
+        return bool(is_valid), stats
 
 
 class ConnectivityValidator:
@@ -565,7 +592,8 @@ class TrustedIoTEEGValidator:
         filt = np.asarray(filtered, dtype=float).flatten()
 
         snr = self.trad_val.compute_snr(filt)
-        time_ok, stats = self.trad_val.check_time_domain_thresholds(filt, max_amplitude=self.max_amplitude)
+        time_ok, stats = self.trad_val.check_time_domain_subwindows(
+            filt, fs=self.fs_filtered, max_amplitude=self.max_amplitude)
         itakura_d = self.itakura_val.compute_itakura_distance(filt, baseline_filtered)
         ml_rating = self.ml_classifier.classify(filt)
 
@@ -579,10 +607,10 @@ class TrustedIoTEEGValidator:
             failed.append(f"ptp {stats['ptp']:.0f} uV > {self.max_amplitude:.0f}")
         if stats["std"] <= 0.01:
             failed.append("flat signal")
-        if stats["kurtosis"] >= 12.0:
-            failed.append(f"kurtosis {stats['kurtosis']:.1f} >= 12 (spiky artefact)")
-        if stats["skew"] >= 4.0:
-            failed.append(f"skew {stats['skew']:.1f} >= 4")
+        if stats["spiky_subwindow_fraction"] > MAX_SPIKY_SUBWINDOW_FRACTION:
+            failed.append(f"spiky artefacts (kurtosis >= 12 or skew >= 4) in {stats['spiky_subwindows']} of "
+                          f"{stats['subwindows']} {SUBWINDOW_SEC:.0f}-s windows "
+                          f"(limit {MAX_SPIKY_SUBWINDOW_FRACTION * 100:.0f}%)")
         if snr <= -20.0:
             failed.append(f"alpha/high-band SNR {snr:.1f} dB <= -20")
         if itakura_d >= 6.0:
@@ -591,7 +619,12 @@ class TrustedIoTEEGValidator:
         return {
             "is_trusted": is_trusted,
             **({"reason": "; ".join(failed)} if failed else {}),
-            "gate_rating": gate_rating,
+            # A block rejected by these later checks is reported POOR (the
+            # gate's own rating, often GOOD, kept as gate_rating_pre_checks),
+            # so stored data never shows a rejected block rated GOOD.
+            "gate_rating": gate_rating if is_trusted else "POOR",
+            "gate_rating_pre_checks": gate_rating,
+            "spiky_subwindow_fraction": stats["spiky_subwindow_fraction"],
             "quality_score": round(gate_score, 1),
             "snr_db": round(snr, 2),
             "itakura_distance": round(itakura_d, 3),

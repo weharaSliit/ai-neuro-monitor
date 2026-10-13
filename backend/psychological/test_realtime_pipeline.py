@@ -375,6 +375,28 @@ def main() -> bool:
     except Exception as e:
         check("Provisional-score checks raised no exception", False, repr(e))
 
+    # 13. One blink/pop doesn't reject a block; sustained spikes still do -----
+    print("\n[13] sub-window kurtosis: a single spike vs sustained artefact")
+    try:
+        from backend.psychological.realtime.quality_gate import TrustedIoTEEGValidator
+        v13 = TrustedIoTEEGValidator(fs_raw=SOURCE_FS, fs_filtered=TARGET_FS)
+        rng13 = np.random.default_rng(13)
+        n13 = int(BLOCK_SEC * TARGET_FS)
+        clean13 = 6 * np.sin(2 * np.pi * 10 * np.arange(n13) / TARGET_FS) + rng13.normal(0, 12, n13)
+        one_pop = clean13.copy(); one_pop[1500:1503] += [180, 360, 150]          # one ~0.03 s pop (like block 1)
+        sustained = clean13.copy()
+        for c in range(100, n13, 220): sustained[c:c + 2] += 300                 # spikes all through the block
+        raw13 = np.ones(int(BLOCK_SEC * SOURCE_FS))
+        q1 = v13.validate_epoch_single(raw13, one_pop, clean13)
+        check("a single pop no longer rejects an otherwise clean block",
+              q1["is_trusted"] and q1["kurtosis"] >= 12, f"kurtosis {q1['kurtosis']}, {q1.get('reason')}")
+        q2 = v13.validate_epoch_single(raw13, sustained, clean13)
+        check("spikes throughout the block are still rejected, with a named reason and rating POOR",
+              not q2["is_trusted"] and "spiky artefacts" in (q2.get("reason") or "") and q2["gate_rating"] == "POOR",
+              f"{q2.get('reason')} rating={q2['gate_rating']}")
+    except Exception as e:
+        check("Sub-window kurtosis checks raised no exception", False, repr(e))
+
     print("\n" + "=" * 60)
     print("ALL CHECKS PASSED" if all_passed else "SOME CHECKS FAILED")
     print("=" * 60)
