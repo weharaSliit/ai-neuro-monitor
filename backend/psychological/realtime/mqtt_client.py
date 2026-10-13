@@ -1,4 +1,5 @@
 import threading
+import time
 import itertools
 from collections import deque
 from dataclasses import dataclass
@@ -22,10 +23,12 @@ class RawSampleBuffer:
     def __init__(self, maxlen: int = 250 * 60):  # 60s of raw 250 SPS data as a safety cap
         self._buf = deque(maxlen=maxlen)
         self._lock = threading.Lock()
+        self.last_append = None  # time.time() of the newest sample, None until one arrives
 
     def append(self, sample: AnySample) -> None:
         with self._lock:
             self._buf.append(sample)
+            self.last_append = time.time()
 
     def drain(self, n: int) -> List[AnySample]:
         with self._lock:

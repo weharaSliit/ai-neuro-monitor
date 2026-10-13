@@ -50,7 +50,7 @@ import time
 
 import paho.mqtt.client as mqtt
 
-from backend.psychological.firebase_service import EegFirebaseSession
+from backend.psychological.firebase_service import EegFirebaseSession, save_eeg_device_heartbeat
 from backend.psychological.calibration_service import (
     CalibrationFailedError, run_eeg_calibration_from_blocks, run_eeg_threshold_from_blocks,
 )
@@ -116,6 +116,7 @@ _shared_client: mqtt.Client | None = None
 _shared_buf: list = []
 _shared_buf_lock = threading.Lock()
 _shared_last_sample_time = [None]  # None until the shared client has ever seen a real sample
+_shared_last_heartbeat = [0.0]
 
 
 def _shared_on_message(client, userdata, msg):
@@ -125,6 +126,12 @@ def _shared_on_message(client, userdata, msg):
     with _shared_buf_lock:
         _shared_buf.extend(samples)
         _shared_last_sample_time[0] = time.time()
+    # Headband heartbeat (throttled to once per 5 s) -- keeps 'Headband on'
+    # true during on-demand calibration even if the always-on bridge is down.
+    now = time.time()
+    if now - _shared_last_heartbeat[0] >= 5:
+        _shared_last_heartbeat[0] = now
+        save_eeg_device_heartbeat()
 
 
 def _get_shared_client() -> mqtt.Client:

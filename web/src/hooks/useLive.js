@@ -5,6 +5,8 @@ import { api, deviceApi, eegApi, DEVICE_ID } from '../lib/api';
 
 const DEVICE_POLL_MS = 5000;
 const EEG_LATEST_WINDOW_FRESH_SEC = 40;
+// The EEG service writes a heartbeat about every 5 s while the headband streams.
+const EEG_HEARTBEAT_FRESH_SEC = 20;
 
 // Re-renders every `ms` so "x min ago"/live checks age honestly.
 export function useNow(ms = 20000) {
@@ -69,7 +71,9 @@ export function useDeviceStatus(userId) {
   }, [userId, eegSessionId]);
 
   const fresh = (sec) => sec != null && (now / 1000 - sec) <= EEG_LATEST_WINDOW_FRESH_SEC;
-  const eegOnline = fresh(eegLastSeen) || fresh(calib?.updated_at ?? null);
+  const deviceSeen = useFirebaseValue('eeg_devices/wearable02/last_seen');
+  const heartbeatFresh = deviceSeen != null && (now / 1000 - deviceSeen) <= EEG_HEARTBEAT_FRESH_SEC;
+  const eegOnline = heartbeatFresh || fresh(eegLastSeen) || fresh(calib?.updated_at ?? null);
   return { ringOnline, eegOnline, eegSessionId };
 }
 
