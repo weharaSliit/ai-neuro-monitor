@@ -2198,29 +2198,56 @@ bool initADS() {
 
 /* ================= MQTT TRANSMISSION ================= */
 
+// Unsent-batch queue. publishBatch() used to discard the batch whenever
+// MQTT was disconnected or a publish failed -- every Wi-Fi blip became a
+// gap in the stream, and the backend rejects any 25 s block with a gap over
+// 1 s. Batches now wait here (oldest first, device timestamps intact) and
+// flushQueue() sends them once the link is back, so a short outage delays
+// data instead of losing it. QUEUE_BATCHES * BATCH_SIZE / 250 SPS = 30 s;
+// only an outage longer than that loses samples (counted in queueDrops).
+#define QUEUE_BATCHES 300
+struct Batch { uint32_t t[BATCH_SIZE]; int32_t v[BATCH_SIZE]; };
+Batch queueBuf[QUEUE_BATCHES];
+uint16_t qHead = 0, qCount = 0;          // qHead = oldest queued batch
+uint32_t queueDrops = 0;                 // batches lost to a full queue (outage > 30 s)
+
 void publishBatch() {
-  if (mqtt.connected()) {
-    static char payload[600];
-    int offset = 0;
-
-    for (uint8_t i = 0; i < batchCount; i++) {
-      int n = snprintf(
-          payload + offset, sizeof(payload) - offset,
-          "%lu,%ld;",
-          batchTime[i], batchCh2[i]
-      );
-      if (n < 0 || offset + n >= (int)sizeof(payload)) break;
-      offset += n;
-    }
-
-    bool ok = mqtt.publish(MQTT_TOPIC, payload);
-    lastBatchPublish = millis();
-    if (!ok) {
-      pubDrops++;
-      Serial.println("[MQTT] Publish batch drop");
-    }
+  // Called when a batch is full: queue it; flushQueue() does the sending.
+  if (qCount == QUEUE_BATCHES) {         // full: overwrite the oldest
+    qHead = (qHead + 1) % QUEUE_BATCHES;
+    qCount--;
+    queueDrops++;
   }
+  Batch& b = queueBuf[(qHead + qCount) % QUEUE_BATCHES];
+  memcpy(b.t, batchTime, sizeof(b.t));
+  memcpy(b.v, batchCh2, sizeof(b.v));
+  qCount++;
   batchCount = 0;
+}
+
+// Sends at most one queued batch per call, and only when no sample is
+// waiting to be read, so catching up after an outage can't make loop()
+// miss DRDY. A failed publish stays queued and is retried next time.
+void flushQueue() {
+  if (qCount == 0 || drdyFlag || !mqtt.connected()) return;
+  static char payload[600];
+  int offset = 0;
+  const Batch& b = queueBuf[qHead];
+  for (uint8_t i = 0; i < BATCH_SIZE; i++) {
+    int n = snprintf(payload + offset, sizeof(payload) - offset, "%lu,%ld;",
+                     (unsigned long)b.t[i], (long)b.v[i]);
+    if (n < 0 || offset + n >= (int)sizeof(payload)) break;
+    offset += n;
+  }
+  bool ok = mqtt.publish(MQTT_TOPIC, payload);
+  lastBatchPublish = millis();
+  if (ok) {
+    qHead = (qHead + 1) % QUEUE_BATCHES;
+    qCount--;
+  } else {
+    pubDrops++;                           // retried, not lost
+    Serial.println("[MQTT] Publish failed -- batch kept in queue for retry");
+  }
 }
 
 /* ================= SETUP ================= */
@@ -2342,6 +2369,7 @@ void loop() {
 
   maintainMQTT();
   mqtt.loop();
+  flushQueue();
 
   // 5-second Watchdog & Heartbeat
   if (millis() - lastHeartbeatTime > 5000) {
@@ -2375,9 +2403,10 @@ void loop() {
       char hb[256];
       snprintf(hb, sizeof(hb),
                "{\"uptime_ms\":%lu,\"drdy_ok\":%d,\"loff_in2p\":%.2f,\"loff_in2n\":%.2f,\"loff_rld\":%.2f,"
-               "\"glitches\":%lu,\"missed_drdy\":%lu,\"pub_drops\":%lu,\"rssi\":%d}",
+               "\"glitches\":%lu,\"missed_drdy\":%lu,\"pub_drops\":%lu,\"rssi\":%d,\"queued\":%u,\"queue_drops\":%lu}",
                millis(), drdyActive ? 1 : 0, offP, offN, offR,
-               (unsigned long)glitchCount, (unsigned long)missed, (unsigned long)pubDrops, (int)WiFi.RSSI());
+               (unsigned long)glitchCount, (unsigned long)missed, (unsigned long)pubDrops, (int)WiFi.RSSI(),
+               (unsigned)qCount, (unsigned long)queueDrops);
       mqtt.publish(MQTT_STATUS, hb);
       lastHeartbeatPublish = millis();
     }
