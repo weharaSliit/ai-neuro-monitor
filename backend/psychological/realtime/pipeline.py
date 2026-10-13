@@ -5,6 +5,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+from scipy.signal import detrend
 
 from backend.psychological.sam40.decision import (  # noqa: E402
     MIN_TASK_RESPONSE_Z, PERSONAL_SIGMA_PRIOR, DecisionThresholds, compute_states,
@@ -16,6 +17,7 @@ from backend.psychological.sam40.preprocess import notch_then_bandpass  # noqa: 
 
 from .adc import (  # noqa: E402
     bipolar_code_to_microvolts, clip_physiological_uv, code_to_microvolts, raw_magnitude_ok,
+    raw_out_of_range_mask,
 )
 from .mqtt_client import BipolarRawSample, RawSample  # noqa: E402
 from .quality_gate import TrustedIoTEEGValidator  # noqa: E402
@@ -121,6 +123,15 @@ WIDE_DESPIKE_UV = 2000.0  # hard pre-filter bound -- see preprocess_bipolar_bloc
 # 39% flat-clamped) is worse than a slightly-mismatched high-pass edge.
 BIPOLAR_HIGHPASS_HZ = 1.0
 
+# Filter edge handling for 25 s blocks. Each block is filtered on its own,
+# and scipy's default filtfilt padding (~0.2 s) is far shorter than the
+# 1 Hz high-pass takes to settle, so any electrode drift across the block
+# rang at both edges. Tested on blocks of ~8 uV EEG + a 3 mV drift: RMS
+# 23.6 uV and every out-of-range sample at the block edges, vs 6.2 uV and
+# none with a linear detrend + 3 s odd-reflection padding (as good as
+# carrying the previous block as context, without keeping state).
+EDGE_PAD_SEC = 3.0
+
 
 def preprocess_bipolar_block_unclamped(samples: list[BipolarRawSample], duration_sec: float | None = None) -> np.ndarray:
     """Order matters here: detrend -> WIDE despike (hard, unconditional) ->
@@ -151,7 +162,18 @@ def preprocess_bipolar_block_unclamped(samples: list[BipolarRawSample], duration
     duration_sec = BLOCK_SEC if duration_sec is None else duration_sec
     millis = np.array([s.millis for s in samples], dtype=float)
     raw_uv = bipolar_code_to_microvolts(np.array([s.code for s in samples]))
-    detrended_uv = raw_uv - np.mean(raw_uv)  # BEFORE any clamping -- see docstring
+    # Sparse hardware glitch samples (beyond MAX_RAW_UV, at most
+    # MAX_RAW_OUT_FRACTION of the block -- raw_magnitude_ok() rejects more)
+    # are replaced by linear interpolation from their neighbours FIRST, so a
+    # single ~245 mV sample can't tilt the detrend line below.
+    bad = raw_out_of_range_mask(raw_uv)
+    if bad.any() and not bad.all():
+        idx = np.arange(len(raw_uv))
+        raw_uv = raw_uv.copy()
+        raw_uv[bad] = np.interp(idx[bad], idx[~bad], raw_uv[~bad])
+    # Linear detrend (not just the mean) BEFORE any clamping -- see the
+    # docstring and EDGE_PAD_SEC: drift left in as a ramp rings at the edges.
+    detrended_uv = detrend(raw_uv, type='linear')
     wide_despiked_uv = np.clip(detrended_uv, -WIDE_DESPIKE_UV, WIDE_DESPIKE_UV)
 
     # clean_raw_channel()'s MAD-based despike (ceiling 10,000uV) + grid
@@ -160,7 +182,8 @@ def preprocess_bipolar_block_unclamped(samples: list[BipolarRawSample], duration
     # filter's input sane, since wide_despiked_uv already guarantees that.
     clean, _ = clean_raw_channel(millis, wide_despiked_uv, target_fs=SOURCE_FS, duration_sec=duration_sec)
     resampled = resample_to_target(clean, source_fs=SOURCE_FS, target_fs=TARGET_FS)  # -> 128Hz
-    filtered = notch_then_bandpass(resampled, fs=TARGET_FS, low=BIPOLAR_HIGHPASS_HZ)  # see BIPOLAR_HIGHPASS_HZ docstring
+    filtered = notch_then_bandpass(resampled, fs=TARGET_FS, low=BIPOLAR_HIGHPASS_HZ,  # see BIPOLAR_HIGHPASS_HZ
+                                   padlen=min(int(EDGE_PAD_SEC * TARGET_FS), len(resampled) - 1))
 
     return filtered
 

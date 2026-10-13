@@ -24,33 +24,38 @@ class RawSampleBuffer:
     def __init__(self, maxlen: int = 250 * 60):  # 60s of raw 250 SPS data as a safety cap
         self._buf = deque(maxlen=maxlen)
         self._lock = threading.Lock()
-        self.last_append = None  # time.time() of the newest sample, None until one arrives
-        # (host wall-clock seconds, device millis) of the newest packet --
-        # lets wall_time_for() date ANY buffered sample by its capture time,
-        # even when blocks queue up behind a slow /predict (Render cold
-        # start, retries) and are drained well after they were recorded.
-        self._anchor: tuple[float, int] | None = None
+        # Device-clock -> host-wall-clock mapping, as offset = arrival time -
+        # device_millis/1000. Every packet arrives at capture time + network
+        # delay, and the firmware now QUEUES batches during a Wi-Fi outage and
+        # sends them late -- so the newest packet's arrival is not its capture
+        # time. The SMALLEST offset seen is the least-delayed packet, i.e. the
+        # best estimate of the true mapping; delay only ever adds to it.
+        # Reset when the device reboots (its millis counter goes backwards).
+        self._offset: float | None = None
+        self._last_millis: int | None = None
 
     def note_arrival(self, device_millis: int) -> None:
+        now = time.time()
+        m = int(device_millis)
         with self._lock:
-            self._anchor = (time.time(), int(device_millis))
+            if self._last_millis is not None and m < self._last_millis - 1000:
+                self._offset = None                       # device rebooted: old mapping is invalid
+                self._last_millis = None
+            off = now - m / 1000.0
+            if self._offset is None or off < self._offset:
+                self._offset = off
+            self._last_millis = m if self._last_millis is None else max(m, self._last_millis)
 
     def wall_time_for(self, device_millis: int) -> float | None:
         """Host wall-clock time (epoch s) at which the sample stamped
-        device_millis was captured: newest arrival minus the device-clock
-        gap since. MQTT transit (well under 1s) is ignored. None if there's
-        no anchor yet, or if device_millis is AHEAD of the anchor (the
-        device rebooted and its millis counter restarted in between), since
-        the two counters are then unrelated."""
+        device_millis was captured, via the least-delayed packet's mapping
+        (see __init__). None before any packet, or for a sample from before
+        the device's last reboot (newer than anything seen = unrelated clock)."""
         with self._lock:
-            anchor = self._anchor
-        if anchor is None:
+            off, last = self._offset, self._last_millis
+        if off is None or last is None or int(device_millis) > last:
             return None
-        anchor_wall, anchor_millis = anchor
-        gap_ms = anchor_millis - int(device_millis)
-        if gap_ms < 0:
-            return None
-        return anchor_wall - gap_ms / 1000.0
+        return off + int(device_millis) / 1000.0
 
     def append(self, sample: AnySample) -> None:
         with self._lock:
@@ -61,6 +66,19 @@ class RawSampleBuffer:
         with self._lock:
             n = min(n, len(self._buf))
             return [self._buf.popleft() for _ in range(n)]
+
+    def discard_before_gap(self, n: int) -> tuple[int, float]:
+        """Looks at the oldest n buffered samples; if they contain a stream
+        break (see raw_cleaning.start_after_last_gap), drops everything up to
+        it so the next block starts after the break. Returns (samples
+        dropped, gap seconds; -1 = device reboot)."""
+        from .raw_cleaning import start_after_last_gap
+        with self._lock:
+            head = list(itertools.islice(self._buf, 0, min(n, len(self._buf))))
+            idx, gap = start_after_last_gap([s.millis for s in head])
+            for _ in range(idx):
+                self._buf.popleft()
+            return idx, gap
 
     def peek_count(self) -> int:
         with self._lock:
