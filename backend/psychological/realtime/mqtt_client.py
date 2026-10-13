@@ -1,4 +1,5 @@
 import threading
+import time
 import itertools
 import time
 from collections import deque
@@ -59,6 +60,7 @@ class RawSampleBuffer:
     def append(self, sample: AnySample) -> None:
         with self._lock:
             self._buf.append(sample)
+            self.last_append = time.time()
 
     def drain(self, n: int) -> List[AnySample]:
         with self._lock:

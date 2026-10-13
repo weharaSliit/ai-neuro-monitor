@@ -77,6 +77,9 @@ export function useDeviceStatus(userId, db) {
   // EEG-related screen showed "Offline" for the device's entire ~10-85s
   // calibration span even though it was live and streaming the whole time.
   const [calibrationLastSeen, setCalibrationLastSeen] = useState(null);
+  // epoch seconds of the headband's own heartbeat (eeg_devices/wearable02),
+  // written about every 5 s while it streams -- same idea as the ring's.
+  const [deviceLastSeen, setDeviceLastSeen] = useState(null);
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -134,14 +137,22 @@ export function useDeviceStatus(userId, db) {
   }, [userId, sessionId, db]);
 
   useEffect(() => {
+    if (!db) return undefined;
+    const hbRef = ref(db, 'eeg_devices/wearable02/last_seen');
+    const handler = onValue(hbRef, (snap) => setDeviceLastSeen(snap.val() ?? null));
+    return () => off(hbRef, 'value', handler);
+  }, [db]);
+
+  useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), DEVICE_POLL_MS);
     return () => clearInterval(id);
   }, []);
 
+  const eegHeartbeatFresh = deviceLastSeen != null && (now / 1000 - deviceLastSeen) <= 20;
   const eegWindowFresh = eegLastSeen != null && (now / 1000 - eegLastSeen) <= EEG_LATEST_WINDOW_FRESH_SEC;
   const eegCalibratingFresh = calibrationLastSeen != null
     && (now / 1000 - calibrationLastSeen) <= EEG_LATEST_WINDOW_FRESH_SEC;
-  const eegOnline = eegWindowFresh || eegCalibratingFresh;
+  const eegOnline = eegHeartbeatFresh || eegWindowFresh || eegCalibratingFresh;
 
   return { ringOnline, eegOnline, eegSessionId: sessionId };
 }

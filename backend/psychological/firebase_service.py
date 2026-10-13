@@ -398,6 +398,22 @@ def _eeg_db_ref(path: str):
     return db.reference(path, app=app)
 
 
+def save_eeg_device_heartbeat(device_id='wearable02'):
+    """Marks the headband as online right now: one small node, overwritten in
+    place, so every client can show 'Headband on' the same way the ring
+    does -- from the device itself, not from whether a block happened to
+    pass the quality check. Lives in its own root (eeg_devices/) so it never
+    appears as a user under psychological/. Best-effort: a Firebase hiccup
+    must never interrupt EEG capture."""
+    try:
+        ref = _eeg_db_ref(f'eeg_devices/{device_id}')
+        if ref is None:
+            return
+        ref.update({'status': 'online', 'last_seen': time.time()})
+    except Exception:
+        pass
+
+
 def _eeg_recent_sessions(user_id, limit=30):
     ref = _eeg_db_ref(f'{RTDB_NAMESPACE}/{user_id}')
     if ref is None:

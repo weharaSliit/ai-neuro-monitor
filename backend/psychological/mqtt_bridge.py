@@ -16,6 +16,7 @@ from backend.common.firebase_config import (
     CURRENT_SESSION_ID_FIELD, CURRENT_USER_ID_FIELD, FIREBASE_DB_URL, RTDB_NAMESPACES
 )
 from backend.common.mqtt_bridge import auth_headers, post_json
+from backend.psychological.firebase_service import save_eeg_device_heartbeat
 from backend.psychological.realtime.csv_logger import CsvLogger, RAW_FIELDS_BIPOLAR, log_raw_block_bipolar
 from backend.psychological.realtime.mqtt_client import RawSampleBuffer, make_bipolar_client
 from backend.psychological.realtime.resample import SOURCE_FS
@@ -261,6 +262,7 @@ def run():
     block_idx = 0
     last_pointer_poll = 0.0
     last_empty_buffer_warn = 0.0
+    last_heartbeat = 0.0
 
     try:
         while True:
@@ -302,6 +304,12 @@ def run():
                 # ready, never as a standalone preview). Just a periodic log so
                 # "nothing arriving from wearable02" is still diagnosable from
                 # this process's own output, minus any Render/Firebase round-trip.
+                # Headband heartbeat: every 5 s while samples are really arriving.
+                if (buffer.last_append is not None and now - buffer.last_append < 8
+                        and now - last_heartbeat >= 5):
+                    save_eeg_device_heartbeat()
+                    last_heartbeat = now
+
                 if buffer.peek_count() == 0 and now - last_empty_buffer_warn >= EMPTY_BUFFER_WARN_INTERVAL_SEC:
                     print("[bridge] no raw samples buffered -- nothing arriving from wearable02 over MQTT")
                     last_empty_buffer_warn = now
