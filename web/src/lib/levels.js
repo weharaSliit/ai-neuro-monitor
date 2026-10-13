@@ -67,3 +67,13 @@ export function fusionKeyToMs(key) {
   if (!Number.isFinite(k)) return null;
   return k * (k >= FUSION_KEY_25S_FROM ? 25000 : 60000);
 }
+
+// How an EEG reading entered fusion (fusion_en eeg_basis, set by
+// backend/psychological/realtime/firebase_sync.py::eeg_fusion_input()).
+// Anything but 'calibrated' is down-weighted and must be shown as such.
+export const EEG_BASIS = {
+  calibrated: { word: 'Calibrated', note: null },
+  uncalibrated: { word: 'Uncalibrated', note: 'no personal baseline yet: standard limit, half weight' },
+  not_responsive: { word: 'Low reliability', note: 'calibration task showed little response: quarter weight' },
+  provisional: { word: 'Weak signal', note: 'provisional reading from a weak-signal block: reduced weight' },
+};

@@ -5,7 +5,7 @@ import { useCalibration, useDeviceStatus, useLivePointer, useNow } from '../hook
 import { useEegBlocks, useFusion, useRingHistory } from '../hooks/useStreams';
 import {
   COLORS, levelOf, LEVEL_COLOR, MIND_WORDS, BODY_WORDS, OVERALL_WORDS, sliderPosition,
-  DEFAULT_RING_THRESHOLD, DEFAULT_EEG_THRESHOLD, timeAgo,
+  DEFAULT_RING_THRESHOLD, DEFAULT_EEG_THRESHOLD, timeAgo, EEG_BASIS,
 } from '../lib/levels';
 import { Card, CardHead, ActionTile, DeviceChip, Stat, Seg, Badge } from '../components/ui';
 import BalanceRing from '../components/BalanceRing';
@@ -92,6 +92,10 @@ export default function UserDashboard() {
   const mindP = fusion.latestMind?.prob_eeg ?? null;
   const mindT = fusion.latestMind?.threshold_eeg ?? latest?.threshold_eeg ?? eegThr;
   const mindLevel = levelOf(mindP, mindT);
+  // Non-calibrated EEG (weak signal, no personal baseline) still shows, but
+  // labelled -- it only enters fusion at reduced weight.
+  const mindBasis = EEG_BASIS[fusion.latestMind?.eeg_basis] || null;
+  const mindCaveat = mindBasis && fusion.latestMind?.eeg_basis !== 'calibrated' ? mindBasis.word : null;
   const bodyP = fusion.latestBody?.prob_hrv_gsr ?? (latest ? null : ringLatest?.prob_stress ?? null);
   const bodyT = fusion.latestBody?.threshold_hrv_gsr ?? latest?.threshold_hrv_gsr ?? ringThr;
   const bodyLevel = levelOf(bodyP, bodyT);
@@ -100,19 +104,23 @@ export default function UserDashboard() {
   const fusedLevel = levelOf(fusedP, fusedT);
 
   // ── Rhythm chart (fused / mind / body), each against its own limit ──
+  // Windows fused on the aligned scale (fusion_engin.py) carry each model's
+  // value with its own limit at 0.5 -- plot Mind/Body on that same scale so
+  // all three tabs are comparable and the limit is 50 for each.
+  const aligned = fusion.rows.some((r) => r.w.fused_scale === 'aligned');
   const rhythm = useMemo(() => {
     const pick = {
       overall: { f: 'fused_probability', t: 'fused_threshold', fb: DEFAULT_RING_THRESHOLD },
-      mind: { f: 'prob_eeg', t: 'threshold_eeg', fb: eegThr },
-      body: { f: 'prob_hrv_gsr', t: 'threshold_hrv_gsr', fb: ringThr },
+      mind: aligned ? { f: 'eeg_aligned', t: null, fb: 0.5 } : { f: 'prob_eeg', t: 'threshold_eeg', fb: eegThr },
+      body: aligned ? { f: 'hrv_gsr_aligned', t: null, fb: 0.5 } : { f: 'prob_hrv_gsr', t: 'threshold_hrv_gsr', fb: ringThr },
     }[rhythmTab];
     const pts = fusion.rows
       .filter((r) => r.w[pick.f] != null)
       .map((r) => ({ date: r.date, value: Math.round(r.w[pick.f] * 100) }));
-    const lastWithThr = [...fusion.rows].reverse().find((r) => r.w[pick.t] != null);
+    const lastWithThr = pick.t ? [...fusion.rows].reverse().find((r) => r.w[pick.t] != null) : null;
     const limit = Math.round((lastWithThr?.w[pick.t] ?? pick.fb) * 100);
     return { rows: toRows(pts), limit };
-  }, [fusion.rows, rhythmTab, eegThr, ringThr]);
+  }, [fusion.rows, rhythmTab, eegThr, ringThr, aligned]);
 
   // ── Body detail (ring) -- same Stress / Heart / Skin tabs as the app's Ring screen ──
   const BODY_TABS = {
@@ -141,9 +149,19 @@ export default function UserDashboard() {
   const bandTotal = bands.reduce((s, b) => s + b.v, 0);
   const topBand = bands.length ? bands.reduce((a, b) => (b.v > a.v ? b : a)) : null;
 
-  const loadRows = useMemo(() => toRows(eeg.blocks
-    .filter((b) => !b.skipped && b.task_state_score != null)
-    .map((b) => ({ date: new Date(b.timestamp_end * 1000), value: Math.round(b.task_state_score * 100) }))), [eeg.blocks]);
+  // Trusted scores and provisional (weak-signal) scores as two series, so a
+  // session with imperfect contact still shows a trace -- clearly separate.
+  const loadRows = useMemo(() => eeg.blocks
+    .filter((b) => b.task_state_score != null || b.provisional_task_state_score != null)
+    .map((b) => ({
+      date: new Date(b.timestamp_end * 1000),
+      values: [
+        b.task_state_score != null ? Math.round(b.task_state_score * 100) : null,
+        b.task_state_score == null && b.provisional_task_state_score != null
+          ? Math.round(b.provisional_task_state_score * 100) : null,
+      ],
+    })), [eeg.blocks]);
+  const hasProvisional = loadRows.some((r) => r.values[1] != null);
 
   const firstName = (user?.name || userId || '').split(/[\s_.]/)[0];
   const displayName = firstName ? firstName.charAt(0).toUpperCase() + firstName.slice(1) : 'there';
@@ -192,7 +210,8 @@ export default function UserDashboard() {
           <CardHead title="Your balance" sub="Judged against your own personal limits" />
           <div className="rings">
             <BalanceRing title="Mind" value={mindP != null ? mindP * 100 : null}
-              word={MIND_WORDS[mindLevel]} color={LEVEL_COLOR[mindLevel] || COLORS.eeg} />
+              word={mindLevel ? `${MIND_WORDS[mindLevel]}${mindCaveat ? ` · ${mindCaveat.toLowerCase()}` : ''}` : undefined}
+              color={mindCaveat ? COLORS.textMuted : (LEVEL_COLOR[mindLevel] || COLORS.eeg)} />
             <BalanceRing title="Body" value={bodyP != null ? bodyP * 100 : null}
               word={BODY_WORDS[bodyLevel]} color={LEVEL_COLOR[bodyLevel] || COLORS.hrv} />
           </div>
@@ -236,7 +255,8 @@ export default function UserDashboard() {
         <Card>
           <CardHead title="Mind" sub="From your headband"
             right={eegLatest ? <Badge color={eegLatest.eeg_quality_flag ? COLORS.normal : COLORS.warning} dot>
-              {eegLatest.eeg_quality_flag ? 'Good contact' : 'Adjust headband'}</Badge> : null} />
+              {eegLatest.eeg_quality_flag ? 'Good contact'
+                : eegLatest.provisional_task_state_score != null ? 'Weak signal · provisional' : 'Adjust headband'}</Badge> : null} />
           {bands.length ? (
             <>
               <p className="body">Mostly <b style={{ color: topBand.color }}>{topBand.name.toLowerCase()}</b> brainwaves right now.</p>
@@ -252,9 +272,16 @@ export default function UserDashboard() {
           <div style={{ marginTop: 16 }}>
             <Chart
               rows={loadRows}
-              series={[{ name: 'Mental load', color: COLORS.eeg }]}
+              series={[{ name: 'Mental load', color: COLORS.eeg }, { name: 'Provisional (weak signal)', color: COLORS.textMuted }]}
               limit={Math.round((eegLatest?.effective_high_load_p ?? eegThr) * 100)}
               domain={[0, 100]} suffix="%" height={150} empty="No headband readings yet." />
+            {(hasProvisional || mindCaveat) && (
+              <p className="caption" style={{ marginTop: 6 }}>
+                Grey points are provisional readings from blocks with a weak signal. They're shown and included in your
+                overall level at reduced weight, but aren't used for alerts.
+                {mindBasis?.note && mindCaveat ? ` Latest: ${mindBasis.note}.` : ''}
+              </p>
+            )}
           </div>
         </Card>
       </div>

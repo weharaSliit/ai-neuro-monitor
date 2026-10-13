@@ -125,7 +125,7 @@ def poll_once(session_ref, session_meta_ref) -> dict:
         fused = fusion_engin.compute_realtime_multimodal_fusion({
             "eeg": _modality_input(w, "eeg"),
             "hrv_gsr": _modality_input(w, "hrv_gsr"),
-        })
+        }, scale=fusion_engin.FUSION_SCALE)
         fused_by_key[k] = fused
         if fused["fused_stress_probability"] is not None:
             windows[k]["fused_probability"] = fused["fused_stress_probability"]
@@ -194,6 +194,9 @@ def poll_once(session_ref, session_meta_ref) -> dict:
             # a domain-shift-style artifact worth investigating, not a
             # silent exclusion.
             "implausible_modalities": fused["implausible_modalities"],
+            # Saturated but kept at reduced weight (aligned scale only; see
+            # fusion_engin.py's SATURATED_WEIGHT).
+            "saturated_modalities": fused.get("saturated_modalities", []),
             # Comparable-across-modalities/users alternative to fused_
             # probability -- see compute_realtime_multimodal_fusion()'s own
             # docstring for the normalization. 0 = exactly at this window's
@@ -202,6 +205,14 @@ def poll_once(session_ref, session_meta_ref) -> dict:
             # ADDITIVE -- fused_probability/fused_threshold/fused_label
             # keep their exact existing values for every current consumer.
             "fused_relative_index": fused["fused_relative_index"],
+            # Which scale fused_probability is on ("aligned": every model's
+            # own limit = 0.5, see fusion_engin.py), each model's value on
+            # that scale, and the raw-scale result for comparison.
+            "fused_scale": fused["fused_scale"],
+            "eeg_aligned": fused["aligned_probs"].get("eeg"),
+            "hrv_gsr_aligned": fused["aligned_probs"].get("hrv_gsr"),
+            "fused_probability_raw": fused["fused_probability_raw"],
+            "fused_threshold_raw": fused["fused_threshold_raw"],
         }
 
         if "eeg" in fused["active_modalities"]:

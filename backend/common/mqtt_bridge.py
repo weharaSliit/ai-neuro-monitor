@@ -101,8 +101,9 @@ def connect_mqtt(broker: str, port: int, topic: str, on_message, client_id: str,
     return client
 
 
-def post_json(url: str, payload: dict, headers: dict, timeout: float, label: str):
-    """POSTs payload, prints one status line, and returns the parsed JSON
+def post_json(url: str, payload: dict, headers: dict, timeout: float, label: str, verbose: bool = True):
+    """POSTs payload, prints one status line (the full response body only if
+    verbose, or on an error status), and returns the parsed JSON
     body on a 2xx response or None on any failure (network error or
     non-2xx) -- callers branch on None instead of each catching requests
     exceptions themselves."""
@@ -110,7 +111,8 @@ def post_json(url: str, payload: dict, headers: dict, timeout: float, label: str
     try:
         resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
         data = resp.json()
-        print(f"[{label}] {resp.status_code} {data}")
+        if verbose or not resp.ok:
+            print(f"[{label}] {resp.status_code} {data}")
         return data if resp.ok else None
     except Exception as e:
         # resp.json() failing (e.g. an empty/non-JSON body) previously only

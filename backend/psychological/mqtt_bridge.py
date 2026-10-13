@@ -26,6 +26,18 @@ BLOCK_SAMPLES = int(BLOCK_SEC * SOURCE_FS)
 N_CALIBRATION_BLOCKS = 3
 EMPTY_BUFFER_WARN_INTERVAL_SEC = 5.0
 
+# EEG_BRIDGE_VERBOSE=1 prints every full /predict and /calibrate JSON body;
+# by default only the one-line summaries below (and any error responses).
+VERBOSE = os.environ.get("EEG_BRIDGE_VERBOSE", "0") == "1"
+
+# After wearable02 restarts, the ADS1292R and its bias (RLD) drive need time
+# to settle: the first blocks after a manual restart were 38-48% out of range.
+# The server's own settling window only covers the start of a session, not a
+# mid-session device restart, so the bridge discards everything for this
+# long after one -- and drops a half-built calibration, so rest blocks from
+# before and after the restart are never mixed into one baseline.
+REBOOT_SETTLE_SEC = 30.0
+
 # Calibration keeps collecting rest blocks until the server accepts a
 # STRICT (non-degraded) calibration with at least MIN_TRUSTED_REST_BLOCKS
 # usable blocks -- the Personal Scale's two rest blocks (paper Sect.
@@ -148,13 +160,13 @@ def _post_json_retrying(url: str, payload: dict, headers, timeout: float, label:
     Left in this caller rather than post_json() itself since it's shared
     with the physiological bridge, which has its own retry needs (or lack
     of them)."""
-    data = post_json(url, payload, headers, timeout, label=label)
+    data = post_json(url, payload, headers, timeout, label=label, verbose=VERBOSE)
     for attempt, delay in enumerate(RETRY_DELAYS_SEC, start=1):
         if data is not None:
             return data
         print(f"[{label}] attempt {attempt} failed -- retrying in {delay:.0f}s")
         time.sleep(delay)
-        data = post_json(url, payload, headers, timeout, label=label)
+        data = post_json(url, payload, headers, timeout, label=label, verbose=VERBOSE)
     return data
 
 
@@ -258,6 +270,8 @@ def run():
 
     calibration_blocks = []
     calibration_blocks_seen = 0
+    seen_reboots = buffer.reboot_count
+    settle_until = 0.0
     calibrated = False
     block_idx = 0
     last_pointer_poll = 0.0
@@ -304,6 +318,24 @@ def run():
                 # ready, never as a standalone preview). Just a periodic log so
                 # "nothing arriving from wearable02" is still diagnosable from
                 # this process's own output, minus any Render/Firebase round-trip.
+                # Device restart (its millis counter went backwards -- detected
+                # per packet in RawSampleBuffer, so even after a long outage that
+                # emptied the buffer): settle, then start calibration afresh if
+                # it was still being built. See REBOOT_SETTLE_SEC.
+                if buffer.reboot_count != seen_reboots:
+                    seen_reboots = buffer.reboot_count
+                    settle_until = now + REBOOT_SETTLE_SEC
+                    print(f"[bridge] wearable02 restarted -- ignoring its data for {REBOOT_SETTLE_SEC:.0f}s "
+                          f"while the amplifier and bias settle")
+                    if not calibrated and calibration_blocks_seen:
+                        print(f"[calibrate] discarding {calibration_blocks_seen} rest block(s) from before the "
+                              f"restart -- calibration starts again after settling")
+                        calibration_blocks = []
+                        calibration_blocks_seen = 0
+                if now < settle_until:
+                    buffer.clear()
+                    time.sleep(0.5)
+                    continue
                 # Headband heartbeat: every 5 s while samples are really arriving.
                 last_sample_at = getattr(buffer, 'last_append', None)
                 if (last_sample_at is not None and now - last_sample_at < 8
@@ -398,11 +430,19 @@ def run():
                               f"{data.get('eeg_quality_reason') or 'see server log'}"
                               + (f" | real RMS={data.get('eeg_std_uv_unclamped')} uV "
                                  f"ptp={data.get('eeg_ptp_uv_unclamped')} uV, "
-                                 f"{oor * 100:.0f}% beyond +-100 uV" if oor is not None else ""))
+                                 f"{oor * 100:.2f}% beyond +-100 uV" if oor is not None else "")
+                              # .3g: these scores can be ~1e-6 on this headband
+                              + (f" | provisional score {data['provisional_task_state_score']:.3g} "
+                                 f"(quality {data.get('provisional_quality')}/100)"
+                                 if data.get("provisional_task_state_score") is not None else ""))
                     else:
-                        print(f"[predict] block {block_idx} task_state_score="
-                              f"{data.get('task_state_score')} label={data.get('task_state_label')} "
-                              f"personal_threshold={data.get('personal_threshold')} "
+                        fmt = lambda v, spec: "None" if v is None else format(v, spec)  # noqa: E731
+                        z = data.get("task_state_z")
+                        print(f"[predict] block {block_idx} "
+                              f"task_state_score={fmt(data.get('task_state_score'), '.3g')} "
+                              + (f"(z={z:+.2f} vs own rest; alert at z>=0.84) " if z is not None else "")
+                              + f"label={data.get('task_state_label')} "
+                              f"personal_threshold={fmt(data.get('personal_threshold'), '.3g')} "
                               f"high_load_alert={data.get('high_load_alert')}")
                         bipolar = ((data.get("features_eeg") or {}).get("bipolar")) or {}
                         feat_str = ", ".join(
