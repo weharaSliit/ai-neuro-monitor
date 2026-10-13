@@ -582,20 +582,28 @@ export default function AdminUserDetailScreen({ route, navigation }) {
     const fbEntries = Object.entries(phenoFeedback || {}).map(([id, item]) => ({ id, ...item }));
     const latestFb = fbEntries.length > 0 ? fbEntries[fbEntries.length - 1] : null;
 
-    // Controlled Experiment (Tier 1)
+    // Controlled Experiment (Tier 1 & Tier 2)
     const expEntries = Object.values(phenoExperiments || {}).filter(Boolean);
-    const latestExp = expEntries.length > 0 ? expEntries[expEntries.length - 1] : null;
+    const typingExp = expEntries.filter((e) => e?.experiment_type?.includes('typing') || e?.experiment_type?.includes('escalation')).pop();
+    const latestExp = typingExp || (expEntries.length > 0 ? expEntries[expEntries.length - 1] : null);
     const hasExperiment = !!latestExp;
-    const expCalmDwell = latestExp?.calm_metrics?.avg_dwell != null ? Math.round(latestExp.calm_metrics.avg_dwell) : null;
-    const expStressDwell = latestExp?.stress_metrics?.avg_dwell != null ? Math.round(latestExp.stress_metrics.avg_dwell) : null;
-    const expShiftPct = (expCalmDwell && expStressDwell) ? Math.round(((expStressDwell - expCalmDwell) / expCalmDwell) * 100) : null;
+    const expCalmDwell = latestExp?.calm_metrics?.dwell_time_ms != null
+      ? Math.round(latestExp.calm_metrics.dwell_time_ms)
+      : (latestExp?.calm_metrics?.avg_dwell != null ? Math.round(latestExp.calm_metrics.avg_dwell) : null);
+    const expStressDwell = latestExp?.high_stress_metrics?.dwell_time_ms != null
+      ? Math.round(latestExp.high_stress_metrics.dwell_time_ms)
+      : (latestExp?.stress_metrics?.avg_dwell != null ? Math.round(latestExp.stress_metrics.avg_dwell) : null);
+    const expShiftPct = latestExp?.hypothesis_test?.dwell_elongation_pct != null
+      ? Math.round(latestExp.hypothesis_test.dwell_elongation_pct)
+      : ((expCalmDwell && expStressDwell) ? Math.round(((expStressDwell - expCalmDwell) / expCalmDwell) * 100) : null);
     const expType = latestExp?.experiment_type
-      ? (latestExp.experiment_type.includes('stroop') ? 'Stroop Challenge' : 'Cognitive Stress Test')
+      ? (latestExp.experiment_type.includes('typing') ? 'Symmetric Typing Escalation' : 'In-Situ Cognitive Challenge')
       : null;
 
     // Smart Ring cross-sensor (Tier 2)
-    const ringSessionCount = Object.keys(history?.sessions || {}).length;
-    const hasRingData = ringSessionCount > 0;
+    const latestDualSync = expEntries.filter((e) => e?.experiment_type === 'dual_sensor_sync_triangulation').pop();
+    const ringSessionCount = Object.keys(history?.sessions || {}).length || (latestDualSync ? 1 : 0);
+    const hasRingData = ringSessionCount > 0 || !!latestDualSync;
 
     // Idiographic baseline calculation from user logs
     const userDwells = Object.values(uLogs).map((w) => w?.avg_dwell).filter((v) => typeof v === 'number' && v > 0);
@@ -662,6 +670,9 @@ export default function AdminUserDetailScreen({ route, navigation }) {
       hasRingData,
       ringSessionCount,
       userMeanDwell,
+      latestDualSync,
+      dualSyncConcordance: latestDualSync?.concordance_rate || null,
+      dualSyncCorrelation: latestDualSync?.correlation_r || null,
     };
   }, [phenoUserRecord, phenoDataLogs, phenoValidationLabels, phenoFeedback, phenoPredictions, phenoExperiments, history]);
 
@@ -1590,15 +1601,19 @@ export default function AdminUserDetailScreen({ route, navigation }) {
                       {phenoMetrics.hasRingData ? (
                         <View style={styles.validationStatGrid}>
                           <View style={styles.validationStatCell}>
-                            <Text style={[styles.validationStatVal, { color: '#059669' }]}>{phenoMetrics.ringSessionCount}</Text>
-                            <Text style={styles.validationStatLbl}>Wearable Sessions</Text>
+                            <Text style={[styles.validationStatVal, { color: '#059669' }]}>
+                              {phenoMetrics.dualSyncConcordance || `${phenoMetrics.ringSessionCount} Sess`}
+                            </Text>
+                            <Text style={styles.validationStatLbl}>Sync Concordance</Text>
                           </View>
                           <View style={styles.validationStatCell}>
-                            <Text style={styles.validationStatVal}>Synchronized</Text>
-                            <Text style={styles.validationStatLbl}>Window Alignment</Text>
+                            <Text style={styles.validationStatVal}>
+                              {phenoMetrics.dualSyncCorrelation || 'Synchronized'}
+                            </Text>
+                            <Text style={styles.validationStatLbl}>Autonomic (r)</Text>
                           </View>
                           <View style={styles.validationStatCell}>
-                            <Text style={[styles.validationStatVal, { color: COLORS.stress }]}>Active</Text>
+                            <Text style={[styles.validationStatVal, { color: COLORS.stress }]}>Time-Locked</Text>
                             <Text style={styles.validationStatLbl}>Cross-Modal Feed</Text>
                           </View>
                         </View>
