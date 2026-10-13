@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ref, get, onValue, query, orderByKey, limitToLast } from 'firebase/database';
 import { db } from '../lib/firebase';
 import { api } from '../lib/api';
-import { sortedWindowKeys } from '../lib/levels';
+import { sortedWindowKeys, DEFAULT_EEG_THRESHOLD, fusionKeyToMs } from '../lib/levels';
 
 // Same cross-session backfill the app uses: the live session plus this
 // many of the user's own prior sessions, so charts never reset on login.
@@ -46,7 +46,7 @@ export function useFusion(userId, liveSessionId) {
   return useMemo(() => {
     const combined = { ...history, ...(live || {}) };
     const keys = sortedWindowKeys(combined).slice(-CHART_POINTS_MAX);
-    const rows = keys.map((k) => ({ key: Number(k), date: new Date(Number(k) * 60000), w: combined[k] || {} }));
+    const rows = keys.map((k) => ({ key: Number(k), date: new Date(fusionKeyToMs(k)), w: combined[k] || {} }));
     const liveKeys = sortedWindowKeys(live);
     const latestKey = liveKeys.length ? Number(liveKeys[liveKeys.length - 1]) : null;
     const lastKey = keys.length ? Number(keys[keys.length - 1]) : null;
@@ -67,9 +67,9 @@ export function useFusion(userId, liveSessionId) {
       latest: fusedLatest || (latestKey != null ? live[latestKey] : null),
       latestMind: newestWith((w) => w.prob_eeg != null),
       latestBody: newestWith((w) => w.prob_hrv_gsr != null),
-      latestMs: latestKey != null ? latestKey * 60000 : null,
+      latestMs: latestKey != null ? fusionKeyToMs(latestKey) : null,
       lastAny: lastKey != null ? combined[lastKey] : null,
-      lastAnyMs: lastKey != null ? lastKey * 60000 : null,
+      lastAnyMs: lastKey != null ? fusionKeyToMs(lastKey) : null,
     };
   }, [history, live]);
 }
@@ -157,7 +157,15 @@ export function useEegBlocks(userId, liveSessionId) {
         setSessions(sids.map((sid) => {
           const blocks = sortedValues(all[sid]);
           const last = blocks[blocks.length - 1];
-          return { sid, blocks: blocks.length, label: last?.task_state_label, end: last?.timestamp_end };
+          // Last SCORED block, judged against that session's own effective
+          // threshold -- task_state_label is a fixed 0.5 cut (firebase_sync.py)
+          // and null on rejected blocks, so it disagrees with the score chart.
+          const lastScored = [...blocks].reverse().find((b) => b?.task_state_score != null);
+          return {
+            sid, blocks: blocks.length, end: last?.timestamp_end,
+            score: lastScored?.task_state_score ?? null,
+            threshold: lastScored?.effective_high_load_p ?? DEFAULT_EEG_THRESHOLD,
+          };
         }).filter((s) => s.blocks > 0).reverse());
         setHistory(sids.filter((sid) => sid !== liveSessionId).slice(-RECENT_SESSIONS_FOR_CHART)
           .flatMap((sid) => sortedValues(all[sid])));

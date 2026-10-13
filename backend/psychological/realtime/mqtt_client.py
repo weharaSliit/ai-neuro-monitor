@@ -1,5 +1,6 @@
 import threading
 import itertools
+import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Union, List
@@ -22,6 +23,32 @@ class RawSampleBuffer:
     def __init__(self, maxlen: int = 250 * 60):  # 60s of raw 250 SPS data as a safety cap
         self._buf = deque(maxlen=maxlen)
         self._lock = threading.Lock()
+        # (host wall-clock seconds, device millis) of the newest packet --
+        # lets wall_time_for() date ANY buffered sample by its capture time,
+        # even when blocks queue up behind a slow /predict (Render cold
+        # start, retries) and are drained well after they were recorded.
+        self._anchor: tuple[float, int] | None = None
+
+    def note_arrival(self, device_millis: int) -> None:
+        with self._lock:
+            self._anchor = (time.time(), int(device_millis))
+
+    def wall_time_for(self, device_millis: int) -> float | None:
+        """Host wall-clock time (epoch s) at which the sample stamped
+        device_millis was captured: newest arrival minus the device-clock
+        gap since. MQTT transit (well under 1s) is ignored. None if there's
+        no anchor yet, or if device_millis is AHEAD of the anchor (the
+        device rebooted and its millis counter restarted in between), since
+        the two counters are then unrelated."""
+        with self._lock:
+            anchor = self._anchor
+        if anchor is None:
+            return None
+        anchor_wall, anchor_millis = anchor
+        gap_ms = anchor_millis - int(device_millis)
+        if gap_ms < 0:
+            return None
+        return anchor_wall - gap_ms / 1000.0
 
     def append(self, sample: AnySample) -> None:
         with self._lock:
@@ -107,6 +134,7 @@ def make_bipolar_client(broker: str, port: int, topic: str, buffer: RawSampleBuf
             return
         for sample in samples:
             buffer.append(sample)
+        buffer.note_arrival(samples[-1].millis)
 
     return connect_mqtt(broker, port, topic, on_message, client_id=client_id,
                          username=username, password=password, ca_cert=ca_cert)

@@ -35,10 +35,9 @@ from backend.psychological.eeg_calibration_capture import run_eeg_calibration_ca
 from backend.psychological.firebase_service import (
     EegFirebaseSession,
     get_calibration_status,
-    load_user_calibration_profile,
-    save_user_calibration_profile,
     compute_eeg_baseline_drift_history,
 )
+from backend.psychological.calibration_service import finish_personal_calibration
 from backend.psychological.mqtt_bridge import N_CALIBRATION_BLOCKS, N_THRESHOLD_TASK_BLOCKS
 from backend.psychological.realtime.csv_logger import CsvLogger, RAW_FIELDS_BIPOLAR, log_raw_block_bipolar
 from backend.psychological.realtime.firebase_sync import make_eeg_output_record
@@ -97,6 +96,33 @@ _calibration_sessions: dict[str, dict] = {}
 # a concurrent baseline capture's own status polling. Mirrors
 # backend/physiological/app.py's identical split.
 _threshold_sessions: dict[str, dict] = {}
+
+
+# A bridge-supplied capture time outside this window (relative to this
+# server's clock) is treated as a host-clock fault and ignored: the bridge
+# buffers at most 60s and retries a block for a few minutes at most, so a
+# genuine capture time is never far in the past, and never in the future
+# beyond normal clock skew.
+CAPTURE_TS_MAX_AGE_SEC = 900
+CAPTURE_TS_MAX_AHEAD_SEC = 60
+
+
+def _capture_end_ts(data: dict) -> float | None:
+    """Validated capture_end_ts from mqtt_bridge.py's /predict payload, or
+    None (-> make_eeg_output_record() falls back to processing time)."""
+    raw = data.get("capture_end_ts")
+    if raw is None:
+        return None
+    try:
+        ts = float(raw)
+    except (TypeError, ValueError):
+        return None
+    now = time.time()
+    if not (now - CAPTURE_TS_MAX_AGE_SEC <= ts <= now + CAPTURE_TS_MAX_AHEAD_SEC):
+        print(f"[predict] ignoring implausible capture_end_ts={ts} ({ts - now:+.0f}s vs server clock) "
+              f"-- check the bridge host's clock; using processing time instead")
+        return None
+    return ts
 
 
 def _samples_from_payload(data: dict) -> list[BipolarRawSample]:
@@ -192,51 +218,10 @@ def calibrate():
 
     outcome = engine.finalize_calibration_bipolar(allow_degraded=bool(data.get("allow_degraded", False)))
 
-    # "You've done this before, skip ahead": a returning user (g.user_id
-    # already has a recent calibration on file) reuses that baseline_shift
-    # instead of this session's own fresh 3-block estimate -- the stored
-    # one typically rests on more/less-noisy history than a single 3-block
-    # SEM check can achieve (see compute_baseline_shift()'s docstring).
-    # Only the probability-correction offset is restored, not the
-    # feature-level UserBaseline or Itakura signal reference -- those still
-    # come from THIS session's real blocks, captured normally above,
-    # because the deployed bipolar-only model doesn't read baseline-relative
-    # features anyway (see pipeline.py's AdaptiveBaselineTracker docstring)
-    # and the Itakura check specifically needs a same-session clean
-    # reference (electrode placement isn't stable across sessions).
-    if outcome["status"] == "ok":
-        stored_profile = load_user_calibration_profile(g.user_id)
-        if stored_profile is not None:
-            engine.baseline_shift = stored_profile["baseline_shift"]
-            engine.thresholds_personalized = stored_profile["thresholds_personalized"]
-            outcome["baseline_shift"] = engine.baseline_shift
-            outcome["thresholds_personalized"] = engine.thresholds_personalized
-            outcome["skip_ahead_used"] = True
-            # A previously-computed personal high_load_p (see /calibrate/threshold
-            # below) also carries forward here -- same skip-ahead spirit as
-            # baseline_shift just above, so a returning user's personal
-            # threshold applies immediately without redoing the task phase
-            # every session.
-            personal_high_load_p = stored_profile.get("personal_high_load_p")
-            if personal_high_load_p is not None:
-                engine.personal_high_load_p = personal_high_load_p
-                engine.thresholds = replace_thresholds(
-                    engine.thresholds, high_load_p=personal_high_load_p, cooldown_high_p=personal_high_load_p
-                )
-                outcome["personal_high_load_p"] = personal_high_load_p
-        else:
-            # New user, or this user's stored profile is now too stale to
-            # trust -- this session's own fresh result (already in outcome/
-            # engine from finalize_calibration() above) becomes the new
-            # baseline. Only persisted when a real shift was actually
-            # computed (thresholds_personalized) -- saving a 0.0-shift
-            # result here would let one noisy session lock out
-            # personalization for CALIBRATION_PROFILE_MAX_AGE_DAYS.
-            outcome["skip_ahead_used"] = False
-            if engine.thresholds_personalized:
-                save_user_calibration_profile(
-                    g.user_id, engine.baseline_shift, engine.thresholds_personalized
-                )
+    # Personal Scale: this session's own rest blocks set mu_rest (never
+    # reused across sessions); only the user's onboarding responsiveness
+    # carries over -- see finish_personal_calibration().
+    finish_personal_calibration(engine, g.user_id, outcome)
 
     # updated_at so useDeviceStatus() can treat a fresh calibration outcome
     # (not just a fresh /predict window) as evidence the device is alive --
@@ -491,6 +476,7 @@ def predict():
         # default the engine was constructed with. See
         # make_eeg_output_record()'s 'effective_high_load_p' docstring.
         high_load_p=state["engine"].thresholds.high_load_p,
+        capture_end_ts=_capture_end_ts(data),
     )
     state["firebase"].push(record)
 
@@ -498,12 +484,18 @@ def predict():
         {
             "session_id": session_id,
             "window": record.get("window"),
+            "timestamp_source": record.get("timestamp_source"),
             "skipped": record.get("skipped"),
             "task_state_score": record.get("task_state_score"),
             "task_state_label": record.get("task_state_label"),
             "task_state_trend": record.get("task_state_trend"),
             "eeg_quality_score": record.get("eeg_quality_score"),
             "eeg_quality_flag": record.get("eeg_quality_flag"),
+            "eeg_quality_reason": record.get("eeg_quality_reason"),
+            "eeg_out_of_range_fraction": record.get("eeg_out_of_range_fraction"),
+            "eeg_ptp_uv_unclamped": record.get("eeg_ptp_uv_unclamped"),
+            "eeg_std_uv_unclamped": record.get("eeg_std_uv_unclamped"),
+            "eeg_quality_checks": record.get("eeg_quality_checks"),
             "baseline_degraded": record.get("baseline_degraded"),
             "high_load_alert": record.get("high_load_alert"),
             "micro_break_recommended": record.get("micro_break_recommended"),

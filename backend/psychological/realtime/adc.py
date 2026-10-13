@@ -21,9 +21,20 @@ def microvolts_to_code(uv: np.ndarray | float, gain: float = GAIN, vref: float =
     code = volts * (gain * ADC_FULL_SCALE) / vref
     return np.round(code).astype(np.int64)
 
-BIPOLAR_GAIN = 6
+# Must match the firmware's CH2SET register (iot_firmware/wearable02/
+# wearable02.ino): 0x50 -> GAIN2[2:0] (bits 6:4) = 101 = gain 8 on the
+# ADS1292R (000=6, 001=1, 010=2, 011=3, 100=4, 101=8, 110=12). This was 6,
+# which overstated every live amplitude by 8/6 (band powers by 1.78x).
+BIPOLAR_GAIN = 8
 BIPOLAR_VREF_VOLTS = 2.42
-BIPOLAR_UV_PER_COUNT = (2.0 * BIPOLAR_VREF_VOLTS / BIPOLAR_GAIN) / ADC_FULL_SCALE * 1e6  # == 0.0961538...
+# ADS1292R LSB = VREF / (gain * (2^23 - 1)) -- the datasheet's "LSB weight
+# VREF / (2^23 - 1)" at gain 1, divided by the PGA gain; the input range is
+# +-VREF/gain, i.e. 2*VREF/gain spread over 2^24 codes, which is the same
+# number. Same formula code_to_microvolts() above already uses. This was
+# (2 * VREF / gain) / (2^23 - 1) ~= 0.0962, counting the two-sided range
+# twice: every live bipolar amplitude came out 2x too large (band powers 4x)
+# relative to the SAM40 microvolts the model was trained on.
+BIPOLAR_UV_PER_COUNT = BIPOLAR_VREF_VOLTS / (BIPOLAR_GAIN * ADC_FULL_SCALE) * 1e6  # == 0.0360608...
 
 
 def bipolar_code_to_microvolts(code: np.ndarray | int) -> np.ndarray:
@@ -34,11 +45,10 @@ def microvolts_to_bipolar_code(uv: np.ndarray | float) -> np.ndarray:
     """Proper inverse of bipolar_code_to_microvolts() -- NOT the same as
     microvolts_to_code() above, which inverts code_to_microvolts() instead
     (GAIN=12/VREF_VOLTS, the 2-channel path's constants). The bipolar path
-    uses its own BIPOLAR_GAIN=6 and a 2x differential-signal factor
-    (BIPOLAR_UV_PER_COUNT ~= 0.0961538, ~4x code_to_microvolts()'s
-    per-count scale) -- round-tripping a real bipolar uV value through
-    microvolts_to_code() -> bipolar_code_to_microvolts() silently produces
-    a ~4x-inflated value instead of recovering the original, which is
+    uses its own BIPOLAR_GAIN=8 (BIPOLAR_UV_PER_COUNT ~= 0.0360608, 1.5x
+    code_to_microvolts()'s per-count scale) -- round-tripping a real bipolar
+    uV value through microvolts_to_code() -> bipolar_code_to_microvolts()
+    silently produces a ~2x-inflated value instead of recovering the original, which is
     exactly wrong for feeding real/synthetic bipolar uV data back into
     BipolarRawSample.code for testing (see test_realtime_pipeline.py and
     any script decoding a real device's already-uV-converted debug output

@@ -25,6 +25,21 @@ BLOCK_SAMPLES = int(BLOCK_SEC * SOURCE_FS)
 N_CALIBRATION_BLOCKS = 3
 EMPTY_BUFFER_WARN_INTERVAL_SEC = 5.0
 
+# Calibration keeps collecting rest blocks until the server accepts a
+# STRICT (non-degraded) calibration with at least MIN_TRUSTED_REST_BLOCKS
+# usable blocks -- the Personal Scale's two rest blocks (paper Sect.
+# "Personal EEG Threshold"). Before, the bridge sent its first 3 blocks with
+# allow_degraded=True, so a session could be calibrated on a block the
+# quality gate scored 0.0 (seen live: session_20261012T214937). Each attempt
+# sends the most recent MAX_CALIBRATION_WINDOW_BLOCKS (the first block of
+# every request is the server's settling block). Only after
+# DEGRADED_FALLBACK_AFTER_BLOCKS blocks (~3.5 min) without success does it
+# accept a degraded baseline -- which the Personal Scale then keeps out of
+# fusion (firebase_sync.py::eeg_fusion_exclusion()).
+MIN_TRUSTED_REST_BLOCKS = 2
+MAX_CALIBRATION_WINDOW_BLOCKS = 6
+DEGRADED_FALLBACK_AFTER_BLOCKS = 8
+
 # Personal high_load_p threshold task block count (see
 # backend/psychological/sam40/decision.py::compute_personal_threshold()).
 # NOT used by this always-on bridge -- kept here only because
@@ -142,6 +157,52 @@ def _post_json_retrying(url: str, payload: dict, headers, timeout: float, label:
     return data
 
 
+def _post_calibrate(blocks: list[dict], allow_degraded: bool) -> tuple[str, dict | None]:
+    """One /calibrate attempt -> ('ok', body) on success, ('rejected', body)
+    when the server answered but no block met the quality bar (a 400 --
+    deterministic, so NOT retried), or ('error', None) after retrying
+    network/5xx failures like _post_json_retrying() does."""
+    payload = {"session_id": SESSION_ID, "blocks": blocks, "allow_degraded": allow_degraded}
+    for attempt, delay in enumerate((0.0, *RETRY_DELAYS_SEC)):
+        if delay:
+            print(f"[calibrate] attempt {attempt} failed -- retrying in {delay:.0f}s")
+            time.sleep(delay)
+        try:
+            # 45s: Render's free tier can take 30s+ to wake from a cold start.
+            resp = requests.post(f"{FLASK_URL}/calibrate", json=payload, headers=AUTH_HEADERS, timeout=45)
+        except requests.RequestException as e:
+            print(f"[calibrate] request failed: {e}")
+            continue
+        try:
+            body = resp.json()
+        except ValueError:
+            body = None
+        if resp.ok and body and body.get("success"):
+            return "ok", body
+        if resp.status_code == 400:
+            return "rejected", body
+        print(f"[calibrate] HTTP {resp.status_code}: {resp.text[:200]!r}")
+    return "error", None
+
+
+def _server_lost_session(session_id: str) -> bool:
+    """True only when the Flask server is reachable AND no longer holds
+    session_id in its in-memory eeg_sessions (app.py) -- i.e. it restarted
+    (Render redeploy/cold start, local Ctrl-C) since this bridge calibrated.
+    Without this the bridge keeps calibrated=True forever and every block
+    400s with "not calibrated -- call /calibrate first". Uses /health's
+    active_sessions (no auth needed) rather than parsing /predict's error,
+    since post_json() returns None for any non-2xx. A network failure here
+    returns False -- an unreachable server isn't evidence the session is
+    gone, so don't throw away a valid calibration over a blip."""
+    try:
+        resp = requests.get(f"{FLASK_URL}/health", timeout=45)
+        resp.raise_for_status()
+        return session_id not in (resp.json().get("active_sessions") or [])
+    except Exception:
+        return False
+
+
 def _get_fallback_logger(session_id: str) -> CsvLogger:
     """Lazily opens (once per session_id, kept open/appended-to for the
     rest of that session) a local CSV that /predict blocks fall back to
@@ -180,6 +241,7 @@ def run():
                                   password=EEG_MQTT_PASSWORD, ca_cert=EEG_MQTT_CA_CERT)
 
     calibration_blocks = []
+    calibration_blocks_seen = 0
     calibrated = False
     block_idx = 0
     last_pointer_poll = 0.0
@@ -207,6 +269,7 @@ def run():
                         SESSION_ID = pointer_session_id
                         calibrated = False
                         calibration_blocks = []
+                        calibration_blocks_seen = 0
                         block_idx = 0
 
                     pointer_user_id = _poll_user_pointer()
@@ -241,37 +304,35 @@ def run():
 
                 if not calibrated:
                     calibration_blocks.append(block_payload(samples))
-                    print(f"[calibrate] captured block {len(calibration_blocks)}/{N_CALIBRATION_BLOCKS}")
+                    calibration_blocks_seen += 1
+                    # Rolling window -- old blocks age out instead of the
+                    # request growing without bound.
+                    calibration_blocks = calibration_blocks[-MAX_CALIBRATION_WINDOW_BLOCKS:]
+                    print(f"[calibrate] captured rest block {calibration_blocks_seen} "
+                          f"(sit still and relax until calibration completes)")
                     if len(calibration_blocks) >= N_CALIBRATION_BLOCKS:
-                        # 45s, not 30s -- see the identical comment in
-                        # backend/physiological/mqtt_bridge.py: Render's
-                        # free-tier Flask can take 30s+ to wake from a cold
-                        # start, and 30s was cutting it too close.
-                        #
-                        # allow_degraded=True -- backstop for the rare case
-                        # none of the N_CALIBRATION_BLOCKS clear even the
-                        # QUESTIONABLE bar (see RealtimeInference's
-                        # calibration_min_rating docstring): falls back to
-                        # whichever single block scored best instead of
-                        # failing outright and looping forever. Result is
-                        # explicitly flagged baseline_degraded=True
-                        # throughout (dashboard, decision confidence) --
-                        # never silently treated as a clean calibration.
-                        data = _post_json_retrying(
-                            f"{FLASK_URL}/calibrate",
-                            {"session_id": SESSION_ID, "blocks": calibration_blocks, "allow_degraded": True},
-                            AUTH_HEADERS, timeout=45, label="calibrate",
-                        )
-                        calibrated = bool(data and data.get("success"))
-                        if calibrated:
-                            print(f"[calibrate] calibrated_baseline(resting_calibrated_p)="
-                                  f"{data.get('resting_calibrated_p')} "
-                                  f"personal_threshold={data.get('personal_high_load_p')} "
+                        fallback = calibration_blocks_seen >= DEGRADED_FALLBACK_AFTER_BLOCKS
+                        outcome, data = _post_calibrate(calibration_blocks, allow_degraded=fallback)
+                        n_trusted = (data or {}).get("n_blocks") or 0
+                        if outcome == "ok" and (fallback or n_trusted >= MIN_TRUSTED_REST_BLOCKS):
+                            calibrated = True
+                            calibration_blocks_seen = 0
+                            print(f"[calibrate] done: status={data.get('status')} usable_blocks={n_trusted} "
+                                  f"mu_rest={data.get('mu_rest')} personal_threshold={data.get('personal_high_load_p')} "
                                   f"degraded={data.get('baseline_degraded')}")
+                            if data.get("baseline_degraded"):
+                                print("[calibrate] WARNING: no rest block passed the quality gate in "
+                                      f"{DEGRADED_FALLBACK_AFTER_BLOCKS} blocks -- degraded baseline, EEG stays "
+                                      "out of fusion. Check electrode/bias contact and restart the session.")
+                        elif outcome == "ok":
+                            print(f"[calibrate] only {n_trusted} usable rest block(s) so far "
+                                  f"(need {MIN_TRUSTED_REST_BLOCKS}) -- collecting more")
+                        elif outcome == "rejected":
+                            print(f"[calibrate] no rest block passed the quality gate yet "
+                                  f"({calibration_blocks_seen}/{DEGRADED_FALLBACK_AFTER_BLOCKS} before fallback) "
+                                  f"-- check electrode and bias contact; collecting more")
                         else:
-                            print("[calibrate] failed after retries -- discarding these "
-                                  "blocks, retrying with a fresh set")
-                            calibration_blocks = []
+                            print("[calibrate] server unreachable after retries -- will try again with the next block")
                     continue
 
                 # Personal threshold task (compute_personal_threshold(),
@@ -283,14 +344,26 @@ def run():
                 # not by flagging this always-on bridge to intercept the
                 # next few live blocks. Every calibrated block just goes
                 # straight to /predict below.
+                # When this block's LAST sample was actually recorded (host
+                # wall clock, via the device-millis anchor in RawSampleBuffer)
+                # -- the server stamps the block and buckets it into the
+                # fusion grid by this instead of its own processing time,
+                # which lags capture by bridge queueing + Render latency +
+                # retries (often a full 25s grid cell or more).
+                capture_end_ts = buffer.wall_time_for(samples[-1].millis)
                 data = _post_json_retrying(
                     f"{FLASK_URL}/predict",
-                    {"session_id": SESSION_ID, **block_payload(samples)},
+                    {"session_id": SESSION_ID, "capture_end_ts": capture_end_ts, **block_payload(samples)},
                     AUTH_HEADERS, timeout=45, label="predict",
                 )
                 if data:
                     if data.get("skipped"):
-                        print(f"[predict] block {block_idx} SKIPPED (quality gate)")
+                        oor = data.get("eeg_out_of_range_fraction")
+                        print(f"[predict] block {block_idx} SKIPPED (quality gate): "
+                              f"{data.get('eeg_quality_reason') or 'see server log'}"
+                              + (f" | real RMS={data.get('eeg_std_uv_unclamped')} uV "
+                                 f"ptp={data.get('eeg_ptp_uv_unclamped')} uV, "
+                                 f"{oor * 100:.0f}% beyond +-100 uV" if oor is not None else ""))
                     else:
                         print(f"[predict] block {block_idx} task_state_score="
                               f"{data.get('task_state_score')} label={data.get('task_state_label')} "
@@ -306,6 +379,13 @@ def run():
                     print(f"[predict] block {block_idx} FAILED after retries -- "
                           f"saving to fallback CSV instead of losing it")
                     log_raw_block_bipolar(_get_fallback_logger(SESSION_ID), samples)
+                    if _server_lost_session(SESSION_ID):
+                        print(f"[session] server no longer has {SESSION_ID!r} calibrated "
+                              f"(Flask restarted?) -- recalibrating with the next "
+                              f"{N_CALIBRATION_BLOCKS} blocks")
+                        calibrated = False
+                        calibration_blocks = []
+                        calibration_blocks_seen = 0
                 block_idx += 1
 
             except Exception as e:

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api, eegApi, DEVICE_ID } from '../lib/api';
-import { COLORS, levelOf, LEVEL_COLOR, DEFAULT_RING_THRESHOLD, timeAgo } from '../lib/levels';
+import { COLORS, levelOf, LEVEL_COLOR, DEFAULT_RING_THRESHOLD, DEFAULT_EEG_THRESHOLD, timeAgo } from '../lib/levels';
 import { useDeviceStatus, useFirebaseValue, useLivePointer } from '../hooks/useLive';
 import { useEegBlocks, useFusion, useRingHistory } from '../hooks/useStreams';
 import { Card, CardHead, Badge, LiveBadge, Seg, Spinner, Avatar } from '../components/ui';
@@ -244,12 +244,18 @@ function EegTab({ userId, isLiveUser }) {
   }, [userId]);
 
   const blocks = useMemo(() => eeg.blocks.filter((b) => !b.skipped), [eeg.blocks]);
-  const latest = eeg.latest || blocks[blocks.length - 1];
-  const thr = latest?.effective_high_load_p ?? calib?.personal_high_load_p ?? 0.7933;
+  const newest = eeg.latest || eeg.blocks[eeg.blocks.length - 1] || null;
+  // A quality-gate-rejected block carries no task_state_score/high_load_alert,
+  // so "current state" comes from the newest SCORED block -- reading the
+  // rejected one would show "Relaxed" for a reading that was never scored.
+  const latest = blocks[blocks.length - 1] || null;
+  const newestRejected = !!newest?.skipped;
+  const thr = latest?.effective_high_load_p ?? calib?.personal_high_load_p ?? DEFAULT_EEG_THRESHOLD;
   const score = useMemo(() => toRows(blocks.filter((b) => b.task_state_score != null)
     .map((b) => ({ date: new Date(b.timestamp_end * 1000), value: Math.round(b.task_state_score * 100) }))), [blocks]);
+  // eeg_quality_score is already 0-100 (quality_gate.py's gate score).
   const quality = useMemo(() => toRows(blocks.filter((b) => b.eeg_quality_score != null)
-    .map((b) => ({ date: new Date(b.timestamp_end * 1000), value: Math.round(b.eeg_quality_score * 100) }))), [blocks]);
+    .map((b) => ({ date: new Date(b.timestamp_end * 1000), value: Math.round(b.eeg_quality_score) }))), [blocks]);
   const f = EEG_FEATURES.find((x) => x[0] === feature);
   const featRows = useMemo(() => toRows(blocks.filter((b) => b.features_eeg?.bipolar?.[feature] != null)
     .map((b) => ({ date: new Date(b.timestamp_end * 1000), value: b.features_eeg.bipolar[feature] }))), [blocks, feature]);
@@ -260,13 +266,17 @@ function EegTab({ userId, isLiveUser }) {
         <Card><span className="micro">Current state</span>
           <div style={{ marginTop: 8 }}>{latest
             ? <Badge color={latest.high_load_alert ? COLORS.stress : COLORS.normal} dot>{latest.high_load_alert ? 'High load (persistent)' : 'Relaxed'}</Badge>
-            : <span className="caption">No blocks</span>}</div></Card>
+            : newest ? <Badge color={COLORS.warning} dot>Signal unclear</Badge>
+              : <span className="caption">No blocks</span>}</div>
+          {latest && newestRejected && (
+            <p className="caption" style={{ margin: '6px 0 0' }}>Newest block was rejected (poor signal) — showing the last scored one.</p>
+          )}</Card>
         <Card><span className="micro">Personal high-load p</span>
           <div style={{ marginTop: 8 }}><b style={{ fontSize: 22 }}>{(thr * 100).toFixed(1)}%</b></div></Card>
         <Card><span className="micro">Signal quality</span>
           <div className="between" style={{ marginTop: 8 }}>
-            <b style={{ fontSize: 22 }}>{latest?.eeg_quality_score != null ? `${Math.round(latest.eeg_quality_score * 100)}%` : '—'}</b>
-            {latest && <Badge color={latest.eeg_quality_flag ? COLORS.normal : COLORS.warning}>{latest.eeg_quality_flag ? 'Good' : 'Poor'}</Badge>}
+            <b style={{ fontSize: 22 }}>{newest?.eeg_quality_score != null ? `${Math.round(newest.eeg_quality_score)}%` : '—'}</b>
+            {newest && <Badge color={newest.eeg_quality_flag ? COLORS.normal : COLORS.warning}>{newest.eeg_quality_flag ? 'Good' : 'Poor'}</Badge>}
           </div></Card>
       </div>
       <Card>
@@ -295,7 +305,9 @@ function EegTab({ userId, isLiveUser }) {
             <table className="data"><thead><tr><th>Session</th><th>Blocks</th><th>Last state</th></tr></thead>
               <tbody>{eeg.sessions.map((s) => (
                 <tr key={s.sid}><td>{s.sid.replace('session_', '')}</td><td>{s.blocks}</td>
-                  <td><Badge color={s.label === 1 ? COLORS.stress : COLORS.normal}>{s.label === 1 ? 'High load' : 'Low load'}</Badge></td></tr>))}
+                  <td>{s.score == null
+                    ? <Badge color={COLORS.textMuted}>No clear reading</Badge>
+                    : <Badge color={s.score >= s.threshold ? COLORS.stress : COLORS.normal}>{s.score >= s.threshold ? 'High load' : 'Low load'}</Badge>}</td></tr>))}
               </tbody></table>
           ) : <p className="body">No EEG sessions yet.</p>}
         </Card>

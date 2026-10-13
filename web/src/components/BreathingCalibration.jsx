@@ -41,14 +41,29 @@ function useCaptureRunner(onUpdate) {
   return run;
 }
 
+// Ring reports capture progress as window_idx/n_windows, the EEG service as
+// block_idx/n_blocks (eeg_calibration_capture.py) -- accept either.
+function captureStep(state) {
+  const idx = state.window_idx ?? state.block_idx;
+  const total = state.n_windows ?? state.n_blocks;
+  return idx != null && total ? { idx, total } : null;
+}
+
+// EEG's 'done' nests the real calibration outcome; 'degraded' means no
+// block cleared the quality bar and the best weak one was used instead.
+function isDegraded(state) {
+  return state.status === 'done' && state.outcome?.status === 'degraded';
+}
+
 function deviceProgress(state, expected, elapsedSec, totalSec) {
   if (!expected) return null;
   if (!state.triggered || state.status === 'error') return 0;
   if (!IN_PROGRESS.includes(state.status)) return 1;
   const timeFrac = Math.min(0.95, elapsedSec / totalSec);
   if (state.status === 'saving') return 0.97;
-  if (state.status === 'capturing' && state.window_idx != null && state.n_windows) {
-    return Math.min(0.96, Math.max(timeFrac, 0.15 + 0.8 * (state.window_idx / state.n_windows)));
+  const step = captureStep(state);
+  if (state.status === 'capturing' && step) {
+    return Math.min(0.96, Math.max(timeFrac, 0.15 + 0.8 * (step.idx / step.total)));
   }
   return timeFrac;
 }
@@ -59,10 +74,11 @@ function deviceWords(state, expected) {
   if (state.status === 'error') return state.message || 'Something went wrong';
   if (state.status === 'settling') return 'Letting the sensor settle…';
   if (state.status === 'capturing') {
-    return state.window_idx != null && state.n_windows != null
-      ? `Learning your calm (${state.window_idx} of ${state.n_windows})` : 'Learning your calm…';
+    const step = captureStep(state);
+    return step ? `Learning your calm (${step.idx} of ${step.total})` : 'Learning your calm…';
   }
   if (state.status === 'saving') return 'Saving…';
+  if (isDegraded(state)) return 'Done, but the signal was weak — recalibrate later for better accuracy';
   return 'Done ✓';
 }
 
@@ -246,7 +262,7 @@ export default function BreathingCalibration({ ringOnline, eegOnline, eegSession
           <p className="caption" style={{ marginTop: 4 }}>{leftText} · keep still</p>
           <div style={{ display: 'grid', gap: 14, marginTop: 18, textAlign: 'left' }}>
             <DeviceRow icon="💍" tint={COLORS.hrv} label="Ring" progress={ringP} words={deviceWords(ringState, ringExpected)} failed={ringState.status === 'error'} />
-            <DeviceRow icon="🧠" tint={COLORS.eeg} label="Headband" progress={eegP} words={deviceWords(eegState, eegExpected)} failed={eegState.status === 'error'} />
+            <DeviceRow icon="🧠" tint={isDegraded(eegState) ? COLORS.warning : COLORS.eeg} label="Headband" progress={eegP} words={deviceWords(eegState, eegExpected)} failed={eegState.status === 'error'} />
           </div>
           {ringState.triggered && finger === false && (
             <div className="banner warning" style={{ marginTop: 14, textAlign: 'left' }}>⚠ No finger on the ring — adjust it for a clean reading.</div>
