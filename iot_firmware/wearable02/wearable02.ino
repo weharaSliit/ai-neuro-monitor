@@ -1932,10 +1932,34 @@ volatile uint32_t drdyPulses = 0;        // counted in the ISR
 uint32_t framesRead = 0, glitchCount = 0, glitchLogged = 0, pubDrops = 0;
 unsigned long lastHeartbeatPublish = 0, lastBatchPublish = 0;
 
-uint32_t batchTime[BATCH_SIZE];
-int32_t  batchCh2[BATCH_SIZE];
-uint8_t  batchCount = 0;
-uint32_t corruptFrameCount = 0;
+// ---- Sampling task + sample ring ------------------------------------
+// The ADS1292R is read by sampleTask(), a high-priority FreeRTOS task woken
+// by the DRDY interrupt -- NOT by loop(). loop() also does TLS publishing,
+// Wi-Fi reconnects and Serial output, any of which can stall it for
+// seconds (seen live: missed_drdy 724-3406 per window, a 13.6 s gap with
+// the network fine); a sample loop() didn't read in time was simply lost.
+// The task pre-empts loop(), so those stalls now only delay sending: each
+// sample waits in the ring below until flushRing() publishes it.
+// Single producer (sampleTask) / single consumer (loop): ringHead is only
+// written by the task, ringTail only by loop().
+#define RING_SAMPLES   8192                 // ~32 s at 250 SPS
+#define SAMPLE_TASK_PRIORITY 10             // above loop() (1), below the Wi-Fi stack
+#define SERIAL_PLOT    0                    // 1 = print every sample for the Arduino Serial
+                                            // Plotter. Keep 0 unless a terminal is reading
+                                            // USB: on the C3 an unread USB port blocks prints.
+uint32_t ringTime[RING_SAMPLES];
+int32_t  ringCode[RING_SAMPLES];
+volatile uint32_t ringHead = 0, ringTail = 0;   // free-running counters (index = % RING_SAMPLES)
+volatile uint32_t ringDrops = 0;                // samples lost to a full ring (outage > ~32 s)
+volatile uint32_t missedDrdy = 0;               // DRDY pulses the task couldn't read in time
+volatile uint32_t corruptFrameCount = 0;
+TaskHandle_t sampleTaskHandle = nullptr;
+
+// Latest glitch sample, recorded by the task, printed by loop().
+struct GlitchInfo { uint32_t t; int32_t code; byte r[9]; uint32_t seq; };
+volatile uint32_t glitchSeq = 0;
+GlitchInfo lastGlitch;
+uint32_t glitchPrintedSeq = 0;
 
 /* ================= SYSTEM OBJECTS ================= */
 
@@ -1956,6 +1980,11 @@ unsigned long lastHeartbeatTime = 0;
 void IRAM_ATTR onDrdy() {
   drdyFlag = true;
   drdyPulses++;
+  // Wake sampleTask() -- each pulse adds one to its notification count, so
+  // a count above 1 when it wakes means samples were overwritten unread.
+  BaseType_t woken = pdFALSE;
+  if (sampleTaskHandle) vTaskNotifyGiveFromISR(sampleTaskHandle, &woken);
+  portYIELD_FROM_ISR(woken);
   // DIAGNOSIS ("drdy issue"): this used to be set in loop() instead, at the
   // point the flag got processed -- but loop() can be blocked for seconds
   // at a time inside connectWiFi() (or, before the mqtt.connect() timeout
@@ -2198,55 +2227,96 @@ bool initADS() {
 
 /* ================= MQTT TRANSMISSION ================= */
 
-// Unsent-batch queue. publishBatch() used to discard the batch whenever
-// MQTT was disconnected or a publish failed -- every Wi-Fi blip became a
-// gap in the stream, and the backend rejects any 25 s block with a gap over
-// 1 s. Batches now wait here (oldest first, device timestamps intact) and
-// flushQueue() sends them once the link is back, so a short outage delays
-// data instead of losing it. QUEUE_BATCHES * BATCH_SIZE / 250 SPS = 30 s;
-// only an outage longer than that loses samples (counted in queueDrops).
-#define QUEUE_BATCHES 300
-struct Batch { uint32_t t[BATCH_SIZE]; int32_t v[BATCH_SIZE]; };
-Batch queueBuf[QUEUE_BATCHES];
-uint16_t qHead = 0, qCount = 0;          // qHead = oldest queued batch
-uint32_t queueDrops = 0;                 // batches lost to a full queue (outage > 30 s)
+// Reads one ADS1292R frame per DRDY. Runs in its own task (see the ring
+// comment above), so loop() stalls can't make it miss samples.
+void sampleTask(void*) {
+  for (;;) {
+    uint32_t pending = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    if (pending > 1) missedDrdy += pending - 1;   // frames overwritten before we could read them
 
-void publishBatch() {
-  // Called when a batch is full: queue it; flushQueue() does the sending.
-  if (qCount == QUEUE_BATCHES) {         // full: overwrite the oldest
-    qHead = (qHead + 1) % QUEUE_BATCHES;
-    qCount--;
-    queueDrops++;
+    byte r[9];
+    SPI.beginTransaction(adsSPI);
+    digitalWrite(ADS_PIN_CS, LOW);
+    for (int i = 0; i < 9; i++) r[i] = SPI.transfer(0x00);
+    digitalWrite(ADS_PIN_CS, HIGH);
+    SPI.endTransaction();
+
+    if (!isStatusValid(r[0])) { corruptFrameCount++; continue; }
+
+    loffFrames++;
+    if (r[0] & STAT_IN2P_OFF) loffIn2pOff++;
+    if (r[0] & STAT_IN2N_OFF) loffIn2nOff++;
+    if (r[0] & STAT_RLD_OFF)  loffRldOff++;
+
+    int32_t code = parseSigned24(r[6], r[7], r[8]);
+    uint32_t now = millis();
+    framesRead++;
+
+    if (fabsf(code * UV_PER_COUNT) > GLITCH_UV) {
+      glitchCount++;
+      lastGlitch.t = now; lastGlitch.code = code;
+      memcpy((void*)lastGlitch.r, r, 9);
+      glitchSeq++;
+    }
+
+    if (ringHead - ringTail >= RING_SAMPLES) { ringDrops++; continue; }   // full: drop newest
+    uint32_t i = ringHead % RING_SAMPLES;
+    ringTime[i] = now;
+    ringCode[i] = code;
+    ringHead++;
   }
-  Batch& b = queueBuf[(qHead + qCount) % QUEUE_BATCHES];
-  memcpy(b.t, batchTime, sizeof(b.t));
-  memcpy(b.v, batchCh2, sizeof(b.v));
-  qCount++;
-  batchCount = 0;
 }
 
-// Sends at most one queued batch per call, and only when no sample is
-// waiting to be read, so catching up after an outage can't make loop()
-// miss DRDY. A failed publish stays queued and is retried next time.
-void flushQueue() {
-  if (qCount == 0 || drdyFlag || !mqtt.connected()) return;
-  static char payload[600];
-  int offset = 0;
-  const Batch& b = queueBuf[qHead];
-  for (uint8_t i = 0; i < BATCH_SIZE; i++) {
-    int n = snprintf(payload + offset, sizeof(payload) - offset, "%lu,%ld;",
-                     (unsigned long)b.t[i], (long)b.v[i]);
-    if (n < 0 || offset + n >= (int)sizeof(payload)) break;
-    offset += n;
-  }
-  bool ok = mqtt.publish(MQTT_TOPIC, payload);
-  lastBatchPublish = millis();
-  if (ok) {
-    qHead = (qHead + 1) % QUEUE_BATCHES;
-    qCount--;
-  } else {
-    pubDrops++;                           // retried, not lost
-    Serial.println("[MQTT] Publish failed -- batch kept in queue for retry");
+// Publishes the oldest BATCH_SIZE buffered samples, at most one batch per
+// call, and only when connected. On failure nothing is consumed -- the same
+// samples are retried next time, so a Wi-Fi drop delays data, never loses it
+// (unless it outlasts the ~32 s ring).
+// Sending has to keep up with 250 samples/s. One 25-sample message per
+// loop() pass couldn't over a weak link (seen live: RSSI -70 dBm, a ~28 s
+// backlog and 3157 batches dropped from a full ring -> stream gaps), since
+// each TLS publish carries a fixed cost. Now each message carries up to
+// PUBLISH_MAX_SAMPLES (1 s), and while a backlog exists several messages go
+// per pass (up to FLUSH_BUDGET_MS), with Wi-Fi modem sleep off until the
+// backlog drains (modem sleep delays every TCP ACK). The bridge and psy_web
+// parse any number of "millis,code;" records per message.
+#define PUBLISH_MAX_SAMPLES   250                  // 1 s per MQTT message
+#define FLUSH_BUDGET_MS       40                   // max time per loop() pass spent sending
+#define BACKLOG_SLEEP_OFF     (SOURCE_SPS)         // > 1 s queued: modem sleep off
+#define BACKLOG_SLEEP_ON      (SOURCE_SPS / 5)     // < 0.2 s queued: modem sleep back on
+#define SOURCE_SPS            250
+bool modemSleepOn = true;
+
+void flushRing() {
+  if (!mqtt.connected()) return;
+  uint32_t backlog = ringHead - ringTail;
+  // Modem sleep only while caught up -- see the block comment above.
+  if (modemSleepOn && backlog > BACKLOG_SLEEP_OFF) { WiFi.setSleep(false); modemSleepOn = false; }
+  else if (!modemSleepOn && backlog < BACKLOG_SLEEP_ON) { WiFi.setSleep(true); modemSleepOn = true; }
+
+  static char payload[PUBLISH_MAX_SAMPLES * 20 + 1];
+  unsigned long start = millis();
+  while (ringHead - ringTail >= BATCH_SIZE && millis() - start < FLUSH_BUDGET_MS) {
+    uint32_t tail = ringTail;
+    uint32_t n = ringHead - tail;
+    if (n > PUBLISH_MAX_SAMPLES) n = PUBLISH_MAX_SAMPLES;
+    int offset = 0;
+    uint32_t k = 0;
+    for (; k < n; k++) {
+      uint32_t i = (tail + k) % RING_SAMPLES;
+      int w = snprintf(payload + offset, sizeof(payload) - offset, "%lu,%ld;",
+                       (unsigned long)ringTime[i], (long)ringCode[i]);
+      if (w < 0 || offset + w >= (int)sizeof(payload)) break;
+      offset += w;
+    }
+    bool ok = mqtt.publish(MQTT_TOPIC, payload);
+    lastBatchPublish = millis();
+    if (!ok) {
+      pubDrops++;                                   // retried, not lost
+      Serial.println("[MQTT] Publish failed -- samples kept for retry");
+      return;
+    }
+    ringTail = tail + k;
+    mqtt.loop();                                    // keep the connection serviced between messages
   }
 }
 
@@ -2336,8 +2406,12 @@ void setup() {
   mqtt.setSocketTimeout(5);          // seconds -- PubSubClient's own read/write timeout
 
   mqtt.setServer(MQTT_BROKER, MQTT_PORT);
-  mqtt.setBufferSize(1024);
+  // Room for a full PUBLISH_MAX_SAMPLES message (~20 bytes/sample + headers).
+  mqtt.setBufferSize(PUBLISH_MAX_SAMPLES * 20 + 256);
   maintainMQTT();
+
+  // Created before initADS() attaches the DRDY interrupt that wakes it.
+  xTaskCreate(sampleTask, "ads_sample", 4096, nullptr, SAMPLE_TASK_PRIORITY, &sampleTaskHandle);
 
   if (!initADS()) {
     Serial.println("[FATAL] ADS1292R initialization failed! Checking SPI lines.");
@@ -2369,7 +2443,7 @@ void loop() {
 
   maintainMQTT();
   mqtt.loop();
-  flushQueue();
+  flushRing();
 
   // 5-second Watchdog & Heartbeat
   if (millis() - lastHeartbeatTime > 5000) {
@@ -2394,11 +2468,9 @@ void loop() {
       Serial.println();
     }
     loffFrames = loffIn2pOff = loffIn2nOff = loffRldOff = 0;
-    // DRDY pulses the loop didn't read in time (frame overwritten before the
-    // SPI read) -- a sign loop() is being blocked, e.g. by a TLS publish.
-    uint32_t pulses = drdyPulses;
-    uint32_t missed = pulses > framesRead ? pulses - framesRead : 0;
-    drdyPulses = 0; framesRead = 0;
+    // DRDY pulses sampleTask() couldn't read in time -- should now stay ~0.
+    uint32_t missed = missedDrdy;
+    missedDrdy = 0; drdyPulses = 0; framesRead = 0;
     if (mqtt.connected()) {
       char hb[256];
       snprintf(hb, sizeof(hb),
@@ -2406,80 +2478,36 @@ void loop() {
                "\"glitches\":%lu,\"missed_drdy\":%lu,\"pub_drops\":%lu,\"rssi\":%d,\"queued\":%u,\"queue_drops\":%lu}",
                millis(), drdyActive ? 1 : 0, offP, offN, offR,
                (unsigned long)glitchCount, (unsigned long)missed, (unsigned long)pubDrops, (int)WiFi.RSSI(),
-               (unsigned)qCount, (unsigned long)queueDrops);
+               (unsigned)(ringHead - ringTail) / BATCH_SIZE, (unsigned long)(ringDrops / BATCH_SIZE));
       mqtt.publish(MQTT_STATUS, hb);
       lastHeartbeatPublish = millis();
     }
     glitchCount = 0; glitchLogged = 0; pubDrops = 0;
   }
 
-  if (!drdyFlag) return;
-  drdyFlag = false;
-  // lastDrdyTimestamp is now set in onDrdy() itself, not here -- see its comment.
-
-  byte r[9];
-  SPI.beginTransaction(adsSPI);
-  digitalWrite(ADS_PIN_CS, LOW);
-  for (int i = 0; i < 9; i++) {
-    r[i] = SPI.transfer(0x00);
-  }
-  digitalWrite(ADS_PIN_CS, HIGH);
-  SPI.endTransaction();
-
-  if (!isStatusValid(r[0])) {
-    corruptFrameCount++;
-    if (corruptFrameCount % 250 == 0) {
-      Serial.print("Corrupted ADS frames: ");
-      Serial.println(corruptFrameCount);
-    }
-    return;
-  }
-
-  loffFrames++;
-  if (r[0] & STAT_IN2P_OFF) loffIn2pOff++;
-  if (r[0] & STAT_IN2N_OFF) loffIn2nOff++;
-  if (r[0] & STAT_RLD_OFF)  loffRldOff++;
-
-  // Channel 2 (T7 - T8 Differential)
-  int32_t raw_t7_t8 = parseSigned24(r[6], r[7], r[8]);
-  uint32_t now = millis();
-
-  // LSB = VREF / (gain * (2^23 - 1)) -- see UV_PER_COUNT. Serial readout
-  // only; MQTT sends the raw code, which the backend converts itself.
-  float t7_t8_uV = raw_t7_t8 * UV_PER_COUNT;
-  framesRead++;
-
-  if (fabsf(t7_t8_uV) > GLITCH_UV) {
-    glitchCount++;
+  // Samples are read by sampleTask(); loop() only reports glitches and
+  // (optionally) plots. Printing here can block loop() but never sampling.
+  if (glitchSeq != glitchPrintedSeq) {
+    glitchPrintedSeq = glitchSeq;
     if (glitchLogged < GLITCH_LOG_MAX) {
       glitchLogged++;
-      // ms since the last heartbeat / batch publish; DRDY pulses vs frames
-      // read so far this window; the 9 raw frame bytes (3 status + 3 CH1 + 3 CH2).
+      const GlitchInfo& g = lastGlitch;
       Serial.printf("[GLITCH] t=%lu code=%ld (0x%06lX) %.0f uV | since_hb=%lu ms since_batch=%lu ms"
-                    " | drdy=%lu read=%lu | loff=%s%s%s | bytes=%02X %02X %02X  %02X %02X %02X  %02X %02X %02X\n",
-                    now, (long)raw_t7_t8, (unsigned long)(raw_t7_t8 & 0xFFFFFF), t7_t8_uV,
-                    now - lastHeartbeatPublish, now - lastBatchPublish,
-                    (unsigned long)drdyPulses, (unsigned long)framesRead,
-                    (r[0] & STAT_IN2P_OFF) ? "P" : "-", (r[0] & STAT_IN2N_OFF) ? "N" : "-", (r[0] & STAT_RLD_OFF) ? "R" : "-",
-                    r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8]);
+                    " | loff=%s%s%s | bytes=%02X %02X %02X  %02X %02X %02X  %02X %02X %02X\n",
+                    (unsigned long)g.t, (long)g.code, (unsigned long)(g.code & 0xFFFFFF), g.code * UV_PER_COUNT,
+                    (unsigned long)(g.t - lastHeartbeatPublish), (unsigned long)(g.t - lastBatchPublish),
+                    (g.r[0] & STAT_IN2P_OFF) ? "P" : "-", (g.r[0] & STAT_IN2N_OFF) ? "N" : "-", (g.r[0] & STAT_RLD_OFF) ? "R" : "-",
+                    g.r[0], g.r[1], g.r[2], g.r[3], g.r[4], g.r[5], g.r[6], g.r[7], g.r[8]);
     }
   }
 
-  /* =========================================== */
-  /* --- MODIFIED FOR ARDUINO SERIAL PLOTTER --- */
-  /* =========================================== */
-  // Only printing the microvolt value with a label. 
-  
-  Serial.print("EEG(uV):");
-  Serial.println(t7_t8_uV, 2);
-
-  /* =========================================== */
-
-  batchTime[batchCount] = now;
-  batchCh2[batchCount]  = raw_t7_t8;
-  batchCount++;
-
-  if (batchCount >= BATCH_SIZE) {
-    publishBatch();
+#if SERIAL_PLOT
+  static uint32_t plotted = 0;
+  if (plotted < ringTail) plotted = ringTail;            // don't plot what's already been dropped
+  while (plotted < ringHead) {
+    Serial.print("EEG(uV):");
+    Serial.println(ringCode[plotted % RING_SAMPLES] * UV_PER_COUNT, 2);
+    plotted++;
   }
+#endif
 }

@@ -295,6 +295,25 @@ DELTA_POWER_IMPLAUSIBLE_SD = 30.0
 # EXTREME_PROB_EPS (the paper's fusion plausibility rule).
 PLAUSIBLE_SCORE_EPS = 1e-6
 
+# Provisional scores. A block rejected by a SOFT quality check (some of the
+# signal out of range, the delta-power plausibility check, or the
+# post-gate SNR/Itakura/kurtosis checks) is still not trusted -- it never
+# enters the decision states or task_state_score -- but its model output is
+# kept as a clearly-flagged provisional score, so a demo with imperfect
+# contact still shows a reading, and fusion can use it at reduced weight
+# (firebase_sync.py EEG_FUSION_POLICY). HARD faults get none: hardware
+# magnitude/timing faults, the settling window, more than
+# PROVISIONAL_MAX_OUT_OF_RANGE of the signal out of range, or a saturated
+# model output (outside PLAUSIBLE_SCORE_EPS).
+PROVISIONAL_MAX_OUT_OF_RANGE = 0.20
+
+
+def provisional_quality(out_of_range_fraction: float | None) -> float:
+    """0-50 quality for a provisional score: half of a clean block's at
+    best, falling linearly to 0 at PROVISIONAL_MAX_OUT_OF_RANGE."""
+    oor = out_of_range_fraction or 0.0
+    return round(50.0 * max(0.0, 1.0 - oor / PROVISIONAL_MAX_OUT_OF_RANGE), 1)
+
 
 class RealtimeInference:
     def __init__(self, model_dir: Path, thresholds: DecisionThresholds = DecisionThresholds(),
@@ -730,6 +749,25 @@ class RealtimeInference:
         result.update({f'session_{k}': v for k, v in health.items()})
         return result
 
+    def _provisional_score(self, raw_feats: dict, quality: dict, elapsed_sec: float) -> dict:
+        """See PROVISIONAL_MAX_OUT_OF_RANGE. Empty dict = no provisional score."""
+        if self.disable_quality_gate or elapsed_sec < SETTLING_TIME_SEC:
+            return {}
+        oor = quality.get('out_of_range_fraction') or 0.0
+        if oor > PROVISIONAL_MAX_OUT_OF_RANGE:
+            return {}
+        if any(c not in raw_feats for c in self.feature_columns):
+            return {}
+        X = np.array([[raw_feats[c] for c in self.feature_columns]])
+        p = float(self.model.predict_proba(X)[:, 1][0])
+        if not (PLAUSIBLE_SCORE_EPS <= p <= 1.0 - PLAUSIBLE_SCORE_EPS):
+            return {}   # saturated: the model is outside its range, not confident
+        return {
+            'provisional_score': p,
+            'provisional_z': personal_z(p, self.mu_rest, self.sigma),
+            'provisional_quality': provisional_quality(oor),
+        }
+
     def infer_bipolar_block(self, samples: list[BipolarRawSample]) -> dict:
         raw_code = _raw_bipolar_codes(samples)
         elapsed_sec = self._bipolar_blocks_processed * BLOCK_SEC
@@ -834,12 +872,17 @@ class RealtimeInference:
             self._itakura_ref_from_live = True
 
         if not quality['is_trusted']:
+            provisional = self._provisional_score(raw_feats, quality, elapsed_sec)
             return {
                 'window': block_no, 'skipped': True, 'calibrated_p': None,
                 'high_load_alert': False, 'micro_break_recommended': False,
                 'fatigue_warning': False, 'cooldown_logged': False,
                 'baseline_degraded': self.baseline_degraded,
                 'wave_uv': wave_uv,
+                'eeg_responsive': self.eeg_responsive,
+                'mu_rest': self.mu_rest,
+                'personal_sigma': self.sigma,
+                **provisional,
                 **raw_feats,
                 **{f'quality_{k}': v for k, v in quality.items()},
                 **{f'session_{k}': v for k, v in health.items()},

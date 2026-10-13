@@ -1,3 +1,4 @@
+import os
 import time
 from pathlib import Path
 
@@ -133,6 +134,16 @@ def make_eeg_output_record(result: dict, window_sec: float, model_version: str,
         record.update({
             'task_state_score': None, 'task_state_label': None, 'task_state_trend': None,
             'prediction_probability': None, 'model_confidence': None,
+            # Score of a block rejected only by a soft quality check -- NOT a
+            # trusted reading (see pipeline.py PROVISIONAL_MAX_OUT_OF_RANGE).
+            # Shown flagged in the apps; fused at reduced weight under the
+            # lenient EEG_FUSION_POLICY. None for hard rejections.
+            'provisional_task_state_score': result.get('provisional_score'),
+            'provisional_task_state_z': result.get('provisional_z'),
+            'provisional_quality': result.get('provisional_quality'),
+            'personal_rest_mean': result.get('mu_rest'),
+            'personal_sigma': result.get('personal_sigma'),
+            'eeg_responsive': result.get('eeg_responsive'),
         })
     else:
         p = result.get('calibrated_p')
@@ -237,12 +248,28 @@ class FirebaseSync:
             print(f'[firebase] WARNING: get failed for session_id={self.session_id}: {e}')
             return None
 
+# How EEG enters fusion when it isn't a fully trusted, personally calibrated
+# reading. 'strict' = the paper's rule: such EEG gets no fusion weight and
+# the fused result rests on HRV/GSR alone. 'lenient' (default) = it is still
+# fused, at a reduced weight and flagged in every fusion window
+# (eeg_basis / eeg_weight_factor), so a demo with imperfect contact or no
+# completed calibration still shows a combined reading. HRV/GSR dominates
+# whenever it reports, because these factors scale EEG's weight down.
+EEG_FUSION_POLICY = os.environ.get('EEG_FUSION_POLICY', 'lenient').strip().lower()
+
+# Weight factors (applied to EEG's signal quality, i.e. its fusion weight)
+# for each non-ideal basis under the lenient policy.
+LENIENT_WEIGHT = {
+    'uncalibrated': 0.5,      # no personal rest baseline / degraded baseline: population limit
+    'not_responsive': 0.25,   # onboarding showed the model barely tracks load for this person
+}
+
+
 def eeg_fusion_exclusion(record: dict) -> str | None:
-    """Why this block must NOT enter fusion, or None if it may. A block
-    excluded here is written with prob_eeg=None, which fusion_engin.py
-    treats as "EEG not reporting" (weight 0) -- the fused result then rests
-    on HRV/GSR alone instead of on a load score known to be uninformative:
-      - skipped: rejected by the quality gate, no score at all
+    """Why this block's EEG is NOT a fully trusted, calibrated reading, or
+    None if it is:
+      - skipped: rejected by the quality gate (may still carry a
+        provisional score -- see make_eeg_fusion_record())
       - not_responsive: the onboarding task showed this model doesn't track
         load for this person (chance-level on SAM40 -- see
         sam40/decision.py::task_response_z())
@@ -260,9 +287,43 @@ def eeg_fusion_exclusion(record: dict) -> str | None:
     return None
 
 
+def eeg_fusion_input(record: dict, policy: str | None = None) -> dict:
+    """(prob, z, signal_quality, basis, weight_factor) for fusion under the
+    given policy. basis: 'calibrated' | 'uncalibrated' | 'not_responsive' |
+    'provisional' | None (EEG not fused)."""
+    policy = EEG_FUSION_POLICY if policy is None else policy
+    reason = eeg_fusion_exclusion(record)
+    quality = record.get('eeg_quality_score')
+    if reason is None:
+        return {'prob': record.get('task_state_score'), 'z': record.get('task_state_z'),
+                'quality': quality, 'basis': 'calibrated', 'factor': 1.0, 'reason': None}
+    none = {'prob': None, 'z': None, 'quality': quality, 'basis': None, 'factor': 0.0, 'reason': reason}
+    if policy != 'lenient':
+        return none
+    if reason == 'skipped':
+        p = record.get('provisional_task_state_score')
+        if p is None:
+            return none   # hard rejection or saturated model output: nothing to fuse
+        # Calibration reductions still apply on top of the weak-signal one.
+        if record.get('eeg_responsive') is False:
+            factor = LENIENT_WEIGHT['not_responsive']
+        elif record.get('baseline_degraded') or record.get('personal_rest_mean') is None:
+            factor = LENIENT_WEIGHT['uncalibrated']
+        else:
+            factor = 1.0
+        return {'prob': p, 'z': record.get('provisional_task_state_z'),
+                'quality': (record.get('provisional_quality') or 0.0) * factor,
+                'basis': 'provisional', 'factor': factor, 'reason': reason}
+    factor = LENIENT_WEIGHT['not_responsive' if reason == 'not_responsive' else 'uncalibrated']
+    return {'prob': record.get('task_state_score'), 'z': record.get('task_state_z'),
+            'quality': None if quality is None else quality * factor,
+            'basis': 'not_responsive' if reason == 'not_responsive' else 'uncalibrated',
+            'factor': factor, 'reason': reason}
+
+
 def make_eeg_fusion_record(record: dict) -> dict:
-    excluded = eeg_fusion_exclusion(record)
-    p = None if excluded else record.get('task_state_score')
+    fin = eeg_fusion_input(record)
+    p = fin['prob']
     # This user's own effective high_load_p (personal if calibrated, else
     # population default) -- see make_eeg_output_record()'s
     # 'effective_high_load_p' field. Consumed by fusion_engin.py's
@@ -299,7 +360,10 @@ def make_eeg_fusion_record(record: dict) -> dict:
         # other modality's, so the two weights weren't comparable.
         'conf_eeg': None if p is None else max(p, 1.0 - p),
         'model_acc_eeg': record.get('model_accuracy'),
-        'signal_quality_eeg': record.get('eeg_quality_score'),
+        # Scaled by the basis weight factor under the lenient policy (see
+        # eeg_fusion_input()) -- this is what reduces a provisional or
+        # uncalibrated reading's say in fusion_engin.py's weighting.
+        'signal_quality_eeg': fin['quality'],
         'stress_label_eeg': stress_label_eeg,
         'threshold_eeg': threshold,
         # Personal Scale sigma -- fusion_engin.py's fused_relative_index
@@ -307,8 +371,13 @@ def make_eeg_fusion_record(record: dict) -> dict:
         # z - PERSONAL_K_ALERT: distance from the alert in units of this
         # person's resting noise.
         'threshold_scale_eeg': record.get('personal_sigma') or PERSONAL_SIGMA_PRIOR,
-        # Why EEG has no prob this window (None = it does). Purely
-        # diagnostic; fusion only looks at prob_eeg.
-        'eeg_excluded_reason': excluded,
-        'z_eeg': None if excluded else record.get('task_state_z'),
+        # Why this EEG reading isn't fully trusted (None = it is), how it
+        # entered fusion, and its weight factor. Diagnostic; fusion itself
+        # only reads prob_eeg / signal_quality_eeg.
+        'eeg_excluded_reason': fin['reason'] if p is None else None,
+        'eeg_untrusted_reason': fin['reason'],
+        'eeg_basis': fin['basis'],
+        'eeg_weight_factor': fin['factor'],
+        'eeg_fusion_policy': EEG_FUSION_POLICY,
+        'z_eeg': fin['z'],
     }

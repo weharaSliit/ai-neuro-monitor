@@ -251,11 +251,33 @@ def main() -> bool:
         check("responsiveness unknown -> EEG enters fusion with personal threshold and sigma scale",
               f["prob_eeg"] == 0.35 and f["threshold_eeg"] == 0.455
               and f["threshold_scale_eeg"] == PERSONAL_SIGMA_PRIOR and f["eeg_excluded_reason"] is None, f"{f}")
-        for over, reason in [({"eeg_responsive": False}, "not_responsive"),
-                             ({"baseline_degraded": True}, "degraded_baseline"),
-                             ({"mu_rest": None}, "no_personal_baseline")]:
-            f = fusion_for(**over)
-            check(f"{reason} -> no EEG prob in fusion", f["prob_eeg"] is None and f["eeg_excluded_reason"] == reason, f"{f}")
+        from backend.psychological.realtime.firebase_sync import eeg_fusion_input, LENIENT_WEIGHT
+
+        def record_for(**over):
+            return make_eeg_output_record({**base, **over}, 25.0, "bipolar_only_v1", "bipolar_only_v1",
+                                          [0.35], high_load_p=0.455, capture_end_ts=1.8e9)
+
+        for over, reason, basis in [({"eeg_responsive": False}, "not_responsive", "not_responsive"),
+                                    ({"baseline_degraded": True}, "degraded_baseline", "uncalibrated"),
+                                    ({"mu_rest": None}, "no_personal_baseline", "uncalibrated")]:
+            strict = eeg_fusion_input(record_for(**over), policy="strict")
+            check(f"strict policy: {reason} -> no EEG prob in fusion",
+                  strict["prob"] is None and strict["reason"] == reason, f"{strict}")
+            lenient = eeg_fusion_input(record_for(**over), policy="lenient")
+            check(f"lenient policy: {reason} -> fused at weight factor {LENIENT_WEIGHT[basis]}",
+                  lenient["prob"] == 0.35 and lenient["basis"] == basis
+                  and abs(lenient["quality"] - 99.0 * LENIENT_WEIGHT[basis]) < 1e-9, f"{lenient}")
+
+        skipped = {"skipped": True, "quality_is_trusted": False, "quality_quality_score": 0.0,
+                   "provisional_score": 0.41, "provisional_z": 0.56, "provisional_quality": 37.5}
+        lenient = eeg_fusion_input(record_for(**skipped), policy="lenient")
+        check("lenient policy: soft-rejected block fuses its provisional score at its provisional quality",
+              lenient["prob"] == 0.41 and lenient["basis"] == "provisional" and lenient["quality"] == 37.5, f"{lenient}")
+        check("strict policy: soft-rejected block is not fused",
+              eeg_fusion_input(record_for(**skipped), policy="strict")["prob"] is None)
+        hard = {**skipped, "provisional_score": None, "provisional_quality": None}
+        check("a hard-rejected block (no provisional score) is never fused",
+              eeg_fusion_input(record_for(**hard), policy="lenient")["prob"] is None)
     except Exception as e:
         check("Personal Scale checks raised no exception", False, repr(e))
 
@@ -326,6 +348,54 @@ def main() -> bool:
               f"rms {ug.std():.1f} vs {uc.std():.1f} uV")
     except Exception as e:
         check("Raw magnitude checks raised no exception", False, repr(e))
+
+    # 12. Provisional scores for soft-rejected blocks ---------------------------
+    print("\n[12] provisional scores (soft rejections only)")
+    try:
+        from backend.psychological.realtime.pipeline import (
+            PROVISIONAL_MAX_OUT_OF_RANGE, SETTLING_TIME_SEC, provisional_quality,
+        )
+        from backend.psychological.sam40.features import channel_features
+        check("provisional quality is half a clean block's at best and 0 at the limit",
+              provisional_quality(0.0) == 50.0 and provisional_quality(PROVISIONAL_MAX_OUT_OF_RANGE) == 0.0
+              and provisional_quality(0.05) == 37.5)
+        eng12 = RealtimeInference(MODEL_DIR)
+        rng12 = np.random.default_rng(12)
+        feats12 = {f"bipolar_{k}": v for k, v in channel_features(
+            6 * np.sin(2 * np.pi * 10 * np.arange(3200) / TARGET_FS) + rng12.normal(0, 5, 3200), fs=TARGET_FS).items()}
+        after = SETTLING_TIME_SEC + 1
+        check("no provisional score beyond the out-of-range limit",
+              eng12._provisional_score(feats12, {"out_of_range_fraction": 0.25}, after) == {})
+        check("no provisional score inside the settling window",
+              eng12._provisional_score(feats12, {"out_of_range_fraction": 0.0}, 0.0) == {})
+        prov = eng12._provisional_score(feats12, {"out_of_range_fraction": 0.05}, after)
+        check("a soft rejection gets a plausible provisional score (or none if the model saturates)",
+              prov == {} or (1e-6 <= prov["provisional_score"] <= 1 - 1e-6 and prov["provisional_quality"] == 37.5),
+              f"{prov}")
+    except Exception as e:
+        check("Provisional-score checks raised no exception", False, repr(e))
+
+    # 13. One blink/pop doesn't reject a block; sustained spikes still do -----
+    print("\n[13] sub-window kurtosis: a single spike vs sustained artefact")
+    try:
+        from backend.psychological.realtime.quality_gate import TrustedIoTEEGValidator
+        v13 = TrustedIoTEEGValidator(fs_raw=SOURCE_FS, fs_filtered=TARGET_FS)
+        rng13 = np.random.default_rng(13)
+        n13 = int(BLOCK_SEC * TARGET_FS)
+        clean13 = 6 * np.sin(2 * np.pi * 10 * np.arange(n13) / TARGET_FS) + rng13.normal(0, 12, n13)
+        one_pop = clean13.copy(); one_pop[1500:1503] += [180, 360, 150]          # one ~0.03 s pop (like block 1)
+        sustained = clean13.copy()
+        for c in range(100, n13, 220): sustained[c:c + 2] += 300                 # spikes all through the block
+        raw13 = np.ones(int(BLOCK_SEC * SOURCE_FS))
+        q1 = v13.validate_epoch_single(raw13, one_pop, clean13)
+        check("a single pop no longer rejects an otherwise clean block",
+              q1["is_trusted"] and q1["kurtosis"] >= 12, f"kurtosis {q1['kurtosis']}, {q1.get('reason')}")
+        q2 = v13.validate_epoch_single(raw13, sustained, clean13)
+        check("spikes throughout the block are still rejected, with a named reason and rating POOR",
+              not q2["is_trusted"] and "spiky artefacts" in (q2.get("reason") or "") and q2["gate_rating"] == "POOR",
+              f"{q2.get('reason')} rating={q2['gate_rating']}")
+    except Exception as e:
+        check("Sub-window kurtosis checks raised no exception", False, repr(e))
 
     print("\n" + "=" * 60)
     print("ALL CHECKS PASSED" if all_passed else "SOME CHECKS FAILED")
