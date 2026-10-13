@@ -32,6 +32,11 @@ class RawSampleBuffer:
         # Reset when the device reboots (its millis counter goes backwards).
         self._offset: float | None = None
         self._last_millis: int | None = None
+        # Device restarts seen on arrival (millis counter went backwards).
+        # Detected here, per packet, so a restart is caught even when the
+        # buffer had already emptied before it -- a backwards jump INSIDE the
+        # buffer (raw_cleaning.start_after_last_gap) only sees it otherwise.
+        self.reboot_count = 0
 
     def note_arrival(self, device_millis: int) -> None:
         now = time.time()
@@ -40,6 +45,7 @@ class RawSampleBuffer:
             if self._last_millis is not None and m < self._last_millis - 1000:
                 self._offset = None                       # device rebooted: old mapping is invalid
                 self._last_millis = None
+                self.reboot_count += 1
             off = now - m / 1000.0
             if self._offset is None or off < self._offset:
                 self._offset = off
@@ -77,6 +83,13 @@ class RawSampleBuffer:
             for _ in range(idx):
                 self._buf.popleft()
             return idx, gap
+
+    def clear(self) -> int:
+        """Drops everything buffered; returns how many samples were dropped."""
+        with self._lock:
+            n = len(self._buf)
+            self._buf.clear()
+            return n
 
     def peek_count(self) -> int:
         with self._lock:

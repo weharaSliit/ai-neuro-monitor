@@ -25,6 +25,14 @@ BLOCK_SAMPLES = int(BLOCK_SEC * SOURCE_FS)
 N_CALIBRATION_BLOCKS = 3
 EMPTY_BUFFER_WARN_INTERVAL_SEC = 5.0
 
+# After wearable02 restarts, the ADS1292R and its bias (RLD) drive need time
+# to settle: the first blocks after a manual restart were 38-48% out of range.
+# The server's own settling window only covers the start of a session, not a
+# mid-session device restart, so the bridge discards everything for this
+# long after one -- and drops a half-built calibration, so rest blocks from
+# before and after the restart are never mixed into one baseline.
+REBOOT_SETTLE_SEC = 30.0
+
 # Calibration keeps collecting rest blocks until the server accepts a
 # STRICT (non-degraded) calibration with at least MIN_TRUSTED_REST_BLOCKS
 # usable blocks -- the Personal Scale's two rest blocks (paper Sect.
@@ -257,6 +265,8 @@ def run():
 
     calibration_blocks = []
     calibration_blocks_seen = 0
+    seen_reboots = buffer.reboot_count
+    settle_until = 0.0
     calibrated = False
     block_idx = 0
     last_pointer_poll = 0.0
@@ -302,6 +312,25 @@ def run():
                 # ready, never as a standalone preview). Just a periodic log so
                 # "nothing arriving from wearable02" is still diagnosable from
                 # this process's own output, minus any Render/Firebase round-trip.
+                # Device restart (its millis counter went backwards -- detected
+                # per packet in RawSampleBuffer, so even after a long outage that
+                # emptied the buffer): settle, then start calibration afresh if
+                # it was still being built. See REBOOT_SETTLE_SEC.
+                if buffer.reboot_count != seen_reboots:
+                    seen_reboots = buffer.reboot_count
+                    settle_until = now + REBOOT_SETTLE_SEC
+                    print(f"[bridge] wearable02 restarted -- ignoring its data for {REBOOT_SETTLE_SEC:.0f}s "
+                          f"while the amplifier and bias settle")
+                    if not calibrated and calibration_blocks_seen:
+                        print(f"[calibrate] discarding {calibration_blocks_seen} rest block(s) from before the "
+                              f"restart -- calibration starts again after settling")
+                        calibration_blocks = []
+                        calibration_blocks_seen = 0
+                if now < settle_until:
+                    buffer.clear()
+                    time.sleep(0.5)
+                    continue
+
                 if buffer.peek_count() == 0 and now - last_empty_buffer_warn >= EMPTY_BUFFER_WARN_INTERVAL_SEC:
                     print("[bridge] no raw samples buffered -- nothing arriving from wearable02 over MQTT")
                     last_empty_buffer_warn = now
@@ -389,7 +418,10 @@ def run():
                               f"{data.get('eeg_quality_reason') or 'see server log'}"
                               + (f" | real RMS={data.get('eeg_std_uv_unclamped')} uV "
                                  f"ptp={data.get('eeg_ptp_uv_unclamped')} uV, "
-                                 f"{oor * 100:.0f}% beyond +-100 uV" if oor is not None else ""))
+                                 f"{oor * 100:.0f}% beyond +-100 uV" if oor is not None else "")
+                              + (f" | provisional score {data['provisional_task_state_score']:.3f} "
+                                 f"(weak signal, reduced fusion weight)"
+                                 if data.get("provisional_task_state_score") is not None else ""))
                     else:
                         print(f"[predict] block {block_idx} task_state_score="
                               f"{data.get('task_state_score')} label={data.get('task_state_label')} "

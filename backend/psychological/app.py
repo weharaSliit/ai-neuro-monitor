@@ -499,6 +499,10 @@ def predict():
             "eeg_ptp_uv_unclamped": record.get("eeg_ptp_uv_unclamped"),
             "eeg_std_uv_unclamped": record.get("eeg_std_uv_unclamped"),
             "eeg_quality_checks": record.get("eeg_quality_checks"),
+            # Soft-rejected blocks only: flagged, untrusted score (see
+            # pipeline.py PROVISIONAL_MAX_OUT_OF_RANGE).
+            "provisional_task_state_score": record.get("provisional_task_state_score"),
+            "provisional_quality": record.get("provisional_quality"),
             "baseline_degraded": record.get("baseline_degraded"),
             "high_load_alert": record.get("high_load_alert"),
             "micro_break_recommended": record.get("micro_break_recommended"),
