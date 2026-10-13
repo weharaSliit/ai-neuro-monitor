@@ -327,3 +327,24 @@ table.data tr:last-child td { border-bottom: 0; }
 
 .spinner { width: 26px; height: 26px; border: 3px solid var(--brand-soft); border-top-color: var(--brand); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 40px auto; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── All users overview (pages/UsersOverview.jsx) ───────────────── */
+.users-scroll { overflow-x: auto; margin: 0 calc(-1 * var(--sp-sm)); }
+table.data.users { display: table; min-width: 1100px; }
+table.data.users td { vertical-align: middle; white-space: nowrap; }
+table.data.users tr.clickable { cursor: pointer; }
+table.data.users tr.clickable:hover td { background: var(--bg); }
+table.data.users tr.sel td { background: var(--brand-soft); }
+table.data.users tr.clickable:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.th-sort { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer; }
+.th-sort:hover { color: var(--text); }
+.thr { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+.thr b { font-size: 14px; }
+.name-cell { font-weight: 800; }
+.search { min-width: 180px; }
+.spark { display: block; }
+.spark-thr { stroke: var(--text-muted); stroke-dasharray: 3 3; stroke-width: 1; }
+.window-table { max-height: 420px; overflow: auto; margin-top: var(--sp-xl); border: 1px solid var(--border-soft); border-radius: 12px; }
+.window-table table.data { display: table; min-width: 980px; }
+.window-table thead th { position: sticky; top: 0; background: var(--card); z-index: 1; }
+.muted-cell { color: var(--text-muted); }

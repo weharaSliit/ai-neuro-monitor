@@ -65,6 +65,35 @@ MrY=
 
 #define BATCH_SIZE 25
 
+// CH2SET (0x05) gain field, bits 6:4 -- ADS1292R datasheet: 000=6, 001=1,
+// 010=2, 011=3, 100=4, 101=8, 110=12. The backend's BIPOLAR_GAIN
+// (backend/psychological/realtime/adc.py) MUST equal CH2_GAIN; it converts
+// the raw codes this device sends into microvolts with it.
+#define CH2_GAIN       8
+#define CH2SET_VALUE   0x50   // gain 8 (101 << 4), normal electrode input (MUX 000)
+#define UV_PER_COUNT   (2.42f / (CH2_GAIN * 8388607.0f) * 1e6f)   // 0.0360608 uV/count
+
+// Lead-off: DC current (6 nA) injected into IN2P/IN2N; the comparators
+// flag an input whose voltage drifts past 95% of the rail, i.e. an electrode
+// that is off or has no contact. Status bits arrive with every sample.
+#define CONFIG2_VALUE  0xE0   // bit7=1 (required), PDB_LOFF_COMP=1, PDB_REFBUF=1, VREF 2.42 V
+#define LOFF_VALUE     0x10   // COMP_TH=95%, bit4=1 (required), ILEAD_OFF=6 nA, DC lead-off
+#define LOFF_SENS_VALUE 0x0C  // LOFF2N | LOFF2P -- sense channel 2's inputs only
+// Status byte 0 = 1100 + LOFF_STAT[4:1]  ->  bit3 = RLD off, bit2 = IN2N off, bit1 = IN2P off
+#define STAT_RLD_OFF   0x08
+#define STAT_IN2N_OFF  0x04
+#define STAT_IN2P_OFF  0x02
+// RLD_SENS (0x06): PDB_RLD=1 (RLD buffer on), RLD_LOFF_SENS=1 (bias
+// electrode lead-off sensing -> RLD_STAT), RLD derived from IN2P + IN2N.
+// UNVERIFIED on this board: if loff_rld reads 1.00 with the bias electrode
+// firmly on, or stays 0.00 with it removed, RLD sensing isn't working in
+// continuous mode -- set this back to 0x2C and check the bias contact by hand.
+#define RLD_SENS_VALUE 0x3C
+
+// Share of samples with each EEG input flagged off since the last
+// heartbeat -- reported in the 5 s status message.
+uint32_t loffFrames = 0, loffIn2pOff = 0, loffIn2nOff = 0, loffRldOff = 0;
+
 uint32_t batchTime[BATCH_SIZE];
 int32_t  batchCh2[BATCH_SIZE];
 uint8_t  batchCount = 0;
@@ -266,7 +295,9 @@ void maintainMQTT() {
   Serial.print("Connecting to EMQX MQTT Broker...");
   if (mqtt.connect("wearable02", MQTT_USER, MQTT_PASS)) {
     Serial.println(" Connected");
-    mqtt.publish(MQTT_STATUS, "{\"status\":\"ONLINE\",\"mode\":\"BIPOLAR_T7_T8\"}");
+    char online[96];
+    snprintf(online, sizeof(online), "{\"status\":\"ONLINE\",\"mode\":\"BIPOLAR_T7_T8\",\"gain\":%d,\"lead_off\":1}", CH2_GAIN);
+    mqtt.publish(MQTT_STATUS, online);
   } else {
     Serial.print(" Failed, rc=");
     Serial.println(mqtt.state());
@@ -288,16 +319,24 @@ bool initADS() {
   // CONFIG1 (0x01): 250 SPS data rate -> 0x01
   if (!verifiedWrite(0x01, 0x01)) return false;
 
-  // CONFIG2 (0x02): PDB_REFBUF = 1, VREF = 2.42V -> 0xA0
-  if (!verifiedWrite(0x02, 0xA0)) return false;
+  // CONFIG2 (0x02): lead-off comparators ON, PDB_REFBUF = 1, VREF = 2.42V
+  // (was 0xA0: comparators powered down, so lead-off was never detected)
+  if (!verifiedWrite(0x02, CONFIG2_VALUE)) return false;
+
+  // LOFF (0x03): DC lead-off, 6 nA, 95% threshold -- see LOFF_VALUE
+  if (!verifiedWrite(0x03, LOFF_VALUE)) return false;
 
   // CH1SET (0x04): Power-down Ch1 & short input -> 0x81
   if (!verifiedWrite(0x04, 0x81)) return false;
 
-  // CH2SET (0x05): Gain = 6 (0x50), Normal Electrode MUX (0x00) -> 0x50
-  if (!verifiedWrite(0x05, 0x50)) return false;
+  // CH2SET (0x05): gain CH2_GAIN, normal electrode input -- see CH2SET_VALUE
+  if (!verifiedWrite(0x05, CH2SET_VALUE)) return false;
 
-  if (!verifiedWrite(0x06, 0x2C)) return false;
+  // RLD_SENS (0x06): see RLD_SENS_VALUE (was 0x2C: no bias lead-off sensing)
+  if (!verifiedWrite(0x06, RLD_SENS_VALUE)) return false;
+
+  // LOFF_SENS (0x07): lead-off sensing on channel 2's inputs -- see LOFF_SENS_VALUE
+  if (!verifiedWrite(0x07, LOFF_SENS_VALUE)) return false;
 
   // RESP1 (0x09): Disable respiration circuitry -> 0x00
   if (!verifiedWrite(0x09, 0x00)) return false;
@@ -470,9 +509,26 @@ void loop() {
     if (!drdyActive) {
       Serial.println("[WARNING] DRDY interrupt stopped pulsing!");
     }
+    // Lead-off over the last 5 s, as the share of samples (0-1) with each
+    // EEG input flagged off. Anything well above 0 = re-seat that electrode.
+    float offP = loffFrames ? (float)loffIn2pOff / loffFrames : 0.0f;
+    float offN = loffFrames ? (float)loffIn2nOff / loffFrames : 0.0f;
+    float offR = loffFrames ? (float)loffRldOff / loffFrames : 0.0f;
+    // Only detects an electrode that is fully off (input past 95% of the
+    // rail) -- poor-but-present contact still shows up only in the signal
+    // quality checks (RMS, out-of-range share, delta power).
+    if (offP > 0.5f || offN > 0.5f || offR > 0.5f) {
+      Serial.print("[WARNING] Electrode off: ");
+      if (offP > 0.5f) Serial.print("IN2P ");
+      if (offN > 0.5f) Serial.print("IN2N ");
+      if (offR > 0.5f) Serial.print("BIAS(RLD) ");
+      Serial.println();
+    }
+    loffFrames = loffIn2pOff = loffIn2nOff = loffRldOff = 0;
     if (mqtt.connected()) {
-      char hb[64];
-      snprintf(hb, sizeof(hb), "{\"uptime_ms\":%lu,\"drdy_ok\":%d}", millis(), drdyActive ? 1 : 0);
+      char hb[160];
+      snprintf(hb, sizeof(hb), "{\"uptime_ms\":%lu,\"drdy_ok\":%d,\"loff_in2p\":%.2f,\"loff_in2n\":%.2f,\"loff_rld\":%.2f}",
+               millis(), drdyActive ? 1 : 0, offP, offN, offR);
       mqtt.publish(MQTT_STATUS, hb);
     }
   }
@@ -499,12 +555,18 @@ void loop() {
     return;
   }
 
+  loffFrames++;
+  if (r[0] & STAT_IN2P_OFF) loffIn2pOff++;
+  if (r[0] & STAT_IN2N_OFF) loffIn2nOff++;
+  if (r[0] & STAT_RLD_OFF)  loffRldOff++;
+
   // Channel 2 (T7 - T8 Differential)
   int32_t raw_t7_t8 = parseSigned24(r[6], r[7], r[8]);
   uint32_t now = millis();
 
-  // Gain 6, VREF 2.42V: (2 * 2.42V / 6) / 8388607 * 1e6 = 0.0961538 uV/count
-  float t7_t8_uV = raw_t7_t8 * 0.0961538f;
+  // LSB = VREF / (gain * (2^23 - 1)) -- see UV_PER_COUNT. Serial readout
+  // only; MQTT sends the raw code, which the backend converts itself.
+  float t7_t8_uV = raw_t7_t8 * UV_PER_COUNT;
 
   /* =========================================== */
   /* --- MODIFIED FOR ARDUINO SERIAL PLOTTER --- */

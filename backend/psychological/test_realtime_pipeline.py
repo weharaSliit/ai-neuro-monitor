@@ -26,7 +26,9 @@ from backend.psychological.realtime.adc import (
     raw_magnitude_ok,
 )
 from backend.psychological.realtime.mqtt_client import BipolarRawSample
-from backend.psychological.realtime.pipeline import BLOCK_SEC, RealtimeInference, preprocess_bipolar_block
+from backend.psychological.realtime.pipeline import (
+    BLOCK_SEC, RealtimeInference, preprocess_bipolar_block, preprocess_bipolar_block_unclamped,
+)
 from backend.psychological.realtime.quality_gate import SignalQualityGate
 from backend.psychological.realtime.raw_cleaning import interpolate_to_uniform_grid, remove_spikes, timing_ok
 from backend.psychological.realtime.resample import SOURCE_FS, TARGET_FS, resample_to_target
@@ -194,6 +196,98 @@ def main() -> bool:
                   f"outcome={threshold_outcome})")
     except Exception as e:
         check("Onboarding task-calibration flow raised no exception", False, repr(e))
+
+    # 8. Personal Scale decision rule + fusion gating -----------------------
+    # Scores are injected directly (synthetic blocks can't be steered to a
+    # chosen model output), so this checks the rule itself.
+    print("\n[8] Personal Scale: mu_rest, z, responsiveness, fusion exclusion")
+    try:
+        from backend.psychological.realtime.firebase_sync import make_eeg_fusion_record, make_eeg_output_record
+        from backend.psychological.sam40.decision import (
+            MIN_TASK_RESPONSE_Z, PERSONAL_K_ALERT, PERSONAL_SIGMA_PRIOR, personal_z,
+        )
+
+        def engine_with(rest, task=None):
+            e = RealtimeInference(MODEL_DIR)
+            e.baseline.add({"x": 0.0})  # finalize's "ok" path only needs a non-empty baseline
+            e._calibration_scores = list(rest)
+            e.finalize_calibration_bipolar()
+            if task is not None:
+                e._task_scores = list(task)
+                return e, e.finalize_personal_threshold()
+            return e, None
+
+        e, _ = engine_with([0.30, 0.34])
+        check("mu_rest is the mean of this session's rest scores", abs(e.mu_rest - 0.32) < 1e-9, f"mu_rest={e.mu_rest}")
+        check("alert threshold is mu_rest + K*sigma (z >= K)",
+              abs(e.thresholds.high_load_p - (0.32 + PERSONAL_K_ALERT * PERSONAL_SIGMA_PRIOR)) < 1e-9,
+              f"high_load_p={e.thresholds.high_load_p}")
+        check("no probability shift is applied", e.baseline_shift == 0.0, f"baseline_shift={e.baseline_shift}")
+        check("z = (s - mu_rest)/sigma", abs(personal_z(0.32 + PERSONAL_SIGMA_PRIOR, e.mu_rest) - 1.0) < 1e-9)
+
+        e, _ = engine_with([1e-63, 2e-40])
+        check("saturated rest scores (< 1e-6) give no personal baseline",
+              e.mu_rest is None and not e.thresholds_personalized and e.n_implausible_rest_blocks == 2,
+              f"mu_rest={e.mu_rest}")
+
+        _, out = engine_with([0.30, 0.30], task=[0.30 + 0.6 * PERSONAL_SIGMA_PRIOR] * 3)
+        check("task >= 0.5 sigma above rest -> responsive ('ok')",
+              out["status"] == "ok" and out["responsive"] is True, f"outcome={out}")
+        _, out = engine_with([0.30, 0.30], task=[0.30 + 0.2 * PERSONAL_SIGMA_PRIOR] * 3)
+        check("task < 0.5 sigma above rest -> not responsive ('not_separated')",
+              out["status"] == "not_separated" and out["responsive"] is False
+              and out["task_response_z"] < MIN_TASK_RESPONSE_Z, f"outcome={out}")
+
+        base = {"window": 0, "skipped": False, "calibrated_p": 0.35, "task_state_z": 0.19,
+                "mu_rest": 0.32, "personal_sigma": PERSONAL_SIGMA_PRIOR, "quality_quality_score": 99.0,
+                "quality_is_trusted": True}
+
+        def fusion_for(**over):
+            rec = make_eeg_output_record({**base, **over}, 25.0, "bipolar_only_v1", "bipolar_only_v1",
+                                         [0.35], high_load_p=0.455, capture_end_ts=1.8e9)
+            return make_eeg_fusion_record(rec)
+
+        f = fusion_for(eeg_responsive=None)
+        check("responsiveness unknown -> EEG enters fusion with personal threshold and sigma scale",
+              f["prob_eeg"] == 0.35 and f["threshold_eeg"] == 0.455
+              and f["threshold_scale_eeg"] == PERSONAL_SIGMA_PRIOR and f["eeg_excluded_reason"] is None, f"{f}")
+        for over, reason in [({"eeg_responsive": False}, "not_responsive"),
+                             ({"baseline_degraded": True}, "degraded_baseline"),
+                             ({"mu_rest": None}, "no_personal_baseline")]:
+            f = fusion_for(**over)
+            check(f"{reason} -> no EEG prob in fusion", f["prob_eeg"] is None and f["eeg_excluded_reason"] == reason, f"{f}")
+    except Exception as e:
+        check("Personal Scale checks raised no exception", False, repr(e))
+
+    # 9. Quality gate judges the UNCLAMPED filtered signal --------------------
+    print("\n[9] quality gate on the unclamped filtered signal")
+    try:
+        gate = SignalQualityGate(fs_raw=SOURCE_FS, fs_filtered=TARGET_FS)
+        rng9 = np.random.default_rng(9)
+        n9 = int(BLOCK_SEC * SOURCE_FS)
+        t9 = np.arange(n9) / SOURCE_FS
+
+        def block_from_uv(uv):
+            return [BipolarRawSample(millis=i * 4, code=int(c)) for i, c in enumerate(microvolts_to_bipolar_code(uv))]
+
+        eeg_uv = 4 * np.sin(2 * np.pi * 10 * t9) + rng9.normal(0, 4, n9) + 300.0      # ~SAM40 range
+        big_uv = 400 * np.sin(2 * np.pi * 7 * t9) + rng9.normal(0, 300, n9)           # ~your interference
+        for name, uv in (("in-range EEG", eeg_uv), ("out-of-range", big_uv)):
+            unc = preprocess_bipolar_block_unclamped(block_from_uv(uv))
+            clamped = preprocess_bipolar_block(block_from_uv(uv))
+            score, rating, det = gate.assess_epoch_single(np.zeros(n9) + 1.0, unc)
+            if name == "in-range EEG":
+                check("in-range EEG is not POOR on the unclamped signal", rating != "POOR",
+                      f"score={score} det={det}")
+                check("in-range EEG: clamping changes nothing (gate and model see the same signal)",
+                      np.allclose(unc, clamped))
+            else:
+                check("out-of-range signal is POOR with an explicit out-of-range reason",
+                      rating == "POOR" and "beyond" in (det.get("reason") or ""), f"det={det}")
+                check("reported ptp is the real unclamped size, not the 200 uV clamp",
+                      det["ptp_uV_unclamped"] > 1000, f"ptp={det['ptp_uV_unclamped']}")
+    except Exception as e:
+        check("Unclamped quality-gate checks raised no exception", False, repr(e))
 
     print("\n" + "=" * 60)
     print("ALL CHECKS PASSED" if all_passed else "SOME CHECKS FAILED")

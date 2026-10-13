@@ -2,9 +2,14 @@ import { useCallback, useEffect, useState } from 'react';
 import { ref, onValue, query, orderByChild, limitToLast } from 'firebase/database';
 import { db } from '../lib/firebase';
 import { api, deviceApi, eegApi, DEVICE_ID } from '../lib/api';
+import useHeadbandHeartbeat from './useHeadbandHeartbeat';
 
 const DEVICE_POLL_MS = 5000;
-const EEG_LATEST_WINDOW_FRESH_SEC = 40;
+// 25s blocks + Render latency/retries (mqtt_bridge.py waits up to 2+5s
+// between attempts) -- 40s flickered "offline" between healthy blocks.
+const EEG_LATEST_WINDOW_FRESH_SEC = 60;
+// Firmware heartbeat interval is 5s; allow two missed beats.
+const EEG_HEARTBEAT_FRESH_MS = 15000;
 
 // Re-renders every `ms` so "x min ago"/live checks age honestly.
 export function useNow(ms = 20000) {
@@ -41,6 +46,7 @@ export function useDeviceStatus(userId) {
   const eegSessionId = useFirebaseValue(userId ? 'psychological/current_session_id' : null) || null;
   const [eegLastSeen, setEegLastSeen] = useState(null);
   const calib = useFirebaseValue(userId && eegSessionId ? `psychological/${userId}/${eegSessionId}/calibration_result` : null);
+  const heartbeat = useHeadbandHeartbeat(!!userId);
   const now = useNow(DEVICE_POLL_MS);
 
   useEffect(() => {
@@ -69,7 +75,13 @@ export function useDeviceStatus(userId) {
   }, [userId, eegSessionId]);
 
   const fresh = (sec) => sec != null && (now / 1000 - sec) <= EEG_LATEST_WINDOW_FRESH_SEC;
-  const eegOnline = fresh(eegLastSeen) || fresh(calib?.updated_at ?? null);
+  // Device heartbeat first (works before the bridge has calibrated, or with
+  // no bridge at all -- /calibrate/start captures over its own MQTT link);
+  // drdyOk false = powered but the ADC isn't producing samples, so it can't
+  // calibrate. Firebase freshness stays as the fallback.
+  const beatFresh = heartbeat.at != null && Date.now() - heartbeat.at <= EEG_HEARTBEAT_FRESH_MS
+    && heartbeat.drdyOk !== false;
+  const eegOnline = beatFresh || fresh(eegLastSeen) || fresh(calib?.updated_at ?? null);
   return { ringOnline, eegOnline, eegSessionId };
 }
 

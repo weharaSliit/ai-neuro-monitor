@@ -209,9 +209,9 @@ export const BaselineCalibrationScreen = () => {
             if (eegCaptured) {
                 eegLine = 'HRV, GSR, and EEG alpha/beta ratios stored. Real-time stress stream is now active.';
                 if (calibrationResult?.status === 'ok') {
-                    eegLine += calibrationResult.thresholds_personalized
-                        ? ` Your EEG high-load sensitivity has been calibrated to your own resting pattern (${calibrationResult.baseline_shift >= 0 ? '+' : ''}${(calibrationResult.baseline_shift * 100).toFixed(1)}% vs. average).`
-                        : ' Not enough clean EEG blocks were captured to personalize your sensitivity this time -- using the standard sensitivity for now.';
+                    eegLine += calibrationResult.thresholds_personalized && calibrationResult.personal_high_load_p != null
+                        ? ` Your EEG high-load alert is now set from your own resting pattern (alert at ${(calibrationResult.personal_high_load_p * 100).toFixed(0)}%).`
+                        : ' No usable resting EEG was captured this time -- re-seat the headband and recalibrate to personalize it.';
                 }
             }
             showAlert({
