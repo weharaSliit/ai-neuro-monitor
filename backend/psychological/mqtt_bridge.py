@@ -93,6 +93,13 @@ RETRY_DELAYS_SEC = (2.0, 5.0)  # 3 total attempts: initial + these 2 retries
 # kills the whole `while True` loop and nothing brings it back.
 RECONNECT_DELAY_SEC = 5.0
 
+# The broker keeps this bridge's MQTT session (and queues the headband's
+# messages) for this long after a disconnect, so a reconnect -- Render
+# network blips, a restart -- delays samples instead of punching a hole in
+# the stream that costs a whole 25 s block. Kept short: a backlog older
+# than this is stale for live use anyway. 0 = no session (old behaviour).
+MQTT_SESSION_EXPIRY_SEC = int(os.environ.get("EEG_MQTT_SESSION_EXPIRY_SEC", "120"))
+
 FALLBACK_LOG_DIR = Path(__file__).resolve().parent / "logs"
 _UNSAFE_FILENAME_CHARS = re.compile(r'[^A-Za-z0-9_-]')
 _fallback_csv_loggers: dict[str, CsvLogger] = {}
@@ -266,7 +273,8 @@ def run():
     # Already connected + looping -- see backend/common/mqtt_bridge.py::connect_mqtt().
     client = make_bipolar_client(EEG_MQTT_BROKER, EEG_MQTT_PORT, EEG_MQTT_TOPIC, buffer,
                                   client_id="eeg_bridge_wearable02", username=EEG_MQTT_USER,
-                                  password=EEG_MQTT_PASSWORD, ca_cert=EEG_MQTT_CA_CERT)
+                                  password=EEG_MQTT_PASSWORD, ca_cert=EEG_MQTT_CA_CERT,
+                                  session_expiry_sec=MQTT_SESSION_EXPIRY_SEC)
 
     calibration_blocks = []
     calibration_blocks_seen = 0
@@ -388,8 +396,10 @@ def run():
                                   f"degraded={data.get('baseline_degraded')}")
                             if data.get("baseline_degraded"):
                                 print("[calibrate] WARNING: no rest block passed the quality gate in "
-                                      f"{DEGRADED_FALLBACK_AFTER_BLOCKS} blocks -- degraded baseline, EEG stays "
-                                      "out of fusion. Check electrode/bias contact and restart the session.")
+                                      f"{DEGRADED_FALLBACK_AFTER_BLOCKS} blocks -- degraded baseline: EEG is fused at "
+                                      "half weight (EEG_FUSION_POLICY=lenient) or not at all (strict), and blocks "
+                                      "the quality gate rejects still aren't fused. Check electrode/bias contact "
+                                      "and restart the session.")
                         elif outcome == "ok":
                             print(f"[calibrate] only {n_trusted} usable rest block(s) so far "
                                   f"(need {MIN_TRUSTED_REST_BLOCKS}) -- collecting more{_latest_block_reason(data)}")
@@ -476,7 +486,8 @@ def run():
                 time.sleep(RECONNECT_DELAY_SEC)
                 client = make_bipolar_client(EEG_MQTT_BROKER, EEG_MQTT_PORT, EEG_MQTT_TOPIC, buffer,
                                               client_id="eeg_bridge_wearable02", username=EEG_MQTT_USER,
-                                              password=EEG_MQTT_PASSWORD, ca_cert=EEG_MQTT_CA_CERT)
+                                              password=EEG_MQTT_PASSWORD, ca_cert=EEG_MQTT_CA_CERT,
+                                              session_expiry_sec=MQTT_SESSION_EXPIRY_SEC, resume=True)
 
     except KeyboardInterrupt:
         print("\nStopping bridge...")

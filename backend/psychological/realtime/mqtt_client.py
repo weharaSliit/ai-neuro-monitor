@@ -158,7 +158,8 @@ def make_client(broker: str, port: int, topic: str, buffer: RawSampleBuffer, cli
 
 def make_bipolar_client(broker: str, port: int, topic: str, buffer: RawSampleBuffer,
                          client_id: str = 'eeg_inference_bipolar',
-                         username: str = None, password: str = None, ca_cert: str = None):
+                         username: str = None, password: str = None, ca_cert: str = None,
+                         session_expiry_sec: int = 0, resume: bool = False):
     from backend.common.mqtt_bridge import connect_mqtt
 
     def on_message(client, userdata, msg):
@@ -171,4 +172,5 @@ def make_bipolar_client(broker: str, port: int, topic: str, buffer: RawSampleBuf
         buffer.note_arrival(samples[-1].millis)
 
     return connect_mqtt(broker, port, topic, on_message, client_id=client_id,
-                         username=username, password=password, ca_cert=ca_cert)
+                         username=username, password=password, ca_cert=ca_cert,
+                         session_expiry_sec=session_expiry_sec, resume=resume)

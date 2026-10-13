@@ -2259,7 +2259,8 @@ void sampleTask(void*) {
       glitchSeq++;
     }
 
-    if (ringHead - ringTail >= RING_SAMPLES) { ringDrops++; continue; }   // full: drop newest
+    // Always written: when full this overwrites the OLDEST sample, and
+    // flushRing() skips past whatever was overwritten (see ringOldest()).
     uint32_t i = ringHead % RING_SAMPLES;
     ringTime[i] = now;
     ringCode[i] = code;
@@ -2286,8 +2287,30 @@ void sampleTask(void*) {
 #define SOURCE_SPS            250
 bool modemSleepOn = true;
 
+// Outage longer than the ring: the ring used to keep the FIRST ~32 s of the
+// outage and drop everything after, so on reconnect the bridge got 32 s of
+// stale data, then a hole, then live data -- and threw the stale part away
+// as a stream break (seen live: "28.3s gap -- discarded 25.0s"). Now
+// sampleTask() overwrites the oldest instead, so the backlog is the LAST
+// ~32 s and runs straight into the live stream. ringTail is still written
+// only here (single consumer): when the producer has lapped it, skip ahead
+// to the oldest sample that is still intact, leaving RING_SKIP_MARGIN of
+// headroom so the producer can't overwrite a batch while it's formatted.
+#define RING_SKIP_MARGIN  SOURCE_SPS                // 1 s
+
+uint32_t ringOldest() {
+  uint32_t head = ringHead;
+  if (head - ringTail > RING_SAMPLES - RING_SKIP_MARGIN) {
+    uint32_t newTail = head - (RING_SAMPLES - RING_SKIP_MARGIN);
+    ringDrops += newTail - ringTail;
+    ringTail = newTail;
+  }
+  return ringTail;
+}
+
 void flushRing() {
   if (!mqtt.connected()) return;
+  ringOldest();
   uint32_t backlog = ringHead - ringTail;
   // Modem sleep only while caught up -- see the block comment above.
   if (modemSleepOn && backlog > BACKLOG_SLEEP_OFF) { WiFi.setSleep(false); modemSleepOn = false; }
@@ -2295,7 +2318,7 @@ void flushRing() {
 
   static char payload[PUBLISH_MAX_SAMPLES * 20 + 1];
   unsigned long start = millis();
-  while (ringHead - ringTail >= BATCH_SIZE && millis() - start < FLUSH_BUDGET_MS) {
+  while (ringHead - ringOldest() >= BATCH_SIZE && millis() - start < FLUSH_BUDGET_MS) {
     uint32_t tail = ringTail;
     uint32_t n = ringHead - tail;
     if (n > PUBLISH_MAX_SAMPLES) n = PUBLISH_MAX_SAMPLES;
