@@ -1,5 +1,5 @@
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -130,6 +130,67 @@ def compute_personal_threshold(resting_scores: list[float], task_scores: list[fl
 
     midpoint = (resting_mean + task_mean) / 2.0
     return max(POPULATION_P5, min(POPULATION_P95, midpoint))
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  PERSONAL SCALE -- the deployed decision rule (paper Sect. "Personal EEG
+#  Threshold"; same constants as fushion engin/personal_scale.py).
+#
+#  Every raw model output s is judged against the person's OWN rest, in
+#  units of normal resting noise:  z = (s - mu_rest) / sigma.  mu_rest is
+#  re-measured from this session's own rest blocks (electrode contact
+#  changes every time the device is worn), and the alert is z >= K, i.e. a
+#  personal threshold mu_rest + K*sigma. No population threshold and no
+#  probability shift (compute_baseline_shift()/compute_personal_threshold()
+#  above are no longer called by the live pipeline).
+#
+#  Why this rule: on SAM40 (LOSO, deployed T7-T8 bipolar model, 2 rest + 2
+#  task onboarding) it gave balanced accuracy 0.619 vs 0.550 for the fixed
+#  population threshold (+0.069, CI lower bound 0.018 --
+#  paper/analysis/results/Z1_personal_scale_sam40.csv), while the old
+#  fixed 0.111 separation margin accepted only 2 of 40 people (and 0 of 5
+#  live onboarding runs).
+#
+#  SIGMA_PRIOR: RMS deviation of later rest scores from the person's own
+#  onboarding-rest mean, from inner out-of-fold scores of the SAM40
+#  training people (paper/analysis/personalization.py::inner_stats(),
+#  design 2+2, mean over the three onboarding-trial pairs: 0.160/0.150/
+#  0.172). Recompute if the model is retrained.
+# ═══════════════════════════════════════════════════════════════════
+PERSONAL_SIGMA_PRIOR = 0.161
+PERSONAL_K_ALERT = 0.84        # ~20% of rest blocks flagged (paper k)
+PERSONAL_K_BREAK = 1.28        # ~10% of rest blocks -- stricter, for the sustained micro-break flag
+MIN_TASK_RESPONSE_Z = 0.5      # onboarding task must sit >= 0.5 sigma above own rest
+
+
+def personal_decision_thresholds(base: DecisionThresholds, mu_rest: float,
+                                 sigma: float = PERSONAL_SIGMA_PRIOR) -> DecisionThresholds:
+    """All decision-state thresholds on the personal scale: high-load alert
+    (and "was high" for cooldown) at z >= PERSONAL_K_ALERT, micro-break at
+    z >= PERSONAL_K_BREAK, cooldown complete back at z <= 0 (own rest).
+    Persistence settings are unchanged from `base`."""
+    alert = min(1.0, mu_rest + PERSONAL_K_ALERT * sigma)
+    brk = min(1.0, mu_rest + PERSONAL_K_BREAK * sigma)
+    return replace(base, high_load_p=alert, cooldown_high_p=alert, break_p=brk,
+                   cooldown_low_p=min(alert, mu_rest))
+
+
+def personal_z(score: float | None, mu_rest: float | None, sigma: float = PERSONAL_SIGMA_PRIOR) -> float | None:
+    if score is None or mu_rest is None:
+        return None
+    return float((score - mu_rest) / sigma)
+
+
+def task_response_z(resting_scores: list[float], task_scores: list[float],
+                    sigma: float = PERSONAL_SIGMA_PRIOR) -> float | None:
+    """Onboarding responsiveness: how far the task blocks sit above own
+    rest, in sigma units. Below MIN_TASK_RESPONSE_Z the model is not
+    tracking load for this person/wearing -- on SAM40 such people had
+    chance-level EEG (eval AUC 0.53 vs 0.81; 9 of 10 below-chance people
+    caught -- paper/analysis/results/Z2_responsiveness_check.csv)."""
+    if not resting_scores or not task_scores:
+        return None
+    return float((np.mean(task_scores) - np.mean(resting_scores)) / sigma)
 
 
 def compute_states(series: pd.DataFrame, thresholds: DecisionThresholds = DecisionThresholds()) -> pd.DataFrame:

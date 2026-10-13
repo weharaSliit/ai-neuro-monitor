@@ -7,7 +7,8 @@ import numpy as np
 import pandas as pd
 
 from backend.psychological.sam40.decision import (  # noqa: E402
-    DecisionThresholds, compute_baseline_shift, compute_personal_threshold, compute_states,
+    MIN_TASK_RESPONSE_Z, PERSONAL_SIGMA_PRIOR, DecisionThresholds, compute_states,
+    personal_decision_thresholds, personal_z, task_response_z,
 )
 from backend.psychological.sam40.derived_features import add_baseline_relative  # noqa: E402
 from backend.psychological.sam40.features import channel_features, epoch_features  # noqa: E402
@@ -121,7 +122,7 @@ WIDE_DESPIKE_UV = 2000.0  # hard pre-filter bound -- see preprocess_bipolar_bloc
 BIPOLAR_HIGHPASS_HZ = 1.0
 
 
-def preprocess_bipolar_block(samples: list[BipolarRawSample], duration_sec: float | None = None) -> np.ndarray:
+def preprocess_bipolar_block_unclamped(samples: list[BipolarRawSample], duration_sec: float | None = None) -> np.ndarray:
     """Order matters here: detrend -> WIDE despike (hard, unconditional) ->
     loose MAD despike + grid interpolation -> resample -> filter ->
     physiological clamp (tight), NOT clamp-first. A hard +-CLIP_UV clamp
@@ -161,10 +162,17 @@ def preprocess_bipolar_block(samples: list[BipolarRawSample], duration_sec: floa
     resampled = resample_to_target(clean, source_fs=SOURCE_FS, target_fs=TARGET_FS)  # -> 128Hz
     filtered = notch_then_bandpass(resampled, fs=TARGET_FS, low=BIPOLAR_HIGHPASS_HZ)  # see BIPOLAR_HIGHPASS_HZ docstring
 
-    # Tight physiological clamp LAST -- a final safety net against residual
-    # filter-transient excursions, not the first thing the raw signal sees.
-    filtered = clip_physiological_uv(filtered)
     return filtered
+
+
+def preprocess_bipolar_block(samples: list[BipolarRawSample], duration_sec: float | None = None) -> np.ndarray:
+    """The model's input: preprocess_bipolar_block_unclamped() + the tight
+    physiological clamp LAST -- a final safety net against residual
+    filter-transient excursions, not the first thing the raw signal sees.
+    The quality gate must NOT be given this: on a clamped block every
+    excursion reads as ptp=200 uV, and the gate can't measure what it is
+    meant to judge (see quality_gate.py MAX_OUT_OF_RANGE_FRACTION)."""
+    return clip_physiological_uv(preprocess_bipolar_block_unclamped(samples, duration_sec))
 
 
 def _raw_codes(samples: list[RawSample]) -> tuple[np.ndarray, np.ndarray]:
@@ -259,6 +267,11 @@ RATING_ORDER = {'POOR': 0, 'QUESTIONABLE': 1, 'GOOD': 2}
 # real states) are collected.
 DELTA_POWER_IMPLAUSIBLE_SD = 30.0
 
+# A model probability closer than this to 0 or 1 is a saturation artifact,
+# not confidence -- same value as fushion engin/fusion_engin.py's
+# EXTREME_PROB_EPS (the paper's fusion plausibility rule).
+PLAUSIBLE_SCORE_EPS = 1e-6
+
 
 class RealtimeInference:
     def __init__(self, model_dir: Path, thresholds: DecisionThresholds = DecisionThresholds(),
@@ -316,6 +329,51 @@ class RealtimeInference:
         self._bipolar_blocks_processed: int = 0
         self._task_scores: list[float] = []
         self.personal_high_load_p: float | None = None
+        # Personal Scale (sam40/decision.py): mu_rest from THIS session's
+        # rest blocks, sigma = the SAM40-derived prior. eeg_responsive comes
+        # from the onboarding task (this session's, or the user's last one,
+        # restored by calibration_service.py) -- None = not checked yet.
+        self.mu_rest: float | None = None
+        self.sigma: float = PERSONAL_SIGMA_PRIOR
+        self.task_response_z: float | None = None
+        self.eeg_responsive: bool | None = None
+        self.n_implausible_rest_blocks: int = 0
+        self._live_blocks: int = 0  # infer_bipolar_block() calls, scored or not -> Firebase key
+        self._itakura_ref_from_live: bool = False  # see infer_bipolar_block()
+
+    def _apply_personal_scale(self) -> None:
+        """Sets mu_rest from the scored rest blocks and moves every decision
+        threshold onto the personal scale. The raw model score is used
+        as-is (baseline_shift stays 0): mu_rest absorbs this person's offset
+        instead of shifting the probability."""
+        self.baseline_shift = 0.0
+        # Same plausibility rule as fusion (fusion_engin.py EXTREME_PROB_EPS):
+        # rest scores like 1e-63 or 1e-133 (seen on real wearable02 sessions)
+        # are the model saturating on out-of-distribution input, not a calm
+        # brain -- a mu_rest built from them would make every later z
+        # meaningless. With no plausible rest block there is no personal
+        # baseline: population thresholds stay and EEG is kept out of fusion
+        # (make_eeg_fusion_record(): 'no_personal_baseline').
+        plausible = [s for s in self._calibration_scores
+                     if PLAUSIBLE_SCORE_EPS <= s <= 1.0 - PLAUSIBLE_SCORE_EPS]
+        self.n_implausible_rest_blocks = len(self._calibration_scores) - len(plausible)
+        if not plausible:
+            return
+        self.mu_rest = float(np.mean(plausible))
+        self.thresholds = personal_decision_thresholds(self.thresholds, self.mu_rest, self.sigma)
+        self.personal_high_load_p = self.thresholds.high_load_p
+        self.thresholds_personalized = True
+
+    def _personal_outcome(self) -> dict:
+        return {
+            'n_implausible_rest_blocks': self.n_implausible_rest_blocks,
+            'thresholds_personalized': self.thresholds_personalized,
+            'resting_calibrated_p': self.mu_rest,
+            'mu_rest': self.mu_rest,
+            'sigma': self.sigma,
+            'personal_high_load_p': self.personal_high_load_p,
+            'baseline_shift': self.baseline_shift,
+        }
 
     def calibrate_block(self, samples: list[RawSample]) -> dict:
         ch1_codes, ch2_codes = _raw_codes(samples)
@@ -353,17 +411,9 @@ class RealtimeInference:
     def finalize_calibration(self, allow_degraded: bool = False) -> dict:
         if self.baseline.blocks:
             self.adaptive_baseline.initialize(self.baseline.mean())
-            shift = compute_baseline_shift(self._calibration_scores)
-            if shift is not None:
-                self.baseline_shift = shift
-                self.thresholds_personalized = True
-            return {
-                'status': 'ok', 'baseline_degraded': False, 'n_blocks': len(self.baseline.blocks),
-                'thresholds_personalized': self.thresholds_personalized,
-                'resting_calibrated_p': (float(np.mean(self._calibration_scores))
-                                          if self._calibration_scores else None),
-                'baseline_shift': self.baseline_shift,
-            }
+            self._apply_personal_scale()
+            return {'status': 'ok', 'baseline_degraded': False, 'n_blocks': len(self.baseline.blocks),
+                    **self._personal_outcome()}
         if allow_degraded and self._calibration_attempts:
             best_score, best_feats, best_filtered_ch1, best_filtered_ch2 = max(
                 self._calibration_attempts, key=lambda t: t[0])
@@ -396,9 +446,13 @@ class RealtimeInference:
                 "reason": "dropped-packet gap exceeds MAX_GAP_SEC -- interpolation would fabricate signal, filter chain skipped",
             }
 
-        filtered = preprocess_bipolar_block(samples)  # the ACTUAL signal the model would see
+        # Gate, Itakura reference and ML classifier judge the UNCLAMPED
+        # filtered signal; features come from the clamped one (the model's
+        # input). The two are identical for any block the gate accepts.
+        unclamped = preprocess_bipolar_block_unclamped(samples)
+        filtered = clip_physiological_uv(unclamped)  # the ACTUAL signal the model would see
         feats = channel_features(filtered, fs=TARGET_FS)  # unprefixed -- see infer_bipolar_block()
-        quality = self.quality_validator.assess_only_single(raw_code, filtered)
+        quality = self.quality_validator.assess_only_single(raw_code, unclamped)
 
         in_settling_window = elapsed_sec < SETTLING_TIME_SEC
         if in_settling_window:
@@ -433,12 +487,12 @@ class RealtimeInference:
             # bipolar()'s allow_degraded path had nothing to fall back to,
             # and a fully-rejected calibration hard-failed instead of
             # degrading gracefully like it was designed to.
-            self._calibration_attempts_bipolar.append((quality['quality_score'], feats, filtered))
+            self._calibration_attempts_bipolar.append((quality['quality_score'], feats, unclamped))
             return quality
         self.baseline.add({f'bipolar_{k}': v for k, v in feats.items()})
         if self._itakura_baseline_filtered_bipolar is None:
-            self._itakura_baseline_filtered_bipolar = filtered
-        self.quality_validator.record_calibration_epoch(filtered)
+            self._itakura_baseline_filtered_bipolar = unclamped
+        self.quality_validator.record_calibration_epoch(unclamped)
         score = self._score_calibration_bipolar_block(feats)
         if score is not None:
             self._calibration_scores.append(score)
@@ -455,17 +509,9 @@ class RealtimeInference:
     def finalize_calibration_bipolar(self, allow_degraded: bool = False) -> dict:
         if self.baseline.blocks:
             self.adaptive_baseline.initialize(self.baseline.mean())
-            shift = compute_baseline_shift(self._calibration_scores)
-            if shift is not None:
-                self.baseline_shift = shift
-                self.thresholds_personalized = True
-            return {
-                'status': 'ok', 'baseline_degraded': False, 'n_blocks': len(self.baseline.blocks),
-                'thresholds_personalized': self.thresholds_personalized,
-                'resting_calibrated_p': (float(np.mean(self._calibration_scores))
-                                          if self._calibration_scores else None),
-                'baseline_shift': self.baseline_shift,
-            }
+            self._apply_personal_scale()
+            return {'status': 'ok', 'baseline_degraded': False, 'n_blocks': len(self.baseline.blocks),
+                    **self._personal_outcome()}
         if allow_degraded and self._calibration_attempts_bipolar:
             best_score, best_feats, best_filtered = max(
                 self._calibration_attempts_bipolar, key=lambda t: t[0])
@@ -490,7 +536,9 @@ class RealtimeInference:
             resting_score = self._score_calibration_bipolar_block(best_feats)
             if resting_score is not None:
                 self._calibration_scores.append(resting_score)
-            return {'status': 'degraded', 'baseline_degraded': True, 'score': best_score}
+            self._apply_personal_scale()
+            return {'status': 'degraded', 'baseline_degraded': True, 'score': best_score,
+                    **self._personal_outcome()}
         return {'status': 'failed', 'baseline_degraded': None}
 
     def score_threshold_task_block(self, samples: list[BipolarRawSample]) -> dict:
@@ -521,9 +569,10 @@ class RealtimeInference:
                 "reason": "dropped-packet gap exceeds MAX_GAP_SEC -- interpolation would fabricate signal, filter chain skipped",
             }
 
-        filtered = preprocess_bipolar_block(samples)
+        unclamped = preprocess_bipolar_block_unclamped(samples)
+        filtered = clip_physiological_uv(unclamped)
         feats = channel_features(filtered, fs=TARGET_FS)
-        quality = self.quality_validator.assess_only_single(raw_code, filtered)
+        quality = self.quality_validator.assess_only_single(raw_code, unclamped)
 
         meets_bar = self.disable_quality_gate or (
             RATING_ORDER.get(quality['gate_rating'], -1) >= RATING_ORDER[self.calibration_min_rating])
@@ -567,18 +616,31 @@ class RealtimeInference:
         see compute_personal_threshold()), self.thresholds is left
         untouched, i.e. still whatever population default it was
         constructed with."""
-        threshold = compute_personal_threshold(self._calibration_scores, self._task_scores)
-        outcome = {
-            'status': 'ok' if threshold is not None else 'not_separated',
-            'personal_high_load_p': threshold,
-            'resting_mean': float(np.mean(self._calibration_scores)) if self._calibration_scores else None,
-            'task_mean': float(np.mean(self._task_scores)) if self._task_scores else None,
+        # Personal Scale: the threshold itself already came from this
+        # session's rest blocks (_apply_personal_scale()); the task only
+        # checks that the model responds to load for this person at all.
+        # 'ok' = responsive, 'not_separated' = not responsive (same status
+        # vocabulary the apps already read), in which case EEG gets no
+        # fusion weight (make_eeg_fusion_record()) and the person should
+        # re-seat the electrodes and repeat -- not fall back to a population
+        # threshold, which live data showed scores never reach.
+        plausible_task = [s for s in self._task_scores
+                          if PLAUSIBLE_SCORE_EPS <= s <= 1.0 - PLAUSIBLE_SCORE_EPS]
+        z_task = (task_response_z([self.mu_rest], plausible_task, self.sigma)
+                  if self.mu_rest is not None else None)
+        self.task_response_z = z_task
+        self.eeg_responsive = None if z_task is None else z_task >= MIN_TASK_RESPONSE_Z
+        return {
+            'status': 'ok' if self.eeg_responsive else 'not_separated',
+            'responsive': self.eeg_responsive,
+            'task_response_z': z_task,
+            'min_task_response_z': MIN_TASK_RESPONSE_Z,
+            'personal_high_load_p': self.personal_high_load_p if self.eeg_responsive else None,
+            'resting_mean': self.mu_rest,
+            'task_mean': float(np.mean(plausible_task)) if plausible_task else None,
             'n_task_blocks': len(self._task_scores),
+            'n_implausible_task_blocks': len(self._task_scores) - len(plausible_task),
         }
-        if threshold is not None:
-            self.personal_high_load_p = threshold
-            self.thresholds = replace(self.thresholds, high_load_p=threshold, cooldown_high_p=threshold)
-        return outcome
 
     def infer_block(self, samples: list[RawSample]) -> dict:
         ch1_codes, ch2_codes = _raw_codes(samples)
@@ -649,6 +711,13 @@ class RealtimeInference:
         raw_code = _raw_bipolar_codes(samples)
         elapsed_sec = self._bipolar_blocks_processed * BLOCK_SEC
         self._bipolar_blocks_processed += 1
+        # 'window' is this block's Firebase key (FirebaseSync.push), so every
+        # live block -- scored OR rejected -- gets its own sequential number.
+        # It used to be len(self._history) (scored blocks only), so every
+        # rejected block before the first scored one was written to key 0,
+        # each overwriting the last, and a session's rejection history was lost.
+        block_no = self._live_blocks
+        self._live_blocks += 1
 
         # Cheap early reject BEFORE the filter chain runs -- see adc.py's
         # MAX_RAW_UV docstring. No raw_feats/filtered signal to report here
@@ -659,7 +728,7 @@ class RealtimeInference:
             print(f"[quality_gate] rejected: raw signal exceeds MAX_RAW_UV, filter chain skipped")
             health = self.session_quality.update(False)
             return {
-                'window': len(self._history), 'skipped': True, 'calibrated_p': None,
+                'window': block_no, 'skipped': True, 'calibrated_p': None,
                 'high_load_alert': False, 'micro_break_recommended': False,
                 'fatigue_warning': False, 'cooldown_logged': False,
                 'baseline_degraded': self.baseline_degraded,
@@ -672,7 +741,7 @@ class RealtimeInference:
             print(f"[quality_gate] rejected: dropped-packet gap exceeds MAX_GAP_SEC, filter chain skipped")
             health = self.session_quality.update(False)
             return {
-                'window': len(self._history), 'skipped': True, 'calibrated_p': None,
+                'window': block_no, 'skipped': True, 'calibrated_p': None,
                 'high_load_alert': False, 'micro_break_recommended': False,
                 'fatigue_warning': False, 'cooldown_logged': False,
                 'baseline_degraded': self.baseline_degraded,
@@ -681,10 +750,21 @@ class RealtimeInference:
                 **{f'session_{k}': v for k, v in health.items()},
             }
 
-        filtered = preprocess_bipolar_block(samples)  # computed ONCE, reused for both the gate and feature extraction
-        baseline_filtered = (self._itakura_baseline_filtered_bipolar
-                              if self._itakura_baseline_filtered_bipolar is not None else filtered)
-        quality = self.quality_validator.validate_epoch_single(raw_code, filtered, baseline_filtered)
+        # Gate on the UNCLAMPED filtered signal, features on the clamped one
+        # -- see calibrate_bipolar_block().
+        unclamped = preprocess_bipolar_block_unclamped(samples)
+        filtered = clip_physiological_uv(unclamped)
+        # A degraded calibration's reference is the best of several BAD
+        # blocks -- comparing clean blocks against it rejects them on the
+        # Itakura distance. Until a live block passes every other check, the
+        # block is compared against itself (Itakura skipped); that first
+        # passing block then becomes the reference (below).
+        ref_trusted = (self._itakura_baseline_filtered_bipolar is not None
+                       and (not self.baseline_degraded or self._itakura_ref_from_live))
+        baseline_filtered = self._itakura_baseline_filtered_bipolar if ref_trusted else unclamped
+        quality = self.quality_validator.validate_epoch_single(raw_code, unclamped, baseline_filtered)
+        if not ref_trusted:
+            quality['itakura_skipped'] = 'no trusted reference block yet (degraded calibration)'
         # Computed regardless of what quality decides below -- seeing what a
         # REJECTED block's waveform actually looked like is exactly the
         # diagnostic visibility a "why does this keep failing" investigation
@@ -706,7 +786,11 @@ class RealtimeInference:
         raw_feats_unprefixed = channel_features(filtered, fs=TARGET_FS)
         raw_feats = {f'bipolar_{k}': v for k, v in raw_feats_unprefixed.items()}
 
+        # Only when nothing earlier already rejected the block: an
+        # out-of-range or settling rejection is the more basic cause, and
+        # overwriting its reason would blame delta power instead.
         if (self._delta_power_reject_threshold is not None
+                and quality.get('is_trusted', True) and not quality.get('reason')
                 and raw_feats_unprefixed['delta_power'] > self._delta_power_reject_threshold):
             quality['is_trusted'] = False
             quality['gate_rating'] = 'POOR'
@@ -722,10 +806,13 @@ class RealtimeInference:
         if not quality['is_trusted']:
             print(f"[quality_gate] rejected: {quality}")
         health = self.session_quality.update(quality['is_trusted'])
+        if quality['is_trusted'] and not ref_trusted and not self.disable_quality_gate:
+            self._itakura_baseline_filtered_bipolar = unclamped
+            self._itakura_ref_from_live = True
 
         if not quality['is_trusted']:
             return {
-                'window': len(self._history), 'skipped': True, 'calibrated_p': None,
+                'window': block_no, 'skipped': True, 'calibrated_p': None,
                 'high_load_alert': False, 'micro_break_recommended': False,
                 'fatigue_warning': False, 'cooldown_logged': False,
                 'baseline_degraded': self.baseline_degraded,
@@ -746,6 +833,7 @@ class RealtimeInference:
 
         row['raw_score'] = raw_score
         row['calibrated_p'] = calibrated_p
+        row['task_state_z'] = personal_z(raw_score, self.mu_rest, self.sigma)
         row['theta_ratio'] = raw_feats_unprefixed['theta_alpha_ratio']
         row['spectral_slope'] = raw_feats_unprefixed['spectral_slope']
         row['window'] = len(self._history)
@@ -756,10 +844,14 @@ class RealtimeInference:
         states = compute_states(pd.DataFrame(self._history), self.thresholds)
         result = states.iloc[-1].to_dict()
         result['skipped'] = False
+        result['window'] = block_no  # see block_no above; row['window'] stays the scored-history index
         result['baseline_degraded'] = self.baseline_degraded
         result['baseline_drift'] = self.adaptive_baseline.drift()
         result['baseline_drift_n_calm_blocks'] = self.adaptive_baseline.n_calm_updates
         result['wave_uv'] = wave_uv
+        result['eeg_responsive'] = self.eeg_responsive
+        result['mu_rest'] = self.mu_rest
+        result['personal_sigma'] = self.sigma
         result.update({f'quality_{k}': v for k, v in quality.items()})
         result.update({f'session_{k}': v for k, v in health.items()})
         return result

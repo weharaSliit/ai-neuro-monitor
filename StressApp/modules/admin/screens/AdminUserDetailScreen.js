@@ -21,6 +21,7 @@ import StatusDot from '../../shared/StatusDot';
 import Icon, { NAMES } from '../../shared/Icon';
 import MoodBadge from '../../shared/MoodBadge';
 import LineChart from '../../shared/LineChart';
+import { fusionKeyToMs } from '../../shared/levels';
 import Dropdown from '../../shared/Dropdown';
 import { COLORS } from '../../physiological/config/theme';
 import { API_BASE, DEVICE_ID, STRESS_DECISION_THRESHOLD_PERCENT } from '../../physiological/config/config';
@@ -306,7 +307,7 @@ export default function AdminUserDetailScreen({ route, navigation }) {
   const fusionPoints = useMemo(() => numericKeys(fusionWindows).slice(-160).map((k) => {
     const w = fusionWindows[k] || {};
     return {
-      date: new Date(Number(k) * 60000),
+      date: new Date(fusionKeyToMs(k)),
       values: [w.prob_eeg, w.prob_hrv_gsr, w.fused_probability].map((v) => (v != null ? Math.round(v * 100) : null)),
     };
   }), [fusionWindows]);
@@ -762,7 +763,7 @@ export default function AdminUserDetailScreen({ route, navigation }) {
                 <Text style={[styles.cardTitle, { color: text }]}>Latest fusion window</Text>
                 {fusionLatest ? (
                   <>
-                    <Row label="When" value={new Date(fusionLatest._key * 60000).toLocaleString()} muted={muted} text={text} />
+                    <Row label="When" value={new Date(fusionKeyToMs(fusionLatest._key)).toLocaleString()} muted={muted} text={text} />
                     <Row label="Fused probability" value={`${Math.round(fusionLatest.fused_probability * 100)}%`} muted={muted} text={text} />
                     <Row label="Fused threshold" value={fusionLatest.fused_threshold != null ? `${Math.round(fusionLatest.fused_threshold * 100)}%` : '—'} muted={muted} text={text} />
                     <Row label="Label" value={fusionLatest.fused_label === 1 ? 'Stress' : 'Normal'} muted={muted} text={text} />

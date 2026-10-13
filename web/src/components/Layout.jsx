@@ -15,6 +15,7 @@ export default function Layout() {
           <NavLink to="/relax">Relax</NavLink>
           <NavLink to="/setup">Calibrate</NavLink>
           <NavLink to="/clinical">Clinical</NavLink>
+          <NavLink to="/users">All users</NavLink>
         </nav>
         <div className="spacer" />
         <div className="row">

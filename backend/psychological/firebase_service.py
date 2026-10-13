@@ -11,7 +11,14 @@ from backend.psychological.realtime.firebase_sync import (
     FirebaseSync,
     make_eeg_fusion_record,
 )
+from backend.psychological.realtime.adc import BIPOLAR_UV_PER_COUNT
 from backend.psychological.sam40.decision import DecisionThresholds
+
+# Every stored EEG calibration result is tagged with the uV-per-count scale
+# it was computed under. Model scores depend on that scale (features are in
+# uV), so a result from a different scale -- e.g. before the gain-8 fix --
+# must not be reused. Rounded so float noise can't cause false mismatches.
+ADC_SCALE_TAG = round(BIPOLAR_UV_PER_COUNT, 7)
 
 # The real population default, read once from its single source of truth
 # (DecisionThresholds) -- exposed via get_calibration_status() below so
@@ -200,20 +207,39 @@ def _calibration_profile_ref(user_id: str) -> FirebaseSync | None:
                          extra_path="eeg")
 
 
-def save_user_calibration_profile(user_id: str, baseline_shift: float, thresholds_personalized: bool) -> None:
-    """Persists a successful, FRESH calibration's outcome for future-session
-    reuse (see load_user_calibration_profile()). Only meant to be called
-    when thresholds_personalized is True -- an unpersonalized (0.0 shift)
-    result shouldn't overwrite a real prior profile, or start a 7-day
-    'confirmed no correction needed' clock off of what's often just one
-    noisy 3-block session (see compute_baseline_shift()'s SEM check)."""
+def save_user_calibration_profile(user_id: str, baseline_shift: float, thresholds_personalized: bool,
+                                  mu_rest: float | None = None,
+                                  personal_high_load_p: float | None = None) -> None:
+    """Records this session's fresh rest calibration (Personal Scale:
+    mu_rest is re-measured every session, so calibrated_at is "last rest
+    calibration", and personal_high_load_p the latest personal threshold
+    for apps that show it outside a live session). .update(), not .set(),
+    so the onboarding responsiveness saved by save_user_responsiveness()
+    survives -- that is the one part carried across sessions."""
     ref = _calibration_profile_ref(user_id)
     if ref is None:
         return
-    ref.set({
+    ref.update({
         'baseline_shift': baseline_shift,
         'thresholds_personalized': thresholds_personalized,
+        'mu_rest': mu_rest,
+        'personal_high_load_p': personal_high_load_p,
         'calibrated_at': time.time(),
+    })
+
+
+def save_user_responsiveness(user_id: str, task_response_z: float | None, responsive: bool | None) -> None:
+    """Onboarding task outcome on the Personal Scale -- the only per-user
+    calibration fact reused across sessions (a non-responsive user keeps EEG
+    out of fusion until they redo the task with re-seated electrodes)."""
+    ref = _calibration_profile_ref(user_id)
+    if ref is None:
+        return
+    ref.update({
+        'task_response_z': task_response_z,
+        'eeg_responsive': responsive,
+        'personal_threshold_calibrated_at': time.time(),
+        'adc_uv_per_count': ADC_SCALE_TAG,
     })
 
 
@@ -304,6 +330,13 @@ def get_calibration_status(user_id: str) -> dict:
         'is_stale_hard': age_days > CALIBRATION_HARD_AGE_DAYS,
         'personal_high_load_p': profile.get('personal_high_load_p'),
         'population_high_load_p': POPULATION_HIGH_LOAD_P,
+        # Personal Scale onboarding result (None = task not done yet).
+        # Hidden when computed under a different uV scale (ADC_SCALE_TAG) --
+        # the same rule finish_personal_calibration() applies.
+        'eeg_responsive': (profile.get('eeg_responsive')
+                           if profile.get('adc_uv_per_count') == ADC_SCALE_TAG else None),
+        'task_response_z': (profile.get('task_response_z')
+                            if profile.get('adc_uv_per_count') == ADC_SCALE_TAG else None),
         # Piggybacks on this same call (not a separate endpoint/round-trip)
         # since CalibrationGate.js's useCalibrationSummary already fetches
         # this response on every poll -- see compute_eeg_baseline_drift()'s
