@@ -24,6 +24,7 @@ class RawSampleBuffer:
     def __init__(self, maxlen: int = 250 * 60):  # 60s of raw 250 SPS data as a safety cap
         self._buf = deque(maxlen=maxlen)
         self._lock = threading.Lock()
+        self.last_append = None  # time.time() of the newest sample, None until one arrives
         # Device-clock -> host-wall-clock mapping, as offset = arrival time -
         # device_millis/1000. Every packet arrives at capture time + network
         # delay, and the firmware now QUEUES batches during a Wi-Fi outage and
