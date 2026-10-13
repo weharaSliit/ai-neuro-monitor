@@ -191,6 +191,13 @@ def calibrate_start():
 
     def on_progress(status, extra):
         entry = {'status': status, 'n_windows': N_BASELINE_WIN}
+        # Live per-window values for the calibration graphs: keep the last
+        # list across every later status update (saving/done/skipped).
+        prev_blocks = _calibration_sessions.get(user_id, {}).get('blocks')
+        if extra.get('blocks') is not None:
+            entry['blocks'] = extra['blocks']
+        elif prev_blocks:
+            entry['blocks'] = prev_blocks
         if status == 'window_captured':
             entry['status'] = 'capturing'
             entry['window_idx'] = extra['window_idx']
@@ -259,6 +266,11 @@ def calibrate_threshold_start():
             entry = {'status': status, **extra}
         else:  # 'capturing' / 'window_skipped' / 'saving'
             entry = {'status': status, **extra}
+        # Keep the live per-window values across every later status update.
+        prev = _threshold_sessions.get(user_id, {})
+        for k in ('blocks', 'resting_scores'):
+            if k not in entry and prev.get(k):
+                entry[k] = prev[k]
         _threshold_sessions[user_id] = entry
 
     def worker():

@@ -328,6 +328,47 @@ table.data tr:last-child td { border-bottom: 0; }
 .spinner { width: 26px; height: 26px; border: 3px solid var(--brand-soft); border-top-color: var(--brand); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 40px auto; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* ── Relaxation guide + phone habits ─────────────────── */
+.tech-icon { width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center; font-size: 24px; flex: none; }
+.tech-icon.big { width: 64px; height: 64px; font-size: 32px; border-radius: 18px; margin: 0 auto; }
+.row > .tech-icon.big { margin: 0; }
+.tech-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: var(--sp-md); }
+.tech-card {
+  display: flex; align-items: center; gap: var(--sp-md); text-align: left;
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: var(--sp-md); cursor: pointer; transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.tech-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-up); }
+.tech-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.tech-text b { font-size: 14px; font-weight: 800; color: var(--text); }
+.tech-text span { font-size: 12px; font-weight: 500; color: var(--text-sub); line-height: 1.4; }
+.tech-go { color: #fff; font-weight: 800; font-size: 12px; padding: 7px 12px; border-radius: var(--r-sm); flex: none; }
+.modal.session { max-width: 460px; }
+.progress { height: 8px; border-radius: 4px; background: var(--pill); overflow: hidden; }
+.progress > span { display: block; height: 100%; background: var(--brand); border-radius: 4px; transition: width 0.4s ease; }
+.clash { font-size: 54px; font-weight: 900; letter-spacing: 2px; margin: var(--sp-xxl) 0; }
+.swatch-row { display: flex; flex-wrap: wrap; gap: var(--sp-sm); justify-content: center; }
+.swatch-row .btn { flex: 1 1 90px; }
+.target { width: 96px; height: 96px; border-radius: 24px; margin: var(--sp-xl) auto; box-shadow: var(--shadow-rest); }
+.swatch-grid { display: grid; grid-template-columns: repeat(3, 72px); gap: var(--sp-md); justify-content: center; }
+.swatch { width: 72px; height: 72px; border: 0; border-radius: 20px; cursor: pointer; transition: transform 0.1s ease; }
+.swatch:hover { transform: scale(1.06); }
+.tracer { position: relative; height: 120px; margin: var(--sp-xxl) 0; background: var(--brand-soft); border-radius: var(--r-lg); overflow: hidden; }
+.tracer > span {
+  position: absolute; top: 50%; left: 0; width: 28px; height: 28px; margin-top: -14px;
+  border-radius: 50%; background: var(--brand); animation: trace 3s ease-in-out infinite alternate;
+}
+@keyframes trace { from { left: 6%; } to { left: calc(94% - 28px); } }
+.stars { display: flex; gap: 6px; justify-content: center; }
+.stars button { background: none; border: 0; font-size: 34px; line-height: 1; color: var(--border); cursor: pointer; padding: 2px; }
+.stars button.on { color: var(--warning); }
+.stars-static { color: var(--warning); letter-spacing: 1px; white-space: nowrap; }
+.stars-static i { color: var(--border); font-style: normal; }
+.steps-list { margin: var(--sp-md) 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; color: var(--text-sub); }
+.sig-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: var(--sp-xl); }
+
+/* ── Live calibration graphs ─────────────────────────── */
+.live-graphs { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: var(--sp-md); }
 /* ── All users overview (pages/UsersOverview.jsx) ───────────────── */
 .users-scroll { overflow-x: auto; margin: 0 calc(-1 * var(--sp-sm)); }
 table.data.users { display: table; min-width: 1100px; }
@@ -348,3 +389,4 @@ table.data.users tr.clickable:focus-visible { outline: 2px solid var(--brand); o
 .window-table table.data { display: table; min-width: 980px; }
 .window-table thead th { position: sticky; top: 0; background: var(--card); z-index: 1; }
 .muted-cell { color: var(--text-muted); }
+

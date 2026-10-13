@@ -11,6 +11,8 @@ export default function Layout() {
         <div className="brandmark"><img src="/icon.png" alt="" /><span>MindPulse</span></div>
         <nav className="navlinks">
           <NavLink to="/" end>My wellbeing</NavLink>
+          <NavLink to="/phone">Phone habits</NavLink>
+          <NavLink to="/relax">Relax</NavLink>
           <NavLink to="/setup">Calibrate</NavLink>
           <NavLink to="/clinical">Clinical</NavLink>
           <NavLink to="/users">All users</NavLink>
