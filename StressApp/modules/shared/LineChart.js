@@ -1,7 +1,30 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ScrollView, Platform } from 'react-native';
 import Svg, { Circle, Line as SvgLine, Path, Defs, LinearGradient, Stop, Text as SvgText } from 'react-native-svg';
 import { COLORS } from '../physiological/config/theme';
+
+if (Platform.OS === 'web' && typeof document !== 'undefined') {
+  const styleId = 'linechart-hide-scrollbar-style';
+  if (!document.getElementById(styleId)) {
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = `
+      .linechart-no-scroll::-webkit-scrollbar,
+      [data-noscroll="true"]::-webkit-scrollbar,
+      [data-noscroll="true"] *::-webkit-scrollbar {
+        display: none !important;
+        width: 0 !important;
+        height: 0 !important;
+      }
+      .linechart-no-scroll,
+      [data-noscroll="true"] {
+        scrollbar-width: none !important;
+        -ms-overflow-style: none !important;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+}
 
 // ============================================================
 // LineChart -- React Native twin of the website's chart
@@ -74,10 +97,21 @@ function LineChart({
     multiLine = false, seriesColors, seriesLabels,
     // Waveforms / dense signals pass a smaller minGap (px per point).
     minGap = MIN_GAP,
+    variant = 'default',
+    continuous = false,
+    solidDots = false,
+    hideScrollbar = false,
 }) {
     const [width, setWidth] = useState(hintWidth || 300);
     const [sel, setSel] = useState(null);
     const scrollRef = useRef(null);
+    const isPheno = variant === 'phenotyping';
+    const isContinuous = continuous || isPheno;
+    const useSolidDots = solidDots || isPheno;
+    const shouldHideScrollbar = hideScrollbar || isPheno;
+    const chartId = useRef(`c_${Math.random().toString(36).slice(2, 7)}`).current;
+    const zoneGradientId = `zone_${chartId}`;
+    const areaGradientId = `area_${chartId}`;
 
     const isMulti = multiLine && seriesColors && seriesLabels;
     const series = useMemo(() => (isMulti
@@ -116,18 +150,21 @@ function LineChart({
 
         // Session breaks: only gaps far larger than this series' normal
         // spacing (so weekly/daily series still draw one continuous line).
-        const diffs = [];
-        for (let i = 1; i < n; i += 1) {
-            const a = rows[i - 1].date; const b = rows[i].date;
-            if (a && b) diffs.push(b - a);
-        }
-        const sortedDiffs = [...diffs].sort((a, b) => a - b);
-        const typical = sortedDiffs.length ? sortedDiffs[Math.floor(sortedDiffs.length / 2)] : 0;
-        const gapLimit = Math.max(GAP_MS, typical * 6);
+        // In continuous mode (phenotyping), gaps never split the line into isolated dots.
         const breaks = [];
-        for (let i = 1; i < n; i += 1) {
-            const a = rows[i - 1].date; const b = rows[i].date;
-            if (a && b && b - a > gapLimit) breaks.push(i);
+        if (!isContinuous) {
+            const diffs = [];
+            for (let i = 1; i < n; i += 1) {
+                const a = rows[i - 1].date; const b = rows[i].date;
+                if (a && b) diffs.push(b - a);
+            }
+            const sortedDiffs = [...diffs].sort((a, b) => a - b);
+            const typical = sortedDiffs.length ? sortedDiffs[Math.floor(sortedDiffs.length / 2)] : 0;
+            const gapLimit = Math.max(GAP_MS, typical * 6);
+            for (let i = 1; i < n; i += 1) {
+                const a = rows[i - 1].date; const b = rows[i].date;
+                if (a && b && b - a > gapLimit) breaks.push(i);
+            }
         }
         const breakSet = new Set(breaks);
         const spanMs = n > 1 && rows[0].date && rows[n - 1].date ? rows[n - 1].date - rows[0].date : 0;
@@ -228,8 +265,15 @@ function LineChart({
                     ref={scrollRef}
                     horizontal
                     scrollEnabled={g.scrollable}
-                    showsHorizontalScrollIndicator={g.scrollable}
-                    style={{ width: g.viewW }}
+                    showsHorizontalScrollIndicator={shouldHideScrollbar ? false : g.scrollable}
+                    style={[
+                        { width: g.viewW },
+                        Platform.OS === 'web' && shouldHideScrollbar && {
+                            scrollbarWidth: 'none',
+                            msOverflowStyle: 'none',
+                        },
+                    ]}
+                    {...(Platform.OS === 'web' && shouldHideScrollbar ? { 'data-noscroll': 'true', className: 'linechart-no-scroll' } : {})}
                     nestedScrollEnabled
                     bounces={false}
                     overScrollMode="never"
@@ -239,7 +283,7 @@ function LineChart({
                         <Svg width={contentW} height={height}>
                             <Defs>
                                 {zoned && (
-                                    <LinearGradient id="zone" x1="0" y1={PAD.t} x2="0" y2={PAD.t + g.plotH} gradientUnits="userSpaceOnUse">
+                                    <LinearGradient id={zoneGradientId} x1="0" y1={PAD.t} x2="0" y2={PAD.t + g.plotH} gradientUnits="userSpaceOnUse">
                                         <Stop offset={0} stopColor={zoneHighColor} />
                                         <Stop offset={frac(baselineValue)} stopColor={zoneHighColor} />
                                         <Stop offset={frac(baselineValue)} stopColor={zoneMidColor} />
@@ -248,11 +292,25 @@ function LineChart({
                                         <Stop offset={1} stopColor={zoneLowColor} />
                                     </LinearGradient>
                                 )}
-                                <LinearGradient id="area" x1="0" y1="0" x2="0" y2="1">
+                                <LinearGradient id={areaGradientId} x1="0" y1="0" x2="0" y2="1">
                                     <Stop offset="0" stopColor={zoned ? COLORS.brand : series[0].color} stopOpacity={0.16} />
                                     <Stop offset="1" stopColor={zoned ? COLORS.brand : series[0].color} stopOpacity={0} />
                                 </LinearGradient>
                             </Defs>
+
+                            {/* Vertical grid lines behind points for phenotyping (reference style) */}
+                            {isPheno && g.xLabels.map((i) => (
+                                <SvgLine
+                                    key={`vx${i}`}
+                                    x1={x(i)}
+                                    x2={x(i)}
+                                    y1={PAD.t}
+                                    y2={PAD.t + g.plotH}
+                                    stroke="#E2E8F0"
+                                    strokeWidth={1}
+                                    strokeOpacity={0.7}
+                                />
+                            ))}
 
                             {g.ticks.map((t, i) => (
                                 <SvgLine key={`t${i}`} x1={0} x2={contentW} y1={y(t)} y2={y(t)} stroke={COLORS.light.borderSoft} strokeWidth={1} />
@@ -265,25 +323,32 @@ function LineChart({
 
                             {baseline2Value != null && (
                                 <SvgLine x1={0} x2={contentW} y1={y(baseline2Value)} y2={y(baseline2Value)}
-                                    stroke={baseline2Color} strokeOpacity={0.7} strokeWidth={1.5} strokeDasharray="5,4" />
+                                    stroke={baseline2Color} strokeOpacity={0.8} strokeWidth={1.5} strokeDasharray="5,4" />
                             )}
                             {baselineValue != null && (
                                 <SvgLine x1={0} x2={contentW} y1={y(baselineValue)} y2={y(baselineValue)}
-                                    stroke={baselineColor} strokeOpacity={0.7} strokeWidth={1.5} strokeDasharray="5,4" />
+                                    stroke={baselineColor} strokeOpacity={0.8} strokeWidth={1.5} strokeDasharray="5,4" />
                             )}
 
                             {g.paths.map((p, si) => (
                                 <React.Fragment key={`p${si}`}>
-                                    {!isMulti && <Path d={p.area} fill="url(#area)" />}
+                                    {!isMulti && !isPheno && <Path d={p.area} fill={`url(#${areaGradientId})`} />}
                                     <Path d={p.d} fill="none" strokeWidth={2.4} strokeLinejoin="round" strokeLinecap="round"
-                                        stroke={zoned ? 'url(#zone)' : series[si].color} />
+                                        stroke={zoned ? `url(#${zoneGradientId})` : series[si].color} />
                                 </React.Fragment>
                             ))}
 
                             {/* Every point is visible -- MIN_GAP guarantees room for a dot. */}
                             {minGap >= 8 && series.map((se, si) => rows.map((r, i) => (r.values[si] == null ? null : (
-                                <Circle key={`d${si}-${i}`} cx={x(i)} cy={y(r.values[si])} r={2.4} fill="#FFFFFF"
-                                    stroke={zoned ? levelColor(r.values[si]) : se.color} strokeWidth={1.5} />
+                                <Circle
+                                    key={`d${si}-${i}`}
+                                    cx={x(i)}
+                                    cy={y(r.values[si])}
+                                    r={useSolidDots ? 3.5 : 2.4}
+                                    fill={useSolidDots ? (zoned ? levelColor(r.values[si]) : se.color) : "#FFFFFF"}
+                                    stroke={zoned ? levelColor(r.values[si]) : se.color}
+                                    strokeWidth={useSolidDots ? 1 : 1.5}
+                                />
                             ))))}
 
                             {g.xLabels.map((i, k) => {
