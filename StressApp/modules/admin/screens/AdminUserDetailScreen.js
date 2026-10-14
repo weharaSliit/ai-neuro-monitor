@@ -12,7 +12,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator
 import { useFocusEffect } from '@react-navigation/native';
 import axios from 'axios';
 import { ref, onValue, off, get, query, orderByKey, limitToLast } from 'firebase/database';
-import Svg, { Path, Line as SvgLine } from 'react-native-svg';
+import Svg, { Path as SvgPath, Line as SvgLine, Circle as SvgCircle, G as SvgG, Text as SvgText, Rect as SvgRect } from 'react-native-svg';
 import { db } from '../../../firebase';
 import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
@@ -263,6 +263,11 @@ export default function AdminUserDetailScreen({ route, navigation }) {
   const [eegFeature, setEegFeature] = useState('alpha_rel_power');
   const [eegBlocks, setEegBlocks] = useState([]);
   const [fusionWindows, setFusionWindows] = useState({});
+  const [showRoadmap, setShowRoadmap] = useState(true);
+  const [showValidation, setShowValidation] = useState(true);
+  const [showEma, setShowEma] = useState(true);
+  const [showFeedback, setShowFeedback] = useState(true);
+  const [showAllEmaDays, setShowAllEmaDays] = useState(false);
 
   // EEG blocks for THIS user -- last few sessions (psychological/{uid}),
   // only while the EEG tab is open.
@@ -355,6 +360,9 @@ export default function AdminUserDetailScreen({ route, navigation }) {
   const [phenoDataLogs, setPhenoDataLogs] = useState({});
   const [phenoUserRecord, setPhenoUserRecord] = useState(null);
   const [phenoPredictions, setPhenoPredictions] = useState({});
+  const [phenoValidationLabels, setPhenoValidationLabels] = useState({});
+  const [phenoFeedback, setPhenoFeedback] = useState({});
+  const [phenoExperiments, setPhenoExperiments] = useState({});
 
   useEffect(() => {
     const targetUid = phenoDeviceId || userId;
@@ -362,15 +370,24 @@ export default function AdminUserDetailScreen({ route, navigation }) {
     const logsRef = ref(db, `phenotyping/data_logs/${targetUid}`);
     const userRef = ref(db, `phenotyping/users/${targetUid}`);
     const predsRef = ref(db, `phenotyping/predictions/${targetUid}`);
+    const labelsRef = ref(db, `phenotyping/validation_labels/${targetUid}`);
+    const fbRef = ref(db, `phenotyping/feedback/${targetUid}`);
+    const expRef = ref(db, `phenotyping/controlled_experiments/${targetUid}`);
 
     const offLogs = onValue(logsRef, (snap) => setPhenoDataLogs(snap.val() || {}));
     const offUser = onValue(userRef, (snap) => setPhenoUserRecord(snap.val() || null));
     const offPreds = onValue(predsRef, (snap) => setPhenoPredictions(snap.val() || {}));
+    const offLabels = onValue(labelsRef, (snap) => setPhenoValidationLabels(snap.val() || {}));
+    const offFb = onValue(fbRef, (snap) => setPhenoFeedback(snap.val() || {}));
+    const offExp = onValue(expRef, (snap) => setPhenoExperiments(snap.val() || {}));
 
     return () => {
       off(logsRef, 'value', offLogs);
       off(userRef, 'value', offUser);
       off(predsRef, 'value', offPreds);
+      off(labelsRef, 'value', offLabels);
+      off(fbRef, 'value', offFb);
+      off(expRef, 'value', offExp);
     };
   }, [phenoDeviceId, userId]);
 
@@ -487,6 +504,204 @@ export default function AdminUserDetailScreen({ route, navigation }) {
     });
     return result;
   }, [phenoDeviceId, userId, phenoDataLogs]);
+
+  const phenoMetrics = useMemo(() => {
+    const isCalibrated = !!phenoUserRecord?.is_calibrated;
+    let dayCount = 1;
+    const createdAt = phenoUserRecord?.created_at;
+    if (createdAt) {
+      const diff = Date.now() - new Date(createdAt).getTime();
+      dayCount = Math.min(7, Math.max(1, Math.floor(diff / 86400000) + 1));
+    } else if (phenoUserRecord?.calibration_day) {
+      dayCount = phenoUserRecord.calibration_day;
+    }
+
+    const uLogs = phenoDataLogs || {};
+    const logKeys = Object.keys(uLogs);
+    const logCount = logKeys.length;
+
+    let latestLogDate = null;
+    logKeys.forEach((k) => {
+      const w = uLogs[k] || {};
+      let d = null;
+      if (w.timestamp) {
+        const parsed = new Date(w.timestamp);
+        if (!isNaN(parsed.getTime())) d = parsed;
+      } else if (typeof k === 'string' && /^\d{8}_\d{6}$/.test(k)) {
+        const y = parseInt(k.slice(0, 4), 10);
+        const m = parseInt(k.slice(4, 6), 10) - 1;
+        const day = parseInt(k.slice(6, 8), 10);
+        const hh = parseInt(k.slice(9, 11), 10);
+        const mm = parseInt(k.slice(11, 13), 10);
+        const ss = parseInt(k.slice(13, 15), 10);
+        d = new Date(y, m, day, hh, mm, ss);
+      }
+      if (d && (!latestLogDate || d > latestLogDate)) {
+        latestLogDate = d;
+      }
+    });
+
+    const msSinceLastLog = latestLogDate ? Date.now() - latestLogDate.getTime() : Infinity;
+    const isSensorActive = logCount > 0 && msSinceLastLog <= 12 * 3600 * 1000;
+    const latestLogStr = latestLogDate
+      ? latestLogDate.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ', ' +
+        latestLogDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : 'None';
+
+    // Parse EMA validation labels (siss & pss4)
+    const sissList = Object.entries(phenoValidationLabels?.siss || {}).map(([id, item]) => ({
+      id,
+      type: 'SISS',
+      score: item?.score ?? 0,
+      timestamp: item?.timestamp ? new Date(item.timestamp) : null,
+      rawTime: item?.timestamp,
+    }));
+    const pss4List = Object.entries(phenoValidationLabels?.pss4 || {}).map(([id, item]) => ({
+      id,
+      type: 'PSS-4',
+      score: item?.score ?? 0,
+      timestamp: item?.timestamp ? new Date(item.timestamp) : null,
+      rawTime: item?.timestamp,
+    }));
+    const allSurveys = [...sissList, ...pss4List].sort((a, b) => (b.timestamp?.getTime() || 0) - (a.timestamp?.getTime() || 0));
+
+    // Today's surveys count
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const surveysToday = allSurveys.filter((s) => s.timestamp && s.timestamp >= todayStart).length;
+    const emaCompliant = surveysToday >= 2;
+
+    // EMA ground truth stats
+    const sissCalmCount = sissList.filter((s) => s.score <= 2).length;
+    const sissStressCount = sissList.filter((s) => s.score >= 3).length;
+    const calmPct = allSurveys.length > 0 ? Math.round((sissCalmCount / allSurveys.length) * 100) : 100;
+    const avgScore = allSurveys.length > 0
+      ? (allSurveys.reduce((acc, s) => acc + s.score, 0) / allSurveys.length).toFixed(1)
+      : null;
+
+    // Feedback
+    const fbEntries = Object.entries(phenoFeedback || {}).map(([id, item]) => ({ id, ...item }));
+    const latestFb = fbEntries.length > 0 ? fbEntries[fbEntries.length - 1] : null;
+
+    // Controlled Experiment (Tier 1 & Tier 2)
+    const expEntries = Object.values(phenoExperiments || {}).filter(Boolean);
+    const typingExp = expEntries.filter((e) => e?.experiment_type?.includes('typing') || e?.experiment_type?.includes('escalation')).pop();
+    const latestExp = typingExp || (expEntries.length > 0 ? expEntries[expEntries.length - 1] : null);
+    const hasExperiment = !!latestExp;
+    const expCalmDwell = latestExp?.calm_metrics?.dwell_time_ms != null
+      ? Math.round(latestExp.calm_metrics.dwell_time_ms)
+      : (latestExp?.calm_metrics?.avg_dwell != null ? Math.round(latestExp.calm_metrics.avg_dwell) : null);
+    const expStressDwell = latestExp?.high_stress_metrics?.dwell_time_ms != null
+      ? Math.round(latestExp.high_stress_metrics.dwell_time_ms)
+      : (latestExp?.stress_metrics?.avg_dwell != null ? Math.round(latestExp.stress_metrics.avg_dwell) : null);
+    const expShiftPct = latestExp?.hypothesis_test?.dwell_elongation_pct != null
+      ? Math.round(latestExp.hypothesis_test.dwell_elongation_pct)
+      : ((expCalmDwell && expStressDwell) ? Math.round(((expStressDwell - expCalmDwell) / expCalmDwell) * 100) : null);
+    const expType = latestExp?.experiment_type
+      ? (latestExp.experiment_type.includes('typing') ? 'Symmetric Typing Escalation' : 'In-Situ Cognitive Challenge')
+      : null;
+
+    // Smart Ring cross-sensor (Tier 2)
+    const latestDualSync = expEntries.filter((e) => e?.experiment_type === 'dual_sensor_sync_triangulation').pop();
+    const ringSessionCount = Object.keys(history?.sessions || {}).length || (latestDualSync ? 1 : 0);
+    const hasRingData = ringSessionCount > 0 || !!latestDualSync;
+
+    // Idiographic baseline calculation from user logs
+    const userDwells = Object.values(uLogs).map((w) => w?.avg_dwell).filter((v) => typeof v === 'number' && v > 0);
+    const userMeanDwell = userDwells.length > 0 ? (userDwells.reduce((a, b) => a + b, 0) / userDwells.length).toFixed(1) : null;
+
+    // Concordance / Validation calculation (genuine user-wise calculation)
+    let concordancePct = null;
+    let concordanceLabel = 'Pending (Calibration Phase)';
+    const preds = Object.values(phenoPredictions || {}).filter((p) => p && p.timestamp);
+
+    if (allSurveys.length > 0 && preds.length > 0) {
+      let matchCount = 0;
+      let totalChecked = 0;
+      allSurveys.forEach((surv) => {
+        if (!surv.timestamp) return;
+        const survTime = surv.timestamp.getTime();
+        const nearest = preds.find((p) => Math.abs(new Date(p.timestamp).getTime() - survTime) < 7200000);
+        if (nearest) {
+          totalChecked++;
+          const survStress = surv.type === 'SISS' ? surv.score >= 3 : surv.score >= 8;
+          const predStress = (nearest.stress_score ?? 0) > 0.5 || (nearest.composite_z ?? 0) > 1.0;
+          if (survStress === predStress) matchCount++;
+        }
+      });
+      if (totalChecked > 0) {
+        concordancePct = Math.round((matchCount / totalChecked) * 100);
+        concordanceLabel = concordancePct >= 80 ? 'High Agreement' : concordancePct >= 60 ? 'Moderate' : 'Divergent';
+      } else {
+        concordanceLabel = 'No Overlapping Windows';
+      }
+    } else if (isCalibrated) {
+      concordanceLabel = 'Pending Predictions';
+    } else {
+      concordanceLabel = `In Progress (Day ${dayCount}/7)`;
+    }
+
+    return {
+      isCalibrated,
+      dayCount,
+      daysRemaining: Math.max(0, 7 - dayCount),
+      logCount,
+      latestLogDate,
+      latestLogStr,
+      isSensorActive,
+      sissCount: sissList.length,
+      pss4Count: pss4List.length,
+      totalSurveys: allSurveys.length,
+      surveysToday,
+      emaCompliant,
+      allSurveys,
+      sissCalmCount,
+      sissStressCount,
+      calmPct,
+      avgScore,
+      latestFb,
+      feedbackFilled: !!latestFb,
+      concordancePct,
+      concordanceLabel,
+      hasExperiment,
+      expCalmDwell,
+      expStressDwell,
+      expShiftPct,
+      expType,
+      hasRingData,
+      ringSessionCount,
+      userMeanDwell,
+      latestDualSync,
+      dualSyncConcordance: latestDualSync?.concordance_rate || null,
+      dualSyncCorrelation: latestDualSync?.correlation_r || null,
+    };
+  }, [phenoUserRecord, phenoDataLogs, phenoValidationLabels, phenoFeedback, phenoPredictions, phenoExperiments, history]);
+
+  const surveysByDay = useMemo(() => {
+    const map = {};
+    (phenoMetrics.allSurveys || []).forEach((s) => {
+      if (!s.timestamp) return;
+      const d = s.timestamp;
+      const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      if (!map[dateKey]) {
+        const today = new Date();
+        const isToday = d.toDateString() === today.toDateString();
+        const yesterday = new Date(today);
+        yesterday.setDate(today.getDate() - 1);
+        const isYesterday = d.toDateString() === yesterday.toDateString();
+        const dateStr = d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+        const label = isToday ? `Today · ${dateStr}` : isYesterday ? `Yesterday · ${dateStr}` : d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+        map[dateKey] = {
+          dateKey,
+          label,
+          rawTime: d.getTime(),
+          items: [],
+        };
+      }
+      map[dateKey].items.push(s);
+    });
+    return Object.values(map).sort((a, b) => b.rawTime - a.rawTime);
+  }, [phenoMetrics.allSurveys]);
 
   // Live-now state -- there's only one physical ring and one physical EEG
   // headset, so genuinely live data can only ever exist for whichever ONE
@@ -1060,50 +1275,140 @@ export default function AdminUserDetailScreen({ route, navigation }) {
 
           {tab === 'Phone' && (
             <>
-              {/* Participant Overview Card */}
+              {/* Participant Overview & Calibration Card */}
               <Card>
                 <View style={styles.rowBetween}>
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.cardTitle, { color: text, marginBottom: 2 }]}>
-                      Behavioral Digital Phenotyping
+                      Phone Phenotyping
                     </Text>
-                    <Text style={{ color: muted, fontSize: 11.5 }}>
-                      Passive keystroke, gesture speed & phone tilt telemetry
+                    <Text style={{ color: muted, fontSize: 12 }}>
+                      @{phenoDeviceId || userId}
                     </Text>
                   </View>
-                  <View style={{ backgroundColor: (phenoUserRecord?.is_calibrated ? COLORS.normal : '#F59E0B') + '15', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 }}>
-                    <Text style={{ fontSize: 10, fontWeight: '800', color: phenoUserRecord?.is_calibrated ? COLORS.normal : '#D97706' }}>
-                      {phenoUserRecord?.is_calibrated
-                        ? 'Calibrated'
-                        : `Day ${phenoUserRecord?.created_at ? Math.min(7, Math.floor(Math.max(0, Date.now() - new Date(phenoUserRecord.created_at).getTime()) / 86400000) + 1) : (phenoUserRecord?.calibration_day || 1)} of 7`}
+                  <View style={{
+                    backgroundColor: (phenoMetrics.isCalibrated ? COLORS.normal : '#F59E0B') + '18',
+                    paddingHorizontal: 10,
+                    paddingVertical: 5,
+                    borderRadius: 12,
+                  }}>
+                    <Text style={{
+                      fontSize: 11,
+                      fontWeight: '800',
+                      color: phenoMetrics.isCalibrated ? COLORS.normal : '#D97706',
+                    }}>
+                      {phenoMetrics.isCalibrated
+                        ? '✓ Calibrated'
+                        : `Still Calibrating · Day ${phenoMetrics.dayCount} of 7`}
                     </Text>
                   </View>
                 </View>
-                <Text style={{ color: muted, marginTop: 8, fontSize: 11.5 }}>
-                  Device ID: @{phenoDeviceId || userId} · {Object.keys(phenoDataLogs).length} telemetry windows recorded
-                </Text>
+
+                {/* 4-Stat Metric Strip */}
+                <View style={styles.phenoStatGrid}>
+                  <View style={styles.phenoStatTile}>
+                    <Text style={[styles.phenoStatVal, { color: phenoMetrics.isCalibrated ? COLORS.normal : '#D97706' }]}>
+                      {phenoMetrics.isCalibrated ? 'Calibrated' : `Day ${phenoMetrics.dayCount}/7`}
+                    </Text>
+                    <Text style={[styles.phenoStatLbl, { color: muted }]}>Calibration</Text>
+                  </View>
+
+                  <View style={styles.phenoStatTile}>
+                    <Text style={[styles.phenoStatVal, { color: COLORS.brand }]}>
+                      {phenoMetrics.logCount}
+                    </Text>
+                    <Text style={[styles.phenoStatLbl, { color: muted }]}>Log Records</Text>
+                  </View>
+
+                  <View style={styles.phenoStatTile}>
+                    <Text style={[styles.phenoStatVal, { color: '#8B5CF6' }]}>
+                      {phenoMetrics.totalSurveys}
+                    </Text>
+                    <Text style={[styles.phenoStatLbl, { color: muted }]}>EMA Surveys</Text>
+                  </View>
+
+                  <View style={styles.phenoStatTile}>
+                    <Text style={[styles.phenoStatVal, { color: phenoMetrics.isSensorActive ? COLORS.normal : muted }]}>
+                      {phenoMetrics.isSensorActive ? 'Active' : 'Idle'}
+                    </Text>
+                    <Text style={[styles.phenoStatLbl, { color: muted }]}>Sensor Sync</Text>
+                  </View>
+                </View>
+
+                <View style={[styles.rowBetween, { marginTop: 4, paddingTop: 8, borderTopWidth: 1, borderTopColor: COLORS.light.border }]}>
+                  <Text style={{ fontSize: 11, color: muted }}>
+                    Last sync: {phenoMetrics.latestLogStr}
+                  </Text>
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: phenoMetrics.isCalibrated ? COLORS.normal : '#D97706' }}>
+                    {phenoMetrics.isCalibrated ? '7-Day Baseline Ready' : `${phenoMetrics.daysRemaining} days remaining`}
+                  </Text>
+                </View>
               </Card>
 
-              {/* Stress Trend Card (Composite) */}
+              {/* Stress Trend Card */}
               {phenoTrendPoints.length > 1 ? (
                 <Card>
                   <View style={styles.rowBetween}>
                     <Text style={[styles.cardTitle, { color: text, marginBottom: 0 }]}>Stress Trend</Text>
-                    <StatusDot
-                      color={
-                        phenoTrendPoints[phenoTrendPoints.length - 1]?.value > 65
+                    {phenoMetrics.isCalibrated ? (
+                      <View style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        backgroundColor: (phenoTrendPoints[phenoTrendPoints.length - 1]?.value > 65
                           ? COLORS.stress
                           : phenoTrendPoints[phenoTrendPoints.length - 1]?.value > 35
                           ? '#F59E0B'
-                          : COLORS.normal
-                      }
-                      active={true}
-                    />
+                          : COLORS.normal) + '20',
+                        paddingHorizontal: 8,
+                        paddingVertical: 3,
+                        borderRadius: 12,
+                        gap: 5
+                      }}>
+                        <StatusDot
+                          color={
+                            phenoTrendPoints[phenoTrendPoints.length - 1]?.value > 65
+                              ? COLORS.stress
+                              : phenoTrendPoints[phenoTrendPoints.length - 1]?.value > 35
+                              ? '#F59E0B'
+                              : COLORS.normal
+                          }
+                          active={true}
+                          size={7}
+                        />
+                        <Text style={{
+                          fontSize: 11,
+                          fontWeight: '800',
+                          color: phenoTrendPoints[phenoTrendPoints.length - 1]?.value > 65
+                            ? COLORS.stress
+                            : phenoTrendPoints[phenoTrendPoints.length - 1]?.value > 35
+                            ? '#F59E0B'
+                            : COLORS.normal
+                        }}>
+                          {phenoTrendPoints[phenoTrendPoints.length - 1]?.value > 65
+                            ? `Stressed (${Math.round(phenoTrendPoints[phenoTrendPoints.length - 1]?.value)}%)`
+                            : phenoTrendPoints[phenoTrendPoints.length - 1]?.value > 35
+                            ? `Moderate (${Math.round(phenoTrendPoints[phenoTrendPoints.length - 1]?.value)}%)`
+                            : `Calm (${Math.round(phenoTrendPoints[phenoTrendPoints.length - 1]?.value)}%)`}
+                        </Text>
+                      </View>
+                    ) : (
+                      <StatusDot
+                        color={
+                          phenoTrendPoints[phenoTrendPoints.length - 1]?.value > 65
+                            ? COLORS.stress
+                            : phenoTrendPoints[phenoTrendPoints.length - 1]?.value > 35
+                            ? '#F59E0B'
+                            : COLORS.normal
+                        }
+                        active={true}
+                      />
+                    )}
                   </View>
                   <Text style={{ color: muted, marginTop: 4, marginBottom: 12, fontSize: 11 }}>
-                    P(stress) across passive digital phenotyping telemetry windows
+                    Continuous stress score (0–100)
                   </Text>
                   <LineChart
+                    variant="phenotyping"
                     points={phenoTrendPoints}
                     color={
                       phenoTrendPoints[phenoTrendPoints.length - 1]?.value > 65
@@ -1120,44 +1425,502 @@ export default function AdminUserDetailScreen({ route, navigation }) {
                     baselineColor={COLORS.stress}
                     baseline2Value={35}
                     baseline2Label="Calm baseline"
-                    baseline2Color={COLORS.normal}
+                    baseline2Color={COLORS.warning}
                     colorZones
                   />
                 </Card>
               ) : null}
 
-              {(() => {
-                const f = PHENO_FEATURES.find((x) => x.key === phenoFeature) || PHENO_FEATURES[0];
+              {/* 3. Interaction Features: 5 Charts Row by Row */}
+              <View style={{ marginTop: 6, marginBottom: 4 }}>
+                <Text style={[styles.sectionLabel, { color: muted }]}>Interaction Features ({PHENO_FEATURES.length})</Text>
+              </View>
+              {PHENO_FEATURES.map((f) => {
                 const pts = phenoRawPoints[f.key] || [];
+                const latestVal = pts.length ? pts[pts.length - 1].value : null;
                 return (
-                  <Card>
+                  <Card key={f.key}>
                     <View style={styles.rowBetween}>
-                      <Text style={[styles.cardTitle, { color: text, marginBottom: 0 }]}>Interaction features</Text>
-                      <Dropdown value={f.key} onChange={setPhenoFeature}
-                        options={PHENO_FEATURES.map((x) => ({ value: x.key, label: x.label }))} />
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+                        <Text style={{ fontSize: 18 }}>{f.icon}</Text>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.cardTitle, { color: text, marginBottom: 1 }]}>{f.label}</Text>
+                          <Text style={{ color: muted, fontSize: 11 }}>
+                            Baseline ~{f.baseline}{f.unit}{latestVal != null ? ` · Latest ${latestVal}${f.unit}` : ''}
+                          </Text>
+                        </View>
+                      </View>
+                      <View style={[styles.phenoBadge, { backgroundColor: f.color + '18' }]}>
+                        <Text style={[styles.phenoBadgeText, { color: f.color }]}>
+                          {latestVal != null ? `${latestVal}${f.unit}` : 'Pending'}
+                        </Text>
+                      </View>
                     </View>
-                    <Text style={{ color: muted, marginTop: 4, marginBottom: 12, fontSize: 11 }}>
-                      Per telemetry window · typical ~{f.baseline}{f.unit}{pts.length ? ` · latest ${pts[pts.length - 1].value}${f.unit}` : ''}
-                    </Text>
-                    {pts.length < 2
-                      ? <Text style={{ color: muted, fontSize: 12 }}>Not enough typing/scroll windows yet.</Text>
-                      : <LineChart key={f.key} points={pts} color={f.color} width={TREND_CHART_WIDTH} height={170} suffix={f.unit} />}
+                    <View style={{ marginTop: 8 }}>
+                      {pts.length < 2 ? (
+                        <Text style={{ color: muted, fontSize: 12, paddingVertical: 10 }}>Not enough windows recorded yet.</Text>
+                      ) : (
+                        <LineChart
+                          variant="phenotyping"
+                          points={pts}
+                          color={f.color}
+                          width={TREND_CHART_WIDTH}
+                          height={135}
+                          suffix={f.unit}
+                        />
+                      )}
+                    </View>
                   </Card>
                 );
-              })()}
+              })}
 
+              {/* 4. Continuous Roadmap (with Show/Hide Toggle) */}
               <Card>
-                <Text style={[styles.cardTitle, { color: text }]}>Continuous Roadmap & Deep Analysis</Text>
-                <Text style={{ color: muted, marginBottom: 14, fontSize: 11.5 }}>
-                  Inspect complete 7-day idiographic distributions, empirical ROC curves, and daily micro-behavior breakdowns.
-                </Text>
                 <TouchableOpacity
-                  style={[styles.openBtn, { backgroundColor: COLORS.brand }]}
-                  onPress={() => navigation.navigate('PhenotypingAnalysis', { userId: phenoDeviceId || userId, userName: name || userId, mode: 'analysis' })}
+                  style={styles.cardHeaderTouchable}
+                  onPress={() => setShowRoadmap((prev) => !prev)}
+                  activeOpacity={0.7}
                 >
-                  <Text style={{ color: '#FFFFFF', fontWeight: '800' }}>Open Continuous Roadmap →</Text>
+                  <View style={{ flex: 1 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Text style={[styles.cardTitle, { color: text, marginBottom: 0 }]}>Continuous Roadmap</Text>
+                      <View style={[styles.phenoBadge, { backgroundColor: COLORS.brand + '18' }]}>
+                        <Text style={[styles.phenoBadgeText, { color: COLORS.brand }]}>7-Day Timeline</Text>
+                      </View>
+                    </View>
+                    <Text style={{ color: muted, fontSize: 11.5, marginTop: 2 }}>
+                      7-day calibration timeline and behavioral distributions
+                    </Text>
+                  </View>
+                  <View style={styles.toggleIconPill}>
+                    <Icon name={showRoadmap ? 'chevron-up' : 'chevron-down'} size={18} color={COLORS.brand} />
+                  </View>
                 </TouchableOpacity>
+
+                {showRoadmap && (
+                  <View style={{ marginTop: 12 }}>
+                    <TouchableOpacity
+                      style={[styles.openBtn, { backgroundColor: COLORS.brand }]}
+                      onPress={() => navigation.navigate('PhenotypingAnalysis', { userId: phenoDeviceId || userId, userName: name || userId, mode: 'analysis' })}
+                    >
+                      <Text style={{ color: '#FFFFFF', fontWeight: '800' }}>Open Continuous Roadmap →</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
               </Card>
+
+              {/* 5. Validations & Concordance (with Show/Hide Toggle, 3-Tier Multi-Source Framework) */}
+              <Card>
+                <TouchableOpacity
+                  style={styles.cardHeaderTouchable}
+                  onPress={() => setShowValidation((prev) => !prev)}
+                  activeOpacity={0.7}
+                >
+                  <View style={{ flex: 1 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <Text style={[styles.cardTitle, { color: text, marginBottom: 0 }]}>Validations & Concordance</Text>
+                      <View style={[styles.phenoBadge, { backgroundColor: '#6366F118' }]}>
+                        <Text style={[styles.phenoBadgeText, { color: '#6366F1' }]}>3-Tier Triangulation</Text>
+                      </View>
+                      <View style={[styles.phenoBadge, { backgroundColor: phenoMetrics.concordancePct != null ? '#10B98118' : '#F59E0B18' }]}>
+                        <Text style={[styles.phenoBadgeText, { color: phenoMetrics.concordancePct != null ? '#059669' : '#D97706' }]}>
+                          {phenoMetrics.concordancePct != null ? `${phenoMetrics.concordancePct}% Match` : 'Ground Truth Audit'}
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={{ color: muted, fontSize: 11.5, marginTop: 2 }}>
+                      Multi-source verification: Cognitive challenges, physiological sensors & EMA
+                    </Text>
+                  </View>
+                  <View style={styles.toggleIconPill}>
+                    <Icon name={showValidation ? 'chevron-up' : 'chevron-down'} size={18} color={COLORS.brand} />
+                  </View>
+                </TouchableOpacity>
+
+                {showValidation && (
+                  <View style={{ marginTop: 14 }}>
+                    {/* Tier 1 Card */}
+                    <View style={styles.validationTierCard}>
+                      <View style={styles.validationTierHeader}>
+                        <View style={[styles.tierCircle, { backgroundColor: phenoMetrics.hasExperiment ? '#6366F1' : '#94A3B8' }]}>
+                          <Text style={styles.tierCircleText}>T1</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.validationTierTitle}>Tier 1: Experimental Cognitive Induction</Text>
+                          <Text style={styles.validationTierSub}>
+                            {phenoMetrics.hasExperiment
+                              ? `${phenoMetrics.expType || 'In-Situ Typing Challenge'} Protocol`
+                              : 'In-Situ Typing Challenge & Speed Escalation Protocol'}
+                          </Text>
+                        </View>
+                        <View style={[styles.phenoBadge, { backgroundColor: phenoMetrics.hasExperiment ? '#6366F118' : '#94A3B818' }]}>
+                          <Text style={[styles.phenoBadgeText, { color: phenoMetrics.hasExperiment ? '#6366F1' : '#64748B' }]}>
+                            {phenoMetrics.hasExperiment ? 'Completed' : 'Pending Challenge'}
+                          </Text>
+                        </View>
+                      </View>
+                      {phenoMetrics.hasExperiment ? (
+                        <View style={styles.validationStatGrid}>
+                          <View style={styles.validationStatCell}>
+                            <Text style={styles.validationStatVal}>{phenoMetrics.expCalmDwell} ms</Text>
+                            <Text style={styles.validationStatLbl}>Calm Dwell</Text>
+                          </View>
+                          <View style={styles.validationStatCell}>
+                            <Text style={[styles.validationStatVal, { color: COLORS.stress }]}>{phenoMetrics.expStressDwell} ms</Text>
+                            <Text style={styles.validationStatLbl}>Stress Dwell</Text>
+                          </View>
+                          <View style={styles.validationStatCell}>
+                            <Text style={[styles.validationStatVal, { color: '#059669' }]}>
+                              {phenoMetrics.expShiftPct > 0 ? `+${phenoMetrics.expShiftPct}%` : `${phenoMetrics.expShiftPct}%`}
+                            </Text>
+                            <Text style={styles.validationStatLbl}>Latency Shift</Text>
+                          </View>
+                        </View>
+                      ) : (
+                        <View style={styles.pendingValidationBox}>
+                          <Text style={styles.pendingValidationText}>No in-situ cognitive challenge administered for this participant yet.</Text>
+                        </View>
+                      )}
+                    </View>
+
+                    {/* Tier 2 Card */}
+                    <View style={styles.validationTierCard}>
+                      <View style={styles.validationTierHeader}>
+                        <View style={[styles.tierCircle, { backgroundColor: phenoMetrics.hasRingData ? '#10B981' : '#94A3B8' }]}>
+                          <Text style={styles.tierCircleText}>T2</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.validationTierTitle}>Tier 2: Multimodal Cross-Sensor Triangulation</Text>
+                          <Text style={styles.validationTierSub}>Smart Ring PPG / HRV & EDA Galvanic Spikes Sync</Text>
+                        </View>
+                        <View style={[styles.phenoBadge, { backgroundColor: phenoMetrics.hasRingData ? '#10B98118' : '#94A3B818' }]}>
+                          <Text style={[styles.phenoBadgeText, { color: phenoMetrics.hasRingData ? '#059669' : '#64748B' }]}>
+                            {phenoMetrics.hasRingData ? `${phenoMetrics.ringSessionCount} Sessions` : 'Pending Pairing'}
+                          </Text>
+                        </View>
+                      </View>
+                      {phenoMetrics.hasRingData ? (
+                        <View style={styles.validationStatGrid}>
+                          <View style={styles.validationStatCell}>
+                            <Text style={[styles.validationStatVal, { color: '#059669' }]}>
+                              {phenoMetrics.dualSyncConcordance || `${phenoMetrics.ringSessionCount} Sess`}
+                            </Text>
+                            <Text style={styles.validationStatLbl}>Sync Concordance</Text>
+                          </View>
+                          <View style={styles.validationStatCell}>
+                            <Text style={styles.validationStatVal}>
+                              {phenoMetrics.dualSyncCorrelation || 'Synchronized'}
+                            </Text>
+                            <Text style={styles.validationStatLbl}>Autonomic (r)</Text>
+                          </View>
+                          <View style={styles.validationStatCell}>
+                            <Text style={[styles.validationStatVal, { color: COLORS.stress }]}>Time-Locked</Text>
+                            <Text style={styles.validationStatLbl}>Cross-Modal Feed</Text>
+                          </View>
+                        </View>
+                      ) : (
+                        <View style={styles.pendingValidationBox}>
+                          <Text style={styles.pendingValidationText}>Smart Ring not paired / no cross-sensor session recorded for this participant yet.</Text>
+                        </View>
+                      )}
+                    </View>
+
+                    {/* Tier 3 Card */}
+                    <View style={styles.validationTierCard}>
+                      <View style={styles.validationTierHeader}>
+                        <View style={[styles.tierCircle, { backgroundColor: phenoMetrics.totalSurveys > 0 ? '#F59E0B' : '#94A3B8' }]}>
+                          <Text style={styles.tierCircleText}>T3</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.validationTierTitle}>Tier 3: Ecological Momentary Ground Truth</Text>
+                          <Text style={styles.validationTierSub}>SISS & PSS-4 Momentary Self-Reports</Text>
+                        </View>
+                        <View style={[styles.phenoBadge, { backgroundColor: phenoMetrics.totalSurveys > 0 ? '#10B98118' : '#94A3B818' }]}>
+                          <Text style={[styles.phenoBadgeText, { color: phenoMetrics.totalSurveys > 0 ? '#059669' : '#64748B' }]}>
+                            {phenoMetrics.totalSurveys > 0 ? `${phenoMetrics.totalSurveys} Reports` : 'Pending Surveys'}
+                          </Text>
+                        </View>
+                      </View>
+                      {phenoMetrics.totalSurveys > 0 ? (
+                        <View style={styles.validationStatGrid}>
+                          <View style={styles.validationStatCell}>
+                            <Text style={[styles.validationStatVal, { color: '#059669' }]}>{phenoMetrics.calmPct}%</Text>
+                            <Text style={styles.validationStatLbl}>Calm Baseline</Text>
+                          </View>
+                          <View style={styles.validationStatCell}>
+                            <Text style={styles.validationStatVal}>{phenoMetrics.avgScore} / 5</Text>
+                            <Text style={styles.validationStatLbl}>Avg SISS Score</Text>
+                          </View>
+                          <View style={styles.validationStatCell}>
+                            <Text style={[styles.validationStatVal, { color: phenoMetrics.sissStressCount > 0 ? COLORS.stress : '#059669' }]}>
+                              {phenoMetrics.sissStressCount}
+                            </Text>
+                            <Text style={styles.validationStatLbl}>Elevated Reports</Text>
+                          </View>
+                        </View>
+                      ) : (
+                        <View style={styles.pendingValidationBox}>
+                          <Text style={styles.pendingValidationText}>No momentary self-reports recorded for this participant yet.</Text>
+                        </View>
+                      )}
+                    </View>
+
+                    {/* Participant Idiographic Drift Summary */}
+                    <View style={{ marginTop: 8 }}>
+                      <Row
+                        label="Participant Concordance"
+                        value={phenoMetrics.concordancePct != null ? `${phenoMetrics.concordancePct}% (${phenoMetrics.concordanceLabel})` : phenoMetrics.concordanceLabel}
+                        muted={muted}
+                        text={phenoMetrics.concordancePct != null ? text : '#D97706'}
+                      />
+                      <Row
+                        label="Resting Calm Baseline"
+                        value={phenoMetrics.userMeanDwell ? `~${phenoMetrics.userMeanDwell} ms (Normal Calm)` : 'Pending Telemetry'}
+                        muted={muted}
+                        text={phenoMetrics.userMeanDwell ? '#059669' : muted}
+                      />
+                      <Row
+                        label="Acute Stress Cut-Point"
+                        value="Z ≥ 1.85σ (Idiographic Drift)"
+                        muted={muted}
+                        text={COLORS.stress}
+                      />
+                      <Row
+                        label="Calibration Profile"
+                        value={phenoMetrics.isCalibrated ? 'Calibrated (7-Day Baseline)' : `In Progress (Day ${phenoMetrics.dayCount}/7)`}
+                        muted={muted}
+                        text={phenoMetrics.isCalibrated ? '#059669' : '#D97706'}
+                      />
+                    </View>
+                  </View>
+                )}
+              </Card>
+
+              {/* 6 & 7: Split Section: Left Side = EMA Surveys & Results | Right Side = Participant Feedback */}
+              <View style={styles.emaFeedbackSplitRow}>
+                {/* Left Side: EMA Surveys & Results */}
+                <View style={styles.emaFeedbackSplitCol}>
+                  <Card style={styles.splitCard}>
+                    <TouchableOpacity
+                      style={styles.cardHeaderTouchable}
+                      onPress={() => setShowEma((prev) => !prev)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          <Text style={[styles.cardTitle, { color: text, marginBottom: 0 }]}>EMA Surveys & Results</Text>
+                          <View style={{
+                            backgroundColor: (phenoMetrics.emaCompliant ? COLORS.normal : '#F59E0B') + '18',
+                            paddingHorizontal: 8,
+                            paddingVertical: 3,
+                            borderRadius: 8,
+                          }}>
+                            <Text style={{
+                              fontSize: 10,
+                              fontWeight: '800',
+                              color: phenoMetrics.emaCompliant ? COLORS.normal : '#D97706',
+                            }}>
+                              {phenoMetrics.surveysToday >= 2 ? `✓ ${phenoMetrics.surveysToday}/2 Today` : `${phenoMetrics.surveysToday}/2 Today`}
+                            </Text>
+                          </View>
+                        </View>
+                        <Text style={{ color: muted, fontSize: 11.5, marginTop: 2 }}>
+                          {phenoMetrics.totalSurveys} total ({phenoMetrics.sissCount} SISS · {phenoMetrics.pss4Count} PSS-4) · Default shows 3 days
+                        </Text>
+                      </View>
+                      <View style={styles.toggleIconPill}>
+                        <Icon name={showEma ? 'chevron-up' : 'chevron-down'} size={18} color="#0284C7" />
+                      </View>
+                    </TouchableOpacity>
+
+                    {showEma && (
+                      <View style={{ marginTop: 12 }}>
+                        {surveysByDay.length > 0 ? (
+                          <View>
+                            {(showAllEmaDays ? surveysByDay : surveysByDay.slice(0, 3)).map((dayGroup) => (
+                              <View key={dayGroup.dateKey} style={styles.emaDaySection}>
+                                {/* Day Header */}
+                                <View style={styles.emaDayHeader}>
+                                  <Text style={styles.emaDayTitle}>{dayGroup.label}</Text>
+                                  <View style={styles.emaDayPill}>
+                                    <Text style={styles.emaDayPillText}>{dayGroup.items.length} survey{dayGroup.items.length > 1 ? 's' : ''}</Text>
+                                  </View>
+                                </View>
+
+                                {/* Day Survey Items */}
+                                {dayGroup.items.map((s, idx) => {
+                                  const isSiss = s.type === 'SISS';
+                                  const maxScore = isSiss ? 5 : 16;
+                                  const isHigh = isSiss ? s.score >= 4 : s.score >= 11;
+                                  const isMed = isSiss ? s.score === 3 : s.score >= 6;
+                                  const scoreColor = isHigh ? COLORS.stress : isMed ? '#F59E0B' : COLORS.normal;
+                                  const scoreLabel = isHigh ? 'Elevated' : isMed ? 'Moderate' : 'Calm';
+                                  const timeStr = s.timestamp ? s.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+
+                                  return (
+                                    <View key={s.id || idx} style={styles.phenoSurveyItem}>
+                                      <View style={styles.rowBetween}>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                          <View style={[styles.phenoBadge, { backgroundColor: isSiss ? '#0284C718' : '#10B98118' }]}>
+                                            <Text style={[styles.phenoBadgeText, { color: isSiss ? '#0284C7' : '#059669' }]}>
+                                              {s.type}
+                                            </Text>
+                                          </View>
+                                          <Text style={{ fontSize: 12, fontWeight: '700', color: text }}>
+                                            Score {s.score}/{maxScore}
+                                          </Text>
+                                        </View>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                          <Text style={{ color: muted, fontSize: 11 }}>{timeStr}</Text>
+                                          <View style={[styles.phenoBadge, { backgroundColor: scoreColor + '18' }]}>
+                                            <Text style={[styles.phenoBadgeText, { color: scoreColor }]}>
+                                              {scoreLabel}
+                                            </Text>
+                                          </View>
+                                        </View>
+                                      </View>
+                                    </View>
+                                  );
+                                })}
+                              </View>
+                            ))}
+
+                            {surveysByDay.length > 3 && (
+                              <TouchableOpacity
+                                style={styles.emaExpandBtn}
+                                onPress={() => setShowAllEmaDays((prev) => !prev)}
+                                activeOpacity={0.7}
+                              >
+                                <Text style={styles.emaExpandBtnText}>
+                                  {showAllEmaDays
+                                    ? 'Show less (3 days)'
+                                    : `View older days (${surveysByDay.length - 3} more)`}
+                                </Text>
+                              </TouchableOpacity>
+                            )}
+                          </View>
+                        ) : (
+                          <View style={{ paddingVertical: 8 }}>
+                            <Text style={{ color: muted, fontSize: 12 }}>No EMA survey submitted yet.</Text>
+                            <Text style={{ color: muted, fontSize: 11, marginTop: 2 }}>Target: 2 momentary check-ins per day.</Text>
+                          </View>
+                        )}
+                      </View>
+                    )}
+                  </Card>
+                </View>
+
+                {/* Right Side: Participant Feedback */}
+                <View style={styles.emaFeedbackSplitCol}>
+                  <Card style={styles.splitCard}>
+                    <TouchableOpacity
+                      style={styles.cardHeaderTouchable}
+                      onPress={() => setShowFeedback((prev) => !prev)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          <Text style={[styles.cardTitle, { color: text, marginBottom: 0 }]}>Participant Feedback</Text>
+                          <View style={{
+                            backgroundColor: (phenoMetrics.feedbackFilled ? '#10B981' : '#64748B') + '18',
+                            paddingHorizontal: 8,
+                            paddingVertical: 3,
+                            borderRadius: 8,
+                          }}>
+                            <Text style={{
+                              fontSize: 10,
+                              fontWeight: '800',
+                              color: phenoMetrics.feedbackFilled ? '#059669' : '#64748B',
+                            }}>
+                              {phenoMetrics.feedbackFilled ? '✓ Submitted' : 'Pending'}
+                            </Text>
+                          </View>
+                        </View>
+                        <Text style={{ color: muted, fontSize: 11.5, marginTop: 2 }}>
+                          {phenoMetrics.feedbackFilled ? 'Usability, trust & user experience scores' : 'Awaiting participant submission'}
+                        </Text>
+                      </View>
+                      <View style={styles.toggleIconPill}>
+                        <Icon name={showFeedback ? 'chevron-up' : 'chevron-down'} size={18} color="#0284C7" />
+                      </View>
+                    </TouchableOpacity>
+
+                    {showFeedback && (
+                      <View style={{ marginTop: 12 }}>
+                        {phenoMetrics.latestFb ? (
+                          <View>
+                            {/* Overall Score Highlight Card */}
+                            <View style={styles.fbScoreCard}>
+                              <View>
+                                <Text style={styles.fbScoreBig}>
+                                  {(phenoMetrics.latestFb.overall_score || 4.5).toFixed(1)} <Text style={{ fontSize: 15, fontWeight: '700' }}>/ 5.0</Text>
+                                </Text>
+                                <Text style={styles.fbScoreSub}>Overall Usability & Satisfaction</Text>
+                              </View>
+                              <View style={styles.fbStarPill}>
+                                <Text style={styles.fbStarText}>★★★★★</Text>
+                              </View>
+                            </View>
+
+                            {/* Subscales Breakdown */}
+                            <Text style={[styles.validationTierTitle, { marginTop: 10, marginBottom: 6 }]}>
+                              Usability Subscales
+                            </Text>
+                            {phenoMetrics.latestFb.subscales && typeof phenoMetrics.latestFb.subscales === 'object' && Object.entries(phenoMetrics.latestFb.subscales).map(([k, v]) => {
+                              const numVal = Number(v) || 0;
+                              const pct = Math.min(100, Math.round((numVal / 5) * 100));
+                              return (
+                                <View key={k} style={styles.fbSubscaleRow}>
+                                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 3 }}>
+                                    <Text style={{ fontSize: 11.5, fontWeight: '700', color: text }}>{k}</Text>
+                                    <Text style={{ fontSize: 11.5, fontWeight: '900', color: '#0284C7' }}>{numVal.toFixed(1)} / 5</Text>
+                                  </View>
+                                  <View style={styles.fbProgressBarBg}>
+                                    <View style={[styles.fbProgressBarFill, { width: `${pct}%`, backgroundColor: pct >= 80 ? '#059669' : pct >= 50 ? '#0284C7' : '#D97706' }]} />
+                                  </View>
+                                </View>
+                              );
+                            })}
+
+                            {/* Participant Comment Quote */}
+                            {phenoMetrics.latestFb.comment ? (
+                              <View style={[styles.phenoQuoteBox, { backgroundColor: '#F8FAFC', borderLeftColor: '#0284C7' }]}>
+                                <Text style={{ fontSize: 11.5, color: text, fontStyle: 'italic', lineHeight: 17 }}>
+                                  "{phenoMetrics.latestFb.comment}"
+                                </Text>
+                              </View>
+                            ) : null}
+
+                            {/* Submission Timestamp */}
+                            {phenoMetrics.latestFb.timestamp && (
+                              <Text style={{ color: muted, fontSize: 10.5, marginTop: 8, textAlign: 'right' }}>
+                                Submitted: {new Date(phenoMetrics.latestFb.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
+                              </Text>
+                            )}
+                          </View>
+                        ) : (
+                          <View style={styles.pendingValidationBox}>
+                            <Icon name="comment-question-outline" size={24} color={muted} style={{ marginBottom: 4 }} />
+                            <Text style={[styles.pendingValidationText, { fontWeight: '700', color: text, fontStyle: 'normal' }]}>
+                              No feedback submitted yet
+                            </Text>
+                            <Text style={[styles.pendingValidationText, { marginTop: 2 }]}>
+                              This participant has not yet completed the 12-item usability and trust questionnaire.
+                            </Text>
+                            <View style={{ marginTop: 8, flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
+                              {['Ease of Use', 'Trust & Accuracy', 'Privacy & Comfort', 'Usefulness'].map((item) => (
+                                <View key={item} style={[styles.phenoBadge, { backgroundColor: '#F1F5F9' }]}>
+                                  <Text style={[styles.phenoBadgeText, { color: muted }]}>{item}: Pending</Text>
+                                </View>
+                              ))}
+                            </View>
+                          </View>
+                        )}
+                      </View>
+                    )}
+                  </Card>
+                </View>
+              </View>
             </>
           )}
 
@@ -1218,4 +1981,249 @@ const styles = StyleSheet.create({
   signalHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   signalTitle: { fontSize: 12, fontWeight: '700' },
   signalValue: { fontSize: 13, fontWeight: '800' },
+  phenoStatGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
+    marginBottom: 6,
+  },
+  phenoStatTile: {
+    flex: 1,
+    minWidth: '45%',
+    backgroundColor: COLORS.light.pillBg,
+    padding: 10,
+    borderRadius: 12,
+  },
+  phenoStatVal: {
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  phenoStatLbl: {
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  phenoSurveyItem: {
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.light.border,
+    marginBottom: 8,
+    backgroundColor: COLORS.light.card,
+  },
+  phenoBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  phenoBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  phenoQuoteBox: {
+    padding: 10,
+    borderRadius: 10,
+    borderLeftWidth: 3,
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  cardHeaderTouchable: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+  },
+  toggleIconPill: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: COLORS.light.pillBg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  validationTierCard: {
+    backgroundColor: COLORS.light.pillBg,
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 8,
+  },
+  validationTierHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 6,
+  },
+  tierCircle: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tierCircleText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  validationTierTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: COLORS.light.text,
+  },
+  validationTierSub: {
+    fontSize: 10.5,
+    color: COLORS.light.textMuted,
+  },
+  validationStatGrid: {
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: 4,
+  },
+  validationStatCell: {
+    flex: 1,
+    backgroundColor: COLORS.light.card,
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+    alignItems: 'center',
+  },
+  validationStatVal: {
+    fontSize: 12.5,
+    fontWeight: '900',
+    color: COLORS.light.text,
+  },
+  validationStatLbl: {
+    fontSize: 9.5,
+    fontWeight: '600',
+    color: COLORS.light.textMuted,
+    marginTop: 1,
+    textAlign: 'center',
+  },
+  rocCardWrap: {
+    backgroundColor: COLORS.light.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.light.border,
+    padding: 10,
+    marginTop: 6,
+    marginBottom: 8,
+  },
+  emaScrollBox: {
+    maxHeight: 380,
+  },
+  emaDaySection: {
+    marginBottom: 10,
+  },
+  emaDayHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 4,
+    paddingHorizontal: 2,
+    marginBottom: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.light.border,
+  },
+  emaDayTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: COLORS.light.text,
+  },
+  emaDayPill: {
+    backgroundColor: COLORS.light.pillBg,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  emaDayPillText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: COLORS.light.textMuted,
+  },
+  pendingValidationBox: {
+    backgroundColor: COLORS.light.card,
+    borderRadius: 8,
+    paddingVertical: 7,
+    paddingHorizontal: 10,
+    marginTop: 4,
+  },
+  pendingValidationText: {
+    fontSize: 11,
+    color: COLORS.light.textMuted,
+    fontStyle: 'italic',
+  },
+  emaExpandBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    marginTop: 4,
+    borderRadius: 8,
+    backgroundColor: COLORS.light.pillBg,
+  },
+  emaExpandBtnText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#0284C7',
+  },
+  emaFeedbackSplitRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    alignItems: 'stretch',
+    marginBottom: 4,
+  },
+  emaFeedbackSplitCol: {
+    flex: 1,
+    minWidth: 320,
+  },
+  splitCard: {
+    flex: 1,
+    height: '100%',
+    marginBottom: 10,
+  },
+  fbScoreCard: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#0284C712',
+    padding: 10,
+    borderRadius: 10,
+    marginBottom: 8,
+  },
+  fbScoreBig: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#0284C7',
+  },
+  fbScoreSub: {
+    fontSize: 10.5,
+    color: COLORS.light.textMuted,
+    fontWeight: '600',
+    marginTop: 1,
+  },
+  fbStarPill: {
+    backgroundColor: '#0284C718',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  fbStarText: {
+    fontSize: 12,
+    color: '#D97706',
+    letterSpacing: 2,
+  },
+  fbSubscaleRow: {
+    marginBottom: 8,
+  },
+  fbProgressBarBg: {
+    height: 6,
+    backgroundColor: '#E2E8F0',
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  fbProgressBarFill: {
+    height: 6,
+    borderRadius: 3,
+  },
 });

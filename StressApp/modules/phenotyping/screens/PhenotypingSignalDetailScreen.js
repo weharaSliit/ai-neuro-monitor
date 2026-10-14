@@ -258,7 +258,7 @@ export default function PhenotypingSignalDetailScreen({ navigation, route }) {
 
 const styles = StyleSheet.create({
     container: { flex: 1 },
-    scroll: { padding: 20, paddingBottom: 40 },
+    scroll: { padding: 20, paddingBottom: 60 },
     card: { borderRadius: 18, borderWidth: 1, padding: 18, marginBottom: 14 },
     rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
     rowStart: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },

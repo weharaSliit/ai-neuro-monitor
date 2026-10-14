@@ -287,6 +287,7 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
     const [baselines, setBaselines] = useState(null);
     const [dataLogCount, setDataLogCount] = useState(null);
     const [calibStatus, setCalibStatus] = useState(null);
+    const [showCalibHistory, setShowCalibHistory] = useState(false);
 
     useEffect(() => {
         const initial = route?.params?.initialTab;
@@ -361,8 +362,9 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
     }, [deviceId]);
 
 
-    const isCalibrating = !calibStatus?.isCalibrated;
-    const effectiveTimeRange = mode === 'analysis' ? (calibStatus?.isCalibrated ? 'post' : '7') : timeRange;
+    const isCalibratedUser = !!(calibStatus?.isCalibrated || (calibStatus?.dayNumber && calibStatus.dayNumber > 7));
+    const isCalibrating = !isCalibratedUser;
+    const effectiveTimeRange = mode === 'analysis' ? (isCalibratedUser ? 'post' : '7') : timeRange;
     const isViewCalibrating = effectiveTimeRange === '7' && isCalibrating;
     const isCalibOverview = mode === 'analysis' ? isCalibrating : (effectiveTimeRange === '7' && isCalibrating);
 
@@ -608,9 +610,12 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
 
 
     // Weekly Overview stats derived dynamically from real predictions and interaction logs
-    const { weeklyScores, avgScore, peakDay, calmDay, detectionStats } = useMemo(() => {
+    const { weeklyScores, avgScore, peakDay, calmDay, detectionStats, calibWeeklyScores, calibPeakDay } = useMemo(() => {
         const ws = buildWeeklyChart(predictions, allEntries, isCalibOverview);
+        const calibWs = buildWeeklyChart(predictions, allEntries, true);
         const withData = ws.filter((d) => d.hasData);
+        const calibWithData = calibWs.filter((d) => d.hasData);
+        const calibPeak = calibWithData.length > 0 ? calibWithData.reduce((a, b) => (a.windowCount > b.windowCount ? a : b)) : null;
         
         let avg = '--';
         let peak = null;
@@ -657,6 +662,8 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                 total: total > 0 ? total : '--',
                 confidence,
             },
+            calibWeeklyScores: calibWs,
+            calibPeakDay: calibPeak,
         };
     }, [predictions, allEntries, effectiveTimeRange, isCalibOverview]);
 
@@ -930,6 +937,7 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                     }}
                                 >
                                     <LineChart
+                                        variant="phenotyping"
                                         points={telemetryPoints}
                                         color={timeRange === 'post' ? COLORS.brand : (isCalibrating ? COLORS.brand : overallStateColor)}
                                         width={chartWidth}
@@ -1225,8 +1233,8 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                 {activeTab === 'overview' && (
                     <>
                         <Card elevated style={styles.card}>
-                            <View style={[styles.rowBetween, { alignItems: 'flex-start' }]}>
-                                <Text style={[styles.cardTitle, { color: t.text, flex: 1, marginRight: 8 }]} numberOfLines={2}>
+                            <View style={[styles.rowBetween, { alignItems: 'center', marginBottom: 14 }]}>
+                                <Text style={[styles.cardTitle, { color: t.text, flex: 1, marginRight: 8 }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
                                     {isCalibOverview ? 'Daily Baseline Activity' : 'Weekly Behavioral Stress Pattern'}
                                 </Text>
                                 <View style={[styles.avgBadge, { backgroundColor: isCalibOverview ? COLORS.brand + '15' : (avgScore !== '--' ? COLORS.brand + '15' : t.pillBg) }]}>
@@ -1238,7 +1246,7 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                 </View>
                             </View>
 
-                            <View style={[styles.barChart, { marginTop: 14 }]}>
+                            <View style={[styles.barChart, { marginTop: 14, paddingTop: 10 }]}>
                                 {weeklyScores.map((s, i) => {
                                     const isPeak = !!(peakDay && s.hasData && s.day === peakDay.day && weeklyScores.filter((d) => d.hasData).length > 1);
                                     const isCalm = !!(calmDay && s.hasData && s.day === calmDay.day && weeklyScores.filter((d) => d.hasData).length > 1 && !isPeak);
@@ -1277,28 +1285,45 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                         {/* Peak vs Calmest / Calibration stats */}
                         <View style={styles.statsRow}>
                             <View style={[styles.statBox, { backgroundColor: t.surface, borderColor: t.border }]}>
-                                <Text style={[styles.statLabel, { color: t.textMuted }]}>
+                                <Text style={[styles.statLabel, { color: t.textMuted }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
                                     {isCalibOverview ? 'Calibration' : 'Average Score'}
                                 </Text>
-                                <Text style={[styles.statValue, { color: t.text, fontSize: isCalibOverview ? 15 : 18 }]}>
-                                    {isCalibOverview ? (calibStatus?.displayDays || 'Day 1 of 7') : avgScore}
+                                <Text style={[styles.statValue, { color: t.text, fontSize: 16 }]} numberOfLines={1}>
+                                    {isCalibOverview
+                                        ? (calibStatus?.isCalibrated ? 'Day 7' : `Day ${Math.min(calibStatus?.dayNumber || 1, 7)}`)
+                                        : avgScore}
                                 </Text>
+                                {isCalibOverview && (
+                                    <Text style={[styles.statSubText, { color: COLORS.brand }]} numberOfLines={1}>
+                                        {calibStatus?.isCalibrated ? 'Calibrated' : (calibStatus?.phase === 'awaiting' ? 'Finalizing' : 'of 7 Days')}
+                                    </Text>
+                                )}
                             </View>
                             <View style={[styles.statBox, { backgroundColor: t.surface, borderColor: t.border }]}>
-                                <Text style={[styles.statLabel, { color: t.textMuted }]}>
-                                    {isCalibOverview ? 'Most Active Day' : 'Peak Stress Day'}
+                                <Text style={[styles.statLabel, { color: t.textMuted }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+                                    {isCalibOverview ? 'Most Active' : 'Peak Day'}
                                 </Text>
-                                <Text style={[styles.statValue, { color: COLORS.warning, fontSize: 15 }]}>
-                                    {isCalibOverview ? (peakDay ? `${peakDay.day} (${peakDay.windowCount})` : '--') : (peakDay?.day || '--')}
+                                <Text style={[styles.statValue, { color: COLORS.warning, fontSize: 15 }]} numberOfLines={1}>
+                                    {isCalibOverview ? (peakDay ? peakDay.day : '--') : (peakDay?.day || '--')}
                                 </Text>
+                                {isCalibOverview && peakDay && (
+                                    <Text style={[styles.statSubText, { color: COLORS.warning }]} numberOfLines={1}>
+                                        {`(${peakDay.windowCount} wins)`}
+                                    </Text>
+                                )}
                             </View>
                             <View style={[styles.statBox, { backgroundColor: t.surface, borderColor: t.border }]}>
-                                <Text style={[styles.statLabel, { color: t.textMuted }]}>
+                                <Text style={[styles.statLabel, { color: t.textMuted }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
                                     {isCalibOverview ? 'Total Windows' : 'Calmest Day'}
                                 </Text>
-                                <Text style={[styles.statValue, { color: isCalibOverview ? COLORS.brand : COLORS.normal, fontSize: 15 }]}>
-                                    {isCalibOverview ? `${dataLogCount || 0} logged` : (calmDay?.day || '--')}
+                                <Text style={[styles.statValue, { color: isCalibOverview ? COLORS.brand : COLORS.normal, fontSize: 15 }]} numberOfLines={1}>
+                                    {isCalibOverview ? (dataLogCount || 0) : (calmDay?.day || '--')}
                                 </Text>
+                                {isCalibOverview && (
+                                    <Text style={[styles.statSubText, { color: t.textMuted }]} numberOfLines={1}>
+                                        Logged
+                                    </Text>
+                                )}
                             </View>
                         </View>
 
@@ -1356,6 +1381,172 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                 </View>
                             </View>
                         </Card>
+
+                        {!isCalibOverview && (
+                            <View style={{ marginTop: 6, marginBottom: 16 }}>
+                                {/* Show / Hide 7-Day Calibration History Toggle */}
+                                <TouchableOpacity
+                                    style={[
+                                        styles.calibToggleCard,
+                                        {
+                                            backgroundColor: t.surface,
+                                            borderColor: t.border,
+                                        },
+                                    ]}
+                                    onPress={() => setShowCalibHistory((prev) => !prev)}
+                                    activeOpacity={0.8}
+                                >
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                                        <View style={[styles.calibToggleIconWrap, { backgroundColor: COLORS.brand + '15' }]}>
+                                            <Icon
+                                                name={showCalibHistory ? 'eye-off-outline' : 'history'}
+                                                size={18}
+                                                color={COLORS.brand}
+                                            />
+                                        </View>
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={[styles.calibToggleTitle, { color: t.text }]}>
+                                                7-Day Calibration Period View
+                                            </Text>
+                                            <Text style={[styles.calibToggleSub, { color: t.textMuted }]}>
+                                                {showCalibHistory ? 'Tap to hide initial 7-day baseline activity' : 'Tap to view initial 7-day baseline activity'}
+                                            </Text>
+                                        </View>
+                                    </View>
+                                    <View style={[styles.calibChevronWrap, { backgroundColor: t.pillBg }]}>
+                                        <Icon
+                                            name={showCalibHistory ? 'chevron-up' : 'chevron-down'}
+                                            size={18}
+                                            color={COLORS.brand}
+                                        />
+                                    </View>
+                                </TouchableOpacity>
+
+                                {/* Expanded 7-Day Calibration View */}
+                                {showCalibHistory && (
+                                    <View style={{ marginTop: 12 }}>
+                                        {/* 1. Daily Baseline Activity Card */}
+                                        <Card elevated style={styles.card}>
+                                            <View style={[styles.rowBetween, { alignItems: 'center', marginBottom: 14 }]}>
+                                                <Text style={[styles.cardTitle, { color: t.text, flex: 1, marginRight: 8 }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
+                                                    Daily Baseline Activity
+                                                </Text>
+                                                <View style={[styles.avgBadge, { backgroundColor: COLORS.brand + '15' }]}>
+                                                    <Text style={{ fontSize: 10.5, fontWeight: '850', color: COLORS.brand }}>
+                                                        {`${dataLogCount || 0} Windows Logged`}
+                                                    </Text>
+                                                </View>
+                                            </View>
+
+                                            <View style={[styles.barChart, { marginTop: 14, paddingTop: 10 }]}>
+                                                {calibWeeklyScores.map((s, i) => {
+                                                    const isPeak = !!(calibPeakDay && s.hasData && s.day === calibPeakDay.day && calibWeeklyScores.filter((d) => d.hasData).length > 1);
+                                                    const color = s.hasData ? COLORS.brand : t.border;
+                                                    return (
+                                                        <View key={i} style={styles.barCol}>
+                                                            <Text style={[styles.barScoreLabel, { color: s.hasData ? COLORS.brand : t.textMuted }]}>
+                                                                {s.displayLabel}
+                                                            </Text>
+                                                            <View style={[styles.barTrack, { backgroundColor: t.pillBg }]}>
+                                                                <View style={[styles.barFill, { height: `${s.hPct}%`, backgroundColor: color }]} />
+                                                            </View>
+                                                            <Text
+                                                                style={[
+                                                                    styles.barLabel,
+                                                                    { color: isPeak ? COLORS.brand : t.textMuted },
+                                                                    isPeak && { fontWeight: '950' },
+                                                                ]}
+                                                            >
+                                                                {s.day}{isPeak ? ' 📍' : ''}
+                                                            </Text>
+                                                        </View>
+                                                    );
+                                                })}
+                                            </View>
+                                        </Card>
+
+                                        {/* 2. Calibration Stats Row */}
+                                        <View style={styles.statsRow}>
+                                            <View style={[styles.statBox, { backgroundColor: t.surface, borderColor: t.border }]}>
+                                                <Text style={[styles.statLabel, { color: t.textMuted }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+                                                    Calibration
+                                                </Text>
+                                                <Text style={[styles.statValue, { color: t.text, fontSize: 16 }]} numberOfLines={1}>
+                                                    {calibStatus?.isCalibrated ? 'Day 7' : `Day ${Math.min(calibStatus?.dayNumber || 1, 7)}`}
+                                                </Text>
+                                                <Text style={[styles.statSubText, { color: COLORS.brand }]} numberOfLines={1}>
+                                                    {calibStatus?.isCalibrated ? 'Calibrated' : (calibStatus?.phase === 'awaiting' ? 'Finalizing' : 'of 7 Days')}
+                                                </Text>
+                                            </View>
+                                            <View style={[styles.statBox, { backgroundColor: t.surface, borderColor: t.border }]}>
+                                                <Text style={[styles.statLabel, { color: t.textMuted }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+                                                    Most Active
+                                                </Text>
+                                                <Text style={[styles.statValue, { color: COLORS.warning, fontSize: 15 }]} numberOfLines={1}>
+                                                    {calibPeakDay ? calibPeakDay.day : '--'}
+                                                </Text>
+                                                {calibPeakDay && (
+                                                    <Text style={[styles.statSubText, { color: COLORS.warning }]} numberOfLines={1}>
+                                                        {`(${calibPeakDay.windowCount} wins)`}
+                                                    </Text>
+                                                )}
+                                            </View>
+                                            <View style={[styles.statBox, { backgroundColor: t.surface, borderColor: t.border }]}>
+                                                <Text style={[styles.statLabel, { color: t.textMuted }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+                                                    Total Windows
+                                                </Text>
+                                                <Text style={[styles.statValue, { color: COLORS.brand, fontSize: 15 }]} numberOfLines={1}>
+                                                    {dataLogCount || 0}
+                                                </Text>
+                                                <Text style={[styles.statSubText, { color: t.textMuted }]} numberOfLines={1}>
+                                                    Logged
+                                                </Text>
+                                            </View>
+                                        </View>
+
+                                        {/* 3. Baseline Calibration Status Card */}
+                                        <Card elevated style={styles.card}>
+                                            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 12 }]}>
+                                                Baseline Calibration Status
+                                            </Text>
+
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                <View style={{ flex: 1, alignItems: 'center' }}>
+                                                    <Text style={[styles.hint, { color: t.textMuted, fontSize: 10.5, textAlign: 'center' }]}>
+                                                        Stage
+                                                    </Text>
+                                                    <Text style={[styles.statValue, { color: t.text, fontSize: 16, marginTop: 4 }]}>
+                                                        {calibStatus?.displayDays || 'Day 7 of 7'}
+                                                    </Text>
+                                                </View>
+
+                                                <View style={{ width: 1, height: 28, backgroundColor: t.border }} />
+
+                                                <View style={{ flex: 1, alignItems: 'center' }}>
+                                                    <Text style={[styles.hint, { color: t.textMuted, fontSize: 10.5, textAlign: 'center' }]}>
+                                                        Windows Captured
+                                                    </Text>
+                                                    <Text style={[styles.statValue, { color: t.text, fontSize: 16, marginTop: 4 }]}>
+                                                        {dataLogCount !== null ? `${dataLogCount}` : '0'}
+                                                    </Text>
+                                                </View>
+
+                                                <View style={{ width: 1, height: 28, backgroundColor: t.border }} />
+
+                                                <View style={{ flex: 1, alignItems: 'center' }}>
+                                                    <Text style={[styles.hint, { color: t.textMuted, fontSize: 10.5, textAlign: 'center' }]}>
+                                                        AI Engine
+                                                    </Text>
+                                                    <Text style={[styles.statValue, { color: COLORS.normal, fontSize: 16, marginTop: 4 }]}>
+                                                        {`${calibStatus?.progressPct || 100}%`}
+                                                    </Text>
+                                                </View>
+                                            </View>
+                                        </Card>
+                                    </View>
+                                )}
+                            </View>
+                        )}
                     </>
                 )}
 
@@ -1486,6 +1677,166 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
                                 </View>
                             ))}
                         </Card>
+
+                        {isCalibratedUser && (
+                            <View style={{ marginTop: 6, marginBottom: 16 }}>
+                                {/* Show / Hide 7-Day Calibration History Toggle */}
+                                <TouchableOpacity
+                                    style={[
+                                        styles.calibToggleCard,
+                                        {
+                                            backgroundColor: t.surface,
+                                            borderColor: t.border,
+                                        },
+                                    ]}
+                                    onPress={() => setShowCalibHistory((prev) => !prev)}
+                                    activeOpacity={0.8}
+                                >
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                                        <View style={[styles.calibToggleIconWrap, { backgroundColor: COLORS.brand + '15' }]}>
+                                            <Icon
+                                                name={showCalibHistory ? 'eye-off-outline' : 'history'}
+                                                size={18}
+                                                color={COLORS.brand}
+                                            />
+                                        </View>
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={[styles.calibToggleTitle, { color: t.text }]}>
+                                                7-Day Calibration Period View
+                                            </Text>
+                                            <Text style={[styles.calibToggleSub, { color: t.textMuted }]}>
+                                                {showCalibHistory ? 'Tap to hide initial 7-day baseline activity' : 'Tap to view initial 7-day baseline activity'}
+                                            </Text>
+                                        </View>
+                                    </View>
+                                    <View style={[styles.calibChevronWrap, { backgroundColor: t.pillBg }]}>
+                                        <Icon
+                                            name={showCalibHistory ? 'chevron-up' : 'chevron-down'}
+                                            size={18}
+                                            color={COLORS.brand}
+                                        />
+                                    </View>
+                                </TouchableOpacity>
+
+                                {/* Expanded 7-Day Calibration View */}
+                                {showCalibHistory && (
+                                    <View style={{ marginTop: 12 }}>
+                                        {/* 1. Daily Baseline Activity Card */}
+                                        <Card elevated style={styles.card}>
+                                            <View style={[styles.rowBetween, { alignItems: 'flex-start' }]}>
+                                                <Text style={[styles.cardTitle, { color: t.text, flex: 1, marginRight: 8 }]} numberOfLines={2}>
+                                                    Daily Baseline Activity
+                                                </Text>
+                                                <View style={[styles.avgBadge, { backgroundColor: COLORS.brand + '15' }]}>
+                                                    <Text style={{ fontSize: 10.5, fontWeight: '850', color: COLORS.brand }}>
+                                                        {`${dataLogCount || 0} Windows Logged`}
+                                                    </Text>
+                                                </View>
+                                            </View>
+
+                                            <View style={[styles.barChart, { marginTop: 14 }]}>
+                                                {calibWeeklyScores.map((s, i) => {
+                                                    const isPeak = !!(calibPeakDay && s.hasData && s.day === calibPeakDay.day && calibWeeklyScores.filter((d) => d.hasData).length > 1);
+                                                    const color = s.hasData ? COLORS.brand : t.border;
+                                                    return (
+                                                        <View key={i} style={styles.barCol}>
+                                                            <Text style={[styles.barScoreLabel, { color: s.hasData ? COLORS.brand : t.textMuted }]}>
+                                                                {s.displayLabel}
+                                                            </Text>
+                                                            <View style={[styles.barTrack, { backgroundColor: t.pillBg }]}>
+                                                                <View style={[styles.barFill, { height: `${s.hPct}%`, backgroundColor: color }]} />
+                                                            </View>
+                                                            <Text
+                                                                style={[
+                                                                    styles.barLabel,
+                                                                    { color: isPeak ? COLORS.brand : t.textMuted },
+                                                                    isPeak && { fontWeight: '950' },
+                                                                ]}
+                                                            >
+                                                                {s.day}{isPeak ? ' 📍' : ''}
+                                                            </Text>
+                                                        </View>
+                                                    );
+                                                })}
+                                            </View>
+                                        </Card>
+
+                                        {/* 2. Calibration Stats Row */}
+                                        <View style={styles.statsRow}>
+                                            <View style={[styles.statBox, { backgroundColor: t.surface, borderColor: t.border }]}>
+                                                <Text style={[styles.statLabel, { color: t.textMuted }]}>Calibration</Text>
+                                                <Text style={[styles.statValue, { color: t.text, fontSize: 16 }]} numberOfLines={1}>
+                                                    {calibStatus?.isCalibrated ? 'Day 7' : `Day ${Math.min(calibStatus?.dayNumber || 1, 7)}`}
+                                                </Text>
+                                                <Text style={[styles.statSubText, { color: COLORS.brand }]} numberOfLines={1}>
+                                                    {calibStatus?.isCalibrated ? 'Calibrated' : (calibStatus?.phase === 'awaiting' ? 'Finalizing' : 'of 7 Days')}
+                                                </Text>
+                                            </View>
+                                            <View style={[styles.statBox, { backgroundColor: t.surface, borderColor: t.border }]}>
+                                                <Text style={[styles.statLabel, { color: t.textMuted }]}>Most Active</Text>
+                                                <Text style={[styles.statValue, { color: COLORS.warning, fontSize: 15 }]} numberOfLines={1}>
+                                                    {calibPeakDay ? calibPeakDay.day : '--'}
+                                                </Text>
+                                                {calibPeakDay && (
+                                                    <Text style={[styles.statSubText, { color: COLORS.warning }]} numberOfLines={1}>
+                                                        {`(${calibPeakDay.windowCount} wins)`}
+                                                    </Text>
+                                                )}
+                                            </View>
+                                            <View style={[styles.statBox, { backgroundColor: t.surface, borderColor: t.border }]}>
+                                                <Text style={[styles.statLabel, { color: t.textMuted }]}>Total Windows</Text>
+                                                <Text style={[styles.statValue, { color: COLORS.brand, fontSize: 15 }]} numberOfLines={1}>
+                                                    {dataLogCount || 0}
+                                                </Text>
+                                                <Text style={[styles.statSubText, { color: t.textMuted }]} numberOfLines={1}>
+                                                    Logged
+                                                </Text>
+                                            </View>
+                                        </View>
+
+                                        {/* 3. Baseline Calibration Status Card */}
+                                        <Card elevated style={styles.card}>
+                                            <Text style={[styles.cardTitle, { color: t.text, marginBottom: 12 }]}>
+                                                Baseline Calibration Status
+                                            </Text>
+
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                <View style={{ flex: 1, alignItems: 'center' }}>
+                                                    <Text style={[styles.hint, { color: t.textMuted, fontSize: 10.5, textAlign: 'center' }]}>
+                                                        Stage
+                                                    </Text>
+                                                    <Text style={[styles.statValue, { color: t.text, fontSize: 16, marginTop: 4 }]}>
+                                                        {calibStatus?.displayDays || 'Day 7 of 7'}
+                                                    </Text>
+                                                </View>
+
+                                                <View style={{ width: 1, height: 28, backgroundColor: t.border }} />
+
+                                                <View style={{ flex: 1, alignItems: 'center' }}>
+                                                    <Text style={[styles.hint, { color: t.textMuted, fontSize: 10.5, textAlign: 'center' }]}>
+                                                        Windows Captured
+                                                    </Text>
+                                                    <Text style={[styles.statValue, { color: t.text, fontSize: 16, marginTop: 4 }]}>
+                                                        {dataLogCount !== null ? `${dataLogCount}` : '0'}
+                                                    </Text>
+                                                </View>
+
+                                                <View style={{ width: 1, height: 28, backgroundColor: t.border }} />
+
+                                                <View style={{ flex: 1, alignItems: 'center' }}>
+                                                    <Text style={[styles.hint, { color: t.textMuted, fontSize: 10.5, textAlign: 'center' }]}>
+                                                        AI Engine
+                                                    </Text>
+                                                    <Text style={[styles.statValue, { color: COLORS.normal, fontSize: 16, marginTop: 4 }]}>
+                                                        {`${calibStatus?.progressPct || 100}%`}
+                                                    </Text>
+                                                </View>
+                                            </View>
+                                        </Card>
+                                    </View>
+                                )}
+                            </View>
+                        )}
                     </>
                 )}
             </ScrollView>
@@ -1580,17 +1931,17 @@ const styles = StyleSheet.create({
     distLabel: { minWidth: 90, fontSize: 11, fontWeight: '700' },
     distBarBg: { flex: 1, height: 8, borderRadius: 4, overflow: 'hidden' },
     distBarFill: { height: 8, borderRadius: 4 },
-    distVal: { fontSize: 11.5, fontWeight: '850', minWidth: 65, textAlign: 'right' },
-    barChart: { flexDirection: 'row', justifyContent: 'space-between', height: 120, marginTop: 14, alignItems: 'flex-end' },
+    barChart: { flexDirection: 'row', justifyContent: 'space-between', minHeight: 125, marginTop: 14, alignItems: 'flex-end', paddingTop: 8 },
     barCol: { flex: 1, alignItems: 'center' },
     barScoreLabel: { fontSize: 9.5, fontWeight: '800', marginBottom: 3 },
-    barTrack: { width: 18, height: 90, borderRadius: 8, overflow: 'hidden', justifyContent: 'flex-end' },
+    barTrack: { width: 18, height: 85, borderRadius: 8, overflow: 'hidden', justifyContent: 'flex-end' },
     barFill: { width: '100%', borderRadius: 8 },
     barLabel: { fontSize: 9.5, fontWeight: '700', marginTop: 6 },
-    statsRow: { flexDirection: 'row', gap: 8, marginVertical: 6 },
-    statBox: { flex: 1, borderRadius: 14, borderWidth: 1, padding: 12, alignItems: 'center' },
-    statLabel: { fontSize: 9, fontWeight: '700', textTransform: 'uppercase' },
-    statValue: { fontSize: 18, fontWeight: '900', marginTop: 4 },
+    statsRow: { flexDirection: 'row', gap: 8, marginVertical: 8 },
+    statBox: { flex: 1, minWidth: 0, borderRadius: 14, borderWidth: 1, paddingHorizontal: 6, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
+    statLabel: { fontSize: 9, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.2, textAlign: 'center' },
+    statValue: { fontSize: 16, fontWeight: '900', marginTop: 3, textAlign: 'center' },
+    statSubText: { fontSize: 9.5, fontWeight: '700', marginTop: 2, textAlign: 'center' },
     avgBadge: { paddingHorizontal: 8, paddingVertical: 3.5, borderRadius: 8, alignSelf: 'flex-start' },
     hint: { fontSize: 11 },
     progressTrack: { height: 8, borderRadius: 4, overflow: 'hidden' },
@@ -1682,4 +2033,38 @@ const styles = StyleSheet.create({
     stepBadgeText: { fontSize: 9, fontWeight: '900', letterSpacing: 0.3 },
     stepTitle: { fontSize: 12, fontWeight: '800', marginBottom: 2 },
     stepDesc: { fontSize: 10, lineHeight: 14 },
+
+    // ── 7-Day Calibration History Toggle & Card Styles ──
+    calibToggleCard: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: 12,
+        borderRadius: 14,
+        borderWidth: 1.5,
+        marginTop: 4,
+    },
+    calibToggleIconWrap: {
+        width: 34,
+        height: 34,
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    calibToggleTitle: {
+        fontSize: 13,
+        fontWeight: '800',
+        letterSpacing: -0.2,
+    },
+    calibToggleSub: {
+        fontSize: 10.5,
+        marginTop: 1,
+    },
+    calibChevronWrap: {
+        width: 28,
+        height: 28,
+        borderRadius: 8,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
 });
