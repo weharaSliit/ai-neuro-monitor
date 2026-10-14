@@ -414,6 +414,30 @@ def save_eeg_device_heartbeat(device_id='wearable02'):
         pass
 
 
+def get_recalibration_request(session_id: str) -> dict | None:
+    """A recalibration request for this session, written by psy_web's
+    Recalibrate button to eeg_recalibration/{session_id} (its own root, like
+    eeg_devices/, so it never shows up as a user under psychological/).
+    Best-effort: None on any Firebase problem."""
+    try:
+        ref = _eeg_db_ref(f'eeg_recalibration/{session_id}')
+        value = ref.get() if ref is not None else None
+        return value if isinstance(value, dict) else None
+    except Exception:
+        return None
+
+
+def update_recalibration_request(session_id: str, fields: dict) -> None:
+    """Reports the bridge's progress on a recalibration request back to the
+    same node (status capturing -> done/failed). Best-effort."""
+    try:
+        ref = _eeg_db_ref(f'eeg_recalibration/{session_id}')
+        if ref is not None:
+            ref.update({**fields, 'updated_at': time.time()})
+    except Exception:
+        pass
+
+
 def _eeg_recent_sessions(user_id, limit=30):
     ref = _eeg_db_ref(f'{RTDB_NAMESPACE}/{user_id}')
     if ref is None:

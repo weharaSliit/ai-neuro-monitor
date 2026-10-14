@@ -16,7 +16,9 @@ from backend.common.firebase_config import (
     CURRENT_SESSION_ID_FIELD, CURRENT_USER_ID_FIELD, FIREBASE_DB_URL, RTDB_NAMESPACES
 )
 from backend.common.mqtt_bridge import auth_headers, post_json
-from backend.psychological.firebase_service import save_eeg_device_heartbeat
+from backend.psychological.firebase_service import (
+    get_recalibration_request, save_eeg_device_heartbeat, update_recalibration_request,
+)
 from backend.psychological.realtime.csv_logger import CsvLogger, RAW_FIELDS_BIPOLAR, log_raw_block_bipolar
 from backend.psychological.realtime.mqtt_client import RawSampleBuffer, make_bipolar_client
 from backend.psychological.realtime.resample import SOURCE_FS
@@ -281,6 +283,9 @@ def run():
     seen_reboots = buffer.reboot_count
     settle_until = 0.0
     calibrated = False
+    # True while a psy_web recalibration request is being served -- its
+    # progress is reported back to eeg_recalibration/{session}.
+    recal_active = False
     block_idx = 0
     last_pointer_poll = 0.0
     last_empty_buffer_warn = 0.0
@@ -305,6 +310,9 @@ def run():
                     if pointer_session_id and pointer_session_id != SESSION_ID:
                         print(f"[session] rotating {SESSION_ID!r} -> {pointer_session_id!r} "
                               f"(app started a new session) -- recalibrating")
+                        if recal_active:
+                            update_recalibration_request(SESSION_ID, {"status": "superseded"})
+                            recal_active = False
                         SESSION_ID = pointer_session_id
                         calibrated = False
                         calibration_blocks = []
@@ -317,6 +325,25 @@ def run():
                               f"(app is now logged in as a different user)")
                         USER_ID = pointer_user_id
                         AUTH_HEADERS = auth_headers(USER_ID)
+
+                    # Recalibration request (psy_web's Recalibrate button):
+                    # drop this session's baseline and capture fresh rest
+                    # blocks, exactly like a new session would. Handled once:
+                    # the status moves on from "requested" straight away.
+                    req = get_recalibration_request(SESSION_ID)
+                    if req and req.get("status") == "requested":
+                        print(f"[calibrate] recalibration requested from {req.get('source') or 'psy_web'} -- "
+                              f"discarding this session's baseline; sit still and relax for the next "
+                              f"{N_CALIBRATION_BLOCKS} blocks ({N_CALIBRATION_BLOCKS * 25}s)")
+                        calibrated = False
+                        calibration_blocks = []
+                        calibration_blocks_seen = 0
+                        buffer.clear()   # the block in progress may not be rest
+                        recal_active = True
+                        update_recalibration_request(SESSION_ID, {
+                            "status": "capturing", "blocks_captured": 0,
+                            "blocks_needed": N_CALIBRATION_BLOCKS, "handled_at": now,
+                        })
 
                     last_pointer_poll = now
 
@@ -385,6 +412,9 @@ def run():
                     calibration_blocks = calibration_blocks[-MAX_CALIBRATION_WINDOW_BLOCKS:]
                     print(f"[calibrate] captured rest block {calibration_blocks_seen} "
                           f"(sit still and relax until calibration completes)")
+                    if recal_active:
+                        update_recalibration_request(SESSION_ID, {"status": "capturing",
+                                                                  "blocks_captured": calibration_blocks_seen})
                     if len(calibration_blocks) >= N_CALIBRATION_BLOCKS:
                         fallback = calibration_blocks_seen >= DEGRADED_FALLBACK_AFTER_BLOCKS
                         outcome, data = _post_calibrate(calibration_blocks, allow_degraded=fallback)
@@ -392,6 +422,14 @@ def run():
                         if outcome == "ok" and (fallback or n_trusted >= MIN_TRUSTED_REST_BLOCKS):
                             calibrated = True
                             calibration_blocks_seen = 0
+                            if recal_active:
+                                recal_active = False
+                                update_recalibration_request(SESSION_ID, {
+                                    "status": "done", "outcome": data.get("status"),
+                                    "usable_blocks": n_trusted, "mu_rest": data.get("mu_rest"),
+                                    "personal_high_load_p": data.get("personal_high_load_p"),
+                                    "baseline_degraded": bool(data.get("baseline_degraded")),
+                                })
                             print(f"[calibrate] done: status={data.get('status')} usable_blocks={n_trusted} "
                                   f"mu_rest={data.get('mu_rest')} personal_threshold={data.get('personal_high_load_p')} "
                                   f"degraded={data.get('baseline_degraded')}")
@@ -405,6 +443,10 @@ def run():
                             print(f"[calibrate] only {n_trusted} usable rest block(s) so far "
                                   f"(need {MIN_TRUSTED_REST_BLOCKS}) -- collecting more{_latest_block_reason(data)}")
                         elif outcome == "rejected":
+                            if recal_active:
+                                update_recalibration_request(SESSION_ID, {
+                                    "status": "capturing", "last_reason": (data or {}).get("message")
+                                    or "no rest block passed the quality gate yet"})
                             print(f"[calibrate] no rest block passed the quality gate yet "
                                   f"({calibration_blocks_seen}/{DEGRADED_FALLBACK_AFTER_BLOCKS} before fallback) "
                                   f"-- check electrode and bias contact; collecting more{_latest_block_reason(data)}")
@@ -448,12 +490,14 @@ def run():
                     else:
                         fmt = lambda v, spec: "None" if v is None else format(v, spec)  # noqa: E731
                         z = data.get("task_state_z")
+                        # No word "alert" here: Render's log viewer reads it as a
+                        # log level and marks every normal block as an error.
                         print(f"[predict] block {block_idx} "
                               f"task_state_score={fmt(data.get('task_state_score'), '.3g')} "
-                              + (f"(z={z:+.2f} vs own rest; alert at z>=0.84) " if z is not None else "")
+                              + (f"(z={z:+.2f} vs own rest; high load at z>=0.84) " if z is not None else "")
                               + f"label={data.get('task_state_label')} "
                               f"personal_threshold={fmt(data.get('personal_threshold'), '.3g')} "
-                              f"high_load_alert={data.get('high_load_alert')}")
+                              f"high_load={'YES' if data.get('high_load_alert') else 'no'}")
                         bipolar = ((data.get("features_eeg") or {}).get("bipolar")) or {}
                         feat_str = ", ".join(
                             f"{k}={bipolar[k]:.3f}" for k in FEATURE_LOG_KEYS if bipolar.get(k) is not None

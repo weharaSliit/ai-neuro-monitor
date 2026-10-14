@@ -1,5 +1,7 @@
-import { useMemo } from 'react';
-import { BarList, MultiLineChart, ScoreGauge } from './charts';
+import { useMemo, useState } from 'react';
+import {
+  BarList, MultiLineChart, ScaleSwitch, ScoreGauge, autoScoreScale, fmtScore, log10Safe,
+} from './charts';
 import { Card, KV, SessionPicker, Stat, Status, ago } from './panels';
 import { FIREBASE_DB_URL } from '../lib/config';
 import {
@@ -132,7 +134,8 @@ function BreakdownPanel({ windows }) {
     ['Raw model output p', (x) => fmt(x.p, 4), 'EEG task-state score / HRV-GSR stress probability'],
     ['Its limit (threshold)', (x) => fmt(x.thr, 4), 'Personal limit if calibrated, else population'],
     ['Its spread (scale)', (x) => fmt(x.sc, 3), 'EEG: Personal Scale σ · HRV/GSR: personal threshold separation'],
-    ['Distance (p − limit) / spread', (x) => `${signed(x.dist)}${x.capped ? ` (capped from ${signed(x.distRaw)})` : ''}`],
+    ['Distance from own limit, in spreads', (x) => `${signed(x.dist)}${x.capped ? ` (capped from ${signed(x.distRaw)})` : ''}${x.useZ ? ` = z ${signed(x.z)} − ${x.zAlert}` : ''}`,
+      'EEG: log-odds z vs own rest (σ 0.55) minus the alert at 0.84 · HRV/GSR: (p − limit) / spread'],
     ['Aligned value σ(distance)', (x) => fmt(x.aligned, 3), 'Limit = 0.5; one spread above = 0.73'],
     ['Confidence max(p′, 1 − p′)', (x) => fmt(x.conf, 3)],
     ['Signal quality', (x) => `${fmt(x.q, 2)} → ${fmt(x.qNorm, 3)}`, 'EEG quality already includes its basis factor'],
@@ -198,6 +201,15 @@ function TimelinePanel({ windows }) {
       thrv: w.threshold_hrv_gsr ?? null,
     };
   }), [windows]);
+  // Raw outputs: log scale by default when EEG sits near 0 (a flat line on 0..1).
+  const RAW_KEYS = ['peeg', 'teeg', 'phrv', 'thrv', 'pfused'];
+  const [rawPick, setRawPick] = useState(null);
+  const rawScale = rawPick || autoScoreScale(points.map((p) => p.peeg));
+  const rawPoints = useMemo(() => (rawScale !== 'log' ? points : points.map((p) => {
+    const q = { ...p };
+    for (const k of RAW_KEYS) q[k] = log10Safe(p[k]);
+    return q;
+  })), [points, rawScale]);
   return (
     <Card title="Over the session" subtitle={`One point per ${WINDOW_SEC}s fusion window`}>
       <h3>On one shared scale (each model&apos;s own limit = 0.5)</h3>
@@ -219,8 +231,15 @@ function TimelinePanel({ windows }) {
           { key: 'whrv', label: 'Body weight', color: 'var(--c2)' },
         ]} />
 
-      <h3 className="section-title">Raw model outputs and their own limits</h3>
-      <MultiLineChart points={points} height={220} yDomain={[0, 1]} xFormat={clockMs} yFormat={(v) => v.toFixed(2)}
+      <div className="chart-head">
+        <h3 className="section-title">Raw model outputs and their own limits</h3>
+        <ScaleSwitch value={rawScale} onChange={setRawPick} options={[
+          ['log', 'Log', 'Log scale: tiny EEG scores and both limits visible'],
+          ['full', '0–1', 'Full probability range'],
+        ]} />
+      </div>
+      <MultiLineChart points={rawPoints} height={220} yDomain={rawScale === 'log' ? undefined : [0, 1]} xFormat={clockMs}
+        yFormat={rawScale === 'log' ? (v) => fmtScore(10 ** v) : (v) => v.toFixed(2)}
         ariaLabel="Raw model outputs and thresholds per window"
         series={[
           { key: 'peeg', label: 'EEG p', color: 'var(--c1)' },
@@ -229,7 +248,10 @@ function TimelinePanel({ windows }) {
           { key: 'thrv', label: 'HRV/GSR limit', color: 'var(--c2)', dash: true, width: 1.5 },
           { key: 'pfused', label: 'Fused (raw rule)', color: 'var(--muted)', width: 1.5 },
         ]} />
-      <p className="caption">The two models output on different scales (EEG often near 0, HRV/GSR near its own limit), which is why fusion aligns them first.</p>
+      <p className="caption">
+        The two models output on different scales (EEG often near 0, HRV/GSR near its own limit), which is why fusion aligns them first.
+        {rawScale === 'log' && ' Log scale: each grid step is a factor of 10.'}
+      </p>
     </Card>
   );
 }
@@ -280,7 +302,7 @@ function WindowLog({ windows }) {
               {rows.map((w) => (
                 <tr key={w.key} className={w.fused_probability == null ? 'skipped' : ''}>
                   <td title={`window ${w.key}`}>{clockMs(keyToMs(w.key))}</td>
-                  <td className="num">{fmt(w.prob_eeg, 3)}</td>
+                  <td className="num">{fmtScore(w.prob_eeg)}</td>
                   <td className="num">{fmt(w.prob_hrv_gsr, 3)}</td>
                   <td className="num">{fmt(w.eeg_aligned, 2)}</td>
                   <td className="num">{fmt(w.hrv_gsr_aligned, 2)}</td>
@@ -325,7 +347,9 @@ function FusionSourcesPanel({ picker, latest }) {
         <div>
           <h3>Fusion rule (aligned scale)</h3>
           <p className="caption">
-            For each input: distance d = (p − limit) / spread, capped at ±{ALIGNED_Z_CAP}; aligned value p′ = 1 / (1 + e<sup>−d</sup>), so
+            For each input: distance d from its own limit in its own spreads, capped at ±{ALIGNED_Z_CAP}. HRV/GSR: d = (p − limit) / spread.
+            EEG: d = z − 0.84, where z = (logit p − logit own-rest) / 0.55 (log-odds, so scores near 0 still move).
+            Aligned value p′ = 1 / (1 + e<sup>−d</sup>), so
             every model&apos;s own limit sits at 0.5. Weight = signal quality × confidence max(p′, 1 − p′) × model prior
             (EEG 0.632 pooled AUC, HRV/GSR 0.851), with EEG quality scaled by its basis (calibrated 1, uncalibrated 0.5,
             not responsive 0.25) and saturated outputs by {SATURATED_WEIGHT}. Fused = Σ weight share × p′; high stress when fused ≥ 0.5.

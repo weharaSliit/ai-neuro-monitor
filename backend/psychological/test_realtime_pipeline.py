@@ -397,6 +397,37 @@ def main() -> bool:
     except Exception as e:
         check("Sub-window kurtosis checks raised no exception", False, repr(e))
 
+    print("\n[14] per-session amplitude gain (low-amplitude headband signal)")
+    try:
+        def block14(scale, seed, start):
+            b = make_synthetic_block(seed=seed, start_millis=start)
+            uv = bipolar_code_to_microvolts(np.array([s.code for s in b])) * scale
+            return [BipolarRawSample(s.millis, int(c)) for s, c in zip(b, microvolts_to_bipolar_code(uv))]
+
+        def session14(scale):
+            e = RealtimeInference(MODEL_DIR)
+            for i in range(4):                       # first block = settling window
+                e.calibrate_bipolar_block(block14(scale, i, i * 25_000))
+            out = e.finalize_calibration_bipolar(allow_degraded=True)
+            r = e.infer_bipolar_block(block14(scale, 9, 200_000))
+            return e, out, r
+
+        e_norm, out_norm, r_norm = session14(1.0)
+        check("normal-amplitude session keeps amplitude_gain 1.0",
+              out_norm["amplitude_gain"] == 1.0, f"gain {out_norm['amplitude_gain']}")
+        e_low, out_low, r_low = session14(1 / 30)
+        expected14 = e_low._train_std_mean / e_low.rest_std_uv     # gain targets the TRAINING SD, not the original
+        check("a 30x-smaller session gets gain = training SD / its rest SD (> 1)",
+              out_low["amplitude_gain"] > 1 and abs(out_low["amplitude_gain"] - expected14) < 1e-6,
+              f"gain {out_low['amplitude_gain']:.2f} vs {expected14:.2f} (rest SD {e_low.rest_std_uv:.2f} uV)")
+        check("with the gain, the low-amplitude score lands near the normal session's score",
+              not r_low.get("skipped") and abs(r_low["calibrated_p"] - r_norm["calibrated_p"]) < 0.15,
+              f"low {r_low.get('calibrated_p')} vs normal {r_norm.get('calibrated_p')}")
+        check("the stored waveform stays in real (unscaled) uV",
+              max(abs(v) for v in r_low["wave_uv"]) < 5, f"max |wave| {max(abs(v) for v in r_low['wave_uv']):.2f} uV")
+    except Exception as e:
+        check("Amplitude gain checks raised no exception", False, repr(e))
+
     print("\n" + "=" * 60)
     print("ALL CHECKS PASSED" if all_passed else "SOME CHECKS FAILED")
     print("=" * 60)

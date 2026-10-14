@@ -3,7 +3,9 @@ import time
 from pathlib import Path
 
 from backend.common.fusion import fusion_window_key
-from backend.psychological.sam40.decision import PERSONAL_SIGMA_PRIOR
+from backend.psychological.sam40.decision import (
+    PERSONAL_K_ALERT, PERSONAL_SIGMA_PRIOR, personal_z_logit,
+)
 
 TASK_STATE_LABEL_THRESHOLD = 0.5
 
@@ -117,6 +119,10 @@ def make_eeg_output_record(result: dict, window_sec: float, model_version: str,
         # trusted enough to score) so the dashboard can show what a
         # rejected block actually looked like, not just a pass/fail flag.
         'wave_uv': result.get('wave_uv'),
+        # Per-session amplitude gain applied before feature extraction (1.0 =
+        # none; see pipeline.py AMPLITUDE_CALIBRATION). Features below are
+        # at this gain; eeg_ptp/std_uv_unclamped and wave_uv are real uV.
+        'amplitude_gain': result.get('amplitude_gain'),
     }
 
     if result.get('T7_total_power') is not None or result.get('bipolar_delta_power') is not None:
@@ -380,4 +386,11 @@ def make_eeg_fusion_record(record: dict) -> dict:
         'eeg_weight_factor': fin['factor'],
         'eeg_fusion_policy': EEG_FUSION_POLICY,
         'z_eeg': fin['z'],
+        # Fusion aligns EEG on this log-odds personal scale (see decision.py
+        # PERSONAL_SIGMA_LOGIT): distance from the alert = z_logit - z_alert,
+        # the same "spreads from own limit" units HRV/GSR is aligned in.
+        # None without a personal rest baseline (fusion then falls back to
+        # threshold/threshold_scale).
+        'z_logit_eeg': personal_z_logit(p, record.get('personal_rest_mean')) if p is not None else None,
+        'z_alert_eeg': PERSONAL_K_ALERT,
     }
