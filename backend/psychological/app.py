@@ -22,9 +22,16 @@
 
 import os
 import re
+import sys
 import threading
 import time
 from dataclasses import replace as replace_thresholds
+
+# Line-buffered output: off a terminal (Render, gunicorn, nohup) Python
+# block-buffers stdout, so print() lines can sit unflushed and the service
+# looks silent in its log viewer. Same as the two mqtt_bridge.py files.
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 from pathlib import Path
 
 from flask import jsonify, request, g
@@ -261,6 +268,12 @@ def calibrate():
             ),
             400,
         )
+
+    # Recalibrating a live session (psy_web's Recalibrate button, see
+    # mqtt_bridge.py): keep numbering blocks after the previous engine's last
+    # one, so the new blocks don't overwrite psychological/{uid}/{sid}/0, 1, ...
+    if existing is not None:
+        engine.continue_block_numbering(existing["engine"])
 
     eeg_sessions[session_id] = {
         "engine": engine,

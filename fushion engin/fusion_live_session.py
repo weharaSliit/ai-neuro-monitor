@@ -7,6 +7,12 @@ from pathlib import Path
 
 import numpy as np
 
+# Line-buffered output: off a terminal (Render, gunicorn, nohup) Python
+# block-buffers stdout, so print() lines can sit unflushed and the service
+# looks silent in its log viewer. Same as the two mqtt_bridge.py files.
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
@@ -68,6 +74,10 @@ def _modality_input(window: dict, m: str) -> dict:
         "model_acc": window.get(f"model_acc_{m}"),
         "threshold": window.get(f"threshold_{m}"),
         "threshold_scale": window.get(f"threshold_scale_{m}"),
+        # Optional own-scale distance (EEG: log-odds personal z); see
+        # fusion_engin.py USE_MODALITY_Z.
+        "z": window.get(f"z_logit_{m}"),
+        "z_alert": window.get(f"z_alert_{m}"),
     }
 
 
