@@ -77,3 +77,8 @@ serviceAccountKey.json
 # Temporary files
 temp_check.txt
 *.tmp
+
+# Phenotyping model backups and personalized models
+phenotyping/models/personalized/
+phenotyping/models/backup_*/
+phenotyping/models/*backup*.pkl
