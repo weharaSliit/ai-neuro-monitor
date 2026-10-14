@@ -597,8 +597,8 @@ export default function PhenotypingScreen({ navigation }) {
 
                     {/* Centered Large Circular Progress Gauge */}
                     <View style={styles.centerGaugeWrap}>
-                        <View style={{ width: 170, height: 170, alignItems: 'center', justifyContent: 'center' }}>
-                            <Svg width={170} height={170} style={StyleSheet.absoluteFill}>
+                        <View style={{ width: 170, height: 170, alignItems: 'center', justifyContent: 'center', aspectRatio: 1 }}>
+                            <Svg width={170} height={170} viewBox="0 0 170 170" style={{ width: 170, height: 170, position: 'absolute' }}>
                                 {/* Background Ring Track */}
                                 <SvgCircle
                                     cx={85}
@@ -962,20 +962,20 @@ export default function PhenotypingScreen({ navigation }) {
 
 const styles = StyleSheet.create({
     container: { flex: 1 },
-    scroll: { paddingBottom: 40 },
+    scroll: { paddingBottom: 60 },
     topHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginHorizontal: 20, marginTop: 12, marginBottom: 8 },
     emaHeaderBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12 },
     emaHeaderBtnText: { fontSize: 11, fontWeight: '800' },
     backRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
     plainTitle: { fontSize: 22, fontWeight: '900', letterSpacing: -0.2, marginBottom: 4 },
-    hwCard: { marginHorizontal: 20, marginVertical: 8, padding: 18 },
+    hwCard: { marginHorizontal: 20, marginVertical: 8, padding: 18, overflow: 'visible' },
     rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
     rowGap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     statusPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
     statusPillText: { fontSize: 11, fontWeight: '800' },
     cardTitle: { fontSize: 15, fontWeight: '800' },
     cardSub: { fontSize: 12 },
-    centerGaugeWrap: { alignItems: 'center', justifyContent: 'center', width: '100%', paddingVertical: 4 },
+    centerGaugeWrap: { alignItems: 'center', justifyContent: 'center', width: '100%', paddingTop: 10, paddingBottom: 18 },
     centerAlign: { alignItems: 'center', justifyContent: 'center' },
     gaugeEmoji: { fontSize: 26, marginBottom: 2 },
     gaugeStatusLabel: { fontSize: 17, fontWeight: '900', letterSpacing: -0.2, marginTop: 2 },
