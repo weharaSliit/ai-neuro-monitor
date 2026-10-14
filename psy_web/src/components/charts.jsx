@@ -182,11 +182,11 @@ export function ScoreGauge({ value, threshold, level, label = 'task_state_score'
   const [tx2, ty2] = [cx + (tx - cx) * 1.18, cy + (ty - cy) * 1.18];
   return (
     <svg viewBox="0 0 180 100" className="gauge" role="img"
-      aria-label={value == null ? 'No score' : `${label} ${value.toFixed(2)}`}>
+      aria-label={value == null ? 'No score' : `${label} ${fmtScore(value)}`}>
       <path d={arc(1)} className="gauge-track" />
       {value != null && <path d={arc(value)} className={`gauge-fill lvl-${level || 'none'}`} />}
       {threshold != null && <line x1={tx} y1={ty} x2={tx2} y2={ty2} className="gauge-tick" />}
-      <text x={cx} y={cy - 12} textAnchor="middle" className="gauge-value">{value == null ? '—' : value.toFixed(2)}</text>
+      <text x={cx} y={cy - 12} textAnchor="middle" className="gauge-value">{fmtScore(value)}</text>
       <text x={cx} y={cy + 6} textAnchor="middle" className="gauge-sub">{label}</text>
     </svg>
   );
@@ -320,6 +320,38 @@ export function MultiLineChart({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── score scales ─────────────────────────────────────────────────────
+// wearable02 scores can sit around 0.001 (far below SAM40's range), which
+// draws as a flat line on a 0..1 axis. Charts of a score offer these scales.
+
+// Score text that stays readable when tiny: 0.000521 -> "5.2e-4".
+export function fmtScore(v) {
+  if (v == null || !Number.isFinite(v)) return '—';
+  const a = Math.abs(v);
+  if (a !== 0 && a < 0.01) return v.toExponential(1);
+  return v.toFixed(a < 0.1 ? 3 : 2);
+}
+
+// log10 for plotting; values <= 0 are floored so they still draw.
+export const log10Safe = (v) => (v == null || !Number.isFinite(v) ? null : Math.log10(Math.max(v, 1e-9)));
+
+// 'log' when every score is small (where a 0..1 axis shows a flat line).
+export const autoScoreScale = (values) => {
+  const v = values.filter((x) => x != null && Number.isFinite(x));
+  return v.length && Math.max(...v) < 0.05 ? 'log' : 'full';
+};
+
+export function ScaleSwitch({ value, onChange, options }) {
+  return (
+    <div className="seg" role="group" aria-label="Chart scale">
+      {options.map(([k, label, hint]) => (
+        <button key={k} type="button" className={value === k ? 'on' : ''} title={hint}
+          aria-pressed={value === k} onClick={() => onChange(k)}>{label}</button>
+      ))}
     </div>
   );
 }

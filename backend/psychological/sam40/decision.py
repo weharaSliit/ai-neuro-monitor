@@ -162,6 +162,30 @@ PERSONAL_K_ALERT = 0.84        # ~20% of rest blocks flagged (paper k)
 PERSONAL_K_BREAK = 1.28        # ~10% of rest blocks -- stricter, for the sustained micro-break flag
 MIN_TASK_RESPONSE_Z = 0.5      # onboarding task must sit >= 0.5 sigma above own rest
 
+# Personal scale in LOG-ODDS, used to align EEG with HRV/GSR in fusion.
+# The probability-space sigma above stops working when a device's scores sit
+# near 0 (wearable02: 0.0005-0.0014, all at the same distance below a 0.136
+# limit), because probabilities compress there; log-odds don't, and they are
+# the logistic model's own linear output. Within-person SD of SAM40 rest-block
+# log-odds (out-of-fold, final_analysis/bipolar_block_level_scores.csv) is
+# 0.547; at z_logit >= PERSONAL_K_ALERT that flags 15.8% of rest blocks and
+# 46.9% of task blocks (vs 16.7% / 40.6% for the probability-space rule).
+PERSONAL_SIGMA_LOGIT = 0.55
+_LOGIT_EPS = 1e-9
+
+
+def _logit(p: float) -> float:
+    p = min(max(float(p), _LOGIT_EPS), 1.0 - _LOGIT_EPS)
+    return float(np.log(p / (1.0 - p)))
+
+
+def personal_z_logit(score: float | None, mu_rest: float | None,
+                     sigma: float = PERSONAL_SIGMA_LOGIT) -> float | None:
+    """Distance of `score` above this person's own rest, in log-odds sigmas."""
+    if score is None or mu_rest is None:
+        return None
+    return float((_logit(score) - _logit(mu_rest)) / sigma)
+
 
 def personal_decision_thresholds(base: DecisionThresholds, mu_rest: float,
                                  sigma: float = PERSONAL_SIGMA_PRIOR) -> DecisionThresholds:

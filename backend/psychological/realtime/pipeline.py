@@ -1,3 +1,4 @@
+import os
 from collections import deque
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -39,6 +40,23 @@ BLOCK_SAMPLES_RAW = int(BLOCK_SEC * SOURCE_FS)  # samples to drain from the buff
 # of 1, for the SAME total 75s capture time (not slower), and a noisy
 # single block no longer fails an otherwise-good attempt outright.
 SETTLING_TIME_SEC = 25.0
+
+# ── Per-session amplitude calibration ─────────────────────────────────
+# The model's strongest features are absolute (log band powers, ptp,
+# power), learned on SAM40's lab amplifiers (block SD ~6.4 uV). A headband
+# whose signal is many times smaller (contact, electrode spacing, front-end
+# gain) puts every block far below that range and the score collapses to
+# ~0.001 whatever the person is doing, even though the relative features
+# (band shares, ratios) look normal. During rest calibration the session's
+# own rest SD is measured; if it sits below the training range, every block
+# of the session is multiplied by ONE gain (training mean SD / rest SD)
+# before features are computed. One fixed gain keeps rest-vs-task
+# differences within the session; the quality gate still judges the real,
+# unscaled signal, and the stored waveform stays in real uV.
+# EEG_AMPLITUDE_CALIBRATION=0 turns it off.
+AMPLITUDE_CALIBRATION = os.environ.get('EEG_AMPLITUDE_CALIBRATION', '1') != '0'
+MAX_AMPLITUDE_GAIN = 100.0     # never amplify more than this
+MIN_REST_STD_UV = 0.05         # below this the input is flat/disconnected: not EEG, don't amplify
 DERIVED_SUFFIXES = ['delta_rel_power', 'theta_rel_power', 'alpha_rel_power', 'beta_rel_power',
                      'gamma_rel_power', 'theta_alpha_ratio', 'beta_alpha_ratio', 'sample_entropy',
                      'hjorth_complexity']
@@ -351,6 +369,21 @@ class RealtimeInference:
             )
         except (AttributeError, KeyError, ValueError, IndexError):
             pass
+        # Training amplitude for the per-session gain (AMPLITUDE_CALIBRATION):
+        # target = the model's own training mean of bipolar_std; a session
+        # is rescaled only when its rest SD is below mean - 2 SD.
+        self._train_std_mean: float | None = None
+        self._train_std_low: float | None = None
+        try:
+            scaler = self.model.named_steps['standardscaler']
+            idx = self.feature_columns.index('bipolar_std')
+            self._train_std_mean = float(scaler.mean_[idx])
+            self._train_std_low = float(scaler.mean_[idx] - 2 * scaler.scale_[idx])
+        except (AttributeError, KeyError, ValueError, IndexError):
+            pass
+        self.amplitude_gain: float = 1.0
+        self.rest_std_uv: float | None = None
+        self._cal_signals_bipolar: list[np.ndarray] = []   # trusted rest blocks, unclamped uV
         self.baseline = UserBaseline()
         self._history: list[dict] = []  # for persistence-aware decision states across blocks
         self.quality_validator = TrustedIoTEEGValidator(fs_raw=SOURCE_FS, fs_filtered=TARGET_FS, max_amplitude=7000.0)
@@ -382,6 +415,43 @@ class RealtimeInference:
         self.n_implausible_rest_blocks: int = 0
         self._live_blocks: int = 0  # infer_bipolar_block() calls, scored or not -> Firebase key
         self._itakura_ref_from_live: bool = False  # see infer_bipolar_block()
+
+    def continue_block_numbering(self, previous: "RealtimeInference") -> None:
+        """Start this engine's Firebase block keys after `previous`'s last
+        one -- used when a live session is recalibrated, so the new engine
+        doesn't reuse (and overwrite) block 0, 1, ... of the same session."""
+        self._live_blocks = max(self._live_blocks, getattr(previous, "_live_blocks", 0))
+
+    def _model_features(self, unclamped: np.ndarray) -> dict:
+        """Features the model sees: the block times this session's
+        amplitude gain (1.0 unless AMPLITUDE_CALIBRATION rescaled it), then
+        the usual +-100 uV clamp. Unprefixed, like channel_features()."""
+        x = unclamped * self.amplitude_gain if self.amplitude_gain != 1.0 else unclamped
+        return channel_features(clip_physiological_uv(x), fs=TARGET_FS)
+
+    def _fit_amplitude_gain(self, rest_signals: list[np.ndarray]) -> None:
+        """Sets amplitude_gain from the rest blocks (see
+        AMPLITUDE_CALIBRATION) and, if it changed, rebuilds the rest
+        baseline and rest scores at the new scale so mu_rest matches what
+        live blocks will be scored on."""
+        self.amplitude_gain = 1.0
+        if not rest_signals:
+            return
+        self.rest_std_uv = float(np.median([channel_features(clip_physiological_uv(s), fs=TARGET_FS)['std']
+                                            for s in rest_signals]))
+        if (not AMPLITUDE_CALIBRATION or self._train_std_mean is None
+                or self.rest_std_uv >= self._train_std_low or self.rest_std_uv < MIN_REST_STD_UV):
+            return
+        self.amplitude_gain = float(min(MAX_AMPLITUDE_GAIN, self._train_std_mean / self.rest_std_uv))
+        self.baseline = UserBaseline()
+        self._calibration_scores = []
+        for sig in rest_signals:
+            feats = self._model_features(sig)
+            self.baseline.add({f'bipolar_{k}': v for k, v in feats.items()})
+            score = self._score_calibration_bipolar_block(feats)
+            if score is not None:
+                self._calibration_scores.append(score)
+        self.adaptive_baseline.initialize(self.baseline.mean())
 
     def _apply_personal_scale(self) -> None:
         """Sets mu_rest from the scored rest blocks and moves every decision
@@ -415,6 +485,8 @@ class RealtimeInference:
             'sigma': self.sigma,
             'personal_high_load_p': self.personal_high_load_p,
             'baseline_shift': self.baseline_shift,
+            'amplitude_gain': self.amplitude_gain,
+            'rest_std_uv': self.rest_std_uv,
         }
 
     def calibrate_block(self, samples: list[RawSample]) -> dict:
@@ -532,6 +604,7 @@ class RealtimeInference:
             self._calibration_attempts_bipolar.append((quality['quality_score'], feats, unclamped))
             return quality
         self.baseline.add({f'bipolar_{k}': v for k, v in feats.items()})
+        self._cal_signals_bipolar.append(unclamped)
         if self._itakura_baseline_filtered_bipolar is None:
             self._itakura_baseline_filtered_bipolar = unclamped
         self.quality_validator.record_calibration_epoch(unclamped)
@@ -551,6 +624,7 @@ class RealtimeInference:
     def finalize_calibration_bipolar(self, allow_degraded: bool = False) -> dict:
         if self.baseline.blocks:
             self.adaptive_baseline.initialize(self.baseline.mean())
+            self._fit_amplitude_gain(self._cal_signals_bipolar)
             self._apply_personal_scale()
             return {'status': 'ok', 'baseline_degraded': False, 'n_blocks': len(self.baseline.blocks),
                     **self._personal_outcome()}
@@ -578,6 +652,7 @@ class RealtimeInference:
             resting_score = self._score_calibration_bipolar_block(best_feats)
             if resting_score is not None:
                 self._calibration_scores.append(resting_score)
+            self._fit_amplitude_gain([best_filtered])
             self._apply_personal_scale()
             return {'status': 'degraded', 'baseline_degraded': True, 'score': best_score,
                     **self._personal_outcome()}
@@ -612,8 +687,7 @@ class RealtimeInference:
             }
 
         unclamped = preprocess_bipolar_block_unclamped(samples)
-        filtered = clip_physiological_uv(unclamped)
-        feats = channel_features(filtered, fs=TARGET_FS)
+        feats = self._model_features(unclamped)   # at this session's amplitude gain
         quality = self.quality_validator.assess_only_single(raw_code, unclamped)
 
         meets_bar = self.disable_quality_gate or (
@@ -844,7 +918,9 @@ class RealtimeInference:
         # amplitude/SNR/Itakura checks above nor gate_rating='GOOD' catch
         # this; see DELTA_POWER_IMPLAUSIBLE_SD's docstring for why a
         # dedicated feature-level check is needed.
-        raw_feats_unprefixed = channel_features(filtered, fs=TARGET_FS)
+        # Model features at this session's amplitude gain (AMPLITUDE_CALIBRATION);
+        # `filtered` / wave_uv above stay in real, unscaled uV.
+        raw_feats_unprefixed = self._model_features(unclamped)
         raw_feats = {f'bipolar_{k}': v for k, v in raw_feats_unprefixed.items()}
 
         # Only when nothing earlier already rejected the block: an
@@ -882,6 +958,7 @@ class RealtimeInference:
                 'eeg_responsive': self.eeg_responsive,
                 'mu_rest': self.mu_rest,
                 'personal_sigma': self.sigma,
+                'amplitude_gain': self.amplitude_gain,
                 **provisional,
                 **raw_feats,
                 **{f'quality_{k}': v for k, v in quality.items()},
@@ -918,6 +995,7 @@ class RealtimeInference:
         result['eeg_responsive'] = self.eeg_responsive
         result['mu_rest'] = self.mu_rest
         result['personal_sigma'] = self.sigma
+        result['amplitude_gain'] = self.amplitude_gain
         result.update({f'quality_{k}': v for k, v in quality.items()})
         result.update({f'session_{k}': v for k, v in health.items()})
         return result

@@ -33,7 +33,7 @@ export default function TechView({ raw, health, picker, sessionData, profile, no
         <TaskStatePanel sessionData={sessionData} profile={profile} now={now} />
       </div>
       <ValidationPanel raw={raw} sessionData={sessionData} now={now} />
-      <CalibrationPanel sessionData={sessionData} profile={profile} raw={raw} now={now} />
+      <CalibrationPanel sessionData={sessionData} profile={profile} raw={raw} now={now} picker={picker} />
       <FeaturesPanel sessionData={sessionData} profile={profile} />
       <BlockLog sessionData={sessionData} />
       <ApiPanel health={health} picker={picker} now={now} />

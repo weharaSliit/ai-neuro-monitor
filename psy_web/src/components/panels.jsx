@@ -1,5 +1,9 @@
 import { useMemo, useState } from 'react';
-import { BarList, LineChart, ScoreGauge } from './charts';
+import {
+  BarList, LineChart, ScaleSwitch, ScoreGauge, autoScoreScale, fmtScore, log10Safe,
+} from './charts';
+import { useFirebaseValue } from '../hooks/useData';
+import { requestRecalibration } from '../lib/firebase';
 import {
   BATCH_SIZE, BIPOLAR_HIGHPASS_HZ, BLOCK_SEC, CLIP_UV, EEG_API_BASE, MQTT_TOPIC_EEG, MQTT_TOPIC_STATUS,
   MQTT_URL, N_CALIBRATION_BLOCKS, POPULATION_HIGH_LOAD_P, RAW_WINDOW_SEC, SOURCE_FS, TARGET_FS,
@@ -184,7 +188,7 @@ export function PipelineStrip({ raw, health, sessionData, picker, now }) {
       name: 'Decision', detail: 'score vs personal/population threshold',
       kind: latest?.task_state_score == null ? 'idle' : latest.task_state_score >= thr ? 'critical' : 'good',
       value: latest?.task_state_score == null ? (latest?.skipped ? 'skipped' : '—')
-        : `${latest.task_state_score.toFixed(3)} ${latest.task_state_score >= thr ? '≥' : '<'} ${fmt(thr, 3)}`,
+        : `${fmtScore(latest.task_state_score)} ${latest.task_state_score >= thr ? '≥' : '<'} ${fmt(thr, 3)}`,
     },
   ];
 
@@ -307,11 +311,39 @@ export function TaskStatePanel({ sessionData, profile, now }) {
   const personal = profile?.personal_high_load_p != null && Math.abs(profile.personal_high_load_p - thr) < 1e-9;
   const level = levelOf(shown?.task_state_score, thr);
 
-  // x = block number, not time: a re-run can overwrite an early window key
-  // with a later timestamp, so time isn't monotonic across windows.
-  const points = blocks.map((b) => ({
-    x: b.window, y: b.task_state_score ?? null, b,
-  }));
+  // Chart scale: 'log' is picked automatically when every score is tiny
+  // (wearable02 often sits around 0.001, a flat line on a 0..1 axis).
+  const [scalePick, setScalePick] = useState(null);
+  const autoScale = autoScoreScale(blocks.map((b) => b.task_state_score));
+  const scale = scalePick || autoScale;
+  const scored = blocks.filter((b) => b.task_state_score != null);
+  const muRest = sessionData.calibration?.mu_rest;
+  const chart = useMemo(() => {
+    // x = block number, not time: a re-run can overwrite an early window key
+    // with a later timestamp, so time isn't monotonic across windows.
+    const base = (f) => blocks.map((b) => ({ x: b.window, y: f(b), b }));
+    const refs = [{ y: thr, label: `threshold ${fmt(thr, 3)}` }, { y: TASK_STATE_LABEL_THRESHOLD, label: 'label cut 0.5' }];
+    if (scale === 'log') {
+      return {
+        points: base((b) => log10Safe(b.task_state_score)),
+        refLines: [...refs, ...(muRest > 0 ? [{ y: muRest, label: 'own rest' }] : [])].map((r) => ({ ...r, y: Math.log10(r.y) })),
+        yFormat: (v) => fmtScore(10 ** v),
+      };
+    }
+    if (scale === 'zoom') {
+      return { points: base((b) => b.task_state_score ?? null), refLines: [], yFormat: fmtScore };
+    }
+    if (scale === 'z') {
+      return {
+        points: base((b) => b.task_state_z ?? null),
+        refLines: [{ y: 0.84, label: 'high load z 0.84' }, { y: 0, label: 'own rest z 0' }],
+        yFormat: (v) => v.toFixed(2),
+      };
+    }
+    return { points: base((b) => b.task_state_score ?? null), refLines: refs, yDomain: [0, 1], yFormat: (v) => v.toFixed(2) };
+  }, [blocks, scale, thr, muRest]);
+  const range = scored.length
+    ? [Math.min(...scored.map((b) => b.task_state_score)), Math.max(...scored.map((b) => b.task_state_score))] : null;
 
   return (
     <Card
@@ -345,6 +377,8 @@ export function TaskStatePanel({ sessionData, profile, now }) {
               ['Trend (last 3)', shown?.task_state_trend || '—'],
               ['Model confidence', shown?.model_confidence == null ? '—' : `${(shown.model_confidence * 100).toFixed(0)}%`, '|p − 0.5| × 2'],
               ['Signal quality', latest ? `${fmt(latest.eeg_quality_score, 0)}/100 (${latest.eeg_quality_flag ? 'trusted' : 'rejected'})` : '—'],
+              ['Amplitude gain', shown?.amplitude_gain == null ? '—' : shown.amplitude_gain === 1 ? '1× (signal in training range)' : `${shown.amplitude_gain.toFixed(1)}× (signal rescaled before the model)`,
+                'Per-session gain from the rest calibration: training SD / this session\'s rest SD. Applied only when the rest signal is below the SAM40 range.'],
               ['Baseline degraded', yesNo(shown?.baseline_degraded)],
               ['Model', `${shown?.model_version || MODEL.model_version} · LOSO AUC ${shown?.model_accuracy ?? '—'}`],
             ]} />
@@ -365,26 +399,49 @@ export function TaskStatePanel({ sessionData, profile, now }) {
               <p className="caption">Persistence-gated over consecutive blocks (sam40/decision.py), so a single high block doesn't trigger an alert on its own.</p>
             </div>
           </div>
-          <h3 className="section-title">Score per block</h3>
+          <div className="chart-head">
+            <h3 className="section-title">{scale === 'z' ? 'Distance from own rest per block (z)' : 'Score per block'}</h3>
+            <ScaleSwitch value={scale} onChange={setScalePick} options={[
+              ['log', 'Log', 'Log scale: small scores and the threshold both visible'],
+              ['zoom', 'Zoom', 'Fit the axis to the scores only'],
+              ['full', '0–1', 'Full probability range'],
+              ['z', 'Personal z', '(score − own rest) / σ; high load at z ≥ 0.84'],
+            ]} />
+          </div>
           <LineChart
-            points={points}
+            points={chart.points}
             height={200}
-            yDomain={[0, 1]}
+            yDomain={chart.yDomain}
             dots
-            ariaLabel="Task-state score per block"
-            refLines={[{ y: thr, label: `threshold ${thr.toFixed(2)}` }, { y: TASK_STATE_LABEL_THRESHOLD, label: 'label cut 0.5' }]}
+            ariaLabel={scale === 'z' ? 'Personal z per block' : 'Task-state score per block'}
+            refLines={chart.refLines}
             xFormat={(v) => `#${Math.round(v)}`}
-            yFormat={(v) => v.toFixed(2)}
+            yFormat={chart.yFormat}
             tooltip={({ b }) => (
               <>
-                <b>{b.task_state_score == null ? 'Skipped (quality gate)' : `score ${b.task_state_score.toFixed(3)}`}</b>
+                <b>{b.task_state_score == null ? 'Skipped (quality gate)' : `score ${fmtScore(b.task_state_score)}`}</b>
+                {b.task_state_z != null && <span>z {b.task_state_z >= 0 ? '+' : ''}{b.task_state_z.toFixed(3)} vs own rest</span>}
                 <span>block #{b.window} · {clock(b.timestamp_end)}</span>
                 <span>quality {fmt(b.eeg_quality_score, 0)}/100</span>
                 {b.task_state_label != null && <span>label {b.task_state_label}</span>}
               </>
             )}
           />
-          <p className="caption">Gaps in the line are blocks the quality gate rejected. Hover a point to see the block.</p>
+          <p className="caption">
+            Gaps in the line are blocks the quality gate rejected. Hover a point to see the block.
+            {scale === 'log' && ' Log scale: each grid step is a factor of 10.'}
+            {scale === 'zoom' && range && ` Axis fitted to the scores (${fmtScore(range[0])}–${fmtScore(range[1])}); the threshold ${fmt(thr, 3)} is ${range[1] < thr ? 'above this range' : 'shown by the colour above'}.`}
+            {scale === 'z' && ' z stays near 0 while the score stays at this person\'s resting level.'}
+          </p>
+          {range && range[1] < 0.01 && (
+            <p className="caption warn-text">
+              ▲ Every score is below 0.01, far under anything in the SAM40 training data. The model&apos;s strongest features are
+              absolute power, so a signal much smaller than SAM40&apos;s (block SD about 6 µV) drives the score to ~0.
+              {(shown?.amplitude_gain ?? 1) === 1
+                ? ' This session has no amplitude gain: it was calibrated before the gain existed, or with the API not yet redeployed. Recalibrate after redeploying.'
+                : ' An amplitude gain is applied, so the signal may be too small even after rescaling (flat or disconnected input).'}
+            </p>
+          )}
         </>
       )}
     </Card>
@@ -392,7 +449,68 @@ export function TaskStatePanel({ sessionData, profile, now }) {
 }
 
 // ── 3. calibration ─────────────────────────────────────────────────
-export function CalibrationPanel({ sessionData, profile, raw, now }) {
+// Recalibrate button: writes eeg_recalibration/{session}; the EEG bridge
+// picks it up within ~10 s and captures fresh rest blocks (see
+// requestRecalibration()). Only offered for the session the bridge is
+// actually serving -- a request for any other session would never be seen.
+const RECAL_TEXT = {
+  requested: 'Requested: waiting for the bridge (checks every 10 s)',
+  capturing: 'Recalibrating: sit still and relax',
+  done: 'Recalibration finished',
+  superseded: 'Cancelled: the app started a new session',
+};
+const RECAL_STALE_SEC = 120;   // "requested" this long with no pickup = bridge isn't running
+
+function RecalibrateBar({ picker, raw, now }) {
+  const sid = picker?.sessionId;
+  const live = sid && sid === picker.liveSession;
+  const req = useFirebaseValue(sid ? `eeg_recalibration/${sid}` : null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const streaming = raw.stats.lastPacketAt && now - raw.stats.lastPacketAt < 5000;
+  const active = req?.status === 'requested' || req?.status === 'capturing';
+  const stale = req?.status === 'requested' && req.requested_at && now / 1000 - req.requested_at > RECAL_STALE_SEC;
+
+  const onClick = async () => {
+    if (!window.confirm(
+      `Recalibrate session ${sid}?\n\nThe current resting baseline is discarded. The bridge then records `
+      + `${N_CALIBRATION_BLOCKS} new rest blocks (${N_CALIBRATION_BLOCKS * BLOCK_SEC}s). Sit still, eyes open, and relax `
+      + 'until it finishes. Blocks recorded before this stay as they are.',
+    )) return;
+    setBusy(true); setError(null);
+    try { await requestRecalibration(sid, picker.userId); } catch (e) { setError(e?.message || String(e)); }
+    setBusy(false);
+  };
+
+  let text = null; let kind = 'idle';
+  if (req?.status) {
+    kind = req.status === 'done' ? (req.baseline_degraded ? 'warning' : 'good') : req.status === 'superseded' ? 'idle' : 'warning';
+    text = RECAL_TEXT[req.status] || req.status;
+    if (req.status === 'capturing') text += ` (${req.blocks_captured ?? 0}/${req.blocks_needed ?? N_CALIBRATION_BLOCKS} blocks)`;
+    if (req.status === 'done') text += `: ${req.outcome || 'ok'}, ${req.usable_blocks ?? 0} usable block(s)${req.baseline_degraded ? ', degraded baseline' : ''}`;
+    if (stale) { text = 'Requested, but the bridge hasn\'t picked it up: is mqtt_bridge.py running (and redeployed)?'; kind = 'critical'; }
+  }
+  const when = req?.updated_at || req?.requested_at;
+
+  return (
+    <div className="recal-bar">
+      <button type="button" className="btn" onClick={onClick} disabled={!live || busy || (active && !stale)}
+        title={!live ? 'Only the live session the bridge is serving can be recalibrated' : undefined}>
+        {busy ? 'Sending…' : active && !stale ? 'Recalibrating…' : 'Recalibrate'}
+      </button>
+      <div className="recal-status">
+        {!sid ? <span className="muted">Pick a session first.</span>
+          : !live ? <span className="muted">This isn&apos;t the live session, so it can&apos;t be recalibrated. Turn on &quot;Follow live session&quot;.</span>
+            : text ? <Status kind={kind}>{text}{when ? ` · ${ago(when * 1000, now)}` : ''}</Status>
+              : <span className="muted">Discards this session&apos;s baseline and records {N_CALIBRATION_BLOCKS} new rest blocks.{!streaming ? ' No live EEG is arriving right now.' : ''}</span>}
+        {req?.status === 'capturing' && req.last_reason && <span className="caption warn-text">▲ {req.last_reason}</span>}
+        {error && <span className="caption warn-text">▲ Couldn&apos;t send the request: {error}</span>}
+      </div>
+    </div>
+  );
+}
+
+export function CalibrationPanel({ sessionData, profile, raw, now, picker }) {
   const c = sessionData.calibration;
   const t = sessionData.threshold;
   const streaming = raw.stats.lastPacketAt && now - raw.stats.lastPacketAt < 5000;
@@ -422,6 +540,7 @@ export function CalibrationPanel({ sessionData, profile, raw, now }) {
           </li>
         ))}
       </ol>
+      <RecalibrateBar picker={picker} raw={raw} now={now} />
       <div className="cal-grid">
         <div>
           <h3>This session: calibration_result</h3>
@@ -435,6 +554,8 @@ export function CalibrationPanel({ sessionData, profile, raw, now }) {
               ['Reused stored profile', yesNo(c.skip_ahead_used)],
               ['Personal high_load_p', fmt(c.personal_high_load_p, 4)],
               ['Degraded', yesNo(c.baseline_degraded)],
+              ['Amplitude gain', c.amplitude_gain == null ? '—' : `${fmt(c.amplitude_gain, 2)}×${c.rest_std_uv != null ? ` (rest SD ${fmt(c.rest_std_uv, 2)} µV)` : ''}`,
+                'Every block of the session is multiplied by this before features are computed; 1 = signal already in the SAM40 range'],
               ...(c.score != null ? [['Best block quality', fmt(c.score, 1)]] : []),
               ['Updated', c.updated_at ? `${clock(c.updated_at)} (${ago(c.updated_at * 1000, now)})` : '—'],
             ]} />

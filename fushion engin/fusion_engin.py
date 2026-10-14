@@ -334,6 +334,15 @@ SATURATED_WEIGHT = float(os.environ.get("FUSION_SATURATED_WEIGHT", "0.5"))
 # far-out reading can't pin p' at 0 or 1 on its own.
 ALIGNED_Z_CAP = 3.0
 
+# A modality may supply its own distance from its personal limit instead of
+# (prob - threshold) / threshold_scale: "z" (distance from its own rest, in
+# its own spreads) and "z_alert" (where its limit sits on that scale). EEG
+# does, on a log-odds scale -- see backend/psychological/sam40/decision.py
+# PERSONAL_SIGMA_LOGIT -- because its probability-space distance is flattened
+# when scores sit near 0. FUSION_EEG_Z=0 ignores z and uses the probability
+# distance for every modality.
+USE_MODALITY_Z = os.environ.get("FUSION_EEG_Z", "1") != "0"
+
 
 def _sigmoid(x: float) -> float:
     if x >= 0:
@@ -377,7 +386,12 @@ def compute_realtime_multimodal_fusion(modalities_data: dict, scale: str | None 
             p = min(max(p, EXTREME_PROB_EPS), 1.0 - EXTREME_PROB_EPS)
             quality = None if quality is None else float(quality) * SATURATED_WEIGHT
             saturated.append(m)
-        d = max(-ALIGNED_Z_CAP, min(ALIGNED_Z_CAP, (p - float(thr)) / float(sc)))
+        z, z_alert = info.get("z"), info.get("z_alert")
+        if USE_MODALITY_Z and z is not None and z_alert is not None:
+            d_raw = float(z) - float(z_alert)
+        else:
+            d_raw = (p - float(thr)) / float(sc)
+        d = max(-ALIGNED_Z_CAP, min(ALIGNED_Z_CAP, d_raw))
         dist[m] = d
         pa = _sigmoid(d)
         aligned[m] = {**info, "prob": pa, "confidence": max(pa, 1.0 - pa),

@@ -269,3 +269,14 @@ td.up, td.down { color: var(--ink-2); }
 /* fusion step table: first column is the step name, not a number */
 .fusion-steps { min-width: 520px; }
 .fusion-steps td:first-child { color: var(--ink-2); }
+
+/* EEG calibration: recalibrate button + request status */
+.recal-bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 0 0 16px; padding: 10px 12px; border-radius: 10px; background: var(--page); }
+.recal-status { display: flex; flex-direction: column; gap: 2px; font-size: 13px; min-width: 0; flex: 1; }
+.btn { font: inherit; font-size: 13px; font-weight: 600; padding: 7px 16px; border-radius: 999px; border: 1px solid var(--series); background: var(--series); color: #fff; cursor: pointer; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn:not(:disabled):hover { filter: brightness(1.08); }
+
+/* chart title row with a scale switch on the right */
+.chart-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.chart-head .section-title { margin-bottom: 0; }

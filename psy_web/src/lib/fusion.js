@@ -42,7 +42,11 @@ export function breakdown(w) {
     const saturated = p < EXTREME_PROB_EPS || p > 1 - EXTREME_PROB_EPS;
     const pc = saturated ? Math.min(Math.max(p, EXTREME_PROB_EPS), 1 - EXTREME_PROB_EPS) : p;
     const canAlign = thr != null && sc != null && sc > 0;
-    const distRaw = canAlign ? (pc - thr) / sc : null;
+    // Own-scale distance when the modality supplies one (EEG: log-odds
+    // personal z, fusion_engin.py USE_MODALITY_Z); else probability distance.
+    const z = num(w[`z_logit_${m.key}`]); const zAlert = num(w[`z_alert_${m.key}`]);
+    const useZ = z != null && zAlert != null;
+    const distRaw = !canAlign ? null : useZ ? z - zAlert : (pc - thr) / sc;
     const dist = distRaw == null ? null : Math.max(-ALIGNED_Z_CAP, Math.min(ALIGNED_Z_CAP, distRaw));
     const aligned = dist == null ? null : sigmoid(dist);
     const conf = aligned == null ? null : Math.max(aligned, 1 - aligned);
@@ -50,7 +54,7 @@ export function breakdown(w) {
     const satFactor = saturated ? SATURATED_WEIGHT : 1;
     const rawWeight = conf == null ? 0 : qNorm * satFactor * conf * clamp01(acc ?? 0);
     rows[m.key] = {
-      present: true, p, thr, sc, q, qNorm, acc, saturated, satFactor,
+      present: true, p, thr, sc, q, qNorm, acc, saturated, satFactor, useZ, z, zAlert,
       distRaw, dist, capped: distRaw != null && Math.abs(distRaw) > ALIGNED_Z_CAP,
       aligned, conf, rawWeight,
     };
