@@ -199,6 +199,22 @@ def _shared_last_sample_age() -> float:
     return 0.0 if last is None else time.time() - last
 
 
+def _live_eeg_point():
+    """Signal amplitude (RMS of the last second, mean removed, in uV) of what
+    the headband is streaming right now -- one number a second, processed,
+    used only for the calibration screens' moving wave. None until a second
+    of samples has arrived."""
+    from backend.psychological.realtime.adc import bipolar_code_to_microvolts
+    import numpy as np
+    with _shared_buf_lock:
+        tail = _shared_buf[-250:]
+    if len(tail) < 125:
+        return None
+    uv = np.asarray(bipolar_code_to_microvolts(np.array([s.code for s in tail])), dtype=float)
+    uv = uv - uv.mean()
+    return round(float(np.sqrt(np.mean(uv ** 2))), 1)
+
+
 def _new_live_engine():
     """A throwaway engine used only to show per-block scores on the live
     calibration graph while blocks are still being captured. It is never
@@ -238,7 +254,7 @@ def _live_task_score(engine, samples):
         return None
 
 
-def run_eeg_calibration_capture(user_id, session_id, on_progress=None):
+def run_eeg_calibration_capture(user_id, session_id, on_progress=None, on_live=None):
     """Blocking: settles (discarding whatever buffered while settling),
     captures N_CALIBRATION_BLOCKS raw bipolar blocks of BLOCK_SAMPLES each
     from the shared MQTT connection (see _get_shared_client()), then calls
@@ -298,6 +314,7 @@ def run_eeg_calibration_capture(user_id, session_id, on_progress=None):
 
     blocks_samples = []
     live_scores = []
+    _live_series, _live_last = [], [0.0]
     live_engine = _new_live_engine()
     capture_deadline = time.time() + CAPTURE_TIMEOUT_SEC
     while len(blocks_samples) < N_CALIBRATION_BLOCKS:
@@ -315,6 +332,16 @@ def run_eeg_calibration_capture(user_id, session_id, on_progress=None):
             return None
         if _shared_buffered_count() >= BLOCK_SAMPLES and _shared_discard_before_gap(BLOCK_SAMPLES)[0]:
             continue  # stream break inside the next block -- start after it
+        if on_live is not None and time.time() - _live_last[0] >= 1.0:
+            _live_last[0] = time.time()
+            pt = _live_eeg_point()
+            if pt is not None:
+                _live_series.append(pt)
+                del _live_series[:-60]
+                try:
+                    on_live({'rms_uv': list(_live_series), 'ts': time.time()})
+                except Exception:
+                    pass
         if _shared_buffered_count() < BLOCK_SAMPLES:
             time.sleep(0.5)
             continue
@@ -342,7 +369,7 @@ def run_eeg_calibration_capture(user_id, session_id, on_progress=None):
     return result
 
 
-def run_eeg_threshold_capture(session_state: dict, on_progress=None):
+def run_eeg_threshold_capture(session_state: dict, on_progress=None, on_live=None):
     """Blocking: captures N_THRESHOLD_TASK_BLOCKS raw bipolar blocks from
     the shared MQTT connection (see _get_shared_client() -- NO settle
     delay, baseline calibration run moments earlier already confirmed
@@ -374,6 +401,7 @@ def run_eeg_threshold_capture(session_state: dict, on_progress=None):
 
     blocks_samples = []
     live_scores = []
+    _live_series, _live_last = [], [0.0]
     live_engine = _new_live_engine()
     try:
         resting_scores = [round(float(v), 3) for v in session_state['engine']._calibration_scores]
@@ -395,6 +423,16 @@ def run_eeg_threshold_capture(session_state: dict, on_progress=None):
             return None
         if _shared_buffered_count() >= BLOCK_SAMPLES and _shared_discard_before_gap(BLOCK_SAMPLES)[0]:
             continue  # stream break inside the next block -- start after it
+        if on_live is not None and time.time() - _live_last[0] >= 1.0:
+            _live_last[0] = time.time()
+            pt = _live_eeg_point()
+            if pt is not None:
+                _live_series.append(pt)
+                del _live_series[:-60]
+                try:
+                    on_live({'rms_uv': list(_live_series), 'ts': time.time()})
+                except Exception:
+                    pass
         if _shared_buffered_count() < BLOCK_SAMPLES:
             time.sleep(0.5)
             continue

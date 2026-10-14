@@ -46,7 +46,7 @@ from backend.common.config import (
     GSR_CAL, WINDOW_SEC, SETTLE_SEC, N_BASELINE_WIN
 )
 from backend.common.config import EMA_ALPHA
-from backend.physiological.extract_features import extract_features
+from backend.physiological.extract_features import extract_features, adc_to_conductance
 from backend.physiological.ema_service import build_ema_summary, interpret_ema_change
 from backend.physiological.predictor import (
     compute_baseline, compute_personal_stress_threshold, feature_cols, predict_window,
@@ -56,6 +56,25 @@ from backend.physiological.firebase_service import (
     baseline_exists, load_baseline, load_resting_scores, save_baseline,
     save_baseline_adaptation, save_personal_stress_threshold, save_resting_scores,
 )
+
+LIVE_GSR_POINTS = 100   # about the last 20 s at the ring's ~5 Hz
+LIVE_IBI_BEATS = 20
+LIVE_EMIT_GAP_SEC = 1.0
+
+
+def _live_tail(state):
+    """What has arrived so far in the window being captured, as processed
+    values only (skin conductance in uS, recent beat intervals). Handed to the
+    status route in memory so the calibration screens can draw a moving wave
+    between the one-per-minute block points. Never saved anywhere."""
+    gsr = state['gsr_buf'][-LIVE_GSR_POINTS:]
+    ibi = [float(v) for v in state['ibi_buf'][-LIVE_IBI_BEATS:] if 300 <= v <= 2000]
+    elapsed = max(0.001, time.time() - state['window_start'])
+    hz = max(1.0, min(50.0, len(state['gsr_buf']) / elapsed)) if state['gsr_buf'] else 5.0
+    us = [round(float(c), 3) for c in adc_to_conductance(gsr, GSR_CAL)] if gsr else []
+    return {'gsr_us': us, 'gsr_hz': round(hz, 1), 'ibi_ms': [round(v, 1) for v in ibi],
+            'elapsed': round(elapsed, 1), 'ts': time.time()}
+
 
 def _live_block(window, baseline_mean=None, baseline_std=None):
     """Display-only summary of one just-captured window for the live
@@ -312,7 +331,7 @@ def save_calibration_windows(user_id, raw_windows):
     }
 
 
-def run_calibration_capture(user_id, on_progress=None):
+def run_calibration_capture(user_id, on_progress=None, on_live=None):
     """Settles, captures N_BASELINE_WIN windows of raw sensor data from a
     fresh MQTT connection dedicated to this one call (see
     _connect_capture_client()), then saves them as user_id's personal
@@ -408,6 +427,13 @@ def run_calibration_capture(user_id, on_progress=None):
         az = data.get("acc_z", 0)
         state['acc_buf'].append(math.sqrt(ax * ax + ay * ay + az * az) / 9.81)
 
+        if on_live is not None and time.time() - state.get('last_live', 0) >= LIVE_EMIT_GAP_SEC:
+            state['last_live'] = time.time()
+            try:
+                on_live(_live_tail(state))
+            except Exception:
+                pass
+
         if time.time() - state['window_start'] >= WINDOW_SEC:
             close_window()
 
@@ -466,7 +492,7 @@ def run_calibration_capture(user_id, on_progress=None):
         _disconnect_capture_client(client)
 
 
-def run_task_calibration_capture(user_id, on_progress=None):
+def run_task_calibration_capture(user_id, on_progress=None, on_live=None):
     """Personal-threshold task-phase capture: captures N_TASK_WIN
     consecutive windows (WINDOW_SEC=60 each -- see EEG's mirror,
     backend/psychological/mqtt_bridge.py's N_THRESHOLD_TASK_BLOCKS /
@@ -559,6 +585,12 @@ def run_task_calibration_capture(user_id, on_progress=None):
         state['gsr_buf'].append(data.get("gsr", 0))
         ax, ay, az = data.get("acc_x", 0), data.get("acc_y", 0), data.get("acc_z", 0)
         state['acc_buf'].append(math.sqrt(ax * ax + ay * ay + az * az) / 9.81)
+        if on_live is not None and time.time() - state.get('last_live', 0) >= LIVE_EMIT_GAP_SEC:
+            state['last_live'] = time.time()
+            try:
+                on_live(_live_tail(state))
+            except Exception:
+                pass
         if time.time() - state['window_start'] >= WINDOW_SEC:
             close_window()
 

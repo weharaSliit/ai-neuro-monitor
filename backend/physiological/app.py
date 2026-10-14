@@ -51,8 +51,14 @@ from backend.physiological.predictor import (
     feature_cols, StressStateMachine, STRESS_DECISION_THRESHOLD
 )
 from backend.common.config import (
-    RAW_DECISION_THRESHOLD
+    RAW_DECISION_THRESHOLD, TREND_RISING_THRESHOLD
 )
+
+# A skin-conductance level this many times above (or below) the saved baseline
+# is far outside anything the model was trained on (WESAD stress windows reach
+# roughly 2-3x). Past it the label is not trustworthy: tell the user to
+# recalibrate instead of showing a confident "Stressed".
+BASELINE_STALE_RATIO = 6.0
 from backend.physiological.extract_features import (
     extract_features, compute_signal_quality
 )
@@ -219,8 +225,13 @@ def calibrate_start():
             entry['status'] = status
         _calibration_sessions[user_id] = entry
 
+    def on_live(tail):
+        cur = _calibration_sessions.get(user_id)
+        if cur is not None and cur.get('status') in ('settling', 'capturing', 'saving'):
+            _calibration_sessions[user_id] = {**cur, 'live': tail}
+
     def worker():
-        run_calibration_capture(user_id, on_progress=on_progress)
+        run_calibration_capture(user_id, on_progress=on_progress, on_live=on_live)
 
     threading.Thread(target=worker, daemon=True).start()
     return jsonify({'status': 'started'})
@@ -273,8 +284,13 @@ def calibrate_threshold_start():
                 entry[k] = prev[k]
         _threshold_sessions[user_id] = entry
 
+    def on_live(tail):
+        cur = _threshold_sessions.get(user_id)
+        if cur is not None and cur.get('status') in ('capturing', 'saving'):
+            _threshold_sessions[user_id] = {**cur, 'live': tail}
+
     def worker():
-        run_task_calibration_capture(user_id, on_progress=on_progress)
+        run_task_calibration_capture(user_id, on_progress=on_progress, on_live=on_live)
 
     threading.Thread(target=worker, daemon=True).start()
     return jsonify({'status': 'started'})
@@ -374,7 +390,8 @@ def predict():
             feature_cols_list = feature_cols,
             baseline_mean     = b_mean,
             window_size       = 5,
-            trend_threshold   = 0.35
+            trend_threshold   = TREND_RISING_THRESHOLD,
+            baseline_std      = b_std
         )
     sm = ring_sessions[user_id]
 
@@ -409,13 +426,27 @@ def predict():
     effective_threshold = personal_threshold if personal_threshold is not None else (
         RAW_DECISION_THRESHOLD if b_mean is None else STRESS_DECISION_THRESHOLD)
 
+    # ── Is this reading far outside the user's saved baseline? ────
+    # Skin features are scored as a ratio to the baseline mean. A ratio far
+    # beyond anything seen in training (the model then saturates at ~0.99
+    # stress) almost always means the baseline is out of date (electrode
+    # contact, hardware calibration or day-to-day shift), not real stress.
+    baseline_stale, baseline_ratio = False, None
+    if b_mean is not None and 'SCL_mean' in feature_cols:
+        base_scl = float(b_mean[feature_cols.index('SCL_mean')])
+        if base_scl > 0.05:
+            baseline_ratio = float(feat_dict.get('SCL_mean', 0.0)) / base_scl
+            baseline_stale = (baseline_ratio >= BASELINE_STALE_RATIO
+                              or baseline_ratio <= 1.0 / BASELINE_STALE_RATIO)
+
     # ── Save structured data only ──────────────────────────────
     save_prediction(
         user_id, session_id, window_idx,
         result['prediction'], result['label'],
         result['prob_normal'], result['prob_stress'],
         result['trending_toward_stress'], feat_dict,
-        wave_dict
+        wave_dict,
+        baseline_stale=baseline_stale, baseline_ratio=baseline_ratio
     )
     save_prediction_quality(
         user_id, session_id, window_idx,
@@ -429,7 +460,8 @@ def predict():
         result['confidence'], signal_quality,
         result['prob_normal'], result['prob_stress'],
         result['label'], result['trending_toward_stress'],
-        feat_dict, effective_threshold
+        feat_dict, effective_threshold,
+        baseline_stale=baseline_stale, baseline_ratio=baseline_ratio
     )
 
     return jsonify({
@@ -445,6 +477,8 @@ def predict():
         },
         'window_idx':      window_idx,
         'motion_rejected': False,
+        'baseline_stale':  baseline_stale,
+        'baseline_ratio':  None if baseline_ratio is None else round(baseline_ratio, 2),
         'features': {
             'AVNN':        float(feat_dict.get('AVNN', 0)),
             'MeanHR':      float(feat_dict.get('MeanHR', 0)),

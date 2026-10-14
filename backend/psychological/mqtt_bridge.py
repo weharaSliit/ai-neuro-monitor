@@ -372,7 +372,8 @@ def run():
                     time.sleep(0.5)
                     continue
                 # Headband heartbeat: every 5 s while samples are really arriving.
-                if (buffer.last_append is not None and now - buffer.last_append < 8
+                last_sample_at = getattr(buffer, 'last_append', None)
+                if (last_sample_at is not None and now - last_sample_at < 8
                         and now - last_heartbeat >= 5):
                     save_eeg_device_heartbeat()
                     last_heartbeat = now

@@ -137,7 +137,12 @@ MIN_CONFIDENCE_FOR_RETRAIN     = 0.75
 MIN_SIGNAL_QUALITY_FOR_RETRAIN = 0.70
 
 # Fraction of state-machine "rising" votes needed to flag trending_toward_stress
-TREND_RISING_THRESHOLD = 0.35
+TREND_RISING_THRESHOLD = 0.25
+# Retuned 0.35 -> 0.25 together with the minimum-change rule in
+# predictor.StressStateMachine (a feature only votes when it moved by more
+# than calm variability). WESAD validation at 0.25: 100% of onsets detected,
+# 3.2% false alarms in calm windows (the old rule at 0.35: 100% / 18.4%);
+# on a real calm ring session 7% flagged against 45% before.
 
 # Normal/Stress decision cutoff on the model's P(Stress) output. Previously
 # an unvalidated implicit 0.5 (XGBoost's own default predict() cutoff, never

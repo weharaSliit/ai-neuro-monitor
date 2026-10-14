@@ -346,8 +346,13 @@ def calibrate_start():
             entry["scores"] = prev["scores"]
         _calibration_sessions[user_id] = entry
 
+    def on_live(tail):
+        cur = _calibration_sessions.get(user_id)
+        if cur is not None and cur.get("status") in ("settling", "capturing", "saving"):
+            _calibration_sessions[user_id] = {**cur, "live": tail}
+
     def worker():
-        run_eeg_calibration_capture(user_id, session_id, on_progress=on_progress)
+        run_eeg_calibration_capture(user_id, session_id, on_progress=on_progress, on_live=on_live)
 
     threading.Thread(target=worker, daemon=True).start()
     return jsonify({"status": "started"})
@@ -448,8 +453,13 @@ def calibrate_threshold_start():
                 entry[k] = prev[k]
         _threshold_sessions[user_id] = entry
 
+    def on_live(tail):
+        cur = _threshold_sessions.get(user_id)
+        if cur is not None and cur.get("status") in ("capturing", "saving"):
+            _threshold_sessions[user_id] = {**cur, "live": tail}
+
     def worker():
-        run_eeg_threshold_capture(session_state, on_progress=on_progress)
+        run_eeg_threshold_capture(session_state, on_progress=on_progress, on_live=on_live)
 
     threading.Thread(target=worker, daemon=True).start()
     return jsonify({"status": "started"})
