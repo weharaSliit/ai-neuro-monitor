@@ -211,7 +211,9 @@ function Chart({
               {paths.map((p, si) => (
                 <g key={si}>
                   {area && series.length === 1 && <path d={p.areaD} fill={`url(#a${gid}${si})`} />}
-                  <path d={p.d} fill="none" strokeWidth={2.4} strokeLinejoin="round" strokeLinecap="round"
+                  <path d={p.d} fill="none" strokeWidth={series[si].width ?? 2.4} strokeLinejoin="round" strokeLinecap="round"
+                    strokeDasharray={series[si].dash ? '6 5' : undefined}
+                    strokeOpacity={series[si].opacity ?? 1}
                     stroke={zoned ? `url(#z${gid})` : series[si].color} />
                 </g>
               ))}

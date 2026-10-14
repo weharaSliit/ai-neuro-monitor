@@ -29,6 +29,7 @@ import { COLORS } from '../../physiological/config/theme';
 import { useAuth } from '../../../context/AuthContext';
 import api from '../../physiological/api/client';
 import { STRESS_DECISION_THRESHOLD_PERCENT } from '../../physiological/config/config';
+import { alignedOf, fusedAligned } from '../config/aligned';
 
 const CHART_WIDTH = Math.max(260, getContentWidth() - 2 * SPACE.xl - 2 * 18);
 // A window older than this is "last reading", not "live".
@@ -242,15 +243,6 @@ export default function FusionSessionScreen({ navigation, route }) {
     );
     const latestMind = useMemo(() => latestWindowWith(windows, (w) => w.prob_eeg != null), [windows]);
     const latestBody = useMemo(() => latestWindowWith(windows, (w) => w.prob_hrv_gsr != null), [windows]);
-    const fusedHistory = useMemo(() => {
-        const keys = sortedWindowKeys(combinedWindows);
-        return keys
-            .map((k) => ({ v: combinedWindows[k]?.fused_probability, key: k }))
-            .filter(({ v }) => v !== undefined && v !== null)
-            .map(({ v, key }) => ({ value: Math.round(v * 100), date: new Date(fusionKeyToMs(key)) }))
-            .slice(-CHART_POINTS_MAX);
-    }, [combinedWindows]);
-
     // Cognitive load (EEG), autonomic arousal (HRV/GSR), and the fused
     // probability -- all three already live on the SAME fusion_en/{window}
     // record (prob_eeg/prob_hrv_gsr are written directly by each backend's
@@ -275,6 +267,19 @@ export default function FusionSessionScreen({ navigation, route }) {
             };
         });
     }, [combinedWindows]);
+    // Stress rhythm: Fused / Mind / Body, each against its own limit (50%).
+    const rhythmPoints = useMemo(() => {
+        const keys = sortedWindowKeys(combinedWindows).slice(-CHART_POINTS_MAX);
+        const pct = (v) => (v == null ? null : Math.round(v * 100));
+        return keys.map((k) => {
+            const w = combinedWindows[k] || {};
+            return {
+                date: new Date(fusionKeyToMs(k)),
+                values: [pct(fusedAligned(w)), pct(alignedOf(w, 'eeg')), pct(alignedOf(w, 'hrv'))],
+            };
+        });
+    }, [combinedWindows]);
+    const hasRhythm = rhythmPoints.filter((p) => p.values.some((v) => v != null)).length > 1;
     const hasMultiSeriesData = multiSeriesPoints.filter((p) => p.values.some((v) => v != null)).length > 1;
 
     // ── Live freshness -- re-evaluated every 20s so "just now" ages
@@ -458,21 +463,22 @@ export default function FusionSessionScreen({ navigation, route }) {
                 </View>
 
                 {/* ── Today's rhythm ── */}
-                {fusedHistory.length > 1 && (
+                {hasRhythm && (
                     <Card style={styles.block}>
                         <Text style={styles.blockTitle}>Your stress rhythm</Text>
-                        <Text style={styles.blockSub}>Higher means more stress · dashed line is your limit</Text>
+                        <Text style={styles.blockSub}>Each line against its own limit · dashed line is 50%</Text>
                         <View style={{ marginTop: SPACE.md }}>
                             <LineChart
-                                points={fusedHistory}
-                                color={heroKey === 'idle' ? COLORS.brand : heroColor}
+                                points={rhythmPoints}
+                                multiLine
+                                seriesColors={[COLORS.light.text, COLORS.eeg, COLORS.hrv]}
+                                seriesLabels={['Overall', 'Mind', 'Body']}
                                 width={CHART_WIDTH}
-                                height={150}
+                                height={170}
                                 maxValue={100}
                                 hideValues
-                                baselineValue={fusedLimitPct}
+                                baselineValue={50}
                                 baselineLabel="Your limit"
-                                colorZones
                                 fallback={<Text style={styles.waiting}>Loading chart…</Text>}
                             />
                         </View>

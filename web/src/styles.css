@@ -390,3 +390,9 @@ table.data.users tr.clickable:focus-visible { outline: 2px solid var(--brand); o
 .window-table thead th { position: sticky; top: 0; background: var(--card); z-index: 1; }
 .muted-cell { color: var(--text-muted); }
 
+
+.quest-row {
+  display: flex; align-items: center; gap: var(--sp-md); width: 100%; text-align: left; cursor: pointer;
+  background: var(--card); border: 1px solid var(--border-soft, rgba(0,0,0,0.08)); border-radius: var(--r-md); padding: var(--sp-md);
+}
+.quest-row:hover { box-shadow: var(--shadow-up); }
