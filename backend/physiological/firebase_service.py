@@ -249,8 +249,12 @@ def save_prediction(user_id, session_id, window_idx,
                     prob_normal, prob_stress,
                     trending_toward_stress,
                     features_dict,
-                    wave_dict=None):
-    """wave_dict (extract_features.py's 5th return value) is the one
+                    wave_dict=None,
+                    baseline_stale=None, baseline_ratio=None):
+    """baseline_stale / baseline_ratio: set when this window's skin level is
+    far from the user's saved baseline (see app.py's BASELINE_STALE_RATIO), so
+    clients can say "recalibrate" instead of showing a confident stress label.
+    wave_dict (extract_features.py's 5th return value) is the one
     exception to "raw sensor arrays never reach Firebase" below --
     it's already processed (wave_gsr: filtered/decimated to
     WAVE_GSR_POINTS, never the raw gsr_adc_array) and/or already
@@ -273,6 +277,10 @@ def save_prediction(user_id, session_id, window_idx,
     if wave_dict:
         record['wave_gsr'] = wave_dict.get('wave_gsr', [])
         record['ibi_sequence'] = wave_dict.get('ibi_sequence', [])
+    if baseline_stale is not None:
+        record['baseline_stale'] = bool(baseline_stale)
+        if baseline_ratio is not None:
+            record['baseline_ratio'] = round(float(baseline_ratio), 2)
     new_ref = ref.push(record)
 
     session_ref = _ref(f'sessions/{user_id}/{session_id}/window_count')
@@ -417,7 +425,8 @@ def save_fusion_en_rtdb(user_id, session_id, window_idx,
                         confidence, signal_quality,
                         prob_normal, prob_stress,
                         label, trending_toward_stress,
-                        feat_dict=None, threshold=None):
+                        feat_dict=None, threshold=None,
+                        baseline_stale=None, baseline_ratio=None):
     """Writes this session's HRV/GSR fusion fields (via the shared
     _hrv_gsr_fusion_fields() helper) to fusion_en/{user_id}/{session_id}/{key}
     -- user-scoped like every other per-session store, since a "session" is
@@ -440,6 +449,10 @@ def save_fusion_en_rtdb(user_id, session_id, window_idx,
     fields = _hrv_gsr_fusion_fields(user_id, session_id, window_idx, confidence, signal_quality,
                                     prob_normal, prob_stress, label, trending_toward_stress, feat_dict,
                                     threshold, capture_ts)
+    if baseline_stale is not None:
+        fields['baseline_stale'] = bool(baseline_stale)
+        if baseline_ratio is not None:
+            fields['baseline_ratio'] = round(float(baseline_ratio), 2)
     key = fusion_window_key(capture_ts)
     try:
         _global_ref(f'{FUSION_EN_ROOT}/{user_id}/{session_id}/{key}').update(fields)

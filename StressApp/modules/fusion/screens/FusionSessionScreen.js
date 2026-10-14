@@ -40,6 +40,7 @@ const HERO = {
     calm:   { word: 'Calm',          line: 'Your mind and body are settled.',                     tip: 'All good — keep going',        icon: 'emoticon-happy-outline' },
     rising: { word: 'Rising',        line: 'Stress is building up a little.',                     tip: 'A short pause would help',     icon: 'emoticon-neutral-outline' },
     high:   { word: 'Stressed',      line: 'Your body and mind are under strain right now.',      tip: 'Try a 1-minute breathing break', icon: 'emoticon-sad-outline' },
+    stale:  { word: 'Recalibrate',   line: 'Your skin signal is far from your saved calm level, so the stress reading can’t be trusted.', tip: 'Recalibrate to fix this', icon: 'refresh' },
     idle:   { word: 'Not connected', line: 'Put on your ring or headband to see how you’re doing.', tip: 'Waiting for devices',  icon: 'power-plug-off-outline' },
 };
 
@@ -306,8 +307,12 @@ export default function FusionSessionScreen({ navigation, route }) {
     } else {
         heroKey = ringConnected || eegConnected ? 'calm' : 'idle';
     }
+    // Ring reading far from the saved baseline: the label can't be trusted.
+    const baselineStale = (latestBody?.baseline_stale ?? lastKnown?.baseline_stale) === true;
+    if (baselineStale && heroKey !== 'idle') heroKey = 'stale';
     const hero = HERO[heroKey];
-    const heroColor = heroKey === 'high' ? COLORS.stress
+    const heroColor = heroKey === 'stale' ? COLORS.warning
+        : heroKey === 'high' ? COLORS.stress
         : heroKey === 'rising' ? COLORS.warning
         : heroKey === 'idle' ? COLORS.light.textMuted
         : COLORS.normal;
