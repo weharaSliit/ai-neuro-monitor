@@ -30,7 +30,14 @@ export const BATCH_SIZE = 250;                // max samples per MQTT message (w
 
 // Pipeline constants (backend/psychological/realtime/pipeline.py, mqtt_bridge.py).
 export const BLOCK_SEC = 25;
-export const N_CALIBRATION_BLOCKS = 3;
+// Calibration protocol (backend/psychological/mqtt_bridge.py): 2 min settle
+// (discarded) -> 10 rest blocks (~4 min, >= 8 usable) -> 19-block task (8 min)
+// -> 7 recovery blocks (~3 min).
+export const CALIBRATION_SETTLE_SEC = 120;
+export const N_CALIBRATION_BLOCKS = 10;
+export const MIN_USABLE_REST_BLOCKS = 8;
+export const N_TASK_BLOCKS = 19;
+export const N_RECOVERY_BLOCKS = 7;
 export const TARGET_FS = 128;
 export const BIPOLAR_HIGHPASS_HZ = 1.0;
 export const CLIP_UV = 100;

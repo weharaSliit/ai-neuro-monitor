@@ -219,9 +219,36 @@ def main() -> bool:
 
         e, _ = engine_with([0.30, 0.34])
         check("mu_rest is the mean of this session's rest scores", abs(e.mu_rest - 0.32) < 1e-9, f"mu_rest={e.mu_rest}")
-        check("alert threshold is mu_rest + K*sigma (z >= K)",
-              abs(e.thresholds.high_load_p - (0.32 + PERSONAL_K_ALERT * PERSONAL_SIGMA_PRIOR)) < 1e-9,
-              f"high_load_p={e.thresholds.high_load_p}")
+        from backend.psychological.sam40.decision import (
+            PERSONAL_SCALE, PERSONAL_SIGMA_LOGIT, inv_logit, logit as _lg,
+        )
+        if PERSONAL_SCALE == 'logit':
+            want_limit = inv_logit((_lg(0.30) + _lg(0.34)) / 2 + PERSONAL_K_ALERT * PERSONAL_SIGMA_LOGIT)
+        else:
+            want_limit = 0.32 + PERSONAL_K_ALERT * PERSONAL_SIGMA_PRIOR
+        check(f"alert threshold sits K spreads above own rest ({PERSONAL_SCALE} scale)",
+              abs(e.thresholds.high_load_p - want_limit) < 1e-9,
+              f"high_load_p={e.thresholds.high_load_p} want {want_limit}")
+        # wearable02 case: every score near 0. The log-odds scale still finds the
+        # task 1 log-odds unit above rest (z ~1.8, responsive) and a reachable limit.
+        e_low, out_low = engine_with([1.0e-4, 1.4e-4], task=[3e-4, 4e-4, 2.5e-4])
+        if PERSONAL_SCALE == 'logit':
+            check("near-zero scores: task above rest is still detected as responsive (log-odds)",
+                  out_low["responsive"] is True and out_low["task_response_z"] > 1,
+                  f"z={out_low['task_response_z']}, limit={e_low.thresholds.high_load_p:.2e}")
+            e_vlow, out_vlow = engine_with([1.44e-11, 2.02e-12, 4.1e-10, 8.03e-11], task=[3e-9, 8e-9, 1.2e-8])
+            check("scores ~1e-11 (live wearable02 rest) still give a resting level and a task z (log-odds bound)",
+                  e_vlow.mu_rest is not None and out_vlow["task_response_z"] is not None,
+                  f"mu_rest={e_vlow.mu_rest}, z={out_vlow['task_response_z']}")
+            live_rest = [3.7e-13, 9.6e-16, 1.6e-17, 5.5e-16, 1.2e-13, 7.4e-14, 4.3e-14, 3.9e-12, 5.7e-13]
+            e_live, _ = engine_with(live_rest)
+            zs = [e_live.personal_z(p) for p in live_rest]
+            check("10-block calibration uses the person's own rest spread (live wearable02: ~4 log-odds, not 0.55)",
+                  e_live.sigma_source == 'personal' and 3.5 < e_live.sigma < 4.5 and max(abs(z) for z in zs) < 2.5,
+                  f"sigma={e_live.sigma:.2f} ({e_live.sigma_source}), rest z range {min(zs):.2f}..{max(zs):.2f}")
+            check("3-block calibration keeps the SAM40 prior spread", e_vlow.sigma_source == 'prior', f"{e_vlow.sigma_source}")
+            check("near-zero scores: the high-load limit is reachable (not ~0.135)",
+                  e_low.thresholds.high_load_p < 1e-3, f"limit={e_low.thresholds.high_load_p:.2e}")
         check("no probability shift is applied", e.baseline_shift == 0.0, f"baseline_shift={e.baseline_shift}")
         check("z = (s - mu_rest)/sigma", abs(personal_z(0.32 + PERSONAL_SIGMA_PRIOR, e.mu_rest) - 1.0) < 1e-9)
 
@@ -230,13 +257,33 @@ def main() -> bool:
               e.mu_rest is None and not e.thresholds_personalized and e.n_implausible_rest_blocks == 2,
               f"mu_rest={e.mu_rest}")
 
-        _, out = engine_with([0.30, 0.30], task=[0.30 + 0.6 * PERSONAL_SIGMA_PRIOR] * 3)
-        check("task >= 0.5 sigma above rest -> responsive ('ok')",
-              out["status"] == "ok" and out["responsive"] is True, f"outcome={out}")
-        _, out = engine_with([0.30, 0.30], task=[0.30 + 0.2 * PERSONAL_SIGMA_PRIOR] * 3)
-        check("task < 0.5 sigma above rest -> not responsive ('not_separated')",
-              out["status"] == "not_separated" and out["responsive"] is False
-              and out["task_response_z"] < MIN_TASK_RESPONSE_Z, f"outcome={out}")
+        from backend.psychological.sam40.decision import PERSONAL_SCALE as _PS, inv_logit as _il, logit as _lg2
+        if _PS == 'logit':
+            # Midpoint method: responsive when the sustained task sits >= 1 spread above the median rest.
+            up = lambda dz: _il(_lg2(0.30) + dz * 0.55)
+            e_mid, out = engine_with([0.30, 0.30], task=[up(0.2)] * 2 + [up(1.4)] * 6)
+            check("midpoint: sustained task >= 1 spread above rest -> responsive, ramp-up blocks skipped",
+                  out["status"] == "ok" and out["responsive"] is True and out["n_task_skipped"] == 4
+                  and abs(out["task_level_logit"] - (_lg2(0.30) + 1.4 * 0.55)) < 1e-9, f"outcome={out}")
+            check("midpoint: limit = (median rest + sustained task) / 2, applied to the engine",
+                  abs(out["limit_logit"] - (_lg2(0.30) + 0.7 * 0.55)) < 1e-9
+                  and abs(e_mid.thresholds.high_load_p - up(0.7)) < 1e-9 and abs(e_mid.z_alert - 0.7) < 1e-9,
+                  f"limit={e_mid.thresholds.high_load_p} z_alert={e_mid.z_alert}")
+            _, out = engine_with([0.30, 0.30], task=[up(0.6)] * 6)
+            check("midpoint: task < 1 spread above rest -> not responsive, provisional limit kept",
+                  out["status"] == "not_separated" and out["responsive"] is False
+                  and out["threshold_method"].startswith('provisional'), f"outcome={out}")
+        else:
+            _, out = engine_with([0.30, 0.30], task=[0.30 + 0.6 * PERSONAL_SIGMA_PRIOR] * 3)
+            check("task >= 0.5 sigma above rest -> responsive ('ok')",
+                  out["status"] == "ok" and out["responsive"] is True, f"outcome={out}")
+
+        from backend.psychological.sam40.decision import compute_states as _cs, DecisionThresholds as _DT
+        import pandas as _pd
+        st = _cs(_pd.DataFrame({"calibrated_p": [0.9, 0.1, 0.9, 0.1, 0.1, 0.1], "spectral_slope": [0.0] * 6,
+                                "theta_ratio": [0.0] * 6}), _DT(high_load_p=0.5))
+        check("high-load alert = 2 of the last 3 blocks above the limit (one noisy block tolerated)",
+              list(st.high_load_alert) == [False, False, True, False, False, False], f"{list(st.high_load_alert)}")
 
         base = {"window": 0, "skipped": False, "calibrated_p": 0.35, "task_state_z": 0.19,
                 "mu_rest": 0.32, "personal_sigma": PERSONAL_SIGMA_PRIOR, "quality_quality_score": 99.0,
@@ -397,34 +444,49 @@ def main() -> bool:
     except Exception as e:
         check("Sub-window kurtosis checks raised no exception", False, repr(e))
 
-    print("\n[14] per-session amplitude gain (low-amplitude headband signal)")
+    print("\n[14] two-way, range-gated amplitude gain")
     try:
-        def block14(scale, seed, start):
+        def block14(scale, seed, start, clench=False):
             b = make_synthetic_block(seed=seed, start_millis=start)
             uv = bipolar_code_to_microvolts(np.array([s.code for s in b])) * scale
+            if clench:                                 # jaw clench: dense large bursts in part of the block
+                rng = np.random.default_rng(seed)
+                uv[2000:3200] += rng.normal(0, 400, 1200)
             return [BipolarRawSample(s.millis, int(c)) for s, c in zip(b, microvolts_to_bipolar_code(uv))]
 
-        def session14(scale):
+        def session14(scale, clench_block=None):
             e = RealtimeInference(MODEL_DIR)
-            for i in range(4):                       # first block = settling window
-                e.calibrate_bipolar_block(block14(scale, i, i * 25_000))
+            for i in range(4):                         # first block = settling window
+                e.calibrate_bipolar_block(block14(scale, i, i * 25_000, clench=(i == clench_block)))
             out = e.finalize_calibration_bipolar(allow_degraded=True)
             r = e.infer_bipolar_block(block14(scale, 9, 200_000))
             return e, out, r
 
-        e_norm, out_norm, r_norm = session14(1.0)
-        check("normal-amplitude session keeps amplitude_gain 1.0",
-              out_norm["amplitude_gain"] == 1.0, f"gain {out_norm['amplitude_gain']}")
-        e_low, out_low, r_low = session14(1 / 30)
-        expected14 = e_low._train_std_mean / e_low.rest_std_uv     # gain targets the TRAINING SD, not the original
-        check("a 30x-smaller session gets gain = training SD / its rest SD (> 1)",
-              out_low["amplitude_gain"] > 1 and abs(out_low["amplitude_gain"] - expected14) < 1e-6,
-              f"gain {out_low['amplitude_gain']:.2f} vs {expected14:.2f} (rest SD {e_low.rest_std_uv:.2f} uV)")
-        check("with the gain, the low-amplitude score lands near the normal session's score",
-              not r_low.get("skipped") and abs(r_low["calibrated_p"] - r_norm["calibrated_p"]) < 0.15,
-              f"low {r_low.get('calibrated_p')} vs normal {r_norm.get('calibrated_p')}")
+        # The synthetic block is ~25 uV SD; rescale it to SAM40's typical rest SD.
+        e_ref, _, _ = session14(1.0)
+        normal = e_ref._train_std_mean / e_ref.rest_std_uv
+        e_n, out_n, r_n = session14(normal)
+        check("SAM40-like session (rest SD in the training range) keeps gain 1.0",
+              out_n["amplitude_gain"] == 1.0 and not out_n["amplitude_capped"],
+              f"gain {out_n['amplitude_gain']}, rest SD {e_n.rest_std_uv:.2f} uV")
+        e_l, out_l, r_l = session14(5 * normal)
+        check("5x louder session is scaled DOWN (gain ~0.2, not capped)",
+              0.15 < out_l["amplitude_gain"] < 0.25 and not out_l["amplitude_capped"],
+              f"gain {out_l['amplitude_gain']:.3f}")
+        check("with the gain, the loud session scores close to the normal one",
+              not r_l.get("skipped") and abs(r_l["calibrated_p"] - r_n["calibrated_p"]) < 0.15,
+              f"loud {r_l.get('calibrated_p')} vs normal {r_n.get('calibrated_p')}")
+        e_q, out_q, r_q = session14(normal / 30)
+        check("1/30 quiet session: gain capped at 10x and the baseline marked degraded",
+              out_q["amplitude_gain"] == 10.0 and out_q["amplitude_capped"] and e_q.baseline_degraded,
+              f"gain {out_q['amplitude_gain']}, capped {out_q['amplitude_capped']}, degraded {e_q.baseline_degraded}")
+        e_a, out_a, _ = session14(normal, clench_block=2)
+        check("artefact-heavy rest: the clench block is excluded and the gain stays 1.0",
+              out_a["amplitude_gain"] == 1.0 and out_a["n_clean_rest_for_gain"] < 3,
+              f"gain {out_a['amplitude_gain']}, clean blocks {out_a['n_clean_rest_for_gain']}, rest SD {e_a.rest_std_uv:.2f}")
         check("the stored waveform stays in real (unscaled) uV",
-              max(abs(v) for v in r_low["wave_uv"]) < 5, f"max |wave| {max(abs(v) for v in r_low['wave_uv']):.2f} uV")
+              max(abs(v) for v in r_l["wave_uv"]) > 5 * max(abs(v) for v in r_n["wave_uv"]) * 0.8,
+              "loud session waveform shown at its real amplitude")
     except Exception as e:
         check("Amplitude gain checks raised no exception", False, repr(e))
 

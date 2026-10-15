@@ -44,7 +44,7 @@ from backend.psychological.firebase_service import (
     get_calibration_status,
     compute_eeg_baseline_drift_history,
 )
-from backend.psychological.calibration_service import finish_personal_calibration
+from backend.psychological.calibration_service import finish_personal_calibration, run_eeg_threshold_from_blocks
 from backend.psychological.mqtt_bridge import N_CALIBRATION_BLOCKS, N_THRESHOLD_TASK_BLOCKS
 from backend.psychological.realtime.csv_logger import CsvLogger, RAW_FIELDS_BIPOLAR, log_raw_block_bipolar
 from backend.psychological.realtime.firebase_sync import make_eeg_output_record
@@ -274,6 +274,10 @@ def calibrate():
     # one, so the new blocks don't overwrite psychological/{uid}/{sid}/0, 1, ...
     if existing is not None:
         engine.continue_block_numbering(existing["engine"])
+    # After an API restart the old engine is gone (existing is None) but the
+    # session's blocks are still in Firebase -- continue after them, or the
+    # recalibrated session would overwrite blocks 0, 1, ... again.
+    engine.start_block_numbering_at(firebase.next_block_number())
 
     eeg_sessions[session_id] = {
         "engine": engine,
@@ -441,6 +445,10 @@ def calibrate_threshold_start():
     def on_progress(status, extra):
         if status == "capturing":
             entry = {"status": "capturing", "session_id": session_id, "n_blocks": N_THRESHOLD_TASK_BLOCKS, **extra}
+        elif status == "recovery":
+            # Protocol phase 4: the task is over, the user rests (see
+            # eeg_calibration_capture.py run_eeg_threshold_capture()).
+            entry = {"status": "recovery", "session_id": session_id, **extra}
         elif status == "error":
             entry = {"status": "error", "session_id": session_id, "error": extra.get("message", "Unknown error")}
         elif status == "done":
@@ -463,6 +471,65 @@ def calibrate_threshold_start():
 
     threading.Thread(target=worker, daemon=True).start()
     return jsonify({"status": "started"})
+
+
+# -- /calibrate/threshold -- personal high-load threshold from given blocks --
+#
+# Same method as /calibrate/threshold/start (run_eeg_threshold_from_blocks():
+# each block scored with score_threshold_task_block(), then
+# finalize_personal_threshold() against this session's rest blocks), but the
+# task blocks are POSTed by the caller -- mqtt_bridge.py sends the live
+# blocks it captured during a psy_web recalibration's task phase -- instead
+# of being captured over a separate MQTT connection.
+#
+# REQUEST FORMAT: {"session_id": "...", "blocks": [{"millis": [...], "code": [...]}, ...]}
+@app.route("/calibrate/threshold", methods=["POST"])
+@require_auth
+def calibrate_threshold_blocks():
+    data = request.json or {}
+    session_id = data.get("session_id", "session_001")
+    blocks = data.get("blocks", [])
+    if not blocks:
+        return jsonify({"error": "No blocks provided"}), 400
+    session_state = eeg_sessions.get(session_id)
+    if session_state is None:
+        return jsonify({"error": f"Session {session_id!r} not calibrated -- call /calibrate first"}), 400
+    try:
+        samples = [_samples_from_payload(b) for b in blocks]
+        recovery = [_samples_from_payload(b) for b in data.get("recovery_blocks") or []]
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    outcome = run_eeg_threshold_from_blocks(session_state, samples, recovery)
+    return jsonify({"success": True, "session_id": session_id, **outcome})
+
+
+# -- /calibrate/preview -- one block's score for the live calibration graph --
+# Stateless: nothing is stored. Rest blocks are scored by a shared engine
+# (no calibration needed); task/recovery blocks by the session's engine, at
+# its amplitude gain.
+#
+# REQUEST FORMAT: {"session_id": "...", "phase": "rest"|"task"|"recovery", "millis": [...], "code": [...]}
+_preview_engine = None
+
+
+@app.route("/calibrate/preview", methods=["POST"])
+@require_auth
+def calibrate_preview():
+    global _preview_engine
+    data = request.json or {}
+    phase = data.get("phase", "rest")
+    try:
+        samples = _samples_from_payload(data)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    session_state = eeg_sessions.get(data.get("session_id", "session_001"))
+    if phase != "rest" and session_state is not None:
+        engine, use_gain = session_state["engine"], True
+    else:
+        if _preview_engine is None:
+            _preview_engine = RealtimeInference(MODEL_DIR, disable_quality_gate=DISABLE_QUALITY_GATE)
+        engine, use_gain = _preview_engine, False
+    return jsonify({"phase": phase, **engine.preview_block_score(samples, use_gain=use_gain)})
 
 
 @app.route("/calibrate/threshold/status", methods=["GET"])

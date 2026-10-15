@@ -9,15 +9,18 @@ import pandas as pd
 from scipy.signal import detrend
 
 from backend.psychological.sam40.decision import (  # noqa: E402
-    MIN_TASK_RESPONSE_Z, PERSONAL_SIGMA_PRIOR, DecisionThresholds, compute_states,
-    personal_decision_thresholds, personal_z, task_response_z,
+    MIN_TASK_RESPONSE_Z, PERSONAL_K_ALERT, PERSONAL_SCALE, PERSONAL_SIGMA_LOGIT, PERSONAL_SIGMA_PRIOR,
+    DecisionThresholds, compute_states, personal_decision_thresholds, personal_decision_thresholds_logit,
+    inv_logit, midpoint_threshold_logit, personal_sigma_logit, personal_z, personal_z_level, plausible_logit_score,
+    rest_level_logit, task_response_z,
+    task_response_z_logit,
 )
 from backend.psychological.sam40.derived_features import add_baseline_relative  # noqa: E402
 from backend.psychological.sam40.features import channel_features, epoch_features  # noqa: E402
 from backend.psychological.sam40.preprocess import notch_then_bandpass  # noqa: E402
 
 from .adc import (  # noqa: E402
-    bipolar_code_to_microvolts, clip_physiological_uv, code_to_microvolts, raw_magnitude_ok,
+    CLIP_UV, bipolar_code_to_microvolts, clip_physiological_uv, code_to_microvolts, raw_magnitude_ok,
     raw_out_of_range_mask,
 )
 from .mqtt_client import BipolarRawSample, RawSample  # noqa: E402
@@ -55,8 +58,25 @@ SETTLING_TIME_SEC = 25.0
 # unscaled signal, and the stored waveform stays in real uV.
 # EEG_AMPLITUDE_CALIBRATION=0 turns it off.
 AMPLITUDE_CALIBRATION = os.environ.get('EEG_AMPLITUDE_CALIBRATION', '1') != '0'
-MAX_AMPLITUDE_GAIN = 100.0     # never amplify more than this
-MIN_REST_STD_UV = 0.05         # below this the input is flat/disconnected: not EEG, don't amplify
+# Two-way and range-gated: the gain is applied only when the session's rest
+# SD is outside the training mean +- 2 SD (SAM40-like sessions keep 1.0, so
+# the published results are unchanged), scaling a quiet session up AND a loud
+# one down. Measured robustly: only clean rest blocks (rules below), and
+# 1.4826 x MAD per block instead of the SD, so one blink or clench during
+# calibration can't inflate it and scale the whole session down too far.
+GAIN_MIN, GAIN_MAX = 0.1, 10.0   # a gain at the cap usually means bad contact/units: calibration marked degraded
+MIN_REST_STD_UV = 0.05           # below this the input is flat/disconnected: not EEG, no gain
+REST_CLEAN_MAX_CLIP = 0.01       # > 1% of samples beyond +-CLIP_UV -> not a clean rest block
+REST_CLEAN_RMS_FACTOR = 3.0      # RMS > 3 x the median rest RMS -> artefact (clench, movement)
+REST_CLEAN_MAX_DELTA_REL = 0.5   # delta share > 0.5 -> blink / drift
+MAX_AMPLITUDE_GAIN = GAIN_MAX
+
+
+def robust_sd(x: np.ndarray) -> float:
+    """1.4826 x median absolute deviation: equals the SD for Gaussian EEG,
+    but a few large artefact samples barely move it."""
+    x = np.asarray(x, dtype=float)
+    return float(1.4826 * np.median(np.abs(x - np.median(x))))
 DERIVED_SUFFIXES = ['delta_rel_power', 'theta_rel_power', 'alpha_rel_power', 'beta_rel_power',
                      'gamma_rel_power', 'theta_alpha_ratio', 'beta_alpha_ratio', 'sample_entropy',
                      'hjorth_complexity']
@@ -374,15 +394,19 @@ class RealtimeInference:
         # is rescaled only when its rest SD is below mean - 2 SD.
         self._train_std_mean: float | None = None
         self._train_std_low: float | None = None
+        self._train_std_high: float | None = None
         try:
             scaler = self.model.named_steps['standardscaler']
             idx = self.feature_columns.index('bipolar_std')
             self._train_std_mean = float(scaler.mean_[idx])
             self._train_std_low = float(scaler.mean_[idx] - 2 * scaler.scale_[idx])
+            self._train_std_high = float(scaler.mean_[idx] + 2 * scaler.scale_[idx])
         except (AttributeError, KeyError, ValueError, IndexError):
             pass
         self.amplitude_gain: float = 1.0
         self.rest_std_uv: float | None = None
+        self.amplitude_capped: bool = False
+        self.n_clean_rest_for_gain: int = 0
         self._cal_signals_bipolar: list[np.ndarray] = []   # trusted rest blocks, unclamped uV
         self.baseline = UserBaseline()
         self._history: list[dict] = []  # for persistence-aware decision states across blocks
@@ -403,24 +427,53 @@ class RealtimeInference:
         self._calibration_attempts_bipolar: list[tuple[float, dict, np.ndarray]] = []
         self._bipolar_blocks_processed: int = 0
         self._task_scores: list[float] = []
+        self._recovery_scores: list[float] = []
         self.personal_high_load_p: float | None = None
         # Personal Scale (sam40/decision.py): mu_rest from THIS session's
         # rest blocks, sigma = the SAM40-derived prior. eeg_responsive comes
         # from the onboarding task (this session's, or the user's last one,
         # restored by calibration_service.py) -- None = not checked yet.
-        self.mu_rest: float | None = None
-        self.sigma: float = PERSONAL_SIGMA_PRIOR
+        self.mu_rest: float | None = None            # mean rest score (probability), for display
+        self.personal_scale: str = PERSONAL_SCALE     # 'logit' | 'probability' (sam40/decision.py)
+        self.mu_rest_logit: float | None = None       # resting level on the log-odds scale
+        self.sigma_source: str = 'prior'              # 'personal' = own rest SD (sam40/decision.py)
+        # Where the high-load limit sits on the z scale (sent to fusion as
+        # z_alert_eeg): 0.84 until the task runs (provisional limit), then
+        # the midpoint between baseline and the sustained task level.
+        self.z_alert: float = PERSONAL_K_ALERT
+        self.threshold_method: str = 'provisional (rest + 0.84 sigma)'
+        self.limit_logit: float | None = None
+        self.sigma: float = PERSONAL_SIGMA_LOGIT if PERSONAL_SCALE == 'logit' else PERSONAL_SIGMA_PRIOR
         self.task_response_z: float | None = None
         self.eeg_responsive: bool | None = None
         self.n_implausible_rest_blocks: int = 0
         self._live_blocks: int = 0  # infer_bipolar_block() calls, scored or not -> Firebase key
         self._itakura_ref_from_live: bool = False  # see infer_bipolar_block()
 
+    def _plausible(self, s: float | None) -> bool:
+        """Score usable for the Personal Scale: within LOGIT_PLAUSIBLE_BOUND
+        on the log-odds scale, within PLAUSIBLE_SCORE_EPS on probability."""
+        if self.personal_scale == 'logit':
+            return plausible_logit_score(s)
+        return s is not None and PLAUSIBLE_SCORE_EPS <= s <= 1.0 - PLAUSIBLE_SCORE_EPS
+
+    def personal_z(self, score: float | None) -> float | None:
+        """Distance of a score above this person's resting level, in the
+        Personal Scale's own spreads (log-odds or probability)."""
+        if self.personal_scale == 'logit':
+            return personal_z_level(score, self.mu_rest_logit, self.sigma)
+        return personal_z(score, self.mu_rest, self.sigma)
+
     def continue_block_numbering(self, previous: "RealtimeInference") -> None:
         """Start this engine's Firebase block keys after `previous`'s last
         one -- used when a live session is recalibrated, so the new engine
         doesn't reuse (and overwrite) block 0, 1, ... of the same session."""
         self._live_blocks = max(self._live_blocks, getattr(previous, "_live_blocks", 0))
+
+    def start_block_numbering_at(self, n: int) -> None:
+        """Same purpose, when the previous engine is gone (API restarted):
+        start after the highest block number already stored for the session."""
+        self._live_blocks = max(self._live_blocks, int(n))
 
     def _model_features(self, unclamped: np.ndarray) -> dict:
         """Features the model sees: the block times this session's
@@ -435,14 +488,32 @@ class RealtimeInference:
         baseline and rest scores at the new scale so mu_rest matches what
         live blocks will be scored on."""
         self.amplitude_gain = 1.0
+        self.amplitude_capped = False
         if not rest_signals:
             return
-        self.rest_std_uv = float(np.median([channel_features(clip_physiological_uv(s), fs=TARGET_FS)['std']
-                                            for s in rest_signals]))
-        if (not AMPLITUDE_CALIBRATION or self._train_std_mean is None
-                or self.rest_std_uv >= self._train_std_low or self.rest_std_uv < MIN_REST_STD_UV):
-            return
-        self.amplitude_gain = float(min(MAX_AMPLITUDE_GAIN, self._train_std_mean / self.rest_std_uv))
+        # Clean rest blocks only (clipping, RMS outliers, blink/drift).
+        clip_frac = [float(np.mean(np.abs(s) > CLIP_UV)) for s in rest_signals]
+        rms = [float(np.sqrt(np.mean(np.square(s)))) for s in rest_signals]
+        delta_rel = [channel_features(clip_physiological_uv(s), fs=TARGET_FS)['delta_rel_power'] for s in rest_signals]
+        med_rms = float(np.median(rms))
+        clean = [s for s, c, r, dr in zip(rest_signals, clip_frac, rms, delta_rel)
+                 if c <= REST_CLEAN_MAX_CLIP and r <= REST_CLEAN_RMS_FACTOR * med_rms and dr <= REST_CLEAN_MAX_DELTA_REL]
+        self.n_clean_rest_for_gain = len(clean)
+        if not clean:
+            return                       # nothing trustworthy to measure: no gain
+        self.rest_std_uv = float(np.median([robust_sd(s) for s in clean]))
+        if (not AMPLITUDE_CALIBRATION or self._train_std_mean is None or self.rest_std_uv < MIN_REST_STD_UV
+                or self._train_std_low <= self.rest_std_uv <= self._train_std_high):
+            return                       # in the training range (or flat): gain stays 1.0
+        raw_gain = self._train_std_mean / self.rest_std_uv
+        self.amplitude_gain = float(min(GAIN_MAX, max(GAIN_MIN, raw_gain)))
+        if self.amplitude_gain != raw_gain:
+            self.amplitude_capped = True
+            self.baseline_degraded = True
+            print(f"[amplitude] gain {raw_gain:.2f} capped to {self.amplitude_gain:.2f} -- rest SD "
+                  f"{self.rest_std_uv:.2f} uV is far outside training; check contact/units. Baseline marked degraded.")
+        else:
+            print(f"[amplitude] rest SD {self.rest_std_uv:.2f} uV outside training range -> gain {self.amplitude_gain:.2f}")
         self.baseline = UserBaseline()
         self._calibration_scores = []
         for sig in rest_signals:
@@ -466,13 +537,17 @@ class RealtimeInference:
         # meaningless. With no plausible rest block there is no personal
         # baseline: population thresholds stay and EEG is kept out of fusion
         # (make_eeg_fusion_record(): 'no_personal_baseline').
-        plausible = [s for s in self._calibration_scores
-                     if PLAUSIBLE_SCORE_EPS <= s <= 1.0 - PLAUSIBLE_SCORE_EPS]
+        plausible = [s for s in self._calibration_scores if self._plausible(s)]
         self.n_implausible_rest_blocks = len(self._calibration_scores) - len(plausible)
         if not plausible:
             return
         self.mu_rest = float(np.mean(plausible))
-        self.thresholds = personal_decision_thresholds(self.thresholds, self.mu_rest, self.sigma)
+        if self.personal_scale == 'logit':
+            self.mu_rest_logit = rest_level_logit(plausible)
+            self.sigma, self.sigma_source = personal_sigma_logit(plausible)
+            self.thresholds = personal_decision_thresholds_logit(self.thresholds, self.mu_rest_logit, self.sigma)
+        else:
+            self.thresholds = personal_decision_thresholds(self.thresholds, self.mu_rest, self.sigma)
         self.personal_high_load_p = self.thresholds.high_load_p
         self.thresholds_personalized = True
 
@@ -483,10 +558,19 @@ class RealtimeInference:
             'resting_calibrated_p': self.mu_rest,
             'mu_rest': self.mu_rest,
             'sigma': self.sigma,
+            'personal_scale': self.personal_scale,
+            'mu_rest_logit': self.mu_rest_logit,
+            'sigma_source': self.sigma_source,
             'personal_high_load_p': self.personal_high_load_p,
             'baseline_shift': self.baseline_shift,
             'amplitude_gain': self.amplitude_gain,
             'rest_std_uv': self.rest_std_uv,
+            'amplitude_capped': self.amplitude_capped,
+            'n_clean_rest_for_gain': self.n_clean_rest_for_gain,
+            # Per-block rest scores behind mu_rest (in capture order, at the
+            # session's amplitude gain) -- for calibration graphs. Includes
+            # implausible ones, which mu_rest excludes.
+            'rest_scores': [float(x) for x in self._calibration_scores],
         }
 
     def calibrate_block(self, samples: list[RawSample]) -> dict:
@@ -658,6 +742,29 @@ class RealtimeInference:
                     **self._personal_outcome()}
         return {'status': 'failed', 'baseline_degraded': None}
 
+    def preview_block_score(self, samples: list[BipolarRawSample], use_gain: bool) -> dict:
+        """Score ONE block for psy_web's live calibration graph without
+        touching any state (baseline, scores, block counters). Rest blocks
+        (use_gain=False) are scored like calibrate_bipolar_block() does --
+        clamped signal, before any gain is fitted; task/recovery blocks
+        (use_gain=True) like score_threshold_task_block(), at this session's
+        amplitude gain. The values that count are still the ones the
+        batch /calibrate and /calibrate/threshold calls compute."""
+        raw_code = _raw_bipolar_codes(samples)
+        if not (self.disable_quality_gate or raw_magnitude_ok(bipolar_code_to_microvolts(raw_code))):
+            return {"score": None, "trusted": False, "reason": "raw signal exceeds MAX_RAW_UV"}
+        millis = np.array([s.millis for s in samples], dtype=float)
+        if not (self.disable_quality_gate or timing_ok(millis)):
+            return {"score": None, "trusted": False, "reason": "dropped-packet gap exceeds MAX_GAP_SEC"}
+        unclamped = preprocess_bipolar_block_unclamped(samples)
+        feats = self._model_features(unclamped) if use_gain else channel_features(
+            clip_physiological_uv(unclamped), fs=TARGET_FS)
+        quality = self.quality_validator.assess_only_single(raw_code, unclamped)
+        trusted = self.disable_quality_gate or (
+            RATING_ORDER.get(quality['gate_rating'], -1) >= RATING_ORDER[self.calibration_min_rating])
+        return {"score": self._score_calibration_bipolar_block(feats), "trusted": bool(trusted),
+                "gate_rating": quality.get('gate_rating')}
+
     def score_threshold_task_block(self, samples: list[BipolarRawSample]) -> dict:
         """Scores one block captured during a DELIBERATE high-load task
         (e.g. a timed mental-arithmetic quiz) run immediately after
@@ -716,6 +823,37 @@ class RealtimeInference:
         quality['score'] = score
         return quality
 
+    def score_recovery_block(self, samples: list[BipolarRawSample]) -> float | None:
+        """Scores one recovery-rest block (after the high-load task) the
+        same way as a task block, kept separately: recovery doesn't change
+        either threshold, it shows whether the score came back down."""
+        raw_code = _raw_bipolar_codes(samples)
+        if not (self.disable_quality_gate or raw_magnitude_ok(bipolar_code_to_microvolts(raw_code))):
+            return None
+        millis = np.array([s.millis for s in samples], dtype=float)
+        if not (self.disable_quality_gate or timing_ok(millis)):
+            return None
+        score = self._score_calibration_bipolar_block(self._model_features(preprocess_bipolar_block_unclamped(samples)))
+        if score is not None:
+            self._recovery_scores.append(score)
+        return score
+
+    def recovery_outcome(self) -> dict:
+        """Recovery-rest summary: mean score, its z vs own rest, and whether
+        it came back below the high-load limit (z < PERSONAL_K_ALERT)."""
+        plausible = [s for s in self._recovery_scores if self._plausible(s)]
+        if not self._recovery_scores:
+            return {}
+        mean = float(np.mean(plausible)) if plausible else None
+        z = self.personal_z(mean) if mean is not None else None
+        return {
+            'recovery_scores': [float(x) for x in self._recovery_scores],
+            'recovery_mean': mean,
+            'recovery_z': z,
+            'recovered': None if z is None else bool(z < self.z_alert),
+            'n_recovery_blocks': len(self._recovery_scores),
+        }
+
     def finalize_personal_threshold(self) -> dict:
         """Computes and APPLIES this user's personal high_load_p from
         resting (self._calibration_scores, already populated by
@@ -740,13 +878,40 @@ class RealtimeInference:
         # fusion weight (make_eeg_fusion_record()) and the person should
         # re-seat the electrodes and repeat -- not fall back to a population
         # threshold, which live data showed scores never reach.
-        plausible_task = [s for s in self._task_scores
-                          if PLAUSIBLE_SCORE_EPS <= s <= 1.0 - PLAUSIBLE_SCORE_EPS]
-        z_task = (task_response_z([self.mu_rest], plausible_task, self.sigma)
-                  if self.mu_rest is not None else None)
-        self.task_response_z = z_task
-        self.eeg_responsive = None if z_task is None else z_task >= MIN_TASK_RESPONSE_Z
+        plausible_task = [s for s in self._task_scores if self._plausible(s)]
+        midpoint = None
+        if self.personal_scale == 'logit':
+            # Midpoint method (sam40/decision.py midpoint_threshold_logit()):
+            # baseline = median rest, task level = mean of the task after the
+            # ramp-up, limit = their midpoint, responsive if the task sits
+            # >= 1 rest SD above baseline.
+            rest_ok = [s for s in self._calibration_scores if self._plausible(s)]
+            midpoint = midpoint_threshold_logit(rest_ok, plausible_task, sigma=self.sigma)
+            z_task = (None if midpoint is None or self.mu_rest_logit is None
+                      else (midpoint['task_level_logit'] - self.mu_rest_logit) / self.sigma)
+            self.task_response_z = z_task
+            self.eeg_responsive = None if midpoint is None else midpoint['responsive']
+            if self.eeg_responsive:
+                lim = midpoint['limit_logit']
+                self.limit_logit = lim
+                self.z_alert = (lim - self.mu_rest_logit) / self.sigma
+                limit_p = inv_logit(lim)
+                self.thresholds = replace(self.thresholds, high_load_p=limit_p, cooldown_high_p=limit_p,
+                                          break_p=max(self.thresholds.break_p, limit_p))
+                self.personal_high_load_p = limit_p
+                self.threshold_method = 'midpoint (median rest, sustained task)'
+        else:
+            z_task = (task_response_z([self.mu_rest], plausible_task, self.sigma)
+                      if self.mu_rest is not None else None)
+            self.task_response_z = z_task
+            self.eeg_responsive = None if z_task is None else z_task >= MIN_TASK_RESPONSE_Z
         return {
+            'threshold_method': self.threshold_method,
+            'z_alert': self.z_alert,
+            **({k: midpoint[k] for k in ('baseline_logit', 'task_level_logit', 'limit_logit', 'rest_sd_logit',
+                                         'separation_sd', 'n_task_used', 'n_task_skipped')} if midpoint else {}),
+            'baseline': None if not midpoint else inv_logit(midpoint['baseline_logit']),
+            'task_level': None if not midpoint else inv_logit(midpoint['task_level_logit']),
             'status': 'ok' if self.eeg_responsive else 'not_separated',
             'responsive': self.eeg_responsive,
             'task_response_z': z_task,
@@ -755,6 +920,11 @@ class RealtimeInference:
             'resting_mean': self.mu_rest,
             'task_mean': float(np.mean(plausible_task)) if plausible_task else None,
             'n_task_blocks': len(self._task_scores),
+            # Per-block scores behind the means above, for calibration graphs.
+            'task_scores': [float(x) for x in self._task_scores],
+            'rest_scores': [float(x) for x in self._calibration_scores],
+            'sigma': self.sigma,
+            'personal_scale': self.personal_scale,
             'n_implausible_task_blocks': len(self._task_scores) - len(plausible_task),
         }
 
@@ -838,7 +1008,7 @@ class RealtimeInference:
             return {}   # saturated: the model is outside its range, not confident
         return {
             'provisional_score': p,
-            'provisional_z': personal_z(p, self.mu_rest, self.sigma),
+            'provisional_z': self.personal_z(p),
             'provisional_quality': provisional_quality(oor),
         }
 
@@ -958,6 +1128,7 @@ class RealtimeInference:
                 'eeg_responsive': self.eeg_responsive,
                 'mu_rest': self.mu_rest,
                 'personal_sigma': self.sigma,
+                'personal_z_alert': self.z_alert,
                 'amplitude_gain': self.amplitude_gain,
                 **provisional,
                 **raw_feats,
@@ -976,7 +1147,7 @@ class RealtimeInference:
 
         row['raw_score'] = raw_score
         row['calibrated_p'] = calibrated_p
-        row['task_state_z'] = personal_z(raw_score, self.mu_rest, self.sigma)
+        row['task_state_z'] = self.personal_z(raw_score)
         row['theta_ratio'] = raw_feats_unprefixed['theta_alpha_ratio']
         row['spectral_slope'] = raw_feats_unprefixed['spectral_slope']
         row['window'] = len(self._history)
@@ -995,6 +1166,8 @@ class RealtimeInference:
         result['eeg_responsive'] = self.eeg_responsive
         result['mu_rest'] = self.mu_rest
         result['personal_sigma'] = self.sigma
+        result['personal_scale'] = self.personal_scale
+        result['personal_z_alert'] = self.z_alert
         result['amplitude_gain'] = self.amplitude_gain
         result.update({f'quality_{k}': v for k, v in quality.items()})
         result.update({f'session_{k}': v for k, v in health.items()})

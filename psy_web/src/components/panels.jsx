@@ -6,11 +6,11 @@ import { useFirebaseValue } from '../hooks/useData';
 import { requestRecalibration } from '../lib/firebase';
 import {
   BATCH_SIZE, BIPOLAR_HIGHPASS_HZ, BLOCK_SEC, CLIP_UV, EEG_API_BASE, MQTT_TOPIC_EEG, MQTT_TOPIC_STATUS,
-  MQTT_URL, N_CALIBRATION_BLOCKS, POPULATION_HIGH_LOAD_P, RAW_WINDOW_SEC, SOURCE_FS, TARGET_FS,
+  CALIBRATION_SETTLE_SEC, MIN_USABLE_REST_BLOCKS, MQTT_URL, N_CALIBRATION_BLOCKS, POPULATION_HIGH_LOAD_P, RAW_WINDOW_SEC, SOURCE_FS, TARGET_FS,
   TASK_STATE_LABEL_THRESHOLD, UV_PER_COUNT,
 } from '../lib/config';
 import {
-  BANDS, FEATURE_GROUPS, LEVEL_WORDS, MODEL, explain, fmt, levelOf, modelLabelText,
+  BANDS, FEATURE_GROUPS, LEVEL_WORDS, MODEL, explain, fmt, levelOf, modelLabelText, previewGain, previewScore,
 } from '../lib/model';
 
 // ── small shared pieces ───────────────────────────────────────────
@@ -345,6 +345,23 @@ export function TaskStatePanel({ sessionData, profile, now }) {
   const range = scored.length
     ? [Math.min(...scored.map((b) => b.task_state_score)), Math.max(...scored.map((b) => b.task_state_score))] : null;
 
+  // Preview of blocks stored before this session had an amplitude gain:
+  // what the backend scores them at the session's gain (model.js previewGain).
+  const pg = useMemo(() => previewGain(sessionData), [sessionData]);
+  const preview = useMemo(() => {
+    if (!pg) return null;
+    const pts = blocks.map((b) => ({ x: b.window, y: previewScore(b, pg.gain), b }));
+    const vals = pts.map((p) => p.y).filter((v) => v != null);
+    if (!vals.length) return null;
+    const sorted = [...vals].sort((a, b) => a - b);
+    // Own-rest level at this gain: the calibration's when it measured the gain,
+    // else the median preview score (blocks assumed mostly rest).
+    const mu = pg.muRest ?? sorted[Math.floor(sorted.length / 2)];
+    const limit = Math.min(1, mu + 0.84 * 0.161);    // decision.py PERSONAL_K_ALERT x PERSONAL_SIGMA_PRIOR
+    const last = [...pts].reverse().find((p) => p.y != null);
+    return { pts, mu, limit, last, lo: sorted[0], hi: sorted[sorted.length - 1], n: vals.length };
+  }, [pg, blocks]);
+
   return (
     <Card
       title="Task state"
@@ -377,6 +394,8 @@ export function TaskStatePanel({ sessionData, profile, now }) {
               ['Trend (last 3)', shown?.task_state_trend || '—'],
               ['Model confidence', shown?.model_confidence == null ? '—' : `${(shown.model_confidence * 100).toFixed(0)}%`, '|p − 0.5| × 2'],
               ['Signal quality', latest ? `${fmt(latest.eeg_quality_score, 0)}/100 (${latest.eeg_quality_flag ? 'trusted' : 'rejected'})` : '—'],
+              ...(preview ? [['Score at amplitude gain (preview)', `${preview.last.y.toFixed(3)} (block #${preview.last.x}, ${pg.gain.toFixed(1)}×)`,
+                'What the updated backend gives this block: its stored features re-scored at the session amplitude gain']] : []),
               ['Amplitude gain', shown?.amplitude_gain == null ? '—' : shown.amplitude_gain === 1 ? '1× (signal in training range)' : `${shown.amplitude_gain.toFixed(1)}× (signal rescaled before the model)`,
                 'Per-session gain from the rest calibration: training SD / this session\'s rest SD. Applied only when the rest signal is below the SAM40 range.'],
               ['Baseline degraded', yesNo(shown?.baseline_degraded)],
@@ -433,12 +452,47 @@ export function TaskStatePanel({ sessionData, profile, now }) {
             {scale === 'zoom' && range && ` Axis fitted to the scores (${fmtScore(range[0])}–${fmtScore(range[1])}); the threshold ${fmt(thr, 3)} is ${range[1] < thr ? 'above this range' : 'shown by the colour above'}.`}
             {scale === 'z' && ' z stays near 0 while the score stays at this person\'s resting level.'}
           </p>
+          {preview && (
+            <div className="preview-box">
+              <div className="chart-head">
+                <h3 className="section-title">Preview: score per block at amplitude gain {pg.gain.toFixed(1)}×</h3>
+                <span className="muted">{preview.n} block(s) · {fmtScore(preview.lo)}–{fmtScore(preview.hi)}</span>
+              </div>
+              <LineChart
+                points={preview.pts}
+                height={200}
+                yDomain={[0, 1]}
+                dots
+                ariaLabel="Preview score per block at the session amplitude gain"
+                refLines={[{ y: preview.limit, label: `limit ${preview.limit.toFixed(2)}` }, { y: preview.mu, label: `own rest ${preview.mu.toFixed(2)}` }]}
+                xFormat={(v) => `#${Math.round(v)}`}
+                yFormat={(v) => v.toFixed(2)}
+                tooltip={({ b, y }) => (
+                  <>
+                    <b>{y == null ? 'no preview' : `preview ${y.toFixed(3)}`}</b>
+                    <span>stored {fmtScore(b.task_state_score)} · block #{b.window}</span>
+                    {y != null && <span>z {((y - preview.mu) / 0.161 >= 0 ? '+' : '')}{((y - preview.mu) / 0.161).toFixed(2)} vs own rest</span>}
+                  </>
+                )}
+              />
+              <p className="caption">
+                These blocks were scored before this session had an amplitude gain. The preview re-scores each block&apos;s stored
+                features at {pg.gain.toFixed(1)}× ({pg.source === 'calibration'
+                  ? `measured by this session's calibration, rest SD ${fmt(pg.restStd, 2)} µV`
+                  : `estimated from the blocks' median SD ${fmt(pg.restStd, 2)} µV`}): powers × g², log powers + ln g², amplitudes × g;
+                band shares, ratios and shape features unchanged. It is what the updated backend gives them. Rest level and limit:
+                {pg.muRest != null ? ' from the calibration.' : ' estimated from these blocks (assumed mostly rest).'} Blocks recorded
+                from now on are scored at the gain directly.
+              </p>
+            </div>
+          )}
           {range && range[1] < 0.01 && (
             <p className="caption warn-text">
               ▲ Every score is below 0.01, far under anything in the SAM40 training data. The model&apos;s strongest features are
               absolute power, so a signal much smaller than SAM40&apos;s (block SD about 6 µV) drives the score to ~0.
               {(shown?.amplitude_gain ?? 1) === 1
-                ? ' This session has no amplitude gain: it was calibrated before the gain existed, or with the API not yet redeployed. Recalibrate after redeploying.'
+                ? (preview ? ' These blocks were scored before the session had an amplitude gain; the preview below shows their scores at the gain.'
+                  : ' This session has no amplitude gain: it was calibrated before the gain existed, or with the API not yet redeployed. Recalibrate after redeploying.')
                 : ' An amplitude gain is applied, so the signal may be too small even after rescaling (flat or disconnected input).'}
             </p>
           )}
@@ -473,8 +527,9 @@ function RecalibrateBar({ picker, raw, now }) {
 
   const onClick = async () => {
     if (!window.confirm(
-      `Recalibrate session ${sid}?\n\nThe current resting baseline is discarded. The bridge then records `
-      + `${N_CALIBRATION_BLOCKS} new rest blocks (${N_CALIBRATION_BLOCKS * BLOCK_SEC}s). Sit still, eyes open, and relax `
+      `Recalibrate session ${sid}?\n\nThe current resting baseline is discarded. The bridge settles for `
+      + `${CALIBRATION_SETTLE_SEC / 60} min, then records ${N_CALIBRATION_BLOCKS} new rest blocks `
+      + `(${Math.round((N_CALIBRATION_BLOCKS * BLOCK_SEC) / 60 * 10) / 10} min). Sit still, eyes open, breathe normally and relax `
       + 'until it finishes. Blocks recorded before this stay as they are.',
     )) return;
     setBusy(true); setError(null);
@@ -517,15 +572,15 @@ export function CalibrationPanel({ sessionData, profile, raw, now, picker }) {
 
   let phase; let kind;
   if (!c) {
-    phase = streaming ? `Waiting for the bridge to finish capturing ${N_CALIBRATION_BLOCKS} relax blocks (${N_CALIBRATION_BLOCKS * BLOCK_SEC}s)` : 'Not calibrated yet';
+    phase = streaming ? `Waiting for the bridge: ${CALIBRATION_SETTLE_SEC / 60} min settle, then ${N_CALIBRATION_BLOCKS} rest blocks (~${Math.round((CALIBRATION_SETTLE_SEC + N_CALIBRATION_BLOCKS * BLOCK_SEC) / 60)} min)` : 'Not calibrated yet';
     kind = 'idle';
   } else if (c.status === 'capturing') { phase = 'API is processing calibration blocks'; kind = 'warning'; } else if (c.status === 'ok') { phase = 'Calibrated'; kind = 'good'; } else if (c.status === 'degraded') { phase = 'Calibrated with a degraded baseline'; kind = 'warning'; } else { phase = `Calibration ${c.status || 'unknown'}`; kind = 'critical'; }
 
   const steps = [
-    { label: 'Settling', desc: 'Block 1 (0–25s) is never used. The electrodes are still settling.' },
-    { label: 'Relax capture', desc: `Blocks 2–${N_CALIBRATION_BLOCKS} must clear the quality gate (QUESTIONABLE or better)` },
-    { label: 'Baseline', desc: 'Resting score → baseline_shift (SEM-checked)' },
-    { label: 'Personal threshold', desc: 'Optional 8-min task: rest vs task → personal high_load_p' },
+    { label: 'Settling', desc: `First ${CALIBRATION_SETTLE_SEC / 60} min discarded, plus the first rest block. Electrodes and amplifier settle.` },
+    { label: 'Resting baseline', desc: `${N_CALIBRATION_BLOCKS} rest blocks (~4 min), natural breathing, eyes open; ≥ ${MIN_USABLE_REST_BLOCKS} must clear the quality gate` },
+    { label: 'Personal baseline', desc: 'Mean rest score → μ_rest; high-load limit = μ_rest + 0.84σ' },
+    { label: 'High-load check', desc: 'Optional 8-min task, then 3-min recovery rest: task must sit ≥ 0.5σ above rest' },
   ];
   const done = !c ? 0 : c.status === 'capturing' ? 2 : 3 + (t?.status === 'ok' || profile?.personal_high_load_p != null ? 1 : 0);
 

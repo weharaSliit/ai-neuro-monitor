@@ -26,10 +26,13 @@ import LiveCalibrationGraphs from './LiveCalibrationGraphs';
 const RING_CONTACT_POLL_MS = 5000;
 const IN_PROGRESS_STATUSES = ['settling', 'capturing', 'saving'];
 const POLL_INTERVAL_MS = 2000;
-const BREATH_TIMINGS = { inhale: 4000, hold: 4000, exhale: 4000, rest: 2000 };
-// Expected end-to-end durations (settle + capture), used for the progress
-// estimate and "time left" -- same figures the old card showed as text.
-const EXPECTED_SEC = { ring: 210, eeg: 85 };
+// Calibration protocol (backend/common/config.py, psychological/mqtt_bridge.py):
+// 2 min settle (discarded), then a 4 min resting baseline with NATURAL
+// breathing and eyes open -- no paced-breathing guide (slow paced breathing
+// raises HRV above a normal resting level). Ring 120 s + 4 x 60 s,
+// headband 120 s + 10 x 25 s.
+const SETTLE_SEC = 120;
+const EXPECTED_SEC = { ring: 120 + 4 * 60, eeg: 120 + 10 * 25 };
 const ORB = 190;
 const RING_STROKE = 8;
 
@@ -87,7 +90,7 @@ function deviceWords(state, expected) {
   if (!expected) return 'Not connected — skipped';
   if (!state.triggered) return 'Getting ready…';
   if (state.status === 'error') return state.message || 'Something went wrong';
-  if (state.status === 'settling') return 'Letting the sensor settle…';
+  if (state.status === 'settling') return 'Settling — the first 2 minutes are not used…';
   if (state.status === 'capturing') {
     return state.window_idx != null && state.n_windows != null
       ? `Learning your calm (${state.window_idx} of ${state.n_windows})`
@@ -99,7 +102,7 @@ function deviceWords(state, expected) {
 
 function freshnessLine(ring, eeg) {
   const sides = [ring, eeg].filter((s) => s?.ok !== false && s?.exists && s.age_days != null);
-  if (!sides.length) return { text: 'Not calibrated yet — this takes about 3½ minutes.', warn: true };
+  if (!sides.length) return { text: 'Not calibrated yet — this takes about 6 minutes.', warn: true };
   const age = Math.min(...sides.map((s) => s.age_days));
   const days = Math.floor(age);
   const when = days < 1 ? 'today' : days === 1 ? 'yesterday' : `${days} days ago`;
@@ -264,44 +267,22 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
   }, [ringState.triggered, ringState.status]);
 
   // ── Breathing pacer ──
-  const [breathPhase, setBreathPhase] = useState('inhale');
-  const scaleAnim = useRef(new Animated.Value(0.82)).current;
   const idlePulse = useRef(new Animated.Value(0)).current;
   const calibrating = stage === 'running';
 
   useEffect(() => {
-    if (calibrating) return undefined;
     idlePulse.setValue(0);
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(idlePulse, { toValue: 1, duration: 2400, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        Animated.timing(idlePulse, { toValue: 0, duration: 2400, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(idlePulse, { toValue: 1, duration: 3000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(idlePulse, { toValue: 0, duration: 3000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
       ]),
     );
     loop.start();
     return () => loop.stop();
   }, [calibrating, idlePulse]);
 
-  useEffect(() => {
-    if (!calibrating) return undefined;
-    let timer;
-    if (breathPhase === 'inhale') {
-      Animated.timing(scaleAnim, { toValue: 1, duration: BREATH_TIMINGS.inhale, easing: Easing.inOut(Easing.ease), useNativeDriver: true }).start();
-      timer = setTimeout(() => setBreathPhase('hold'), BREATH_TIMINGS.inhale);
-    } else if (breathPhase === 'hold') {
-      timer = setTimeout(() => setBreathPhase('exhale'), BREATH_TIMINGS.hold);
-    } else if (breathPhase === 'exhale') {
-      Animated.timing(scaleAnim, { toValue: 0.82, duration: BREATH_TIMINGS.exhale, easing: Easing.inOut(Easing.ease), useNativeDriver: true }).start();
-      timer = setTimeout(() => setBreathPhase('rest'), BREATH_TIMINGS.exhale);
-    } else {
-      timer = setTimeout(() => setBreathPhase('inhale'), BREATH_TIMINGS.rest);
-    }
-    return () => { if (timer) clearTimeout(timer); };
-  }, [breathPhase, calibrating]);
-
-  const breathText = breathPhase === 'inhale' ? 'Breathe in'
-    : breathPhase === 'hold' ? 'Hold'
-      : breathPhase === 'exhale' ? 'Breathe out' : 'Rest';
+  // Natural breathing: no paced guide, just a gentle pulse and the phase.
 
   // ── Progress ──
   const elapsedSec = startedAt ? (now - startedAt) / 1000 : 0;
@@ -311,12 +292,14 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
   const overall = stage === 'complete' ? 1 : parts.length ? Math.min(...parts) : 0;
   const longest = Math.max(ringExpected ? EXPECTED_SEC.ring : 0, eegExpected ? EXPECTED_SEC.eeg : 0);
   const leftSec = Math.max(0, Math.round(longest - elapsedSec));
+  const settling = calibrating && elapsedSec < SETTLE_SEC;
+  const settleLeft = Math.max(0, Math.round(SETTLE_SEC - elapsedSec));
   const leftText = leftSec > 60 ? `about ${Math.ceil(leftSec / 60)} min left` : leftSec > 0 ? `about ${leftSec}s left` : 'finishing up…';
 
   const R = (ORB - RING_STROKE) / 2;
   const C = 2 * Math.PI * R;
   const fresh = freshnessLine(ring, eeg);
-  const orbScale = calibrating ? scaleAnim : idlePulse.interpolate({ inputRange: [0, 1], outputRange: [0.86, 0.92] });
+  const orbScale = idlePulse.interpolate({ inputRange: [0, 1], outputRange: [0.86, 0.92] });
 
   return (
     <View style={styles.container}>
@@ -347,7 +330,7 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
           transform: [{ scale: orbScale }],
         }]}>
           <Text style={styles.orbWord}>
-            {calibrating ? breathText : stage === 'complete' ? '✓' : stage === 'error' ? '!' : '🌬️'}
+            {calibrating ? (settling ? 'Settling' : 'Resting') : stage === 'complete' ? '✓' : stage === 'error' ? '!' : '🧘'}
           </Text>
           {calibrating && <Text style={styles.orbPct}>{Math.round(overall * 100)}%</Text>}
         </Animated.View>
@@ -355,8 +338,8 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
 
       {stage === 'idle' && (
         <>
-          <Text style={styles.lead}>Sit comfortably, keep still, and breathe slowly with the circle.</Text>
-          <Text style={styles.sub}>We learn what “calm” looks like for you. It takes about 3½ minutes.</Text>
+          <Text style={styles.lead}>Sit comfortably, keep still, eyes open, and breathe normally.</Text>
+          <Text style={styles.sub}>We learn what “calm” looks like for you: 2 minutes to settle, then 4 minutes of quiet rest. About 6 minutes in all.</Text>
           <View style={styles.chipsRow}>
             <View style={[styles.chip, { backgroundColor: ringOnline ? COLORS.normalSoft : COLORS.light.pillBg }]}>
               <Icon name="heart-pulse" size={14} color={ringOnline ? COLORS.normalDark : COLORS.light.textMuted} />
@@ -383,8 +366,8 @@ export default function CalibrateBreathingCard({ userId, token, eegDb, onComplet
 
       {stage === 'running' && (
         <>
-          <Text style={styles.lead}>{breathText === 'Rest' ? 'Relax…' : `${breathText}…`}</Text>
-          <Text style={styles.sub}>{leftText} · keep still</Text>
+          <Text style={styles.lead}>{settling ? `Settling in — ${settleLeft}s (not recorded)` : 'Resting baseline — eyes open, breathe normally'}</Text>
+          <Text style={styles.sub}>{leftText} · keep still, look at one spot, don't talk</Text>
           <View style={styles.devices}>
             <DeviceProgressRow icon="heart-pulse" tint={COLORS.hrv} label="Ring" progress={ringP}
               words={deviceWords(ringState, ringExpected)} failed={ringState.status === 'error'} />

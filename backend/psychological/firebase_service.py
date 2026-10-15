@@ -152,6 +152,15 @@ class EegFirebaseSession:
         # docstring.
         self._fusion_en_rtdb.merge(make_eeg_fusion_record(record))
 
+    def next_block_number(self) -> int:
+        """First free block key for this session in Firebase (0 for a new
+        session) -- so an engine created after an API restart doesn't
+        overwrite the session's earlier blocks."""
+        if not self.enabled:
+            return 0
+        top = self._rtdb.max_window_key()
+        return 0 if top is None else top + 1
+
     def push_threshold_result(self, record: dict) -> None:
         """One-shot snapshot of finalize_personal_threshold()'s outcome
         (status, personal_high_load_p, resting_mean, task_mean,

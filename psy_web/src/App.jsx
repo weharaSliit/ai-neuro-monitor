@@ -4,13 +4,14 @@ import { useFirebaseValue, useHealth, useNow, useSessionData, useSessionPicker }
 import TechView from './components/TechView';
 import FusionView from './components/FusionView';
 import PhysioView from './components/PhysioView';
+import CalibrationDashboard from './components/CalibrationDashboard';
 import { useFusionData, useFusionPicker } from './hooks/useFusion';
 import {
   Breathing, CalibrateScreen, HomeScreen, NavBar, ProfileScreen, ProgressScreen, TABS, WavesScreen, Welcome,
 } from './components/friendly/Screens';
 import './friendly.css';
 
-const VIEWS = new Set([...TABS.map((t) => t.key), 'tech', 'fusion', 'physio']);
+const VIEWS = new Set([...TABS.map((t) => t.key), 'tech', 'fusion', 'physio', 'calibration']);
 const WELCOME_KEY = 'psy_web_welcomed';
 
 function readHash() {
@@ -57,10 +58,13 @@ export default function App() {
 
   if (view === 'tech') {
     return <TechView raw={raw} health={health} picker={picker} sessionData={sessionData} profile={profile} now={now}
-      onBack={() => go('profile')} openFusion={() => go('fusion')} openPhysio={() => go('physio')} />;
+      onBack={() => go('profile')} openFusion={() => go('fusion')} openPhysio={() => go('physio')} openCalibration={() => go('calibration')} />;
   }
   if (view === 'fusion') {
     return <FusionView picker={fusionPicker} data={fusionData} now={now} onBack={() => go('tech')} />;
+  }
+  if (view === 'calibration') {
+    return <CalibrationDashboard now={now} onBack={() => go('tech')} />;
   }
   if (view === 'physio') {
     // Mounted only here, so the ring's MQTT/Firebase subscriptions run only while it's open.

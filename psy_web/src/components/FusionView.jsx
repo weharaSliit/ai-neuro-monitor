@@ -9,6 +9,10 @@ import {
   breakdown, keyToMs,
 } from '../lib/fusion';
 import { fmt } from '../lib/model';
+import { useSessionData } from '../hooks/useData';
+import { usePhysioData } from '../hooks/usePhysio';
+import useEegCalibrations from '../hooks/useEegCalibrations';
+import { eegLimitInfo, persistent, pickEeg, ringLimitInfo, sig } from '../lib/limits';
 
 const WINDOW_SEC = 25;
 const clockMs = (ms) => (ms == null ? '—' : new Date(ms).toLocaleTimeString());
@@ -55,6 +59,9 @@ function FusionSources({ windows, picker, now }) {
 
 // ── 1. current fused result ───────────────────────────────────────
 function CurrentPanel({ windows, baseline, now }) {
+  const fw = windows.filter((w) => w.fused_probability != null);
+  const lastF = fw[fw.length - 1];
+  const persistentHigh = lastF?.fused_high_persistent ?? persistent(fw.map((w) => w.fused_probability >= 0.5));
   const shown = lastWith(windows, 'fused_probability');
   const latest = windows[windows.length - 1];
   if (!shown) {
@@ -88,7 +95,8 @@ function CurrentPanel({ windows, baseline, now }) {
           )}
         </div>
         <KV rows={[
-          ['Fused label', shown.fused_label == null ? '—' : shown.fused_label === 1 ? '1 · high stress' : '0 · normal'],
+          ['Condition (2 of last 3)', persistentHigh == null ? '—' : persistentHigh ? 'HIGH STRESS' : 'normal', 'Persistent: at least 2 of the last 3 fused windows at/above 0.50'],
+          ['This window', shown.fused_label == null ? '—' : shown.fused_label === 1 ? 'above the limit' : 'below the limit'],
           ['Fused value / limit', `${fmt(shown.fused_probability, 3)} / ${fmt(thr, 3)}`, 'Aligned scale: every model\'s own limit maps to 0.5'],
           ['Relative index', signed(shown.fused_relative_index), 'Weighted distance from each model\'s own limit, in its own spreads (capped ±3)'],
           ['Raw-scale result', `${fmt(shown.fused_probability_raw, 3)} vs ${fmt(shown.fused_threshold_raw, 3)}`, 'Old rule, averaging raw model outputs'],
@@ -122,6 +130,56 @@ function CurrentPanel({ windows, baseline, now }) {
   );
 }
 
+// ── Limits in use (live: updates as soon as a calibration changes) ──
+function LimitsPanel({ eegInfo, eegCal, eegThr, ringInfo, ring, latest, now }) {
+  const at = (sec) => (sec ? ago(sec * 1000, now) : '—');
+  const ringSet = ring.thresholds?.threshold_updated_at || ring.thresholds?.resting_scores_updated_at;
+  const winZ = latest?.z_alert_eeg;
+  const mismatch = eegInfo && winZ != null && Math.abs(winZ - (eegInfo.limitL - eegInfo.level) / eegInfo.sd) > 0.05;
+  return (
+    <Card title="Limits in use" subtitle="Each input is judged against its own personal limit; the fused limit is then 0.50">
+      <div className="limits-grid">
+        <div>
+          <h3>Mind (EEG)</h3>
+          {!eegInfo ? <p className="muted">Not calibrated.</p> : (
+            <KV rows={[
+              ['Baseline (median rest)', `${sig(eegInfo.level).toExponential(1)} · log-odds ${eegInfo.level.toFixed(1)}`],
+              ['Sustained task', eegInfo.taskL == null ? 'task not run' : `${sig(eegInfo.taskL).toExponential(1)} · log-odds ${eegInfo.taskL.toFixed(1)}`],
+              ['Limit', `${sig(eegInfo.limitL).toExponential(1)} · ${eegInfo.method}`],
+              ['Spread', `${eegInfo.sd.toFixed(2)} log-odds`],
+              ['Responsive', eegInfo.responsive == null ? '—' : eegInfo.responsive ? `yes (${eegInfo.sepSd?.toFixed(2)} spreads)` : 'no: provisional limit'],
+              ['Calibrated', at(eegThr?.updated_at || eegCal?.updated_at)],
+            ]} />
+          )}
+          {eegInfo?.src === 'computed' && <p className="caption warn-text">▲ Computed here from the stored scores; the live engine uses it after the redeploy.</p>}
+          {mismatch && <p className="caption warn-text">▲ The latest fusion window used an older EEG limit (z {winZ.toFixed(2)}).</p>}
+        </div>
+        <div>
+          <h3>Body (HRV + GSR)</h3>
+          {ringInfo.base == null ? <p className="muted">No ring calibration for this user.</p> : (
+            <KV rows={[
+              ['Baseline (median rest)', fmt(ringInfo.base, 3)],
+              ['Sustained task', ringInfo.taskLevel == null ? 'task not run' : fmt(ringInfo.taskLevel, 3)],
+              ['Limit', `${fmt(ringInfo.limit, 3)} · ${ringInfo.personal ? 'midpoint of rest and task' : 'population (not separated)'}`],
+              ['Separation needed', ringInfo.needed == null ? '—' : fmt(ringInfo.needed, 3)],
+              ['Calibrated', ringSet ? ago(Date.parse(ringSet), now) : '—'],
+            ]} />
+          )}
+          {ringInfo.src === 'computed' && <p className="caption warn-text">▲ Computed here; the live ring API uses it after the redeploy.</p>}
+        </div>
+        <div>
+          <h3>Fused</h3>
+          <KV rows={[
+            ['Limit', '0.50 (each input aligned to its own limit)'],
+            ['Condition', 'high stress when 2 of the last 3 windows ≥ 0.50'],
+            ['Baseline', 'first 3 fused windows of the session (trend and phase)'],
+          ]} />
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 // ── 2. how the latest window was built ─────────────────────────────
 function BreakdownPanel({ windows }) {
   const w = lastWith(windows, 'fused_probability');
@@ -132,10 +190,9 @@ function BreakdownPanel({ windows }) {
   const cell = (m, f) => (r[m].present ? f(r[m]) : '—');
   const rows = [
     ['Raw model output p', (x) => fmt(x.p, 4), 'EEG task-state score / HRV-GSR stress probability'],
-    ['Its limit (threshold)', (x) => fmt(x.thr, 4), 'Personal limit if calibrated, else population'],
-    ['Its spread (scale)', (x) => fmt(x.sc, 3), 'EEG: Personal Scale σ · HRV/GSR: personal threshold separation'],
-    ['Distance from own limit, in spreads', (x) => `${signed(x.dist)}${x.capped ? ` (capped from ${signed(x.distRaw)})` : ''}${x.useZ ? ` = z ${signed(x.z)} − ${x.zAlert}` : ''}`,
-      'EEG: log-odds z vs own rest (σ 0.55) minus the alert at 0.84 · HRV/GSR: (p − limit) / spread'],
+    ['Its limit', (x) => (x.thr == null ? '—' : x.thr < 1e-3 ? x.thr.toExponential(1) : fmt(x.thr, 4)), 'Midpoint of baseline and sustained task when calibrated; else provisional / population'],
+    ['Distance from own limit, in spreads', (x) => `${signed(x.dist)}${x.capped ? ` (capped from ${signed(x.distRaw)})` : ''}${x.useZ ? ` = z ${signed(x.z)} − limit at z ${signed(x.zAlert)}` : ''}`,
+      'EEG: log-odds z vs the median rest (own spread) minus where the limit sits on that scale · HRV/GSR: (p − limit) / 0.10'],
     ['Aligned value σ(distance)', (x) => fmt(x.aligned, 3), 'Limit = 0.5; one spread above = 0.73'],
     ['Confidence max(p′, 1 − p′)', (x) => fmt(x.conf, 3)],
     ['Signal quality', (x) => `${fmt(x.q, 2)} → ${fmt(x.qNorm, 3)}`, 'EEG quality already includes its basis factor'],
@@ -347,14 +404,18 @@ function FusionSourcesPanel({ picker, latest }) {
         <div>
           <h3>Fusion rule (aligned scale)</h3>
           <p className="caption">
-            For each input: distance d from its own limit in its own spreads, capped at ±{ALIGNED_Z_CAP}. HRV/GSR: d = (p − limit) / spread.
-            EEG: d = z − 0.84, where z = (logit p − logit own-rest) / 0.55 (log-odds, so scores near 0 still move).
+            Limits (calibration): baseline = median of the rest blocks; task level = mean of the task after a ~2 min ramp-up;
+            limit = their midpoint; personal only if the task sits ≥ 1 spread above baseline (EEG on log-odds with the
+            person&apos;s own rest spread, floor 0.55; ring on probability, floor 0.10), else a provisional / population limit.
+            For each input: distance d from its own limit in its own spreads, capped at ±{ALIGNED_Z_CAP}. HRV/GSR: d = (p − limit) / 0.10.
+            EEG: d = z − z<sub>limit</sub>, with z = (logit p − median rest log-odds) / spread.
             Aligned value p′ = 1 / (1 + e<sup>−d</sup>), so
             every model&apos;s own limit sits at 0.5. Weight = signal quality × confidence max(p′, 1 − p′) × model prior
             (EEG 0.632 pooled AUC, HRV/GSR 0.851), with EEG quality scaled by its basis (calibrated 1, uncalibrated 0.5,
             not responsive 0.25) and saturated outputs by {SATURATED_WEIGHT}. Fused = Σ weight share × p′; high stress when fused ≥ 0.5.
           </p>
           <p className="caption">
+            Condition: high stress when 2 of the last 3 fused windows are ≥ 0.5 (same 2-of-3 rule as the EEG high-load alert).
             Trend and phase compare each window with the session&apos;s first three fused windows (baseline).
             EEG measures cognitive load, HRV/GSR autonomic arousal; the fused value combines both, it is not a clinical diagnosis.
           </p>
@@ -366,6 +427,15 @@ function FusionSourcesPanel({ picker, latest }) {
 
 export default function FusionView({ picker, data, now, onBack }) {
   const latest = data.windows[data.windows.length - 1] || null;
+  // Limits come live from each component's calibration -- this page updates
+  // as soon as a recalibration writes new values.
+  const uid = picker.userId; const sid = picker.sessionId;
+  const eeg = useSessionData(uid, sid);
+  const ring = usePhysioData(uid, sid);
+  const history = useEegCalibrations(uid, `${sid}|${eeg.calibration?.updated_at ?? ''}|${eeg.threshold?.updated_at ?? ''}`);
+  const { cal: eegCal, thr: eegThr } = pickEeg(eeg, history, sid);
+  const eegInfo = eegLimitInfo(eegCal, eegThr);
+  const ringInfo = ringLimitInfo(ring);
   return (
     <div className="page">
       <header className="top">
@@ -385,6 +455,7 @@ export default function FusionView({ picker, data, now, onBack }) {
       {data.loading && picker.sessionId ? <p className="muted">Loading fusion windows…</p> : null}
 
       <CurrentPanel windows={data.windows} baseline={data.baseline} now={now} />
+      <LimitsPanel eegInfo={eegInfo} eegCal={eegCal} eegThr={eegThr} ringInfo={ringInfo} ring={ring} latest={latest} now={now} />
       <BreakdownPanel windows={data.windows} />
       <TimelinePanel windows={data.windows} />
       <SummaryPanel data={data} now={now} />

@@ -196,6 +196,20 @@ def save_personal_stress_threshold(user_id, threshold: float) -> None:
     })
 
 
+def save_task_calibration_result(user_id, task_scores: list, result: dict) -> None:
+    """Per-window task prob_stress scores and the outcome of the onboarding
+    task (ok / not_separated), next to resting_scores -- so a calibration
+    graph can show both groups and the midpoint chosen. .update(): never
+    clobbers resting_scores or personal_stress_threshold."""
+    ref = _ref(f'personal_thresholds/{user_id}')
+    ref.update({
+        'task_scores': [float(s) for s in task_scores],
+        'task_result': {k: (float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v)
+                        for k, v in result.items()},
+        'task_updated_at': datetime.now(timezone.utc).isoformat(),
+    })
+
+
 def load_personal_stress_threshold(user_id):
     data = _ref(f'personal_thresholds/{user_id}').get()
     if not data or 'personal_stress_threshold' not in data:

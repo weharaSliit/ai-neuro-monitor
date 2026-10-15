@@ -25,7 +25,14 @@ from backend.psychological.realtime.resample import SOURCE_FS
 
 BLOCK_SEC = 25.0
 BLOCK_SAMPLES = int(BLOCK_SEC * SOURCE_FS)
-N_CALIBRATION_BLOCKS = 3
+# Calibration protocol (shared with the ring -- backend/common/config.py):
+# 2 min settle (discarded) -> resting baseline 10 x 25 s blocks (~4 min,
+# natural breathing, eyes open; the server also drops each request's first
+# block as its settling block, so 9 are scored and >= 8 must be usable) ->
+# high-load task 19 blocks (8 min) -> recovery rest 7 blocks (~3 min).
+N_CALIBRATION_BLOCKS = 10
+CALIBRATION_SETTLE_SEC = 120.0
+N_RECOVERY_BLOCKS = 7
 EMPTY_BUFFER_WARN_INTERVAL_SEC = 5.0
 
 # EEG_BRIDGE_VERBOSE=1 prints every full /predict and /calibrate JSON body;
@@ -51,9 +58,9 @@ REBOOT_SETTLE_SEC = 30.0
 # DEGRADED_FALLBACK_AFTER_BLOCKS blocks (~3.5 min) without success does it
 # accept a degraded baseline -- which the Personal Scale then keeps out of
 # fusion (firebase_sync.py::eeg_fusion_exclusion()).
-MIN_TRUSTED_REST_BLOCKS = 2
-MAX_CALIBRATION_WINDOW_BLOCKS = 6
-DEGRADED_FALLBACK_AFTER_BLOCKS = 8
+MIN_TRUSTED_REST_BLOCKS = 8          # of the 9 scored per request (protocol: 8 minimum usable)
+MAX_CALIBRATION_WINDOW_BLOCKS = 12   # a couple of rejected blocks can be replaced before falling back
+DEGRADED_FALLBACK_AFTER_BLOCKS = 20  # ~8 min of rest without 8 usable blocks -> degraded baseline
 
 # Personal high_load_p threshold task block count (see
 # backend/psychological/sam40/decision.py::compute_personal_threshold()).
@@ -154,6 +161,43 @@ def _poll_user_pointer() -> str | None:
         return value if isinstance(value, str) and value else None
     except Exception:
         return None
+
+
+def _post_threshold(blocks: list[dict], recovery_blocks: list[dict] | None = None) -> dict | None:
+    """POST the live task blocks (and recovery-rest blocks) to
+    /calibrate/threshold (same method as the onboarding task). Returns the
+    outcome, or None if the server failed."""
+    for attempt, delay in enumerate((0.0, *RETRY_DELAYS_SEC)):
+        if delay:
+            time.sleep(delay)
+        try:
+            resp = requests.post(f"{FLASK_URL}/calibrate/threshold", headers=AUTH_HEADERS, timeout=120,
+                                 json={"session_id": SESSION_ID, "blocks": blocks,
+                                       "recovery_blocks": recovery_blocks or []})
+            body = resp.json() if resp.content else None
+            if resp.ok and body:
+                return body
+            print(f"[calibrate] threshold HTTP {resp.status_code}: {resp.text[:200]!r}")
+            if resp.status_code == 400:
+                return body
+        except (requests.RequestException, ValueError) as e:
+            print(f"[calibrate] threshold request failed: {e}")
+    return None
+
+
+def _post_live_point(samples, phase: str, n: int) -> None:
+    """Live calibration graph (psy_web): score this block (stateless
+    /calibrate/preview) and append it to eeg_recalibration/{sid}/live/{n}.
+    One attempt, best-effort -- a missed point only leaves a gap in the
+    graph; the calibration itself still uses the batch calls."""
+    try:
+        resp = requests.post(f"{FLASK_URL}/calibrate/preview", headers=AUTH_HEADERS, timeout=20,
+                             json={"session_id": SESSION_ID, "phase": phase, **block_payload(samples)})
+        body = resp.json() if resp.ok and resp.content else {}
+    except (requests.RequestException, ValueError):
+        body = {}
+    update_recalibration_request(SESSION_ID, {f"live/{n}": {
+        "phase": phase, "t": time.time(), "score": body.get("score"), "trusted": body.get("trusted")}})
 
 
 def block_payload(samples) -> dict:
@@ -281,11 +325,24 @@ def run():
     calibration_blocks = []
     calibration_blocks_seen = 0
     seen_reboots = buffer.reboot_count
-    settle_until = 0.0
+    # Protocol phase 1: discard the first CALIBRATION_SETTLE_SEC before any
+    # resting baseline (at startup, on a new session, on a recalibration).
+    settle_until = time.time() + CALIBRATION_SETTLE_SEC
+    print(f"[calibrate] settling for {CALIBRATION_SETTLE_SEC:.0f}s before the resting baseline "
+          f"(data discarded) -- headband on, sit comfortably")
     calibrated = False
     # True while a psy_web recalibration request is being served -- its
     # progress is reported back to eeg_recalibration/{session}.
     recal_active = False
+    # Task phase of a recalibration that also asked for the high-load
+    # threshold (request "include_threshold"): live blocks collected while
+    # the user does the task, sent to /calibrate/threshold when complete.
+    recal_task_needed = 0
+    recal_task_blocks: list[dict] = []
+    recal_rest_result: dict = {}
+    recal_recovery_needed = 0          # recovery-rest blocks still to record (protocol phase 4)
+    recal_recovery_blocks: list[dict] = []
+    recal_live_n = 0                   # next eeg_recalibration/{sid}/live/{n} point
     block_idx = 0
     last_pointer_poll = 0.0
     last_empty_buffer_warn = 0.0
@@ -310,10 +367,16 @@ def run():
                     if pointer_session_id and pointer_session_id != SESSION_ID:
                         print(f"[session] rotating {SESSION_ID!r} -> {pointer_session_id!r} "
                               f"(app started a new session) -- recalibrating")
-                        if recal_active:
+                        if recal_active or recal_task_needed or recal_recovery_needed:
                             update_recalibration_request(SESSION_ID, {"status": "superseded"})
                             recal_active = False
+                            recal_task_needed = 0
+                            recal_task_blocks = []
+                            recal_recovery_needed = 0
+                            recal_recovery_blocks = []
                         SESSION_ID = pointer_session_id
+                        settle_until = now + CALIBRATION_SETTLE_SEC
+                        print(f"[calibrate] settling for {CALIBRATION_SETTLE_SEC:.0f}s before the resting baseline")
                         calibrated = False
                         calibration_blocks = []
                         calibration_blocks_seen = 0
@@ -333,16 +396,26 @@ def run():
                     req = get_recalibration_request(SESSION_ID)
                     if req and req.get("status") == "requested":
                         print(f"[calibrate] recalibration requested from {req.get('source') or 'psy_web'} -- "
-                              f"discarding this session's baseline; sit still and relax for the next "
-                              f"{N_CALIBRATION_BLOCKS} blocks ({N_CALIBRATION_BLOCKS * 25}s)")
+                              f"discarding this session's baseline: {CALIBRATION_SETTLE_SEC:.0f}s settle, then "
+                              f"{N_CALIBRATION_BLOCKS} rest blocks ({N_CALIBRATION_BLOCKS * 25}s)")
                         calibrated = False
                         calibration_blocks = []
                         calibration_blocks_seen = 0
                         buffer.clear()   # the block in progress may not be rest
                         recal_active = True
+                        settle_until = now + CALIBRATION_SETTLE_SEC
+                        recal_recovery_needed = 0
+                        recal_recovery_blocks = []
+                        recal_task_blocks = []
+                        recal_live_n = 0
+                        recal_task_needed = (int(req.get("task_blocks") or N_THRESHOLD_TASK_BLOCKS)
+                                             if req.get("include_threshold") else 0)
                         update_recalibration_request(SESSION_ID, {
-                            "status": "capturing", "blocks_captured": 0,
+                            "status": "capturing", "phase": "settle", "blocks_captured": 0, "live": None,
+                            "settle_sec": CALIBRATION_SETTLE_SEC, "settle_until": settle_until,
                             "blocks_needed": N_CALIBRATION_BLOCKS, "handled_at": now,
+                            "task_blocks_needed": recal_task_needed,
+                            "recovery_blocks_needed": N_RECOVERY_BLOCKS if recal_task_needed else 0,
                         })
 
                     last_pointer_poll = now
@@ -367,16 +440,17 @@ def run():
                               f"restart -- calibration starts again after settling")
                         calibration_blocks = []
                         calibration_blocks_seen = 0
-                if now < settle_until:
-                    buffer.clear()
-                    time.sleep(0.5)
-                    continue
-                # Headband heartbeat: every 5 s while samples are really arriving.
+                # Headband heartbeat: every 5 s while samples are really
+                # arriving -- also while settling, so the device shows online.
                 last_sample_at = getattr(buffer, 'last_append', None)
                 if (last_sample_at is not None and now - last_sample_at < 8
                         and now - last_heartbeat >= 5):
                     save_eeg_device_heartbeat()
                     last_heartbeat = now
+                if now < settle_until:
+                    buffer.clear()
+                    time.sleep(0.5)
+                    continue
 
                 if buffer.peek_count() == 0 and now - last_empty_buffer_warn >= EMPTY_BUFFER_WARN_INTERVAL_SEC:
                     print("[bridge] no raw samples buffered -- nothing arriving from wearable02 over MQTT")
@@ -413,8 +487,10 @@ def run():
                     print(f"[calibrate] captured rest block {calibration_blocks_seen} "
                           f"(sit still and relax until calibration completes)")
                     if recal_active:
-                        update_recalibration_request(SESSION_ID, {"status": "capturing",
+                        update_recalibration_request(SESSION_ID, {"status": "capturing", "phase": "rest",
                                                                   "blocks_captured": calibration_blocks_seen})
+                        _post_live_point(samples, "rest", recal_live_n)
+                        recal_live_n += 1
                     if len(calibration_blocks) >= N_CALIBRATION_BLOCKS:
                         fallback = calibration_blocks_seen >= DEGRADED_FALLBACK_AFTER_BLOCKS
                         outcome, data = _post_calibrate(calibration_blocks, allow_degraded=fallback)
@@ -424,12 +500,31 @@ def run():
                             calibration_blocks_seen = 0
                             if recal_active:
                                 recal_active = False
-                                update_recalibration_request(SESSION_ID, {
-                                    "status": "done", "outcome": data.get("status"),
+                                recal_rest_result = {
+                                    "outcome": data.get("status"),
                                     "usable_blocks": n_trusted, "mu_rest": data.get("mu_rest"),
                                     "personal_high_load_p": data.get("personal_high_load_p"),
                                     "baseline_degraded": bool(data.get("baseline_degraded")),
-                                })
+                                    "amplitude_gain": data.get("amplitude_gain"),
+                                }
+                                if recal_task_needed and data.get("mu_rest") is not None:
+                                    # Phase 2: the next live blocks are the task.
+                                    recal_task_blocks = []
+                                    update_recalibration_request(SESSION_ID, {
+                                        "status": "capturing", "phase": "task", "rest": recal_rest_result,
+                                        "blocks_captured": 0, "blocks_needed": recal_task_needed,
+                                    })
+                                    print(f"[calibrate] resting baseline set -- now the high-load task: "
+                                          f"{recal_task_needed} blocks ({recal_task_needed * 25}s) of mental arithmetic")
+                                else:
+                                    skipped = bool(recal_task_needed)   # task wanted, but no usable mu_rest
+                                    if skipped:
+                                        print("[calibrate] no usable resting level -- high-load task skipped")
+                                    recal_task_needed = 0
+                                    update_recalibration_request(SESSION_ID, {
+                                        "status": "done", "phase": "done", **recal_rest_result,
+                                        **({"task_skipped": "no usable resting level"} if skipped else {}),
+                                    })
                             print(f"[calibrate] done: status={data.get('status')} usable_blocks={n_trusted} "
                                   f"mu_rest={data.get('mu_rest')} personal_threshold={data.get('personal_high_load_p')} "
                                   f"degraded={data.get('baseline_degraded')}")
@@ -469,6 +564,62 @@ def run():
                 # fusion grid by this instead of its own processing time,
                 # which lags capture by bridge queueing + Render latency +
                 # retries (often a full 25s grid cell or more).
+                # Recalibration task phase: this live block is also a
+                # high-load task block. It is still scored by /predict below,
+                # so the live view keeps running during the task.
+                if recal_recovery_needed:
+                    # Protocol phase 4: recovery rest after the task.
+                    recal_recovery_blocks.append(block_payload(samples))
+                    n_rec = len(recal_recovery_blocks)
+                    print(f"[calibrate] captured recovery block {n_rec}/{recal_recovery_needed}")
+                    _post_live_point(samples, "recovery", recal_live_n)
+                    recal_live_n += 1
+                    update_recalibration_request(SESSION_ID, {"status": "capturing", "phase": "recovery",
+                                                              "blocks_captured": n_rec,
+                                                              "blocks_needed": recal_recovery_needed})
+                    if n_rec >= recal_recovery_needed:
+                        update_recalibration_request(SESSION_ID, {"status": "saving", "phase": "recovery"})
+                        thr = _post_threshold(recal_task_blocks, recal_recovery_blocks)
+                        recal_recovery_needed = 0
+                        recal_task_blocks = []
+                        recal_recovery_blocks = []
+                        if thr and thr.get("status"):
+                            print(f"[calibrate] high-load threshold: status={thr.get('status')} "
+                                  f"task_response_z={thr.get('task_response_z')} limit={thr.get('personal_high_load_p')} "
+                                  f"| recovery z={thr.get('recovery_z')} recovered={thr.get('recovered')}")
+                            update_recalibration_request(SESSION_ID, {
+                                "status": "done", "phase": "done", **recal_rest_result,
+                                "threshold": {k: thr.get(k) for k in (
+                                    "status", "responsive", "task_response_z", "personal_high_load_p",
+                                    "resting_mean", "task_mean", "n_task_blocks")},
+                                "recovery": {k: thr.get(k) for k in (
+                                    "recovery_mean", "recovery_z", "recovered", "n_recovery_blocks")},
+                            })
+                        else:
+                            update_recalibration_request(SESSION_ID, {
+                                "status": "done", "phase": "done", **recal_rest_result,
+                                "threshold_error": (thr or {}).get("error") or "server unreachable"})
+                elif recal_task_needed:
+                    # Protocol phase 3: this live block is also a high-load
+                    # task block. It is still scored by /predict below, so
+                    # the live view keeps running during the task.
+                    recal_task_blocks.append(block_payload(samples))
+                    n_task = len(recal_task_blocks)
+                    print(f"[calibrate] captured task block {n_task}/{recal_task_needed}")
+                    _post_live_point(samples, "task", recal_live_n)
+                    recal_live_n += 1
+                    update_recalibration_request(SESSION_ID, {"status": "capturing", "phase": "task",
+                                                              "blocks_captured": n_task})
+                    if n_task >= recal_task_needed:
+                        recal_task_needed = 0
+                        recal_recovery_needed = N_RECOVERY_BLOCKS
+                        recal_recovery_blocks = []
+                        print(f"[calibrate] task done -- recovery rest: {N_RECOVERY_BLOCKS} blocks "
+                              f"({N_RECOVERY_BLOCKS * 25}s), sit still and relax")
+                        update_recalibration_request(SESSION_ID, {"status": "capturing", "phase": "recovery",
+                                                                  "blocks_captured": 0,
+                                                                  "blocks_needed": N_RECOVERY_BLOCKS})
+
                 capture_end_ts = buffer.wall_time_for(samples[-1].millis)
                 data = _post_json_retrying(
                     f"{FLASK_URL}/predict",

@@ -83,10 +83,10 @@ export default function SetupPage() {
         )}
       </Step>
 
-      <Step n={3} title="Personal limit test (≈ 8 min)" done={personalised} active={current === 'task'}>
+      <Step n={3} title="Personal limit test (≈ 11 min)" done={personalised} active={current === 'task'}>
         {current === 'task' ? (
           <>
-            <ThresholdTask eegSessionId={eegSessionId} alreadyPersonalized={personalised}
+            <ThresholdTask userId={userId} eegSessionId={eegSessionId} alreadyPersonalized={personalised}
               ringCal={cal.ring} eegCal={cal.eeg} disabled={otherUserLive || cal.loading}
               onFinish={() => navigate('/', { replace: true })} />
             <LiveCalibrationGraphs phase="task" ringOnline={ringOnline} eegOnline={eegOnline} />
