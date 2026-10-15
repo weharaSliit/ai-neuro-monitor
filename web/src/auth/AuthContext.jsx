@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { api, setAuthToken, setUnauthorizedHandler } from '../lib/api';
-import { attachSession, endSession } from '../lib/session';
+import { attachSession, endSession, takeOverSession } from '../lib/session';
 
 const STORAGE_KEY = 'mindpulse.web.auth';
 
@@ -42,6 +42,21 @@ export function AuthProvider({ children }) {
     setAuth(next);
   };
 
+  // The devices are held by another account; claim them for this one.
+  const takeOver = async () => {
+    const s = readStored();
+    if (!s?.user?.userId) return { success: false };
+    try {
+      const { sessionId, mode } = await takeOverSession(s.user.userId);
+      const next = { ...s, sessionId, sessionMode: mode };
+      writeStored(next);
+      setAuth(next);
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e?.message || 'Could not take over the devices.' };
+    }
+  };
+
   const login = async (userId, password) => {
     try {
       const res = await api.post('/login', { user_id: userId, password });
@@ -70,7 +85,7 @@ export function AuthProvider({ children }) {
       token: auth?.token || null,
       sessionId: auth?.sessionId || null,
       sessionMode: auth?.sessionMode || null,
-      login, register, logout,
+      login, register, logout, takeOver,
     }}>
       {children}
     </AuthContext.Provider>

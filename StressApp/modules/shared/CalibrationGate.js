@@ -6,6 +6,7 @@ import { useTheme } from '../physiological/config/ThemeContext';
 import physiologicalApi from '../physiological/api/client';
 import { API_BASE, DEVICE_ID } from '../physiological/config/config';
 import { eegClient } from './eegApiClient';
+import { useAuth } from '../../context/AuthContext';
 
 const DEVICE_POLL_MS = 5000;
 // The backend no longer pushes a ~1s raw live_raw preview (raw EEG samples
@@ -66,6 +67,7 @@ export function useCalibrationSummary(userId, token) {
 }
 
 export function useDeviceStatus(userId, db) {
+  const auth = useAuth();
   const [ringOnline, setRingOnline] = useState(false);
   const [sessionId, setSessionId] = useState(null);
   const [eegLastSeen, setEegLastSeen] = useState(null); // epoch seconds, from the latest block record's timestamp_end
@@ -153,6 +155,15 @@ export function useDeviceStatus(userId, db) {
   const eegCalibratingFresh = calibrationLastSeen != null
     && (now / 1000 - calibrationLastSeen) <= EEG_LATEST_WINDOW_FRESH_SEC;
   const eegOnline = eegHeartbeatFresh || eegWindowFresh || eegCalibratingFresh;
+
+  // Claim the shared device pointer once this account's own ring/headband is
+  // on. Only for the signed-in account's own screens (an admin viewing another
+  // user's devices must not take it), and never from another account.
+  const online = ringOnline || eegOnline;
+  const mine = !!auth?.user?.userId && auth.user.userId === userId;
+  useEffect(() => {
+    if (online && mine && auth?.claimDevices) auth.claimDevices();
+  }, [online, mine, auth?.sessionId]);
 
   return { ringOnline, eegOnline, eegSessionId: sessionId };
 }

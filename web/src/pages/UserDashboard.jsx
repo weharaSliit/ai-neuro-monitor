@@ -13,6 +13,7 @@ import LevelSlider from '../components/LevelSlider';
 import Chart, { toRows } from '../components/Chart';
 import { alignedOf, fusedAligned } from '../lib/aligned';
 import LiveSignals from '../components/LiveSignals';
+import TakeOverBanner from '../components/TakeOverBanner';
 import BreathingModal from '../components/BreathingModal';
 import BaselineDriftCard from '../components/BaselineDriftCard';
 
@@ -188,9 +189,7 @@ export default function UserDashboard() {
         </div>
       )}
       {sessionMode === 'view' && (
-        <div className="banner info" style={{ marginBottom: 20 }}>
-          👀 Someone else is wearing the devices right now — you’re seeing your own past readings.
-        </div>
+        <TakeOverBanner holder={pointer.userId} style={{ marginBottom: 20 }} />
       )}
       {latest?.stress_alert_message && (
         <div className={`banner ${heroKey === 'high' ? 'stress' : 'warning'}`} style={{ marginBottom: 20 }}>
