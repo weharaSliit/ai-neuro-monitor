@@ -6,10 +6,11 @@ import { usePhysioData } from '../hooks/usePhysio';
 import { useFusionData } from '../hooks/useFusion';
 import useEegCalibrations from '../hooks/useEegCalibrations';
 import RecalibratePanel from './RecalibratePanel';
+import LiveCalibrationCard from './LiveCalibrationCard';
 import { keyToMs } from '../lib/fusion';
 import { fmt } from '../lib/model';
 import {
-  TASK_SKIP_RING, dShow, eegAligned, eegD, eegLimitInfo, lgt, mean, median, num, persistent, pickEeg, plausible, ringAligned, ringLimitInfo, sig,
+  TASK_SKIP_RING, dShow, eegAligned, eegD, eegLimitInfo, lgt, mean, median, num, persistent, pickEeg, plausible, ringAligned, ringLimitInfo,
 } from '../lib/limits';
 
 const C = { eeg: 'var(--c1)', hrv: 'var(--c2)', fused: 'var(--c7)', mean: 'var(--ink)', task: 'var(--c4)', rec: 'var(--c3)' };
@@ -427,6 +428,7 @@ export default function CalibrationDashboard({ now, onBack }) {
             rows={ring.windows.filter((w) => w.t && w.features).map((w) => ({ t: w.t, f: w.features }))} />
         </div>
       </Card>
+      <LiveCalibrationCard sid={sid} />
       <RecalibratePanel picker={picker} now={now} streaming={streaming} />
     </div>
   );
