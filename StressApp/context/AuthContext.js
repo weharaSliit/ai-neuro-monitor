@@ -5,10 +5,10 @@
 // they ever reach the physiological module.
 // ============================================================
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeModules, Platform } from 'react-native';
-import { ref, update } from 'firebase/database';
+import { ref, update, get } from 'firebase/database';
 import { db } from '../firebase';
 import api, { setAuthToken, setUnauthorizedHandler } from '../modules/physiological/api/client';
 import { setAuthToken as setRelaxationAuthToken } from '../modules/relaxation_guide/src/api/apiService';
@@ -83,6 +83,14 @@ function mintSessionId() {
     + `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 
+async function readPointer() {
+  const [sid, uid] = await Promise.all([
+    get(ref(db, `fusion_en_sessions/${CURRENT_SESSION_ID_FIELD}`)),
+    get(ref(db, `fusion_en_sessions/${CURRENT_USER_ID_FIELD}`)),
+  ]);
+  return { sid: sid.val() || null, uid: uid.val() || null };
+}
+
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
@@ -97,14 +105,19 @@ export function AuthProvider({ children }) {
   // session_started directly (the authoritative moment this session began;
   // fushion engin/fusion_live_session.py only backfills this if it somehow
   // sees the session before this write lands).
+  //
+  // Logging in does NOT claim the shared device pointer any more. The pointer
+  // decides which account the ring and headband are attributed to, and a
+  // login on a phone that is only doing phone-habit tracking must not take it
+  // (it used to hold it until that person signed out, blocking everyone
+  // else). It is claimed by claimDevices() below, only once this account's
+  // own app can see the devices are on. Phenotyping still gets its identity
+  // and session id from here, so its windows are stored under this session and
+  // join the fusion automatically if the account later claims the devices.
   const startLiveSession = async (userId) => {
     const newSessionId = mintSessionId();
     const nowIso = new Date().toISOString();
     const updates = { [`fusion_en_sessions/${userId}/${newSessionId}/session_started`]: nowIso };
-    for (const root of CURRENT_SESSION_ID_ROOTS) {
-      updates[`${root}/${CURRENT_SESSION_ID_FIELD}`] = newSessionId;
-      updates[`${root}/${CURRENT_USER_ID_FIELD}`] = userId;
-    }
     try {
       await update(ref(db), updates);
     } catch (e) {
@@ -128,9 +141,15 @@ export function AuthProvider({ children }) {
     const updates = {
       [`fusion_en_sessions/${userId}/${endingSessionId}/session_ended`]: nowIso,
     };
-    for (const root of CURRENT_SESSION_ID_ROOTS) {
-      updates[`${root}/${CURRENT_SESSION_ID_FIELD}`] = null;
-      updates[`${root}/${CURRENT_USER_ID_FIELD}`] = null;
+    // Clear the pointer only if it is still ours: signing out of a phone that
+    // never held it must not wipe the account that is wearing the devices.
+    let holder = { sid: null, uid: null };
+    try { holder = await readPointer(); } catch (e) { /* offline: leave the pointer */ }
+    if (holder.sid === endingSessionId && holder.uid === userId) {
+      for (const root of CURRENT_SESSION_ID_ROOTS) {
+        updates[`${root}/${CURRENT_SESSION_ID_FIELD}`] = null;
+        updates[`${root}/${CURRENT_USER_ID_FIELD}`] = null;
+      }
     }
     try {
       await update(ref(db), updates);
@@ -138,6 +157,39 @@ export function AuthProvider({ children }) {
       console.log('[live_session] end failed:', e?.message);
     }
   };
+
+  // Latest identity for claimDevices(), which is called from effects.
+  const identityRef = useRef({ userId: null, sessionId: null });
+  identityRef.current = { userId: user?.userId || null, sessionId };
+  const claimBusy = useRef(false);
+
+  // Claim the shared device pointer for this account -- called by the device
+  // status hook once the ring or headband is online. Never takes it from
+  // another account (that needs an explicit takeover on the website) and is
+  // a no-op if it is already ours. Returns 'claimed' | 'already' | 'held' |
+  // 'skipped'.
+  const claimDevices = useCallback(async () => {
+    const { userId, sessionId: sid } = identityRef.current;
+    if (!userId || !sid || claimBusy.current) return 'skipped';
+    claimBusy.current = true;
+    try {
+      const holder = await readPointer();
+      if (holder.uid && holder.uid !== userId) return 'held';
+      if (holder.uid === userId && holder.sid === sid) return 'already';
+      const updates = {};
+      for (const root of CURRENT_SESSION_ID_ROOTS) {
+        updates[`${root}/${CURRENT_SESSION_ID_FIELD}`] = sid;
+        updates[`${root}/${CURRENT_USER_ID_FIELD}`] = userId;
+      }
+      await update(ref(db), updates);
+      return 'claimed';
+    } catch (e) {
+      console.log('[live_session] claim failed:', e?.message);
+      return 'skipped';
+    } finally {
+      claimBusy.current = false;
+    }
+  }, []);
 
   const logout = useCallback(async () => {
     await endLiveSession(user?.userId, sessionId);
@@ -247,7 +299,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, token, sessionId, isLoading, login, register, logout, completeOnboarding }}>
+    <AuthContext.Provider value={{ user, token, sessionId, isLoading, login, register, logout, completeOnboarding, claimDevices }}>
       {children}
     </AuthContext.Provider>
   );
