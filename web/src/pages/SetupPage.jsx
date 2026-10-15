@@ -7,6 +7,7 @@ import { Card, CardHead, DeviceChip, Badge } from '../components/ui';
 import BreathingCalibration from '../components/BreathingCalibration';
 import ThresholdTask from '../components/ThresholdTask';
 import LiveCalibrationGraphs from '../components/LiveCalibrationGraphs';
+import TakeOverBanner from '../components/TakeOverBanner';
 
 // Same three steps as the app's AccountSetupScreen -> EegThresholdTaskScreen:
 // 1) devices on, 2) calm-breathing baseline, 3) the ~8 min limit test.
@@ -56,9 +57,7 @@ export default function SetupPage() {
       </div>
 
       {otherUserLive && (
-        <div className="banner warning">
-          ⚠ Someone else ({pointer.userId}) is wearing the devices right now. Calibration is paused until they sign out.
-        </div>
+        <TakeOverBanner holder={pointer.userId} className="banner warning" style={{ marginBottom: 16 }} />
       )}
 
       <Step n={1} title="Put on your devices" done={anyDevice} active>

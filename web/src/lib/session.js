@@ -55,6 +55,33 @@ export async function attachSession(userId) {
   return { sessionId, mode: 'started' };
 }
 
+// Explicit, user-confirmed takeover of the shared device pointer. Used when
+// another account (typically a phone user who is only tracking phone habits and
+// never signed out) is holding it, so the ring and headband keep being
+// attributed to them. Ends their live session cleanly and starts ours; the
+// ring / EEG bridges follow the pointer exactly as they do for any login.
+// Their phone keeps writing its own phenotyping windows under its own session
+// path, which does not touch ours.
+export async function takeOverSession(userId) {
+  let live = { sessionId: null, userId: null };
+  try { live = await readLivePointer(); } catch { /* offline: just start */ }
+
+  const sessionId = mintSessionId();
+  const nowIso = new Date().toISOString();
+  const updates = {
+    [`fusion_en_sessions/${userId}/${sessionId}/session_started`]: nowIso,
+  };
+  if (live.sessionId && live.userId && live.userId !== userId) {
+    updates[`fusion_en_sessions/${live.userId}/${live.sessionId}/session_ended`] = nowIso;
+  }
+  for (const root of CURRENT_SESSION_ID_ROOTS) {
+    updates[`${root}/${CURRENT_SESSION_ID_FIELD}`] = sessionId;
+    updates[`${root}/${CURRENT_USER_ID_FIELD}`] = userId;
+  }
+  await update(ref(db), updates);
+  return { sessionId, mode: 'started' };
+}
+
 export async function endSession(userId, sessionId) {
   if (!userId || !sessionId) return;
   // Only clear the pointer if it still points at our session -- the phone
