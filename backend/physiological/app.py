@@ -258,7 +258,7 @@ def calibrate_threshold_start():
     user_id = g.user_id
     with _session_start_lock:
         current = _threshold_sessions.get(user_id)
-        if current and current.get('status') in ('capturing', 'saving'):
+        if current and current.get('status') in ('capturing', 'saving', 'recovery'):
             return jsonify({'error': 'Threshold calibration already in progress'}), 409
 
         _threshold_sessions[user_id] = {'status': 'capturing'}
@@ -275,7 +275,7 @@ def calibrate_threshold_start():
             # 'ok'/'not_separated' back to 'done' every time, so the frontend
             # could never actually see a successful personalization).
             entry = {'status': status, **extra}
-        else:  # 'capturing' / 'window_skipped' / 'saving'
+        else:  # 'capturing' / 'window_skipped' / 'saving' / 'recovery' (rest after the task)
             entry = {'status': status, **extra}
         # Keep the live per-window values across every later status update.
         prev = _threshold_sessions.get(user_id, {})

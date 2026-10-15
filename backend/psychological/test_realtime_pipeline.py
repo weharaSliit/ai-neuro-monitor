@@ -219,9 +219,25 @@ def main() -> bool:
 
         e, _ = engine_with([0.30, 0.34])
         check("mu_rest is the mean of this session's rest scores", abs(e.mu_rest - 0.32) < 1e-9, f"mu_rest={e.mu_rest}")
-        check("alert threshold is mu_rest + K*sigma (z >= K)",
-              abs(e.thresholds.high_load_p - (0.32 + PERSONAL_K_ALERT * PERSONAL_SIGMA_PRIOR)) < 1e-9,
-              f"high_load_p={e.thresholds.high_load_p}")
+        from backend.psychological.sam40.decision import (
+            PERSONAL_SCALE, PERSONAL_SIGMA_LOGIT, inv_logit, logit as _lg,
+        )
+        if PERSONAL_SCALE == 'logit':
+            want_limit = inv_logit((_lg(0.30) + _lg(0.34)) / 2 + PERSONAL_K_ALERT * PERSONAL_SIGMA_LOGIT)
+        else:
+            want_limit = 0.32 + PERSONAL_K_ALERT * PERSONAL_SIGMA_PRIOR
+        check(f"alert threshold sits K spreads above own rest ({PERSONAL_SCALE} scale)",
+              abs(e.thresholds.high_load_p - want_limit) < 1e-9,
+              f"high_load_p={e.thresholds.high_load_p} want {want_limit}")
+        # wearable02 case: every score near 0. The log-odds scale still finds the
+        # task 1 log-odds unit above rest (z ~1.8, responsive) and a reachable limit.
+        e_low, out_low = engine_with([1.0e-4, 1.4e-4], task=[3e-4, 4e-4, 2.5e-4])
+        if PERSONAL_SCALE == 'logit':
+            check("near-zero scores: task above rest is still detected as responsive (log-odds)",
+                  out_low["responsive"] is True and out_low["task_response_z"] > 1,
+                  f"z={out_low['task_response_z']}, limit={e_low.thresholds.high_load_p:.2e}")
+            check("near-zero scores: the high-load limit is reachable (not ~0.135)",
+                  e_low.thresholds.high_load_p < 1e-3, f"limit={e_low.thresholds.high_load_p:.2e}")
         check("no probability shift is applied", e.baseline_shift == 0.0, f"baseline_shift={e.baseline_shift}")
         check("z = (s - mu_rest)/sigma", abs(personal_z(0.32 + PERSONAL_SIGMA_PRIOR, e.mu_rest) - 1.0) < 1e-9)
 

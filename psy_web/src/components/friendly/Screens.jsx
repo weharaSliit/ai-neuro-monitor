@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Face from './Face';
 import { FaceLine, LiveWave, LoadBars, MoodLegend, bucketize } from './MoodCharts';
-import { BLOCK_SEC, N_CALIBRATION_BLOCKS, POPULATION_HIGH_LOAD_P } from '../../lib/config';
+import { BLOCK_SEC, CALIBRATION_SETTLE_SEC, N_CALIBRATION_BLOCKS, POPULATION_HIGH_LOAD_P } from '../../lib/config';
 import {
   MOODS, MOOD_ORDER, RHYTHMS, clockShort, friendlyAgo, greeting, headbandOf, load, moodOf, sessionLabel, signalOf,
 } from '../../lib/friendly';
@@ -49,7 +49,7 @@ function stageOf({ raw, now, sessionData, reading }) {
     return { key: 'off', title: 'Put on your headband', text: 'Place the sensors on both temples and switch the headband on. This page connects by itself.' };
   }
   if (!c) {
-    return { key: 'calibrating', title: 'Getting to know your calm', text: `Sit still and relax for about ${Math.round((N_CALIBRATION_BLOCKS * BLOCK_SEC) / 60 * 10) / 10} minutes while the system learns what your resting mind looks like.` };
+    return { key: 'calibrating', title: 'Getting to know your calm', text: `Sit still, eyes open, and breathe normally for about ${Math.round((CALIBRATION_SETTLE_SEC + N_CALIBRATION_BLOCKS * BLOCK_SEC) / 60)} minutes (2 to settle, then about 4 of quiet rest) while the system learns what your resting mind looks like.` };
   }
   if (!reading.lastScored) {
     return { key: 'first', title: 'Almost there', text: `Your first reading arrives about every ${BLOCK_SEC} seconds. Keep the headband on.` };

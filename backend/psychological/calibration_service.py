@@ -166,7 +166,8 @@ def run_eeg_calibration_from_blocks(user_id: str, session_id: str, blocks_sample
     }
 
 
-def run_eeg_threshold_from_blocks(session_state: dict, blocks_samples: list[list[BipolarRawSample]]) -> dict:
+def run_eeg_threshold_from_blocks(session_state: dict, blocks_samples: list[list[BipolarRawSample]],
+                                  recovery_samples: list[list[BipolarRawSample]] | None = None) -> dict:
     """Scores deliberate high-load task blocks against the ALREADY-
     CALIBRATED engine from this session's session_state (see
     run_eeg_calibration_from_blocks()'s return shape / app.py's
@@ -181,6 +182,11 @@ def run_eeg_threshold_from_blocks(session_state: dict, blocks_samples: list[list
         engine.score_threshold_task_block(samples)
 
     outcome = engine.finalize_personal_threshold()
+    # Recovery rest after the task (protocol phase 4): scored and reported,
+    # never used to set either threshold.
+    for samples in recovery_samples or []:
+        engine.score_recovery_block(samples)
+    outcome.update(engine.recovery_outcome())
     # Saved whether or not the user was responsive -- a 'not_separated'
     # (non-responsive) result must also persist, so later sessions keep EEG
     # out of fusion until the task is redone.

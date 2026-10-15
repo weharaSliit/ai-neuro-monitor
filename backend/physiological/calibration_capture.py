@@ -43,7 +43,7 @@ import paho.mqtt.client as mqtt
 
 from backend.common.config import (
     MQTT_BROKER, MQTT_PORT, MQTT_TOPIC, MQTT_USER, MQTT_PASSWORD, MQTT_CA_CERT,
-    GSR_CAL, WINDOW_SEC, SETTLE_SEC, N_BASELINE_WIN
+    GSR_CAL, WINDOW_SEC, SETTLE_SEC, N_BASELINE_WIN, CALIBRATION_SETTLE_SEC, N_RECOVERY_WIN
 )
 from backend.common.config import EMA_ALPHA
 from backend.physiological.extract_features import extract_features, adc_to_conductance
@@ -54,7 +54,7 @@ from backend.physiological.predictor import (
 )
 from backend.physiological.firebase_service import (
     baseline_exists, load_baseline, load_resting_scores, save_baseline,
-    save_baseline_adaptation, save_personal_stress_threshold, save_resting_scores,
+    save_baseline_adaptation, save_personal_stress_threshold, save_resting_scores, save_task_calibration_result,
 )
 
 LIVE_GSR_POINTS = 100   # about the last 20 s at the ring's ~5 Hz
@@ -356,7 +356,7 @@ def run_calibration_capture(user_id, on_progress=None, on_live=None):
         # the server logs someone's actually watching during a capture --
         # a rejected/failed calibration used to be completely silent here.
         if status == 'settling':
-            print(f"[calibrate {user_id}] settling for {SETTLE_SEC}s...")
+            print(f"[calibrate {user_id}] settling for {CALIBRATION_SETTLE_SEC}s (discarded)...")
         elif status == 'window_captured':
             print(f"[calibrate {user_id}] window {extra['window_idx']}/{N_BASELINE_WIN} "
                   f"captured (fs={extra['fs']}Hz)")
@@ -444,8 +444,8 @@ def run_calibration_capture(user_id, on_progress=None, on_live=None):
         return None
 
     try:
-        _notify('settling')
-        time.sleep(SETTLE_SEC)
+        _notify('settling', settle_sec=CALIBRATION_SETTLE_SEC)
+        time.sleep(CALIBRATION_SETTLE_SEC)   # protocol phase 1: 2 min, discarded (was SETTLE_SEC = 30 s)
 
         # Discard whatever accumulated during settling and start the real
         # capture window fresh from here.
@@ -543,10 +543,11 @@ def run_task_calibration_capture(user_id, on_progress=None, on_live=None):
         return None
 
     collected_windows = []
+    recovery_windows = []      # protocol phase 4, after the task
     live_blocks = []
     state = {
         'window_start': time.time(), 'ibi_buf': [], 'gsr_buf': [], 'acc_buf': [],
-        'last_sample_time': time.time(),
+        'last_sample_time': time.time(), 'phase': 'task',
     }
 
     def close_window():
@@ -557,6 +558,12 @@ def run_task_calibration_capture(user_id, on_progress=None, on_live=None):
         if (len(state['ibi_buf']) < 10 or len(state['gsr_buf']) < 20 or len(state['acc_buf']) < 10):
             _notify('window_skipped', ibi=len(state['ibi_buf']), gsr=len(state['gsr_buf']), acc=len(state['acc_buf']),
                     window_idx=len(collected_windows), n_windows=N_TASK_WIN)
+        elif state['phase'] == 'recovery':
+            recovery_windows.append({
+                "ibi_array": state['ibi_buf'], "gsr_adc_array": state['gsr_buf'],
+                "acc_array": state['acc_buf'], "gsr_calibration": GSR_CAL, "actual_fs": actual_fs,
+            })
+            _notify('recovery', window_idx=len(recovery_windows), n_windows=N_RECOVERY_WIN)
         else:
             collected_windows.append({
                 "ibi_array": state['ibi_buf'], "gsr_adc_array": state['gsr_buf'],
@@ -573,7 +580,11 @@ def run_task_calibration_capture(user_id, on_progress=None, on_live=None):
         # fix -- this callback runs on the dedicated connection's own
         # background thread and would otherwise keep closing/appending
         # windows past N_TASK_WIN for as long as messages keep arriving.
-        if len(collected_windows) >= N_TASK_WIN:
+        if state['phase'] == 'task' and len(collected_windows) >= N_TASK_WIN:
+            return
+        if state['phase'] == 'recovery' and len(recovery_windows) >= N_RECOVERY_WIN:
+            return
+        if state['phase'] == 'scoring':
             return
 
         try:
@@ -619,6 +630,7 @@ def run_task_calibration_capture(user_id, on_progress=None, on_live=None):
                 return None
             time.sleep(1)
 
+        state['phase'] = 'scoring'   # stop collecting while the task is scored
         _notify('saving')
         try:
             # Score every collected window individually and drop only the
@@ -650,9 +662,45 @@ def run_task_calibration_capture(user_id, on_progress=None, on_live=None):
             }
             if threshold is not None:
                 save_personal_stress_threshold(user_id, threshold)
+            # Kept even when not separated, so the graph shows why.
+            save_task_calibration_result(user_id, task_scores, result)
         except Exception as e:
             _notify('error', message=str(e))
             return None
+
+        # Protocol phase 4: recovery rest. The threshold is already saved;
+        # recovery is only reported (does prob_stress come back down?).
+        state['ibi_buf'], state['gsr_buf'], state['acc_buf'] = [], [], []
+        state['window_start'] = time.time()
+        state['last_sample_time'] = time.time()
+        state['phase'] = 'recovery'
+        _notify('recovery', window_idx=0, n_windows=N_RECOVERY_WIN)
+        recovery_deadline = time.time() + _capture_timeout_sec(N_RECOVERY_WIN)
+        while len(recovery_windows) < N_RECOVERY_WIN:
+            if time.time() > recovery_deadline or time.time() - state['last_sample_time'] > INACTIVITY_TIMEOUT_SEC:
+                print(f"[calibrate {user_id}] recovery rest incomplete "
+                      f"({len(recovery_windows)}/{N_RECOVERY_WIN} windows) -- threshold already saved")
+                break
+            time.sleep(1)
+        state['phase'] = 'scoring'
+        recovery_scores = []
+        for w in recovery_windows:
+            features_2d, motion_rejected, _fd, hrv_is_fallback, _wd = extract_features(
+                w['ibi_array'], w['gsr_adc_array'], w['acc_array'], w['gsr_calibration'], actual_fs=w['actual_fs'],
+            )
+            if not (motion_rejected or hrv_is_fallback):
+                recovery_scores.append(float(predict_window(features_2d, baseline_mean, baseline_std)['prob_stress']))
+        if recovery_scores:
+            rec_mean = float(np.mean(recovery_scores))
+            limit = threshold if threshold is not None else (result['resting_mean'] + result['task_mean']) / 2.0
+            result.update({
+                'recovery_scores': recovery_scores, 'recovery_mean': rec_mean,
+                'recovered': bool(rec_mean < limit), 'n_recovery_windows': len(recovery_scores),
+            })
+            try:
+                save_task_calibration_result(user_id, task_scores, result)
+            except Exception as e:
+                print(f"[calibrate {user_id}] couldn't save recovery result: {e}")
 
         _notify('done', **result)
         return result

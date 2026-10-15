@@ -1,8 +1,11 @@
 # psy_web — Wearable 02 EEG monitor (proof of concept)
 
-A standalone, read-only React dashboard for the psychological (EEG) component. It shows
+A standalone React dashboard for the psychological (EEG) component. It shows
 wearable 02's raw signal, calibration, extracted features, task-state score and label as
-they happen. It doesn't change the backend or Firebase, and it never writes anything.
+they happen. It only reads, with one exception: the **Recalibrate** button in the
+technical view's Calibration card writes `eeg_recalibration/{session}`. The EEG bridge
+(`backend/psychological/mqtt_bridge.py`) checks that node every 10 s, discards the
+session's baseline, records new rest blocks and reports its progress back there.
 
 ```bash
 cd psy_web
@@ -17,6 +20,7 @@ npm run dev        # http://localhost:5174
   the mood face compares the score with the user's alert level (`effective_high_load_p`).
 - **Technical view** (Profile → Technical view, or `#tech`): the raw signal, all 29 features, model contributions, the block log and the API.
 - **Wearable 01 HRV + GSR monitor** (Technical view → Wearable 01 HRV + GSR monitor, or `#physio`): live ring signals over MQTT (`mindpulse/wearable01/sensors`: skin conductance, heart rate from beat intervals, PPG, movement), the stress prediction per window, the processed GSR wave and beat intervals the model saw, the personal baseline and threshold, all features against the baseline, the window log and the ring API's `/health`. Reads `physiological/{predictions,prediction_quality,baselines,personal_thresholds,devices}`; follows `fusion_en/current_*` like the ring bridge. Never reads `physiological/users`.
+- **Calibration, scores & alerts dashboard** (Technical view → Calibration, scores & alerts, or `#calibration`): for the selected session, baseline and high-load threshold calibration graphs for EEG, HRV/GSR and fused (each block's score, the running mean settling, and the value chosen), each component's score and label over time (EEG at its amplitude gain), the rising alerts from each component on one timeline, and a feature dropdown graph for EEG and for HRV/GSR.
 - **Fusion engine monitor** (Technical view → Fusion engine monitor, or `#fusion`): the fused EEG + HRV/GSR stress result per window from `fusion_en/{uid}/{sid}`, a step-by-step breakdown of how each window's weights and fused value were computed (cross-checked against the stored value), timelines, a session summary and the window log. Follows `fusion_en_sessions/current_*` by default.
 
 For live data, run wearable02 and `backend/psychological/mqtt_bridge.py` as usual. The page

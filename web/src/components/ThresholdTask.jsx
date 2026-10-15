@@ -1,21 +1,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, eegApi } from '../lib/api';
+import { ref, set, update } from 'firebase/database';
 import { COLORS } from '../lib/levels';
+import { db } from '../lib/firebase';
+import StroopStressor from './StroopStressor';
 
 // Web port of StressApp/modules/eeg/screens/EegThresholdTaskScreen.js --
 // identical activities, timings and difficulty, and the same
 // /calibrate/threshold/start + /status calls on both backends, so a
 // limit set here is exactly the same as one set in the app.
-const SERIAL_SUB_DURATION_SEC = 150;
-const MATH_DURATION_SEC = 100;
-const PUZZLE_DURATION_SEC = 70;
-const SORTER_DURATION_SEC = 90;
-const STROOP_DURATION_SEC = 70;
-const STUCK_WARNING_SEC = 520;
+// 8 min in all (backend: 19 EEG blocks, 8 ring windows). The Stroop
+// stressor gets 3 min (a 70 s Stroop is too short to build sustained
+// load); the other rounds were shortened to keep the total at 480 s.
+const SERIAL_SUB_DURATION_SEC = 120;
+const MATH_DURATION_SEC = 90;
+const PUZZLE_DURATION_SEC = 45;
+const SORTER_DURATION_SEC = 45;
+const STROOP_DURATION_SEC = 180;
+// Protocol phase 4: 3 min recovery rest after the 8 min task (both backends
+// record it: EEG 7 x 25 s blocks, ring 3 x 60 s windows -- status 'recovery').
+const RECOVERY_DURATION_SEC = 180;
+const STUCK_WARNING_SEC = 480 + RECOVERY_DURATION_SEC + 60;
 const POLL_INTERVAL_MS = 2000;
 const TICK_MS = 100;
-const IN_PROGRESS = ['capturing', 'saving'];
-const TASK_PHASES = ['serialSub', 'quiz', 'puzzle', 'sorter', 'stroop'];
+const IN_PROGRESS = ['capturing', 'saving', 'recovery'];
+const TASK_PHASES = ['serialSub', 'quiz', 'puzzle', 'sorter', 'stroop', 'recovery'];
 
 const SERIAL_SUB_STEP = 13;
 const SERIAL_URGENCY_FRAC = 0.2;
@@ -46,17 +55,6 @@ const SORTER_DROP_SPEEDUP = 0.9;
 const SORTER_DROP_SETBACK = 1.4;
 const SORTER_BUZZ_PATTERN = [0, 120, 60, 120];
 
-const STROOP_COLORS = [
-  { name: 'Red', hex: '#E53935' }, { name: 'Blue', hex: '#1E88E5' }, { name: 'Green', hex: '#43A047' },
-  { name: 'Yellow', hex: '#FDD835' }, { name: 'Purple', hex: '#8E24AA' }, { name: 'Orange', hex: '#FB8C00' },
-  { name: 'Teal', hex: '#00897B' }, { name: 'Pink', hex: '#D81B60' }, { name: 'Cyan', hex: '#00ACC1' },
-  { name: 'Brown', hex: '#6D4C41' },
-];
-const STROOP_INCONGRUENT_PROB = 0.92;
-const STROOP_TRIAL_SEC_BASE = 2.8;
-const STROOP_TRIAL_SEC_MIN = 1.0;
-const STROOP_TRIAL_SEC_STEP = 0.15;
-const STROOP_URGENCY_FRAC = 0.25;
 
 const randomInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 function shuffle(arr) {
@@ -100,12 +98,6 @@ function generateMathProblem(levelIdx) {
   return { display: '1 + 1', answer: 2 };
 }
 
-function generateStroopTrial() {
-  const inkColor = STROOP_COLORS[randomInt(0, STROOP_COLORS.length - 1)];
-  const others = STROOP_COLORS.filter((c) => c.name !== inkColor.name);
-  const labelColor = Math.random() < STROOP_INCONGRUENT_PROB ? others[randomInt(0, others.length - 1)] : inkColor;
-  return { inkColor, labelColor, askMode: Math.random() < 0.5 ? 'ink' : 'word', options: shuffle(STROOP_COLORS) };
-}
 
 function Header({ secondsLeft, urgent, right }) {
   return (
@@ -137,7 +129,7 @@ function AnswerBox({ value, onChange, onSubmit }) {
   );
 }
 
-export default function ThresholdTask({ eegSessionId, alreadyPersonalized, ringCal, eegCal, onFinish, disabled }) {
+export default function ThresholdTask({ userId, eegSessionId, alreadyPersonalized, ringCal, eegCal, onFinish, disabled }) {
   const [phase, setPhase] = useState('intro');
   const [nowFine, setNowFine] = useState(Date.now());
 
@@ -178,14 +170,12 @@ export default function ThresholdTask({ eegSessionId, alreadyPersonalized, ringC
   const [sorterFeedback, setSorterFeedback] = useState(null);
   const sorterResolved = useRef(true);
 
-  const [stroopDeadline, setStroopDeadline] = useState(null);
-  const [stroopTrial, setStroopTrial] = useState(null);
-  const [stroopTrialDeadline, setStroopTrialDeadline] = useState(null);
-  const [stroopTrialMs, setStroopTrialMs] = useState(1);
-  const [stroopScore, setStroopScore] = useState({ correct: 0, total: 0 });
-  const [stroopStreak, setStroopStreak] = useState(0);
-  const [stroopFeedback, setStroopFeedback] = useState(null);
-  const stroopHandled = useRef(false);
+  const [recoveryDeadline, setRecoveryDeadline] = useState(null);
+  const [colourSafe, setColourSafe] = useState(false);   // purple instead of green
+  const [stroopLog, setStroopLog] = useState(null);      // { settings, trials, summary }
+  const [stressRating, setStressRating] = useState(null);
+  const [ratingSaved, setRatingSaved] = useState(false);
+  const taskStartedAt = useRef(null);
 
   const [eegResult, setEegResult] = useState(null);
   const [eegTriggeredAt, setEegTriggeredAt] = useState(null);
@@ -247,6 +237,7 @@ export default function ThresholdTask({ eegSessionId, alreadyPersonalized, ringC
   // ── Serial subtraction ──
   const startSerial = () => {
     triggerEeg(); triggerRing();
+    taskStartedAt.current = Date.now();
     const start = randomInt(800, 1200);
     setSerialStart(start); setSerialCurrent(start); setSerialAnswer('');
     setSerialStreak(0); setSerialBest(0); setSerialRestarts(0); setSerialFeedback(null);
@@ -350,31 +341,29 @@ export default function ThresholdTask({ eegSessionId, alreadyPersonalized, ringC
     return () => clearTimeout(id);
   }, [phase, sorterFeedback, sorterDropMs, spawnItem]);
 
-  // ── Stroop ──
-  const nextStroop = useCallback((streak) => {
-    const sec = Math.max(STROOP_TRIAL_SEC_MIN, STROOP_TRIAL_SEC_BASE - streak * STROOP_TRIAL_SEC_STEP);
-    setStroopTrial(generateStroopTrial()); setStroopTrialDeadline(Date.now() + sec * 1000);
-    setStroopTrialMs(sec * 1000); setStroopFeedback(null); stroopHandled.current = false;
-  }, []);
-  const startStroop = useCallback(() => {
-    setStroopScore({ correct: 0, total: 0 }); setStroopStreak(0);
-    setStroopDeadline(Date.now() + STROOP_DURATION_SEC * 1000);
-    nextStroop(0); setPhase('stroop');
-  }, [nextStroop]);
-  const answerStroop = (name) => {
-    if (!stroopTrial || stroopFeedback || stroopHandled.current) return;
-    stroopHandled.current = true;
-    const correctName = stroopTrial.askMode === 'ink' ? stroopTrial.inkColor.name : stroopTrial.labelColor.name;
-    const ok = name === correctName;
-    setStroopScore((s) => ({ correct: s.correct + (ok ? 1 : 0), total: s.total + 1 }));
-    setStroopStreak((s) => (ok ? s + 1 : 0));
-    setStroopFeedback({ correct: ok, correctName });
+  // ── Stroop stressor (StroopStressor.jsx) ──
+  const startStroop = useCallback(() => setPhase('stroop'), []);
+  // Trial log + summary, stored for engagement checks and for aligning trials
+  // with EEG blocks / ring windows by timestamp.
+  const taskPath = userId && eegSessionId ? `calibration_tasks/${userId}/${eegSessionId}` : null;
+  const finishStroop = useCallback((log) => {
+    setStroopLog(log);
+    setRecoveryDeadline(Date.now() + RECOVERY_DURATION_SEC * 1000);
+    setPhase('recovery');
+    if (taskPath) {
+      set(ref(db, taskPath), {
+        started_at: taskStartedAt.current, stroop_finished_at: Date.now(), source: 'web',
+        durations_sec: { serial: SERIAL_SUB_DURATION_SEC, maths: MATH_DURATION_SEC, puzzle: PUZZLE_DURATION_SEC,
+          sorter: SORTER_DURATION_SEC, stroop: STROOP_DURATION_SEC, recovery: RECOVERY_DURATION_SEC },
+        stroop: log,
+      }).catch(() => { /* best effort: the thresholds don't depend on it */ });
+    }
+  }, [taskPath]);
+  const saveRating = (r) => {
+    setStressRating(r);
+    if (taskPath) update(ref(db, taskPath), { manipulation_check: { stress_rating_1_9: r, at: Date.now() } })
+      .then(() => setRatingSaved(true)).catch(() => {});
   };
-  useEffect(() => {
-    if (phase !== 'stroop' || !stroopFeedback) return undefined;
-    const id = setTimeout(() => nextStroop(stroopStreak), 500);
-    return () => clearTimeout(id);
-  }, [phase, stroopFeedback, stroopStreak, nextStroop]);
 
   // ── One fine clock drives every phase's deadlines ──
   useEffect(() => {
@@ -395,6 +384,7 @@ export default function ThresholdTask({ eegSessionId, alreadyPersonalized, ringC
       }
     }
     if (phase === 'puzzle' && puzzleDeadline && nowFine >= puzzleDeadline) { puzzleGen.current += 1; startSorter(); }
+    if (phase === 'recovery' && recoveryDeadline && nowFine >= recoveryDeadline) { setPhase('review'); return; }
     if (phase === 'sorter' && sorterDeadline) {
       if (nowFine >= sorterDeadline) { startStroop(); return; }
       if (sorterItemDeadline && nowFine >= sorterItemDeadline && !sorterResolved.current) {
@@ -405,18 +395,8 @@ export default function ThresholdTask({ eegSessionId, alreadyPersonalized, ringC
         setSorterFeedback({ correct: false });
       }
     }
-    if (phase === 'stroop' && stroopDeadline) {
-      if (nowFine >= stroopDeadline) { setPhase('review'); return; }
-      if (stroopTrialDeadline && nowFine >= stroopTrialDeadline && !stroopHandled.current && stroopTrial) {
-        stroopHandled.current = true;
-        const correctName = stroopTrial.askMode === 'ink' ? stroopTrial.inkColor.name : stroopTrial.labelColor.name;
-        setStroopScore((s) => ({ correct: s.correct, total: s.total + 1 }));
-        setStroopStreak(0);
-        setStroopFeedback({ correct: false, correctName, timeout: true });
-      }
-    }
   }, [phase, nowFine, serialDeadline, mathDeadline, mathQDeadline, mathProblem, puzzleDeadline, sorterDeadline,
-    sorterItemDeadline, stroopDeadline, stroopTrialDeadline, stroopTrial, startMath, startPuzzle, startSorter, startStroop]);
+    sorterItemDeadline, startMath, startPuzzle, startSorter, startStroop, recoveryDeadline]);
 
   useEffect(() => {
     if (phase !== 'quiz' || !mathFeedback) return undefined;
@@ -485,8 +465,6 @@ export default function ThresholdTask({ eegSessionId, alreadyPersonalized, ringC
   const mathFrac = mathQDeadline && mathProblem
     ? Math.max(0, Math.min(1, (mathQDeadline - nowFine) / (MATH_LEVELS[mathLevelIdx].timeSec * 1000))) : 1;
   const sorterFall = sorterItemDeadline ? Math.max(0, Math.min(1, 1 - (sorterItemDeadline - nowFine) / sorterDropMs)) : 0;
-  const stroopFrac = stroopTrialDeadline ? Math.max(0, Math.min(1, (stroopTrialDeadline - nowFine) / stroopTrialMs)) : 1;
-  const stroopUrgent = phase === 'stroop' && !stroopFeedback && stroopFrac <= STROOP_URGENCY_FRAC;
 
   useEffect(() => {
     if (!serialUrgent) return undefined;
@@ -494,9 +472,8 @@ export default function ThresholdTask({ eegSessionId, alreadyPersonalized, ringC
     const id = setInterval(() => buzz(200), 4000);
     return () => clearInterval(id);
   }, [serialUrgent]);
-  useEffect(() => { if (stroopUrgent) buzz(80); }, [stroopUrgent]);
 
-  const pulse = (serialUrgent && Math.floor(nowFine / 500) % 2 === 0) || (stroopUrgent && Math.floor(nowFine / 300) % 2 === 0);
+  const pulse = serialUrgent && Math.floor(nowFine / 500) % 2 === 0;
   const boxStyle = { border: `2px solid ${pulse ? COLORS.stress : 'transparent'}`, background: pulse ? COLORS.stressSoft : undefined, transition: 'background .15s' };
 
   // ── Render ──
@@ -509,7 +486,7 @@ export default function ThresholdTask({ eegSessionId, alreadyPersonalized, ringC
               Your limits are already set — Mind {eegCal?.personal_high_load_p != null
                 ? <>at <b>{Math.round(eegCal.personal_high_load_p * 100)}%</b></>
                 : <>on the <b>standard limit</b> (your test didn’t show a clear rest/task difference)</>},
-              Body at <b>{Math.round(ringCal.personal_stress_threshold * 100)}%</b>. Keep them, or redo the ~8-minute test.
+              Body at <b>{Math.round(ringCal.personal_stress_threshold * 100)}%</b>. Keep them, or redo the ~11-minute test.
             </p>
             <div className="row" style={{ marginTop: 16, flexWrap: 'wrap' }}>
               <button className="btn" onClick={onFinish}>Keep current & continue</button>
@@ -519,10 +496,11 @@ export default function ThresholdTask({ eegSessionId, alreadyPersonalized, ringC
         ) : (
           <>
             <p className="body">
-              About 8 minutes, five quick rounds back to back: counting down by 13, a speed maths quiz,
-              a memory puzzle, an even/odd sorter and a colour-word test. It’s meant to feel a bit stressful —
-              that’s how we learn where <b>your</b> stress starts, instead of using an average for everyone.
-              Keep your ring and headband on the whole time.
+              About 11 minutes: 8 minutes of five quick rounds back to back (counting down by 13, a speed maths quiz,
+              a memory puzzle, an even/odd sorter and a 3-minute colour-word test), then 3 minutes of quiet rest. The rounds are
+              meant to feel stressful — that’s how we learn where <b>your</b> stress starts, instead of using an
+              average for everyone. Keep your ring and headband on, rest the phone or keyboard on a table, and answer
+              by tapping or typing — don’t say answers out loud.
             </p>
             <div className="row" style={{ marginTop: 16, flexWrap: 'wrap' }}>
               <button className="btn" onClick={startSerial} disabled={disabled}>Start the test</button>
@@ -530,6 +508,10 @@ export default function ThresholdTask({ eegSessionId, alreadyPersonalized, ringC
             </div>
           </>
         )}
+        <label className="caption" style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
+          <input type="checkbox" checked={colourSafe} onChange={(e) => setColourSafe(e.target.checked)} />
+          I find red and green hard to tell apart (the colour test will use purple instead of green)
+        </label>
       </div>
     );
   }
@@ -616,27 +598,22 @@ export default function ThresholdTask({ eegSessionId, alreadyPersonalized, ringC
     );
   }
 
-  if (phase === 'stroop' && stroopTrial) {
+  if (phase === 'stroop') {
+    return <StroopStressor durationSec={STROOP_DURATION_SEC} colourSafe={colourSafe} roundLabel="Round 5 of 5" onDone={finishStroop} />;
+  }
+
+  if (phase === 'recovery') {
+    const secs = left(recoveryDeadline, RECOVERY_DURATION_SEC);
     return (
-      <div className="card flat" style={boxStyle}>
-        <Header secondsLeft={left(stroopDeadline, STROOP_DURATION_SEC)} urgent={stroopUrgent} right={`Round 5 of 5 · streak ${stroopStreak} · ${stroopScore.correct}/${stroopScore.total} correct`} />
-        <p style={{ color: COLORS.brand, fontWeight: 800, textAlign: 'center' }}>
-          {stroopTrial.askMode === 'ink' ? 'Tap the INK COLOUR — ignore the word' : 'Tap the colour the WORD SAYS — ignore the ink'}
+      <div className="card flat" style={{ textAlign: 'center' }}>
+        <Header secondsLeft={secs} right="Last step · recovery rest" />
+        <div style={{ fontSize: 44, margin: '18px 0 6px' }}>🧘</div>
+        <p style={{ fontWeight: 800, margin: 0 }}>Well done — the task is over. Now just rest.</p>
+        <p className="body" style={{ marginTop: 6 }}>
+          Sit still, eyes open, breathe normally and look at one spot for {Math.floor(secs / 60)}:{String(secs % 60).padStart(2, '0')}.
+          This shows how quickly you settle after stress. Keep both devices on.
         </p>
-        {stroopFeedback ? (
-          <Feedback ok={stroopFeedback.correct} text={stroopFeedback.correct ? '✓ Correct!' : stroopFeedback.timeout ? '⏱ Too slow!' : '✗ Wrong'}
-            sub={!stroopFeedback.correct ? `It was ${stroopFeedback.correctName}` : null} />
-        ) : (
-          <div style={{ fontSize: 46, fontWeight: 900, textAlign: 'center', margin: '18px 0', color: stroopTrial.inkColor.hex }}>
-            {stroopTrial.labelColor.name.toUpperCase()}
-          </div>
-        )}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
-          {stroopTrial.options.map((c) => (
-            <button key={c.name} title={c.name} disabled={!!stroopFeedback} onClick={() => answerStroop(c.name)}
-              style={{ aspectRatio: '1.4', border: 0, borderRadius: 12, background: c.hex, opacity: stroopFeedback ? 0.5 : 1 }} />
-          ))}
-        </div>
+        <button className="btn ghost" style={{ marginTop: 12 }} onClick={() => setPhase('review')}>Skip the rest</button>
       </div>
     );
   }
@@ -647,8 +624,25 @@ export default function ThresholdTask({ eegSessionId, alreadyPersonalized, ringC
       <div>
         <p className="body">
           Counting: best streak {serialBest}, {serialRestarts} restarts · Maths {mathScore.correct}/{mathScore.total} ·
-          Puzzle {puzzleScore.correct} solved · Sorter {sorterScore.correct} sorted · Stroop {stroopScore.correct}/{stroopScore.total}.
+          Puzzle {puzzleScore.correct} solved · Sorter {sorterScore.correct} sorted ·
+          Stroop {stroopLog ? `${Math.round((stroopLog.summary.accuracy ?? 0) * 100)}% of ${stroopLog.summary.n_trials}` : '—'}.
         </p>
+        {stroopLog && (
+          <p className="caption" style={{ color: stroopLog.summary.engagement === 'engaged' ? COLORS.textMuted : COLORS.warning }}>
+            Stroop engagement check: {stroopLog.summary.engagement} (aim 50–85% correct; final response window
+            {' '}{(stroopLog.summary.final_window_ms / 1000).toFixed(1)} s).
+          </p>
+        )}
+        <div className="card flat" style={{ margin: '10px 0' }}>
+          <b>How stressful did the tasks feel?</b>
+          <div className="row" style={{ gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+            {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((r) => (
+              <button key={r} type="button" className={`btn sm ${stressRating === r ? '' : 'ghost'}`} onClick={() => saveRating(r)}>{r}</button>
+            ))}
+          </div>
+          <div className="between caption" style={{ marginTop: 4 }}><span>1 = not at all</span><span>9 = extremely</span></div>
+          {stressRating != null && <p className="caption">{ratingSaved ? 'Thanks — saved.' : 'Thanks.'}</p>}
+        </div>
         {rows.map(([label, s]) => (
           <div key={label} className="between" style={{ padding: '12px 0', borderBottom: `1px solid ${COLORS.borderSoft}` }}>
             <b>{label}</b>
