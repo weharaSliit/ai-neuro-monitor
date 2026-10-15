@@ -149,6 +149,7 @@ def make_eeg_output_record(result: dict, window_sec: float, model_version: str,
             'provisional_quality': result.get('provisional_quality'),
             'personal_rest_mean': result.get('mu_rest'),
             'personal_sigma': result.get('personal_sigma'),
+            'personal_scale': result.get('personal_scale'),
             'eeg_responsive': result.get('eeg_responsive'),
         })
     else:
@@ -162,6 +163,9 @@ def make_eeg_output_record(result: dict, window_sec: float, model_version: str,
             'task_state_z': result.get('task_state_z'),
             'personal_rest_mean': result.get('mu_rest'),
             'personal_sigma': result.get('personal_sigma'),
+            # 'logit' (default): task_state_z and every personal limit are on
+            # the log-odds scale -- see sam40/decision.py PERSONAL_SCALE.
+            'personal_scale': result.get('personal_scale'),
             # Onboarding responsiveness (None = task not done yet). False =
             # this model isn't tracking load for this person -> no fusion
             # weight (make_eeg_fusion_record()).
@@ -246,6 +250,18 @@ class FirebaseSync:
             self._ref.update(record)
         except Exception as e:
             print(f'[firebase] WARNING: update failed for session_id={self.session_id}: {e}')
+
+    def max_window_key(self) -> int | None:
+        """Highest numeric child key under this ref (a session's block
+        numbers), read shallowly so no block data is downloaded. None if
+        there are none or the read fails."""
+        try:
+            keys = self._ref.get(shallow=True) or {}
+            nums = [int(k) for k in keys if str(k).isdigit()]
+            return max(nums) if nums else None
+        except Exception as e:
+            print(f'[firebase] WARNING: block-key read failed for session_id={self.session_id}: {e}')
+            return None
 
     def get(self) -> dict | None:
         try:
@@ -391,6 +407,7 @@ def make_eeg_fusion_record(record: dict) -> dict:
         # the same "spreads from own limit" units HRV/GSR is aligned in.
         # None without a personal rest baseline (fusion then falls back to
         # threshold/threshold_scale).
-        'z_logit_eeg': personal_z_logit(p, record.get('personal_rest_mean')) if p is not None else None,
+        'z_logit_eeg': (fin['z'] if record.get('personal_scale') == 'logit'
+                        else personal_z_logit(p, record.get('personal_rest_mean')) if p is not None else None),
         'z_alert_eeg': PERSONAL_K_ALERT,
     }

@@ -2,6 +2,8 @@ import json
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+import os
+
 import numpy as np
 import pandas as pd
 
@@ -177,6 +179,60 @@ _LOGIT_EPS = 1e-9
 def _logit(p: float) -> float:
     p = min(max(float(p), _LOGIT_EPS), 1.0 - _LOGIT_EPS)
     return float(np.log(p / (1.0 - p)))
+
+
+# Which scale the Personal Scale runs on. 'logit' (default): resting level,
+# z, responsiveness and alert limits all in log-odds (sigma 0.55). On SAM40
+# it matches the probability scale (responsiveness: same 8/8 below-chance
+# people caught, Spearman 0.84 with held-out AUC both ways; alerts: 15.8%
+# rest / 46.9% task blocks flagged vs 16.7% / 40.6%), and unlike it, it
+# survives a device whose scores all sit near 0 (wearable02: 1e-9..1e-3):
+# shifting every SAM40 score to ~1e-3 leaves 24/40 people responsive in
+# log-odds but 0/40 in probability -- there, mu_rest + 0.84 x 0.161 can
+# never be reached. 'probability' restores the original rule.
+PERSONAL_SCALE = os.environ.get('EEG_PERSONAL_SCALE', 'logit').strip().lower()
+
+
+def logit(p: float) -> float:
+    return _logit(p)
+
+
+def inv_logit(x: float) -> float:
+    return float(1.0 / (1.0 + np.exp(-x)))
+
+
+def rest_level_logit(rest_scores: list[float]) -> float | None:
+    """Resting level on the log-odds scale: mean log-odds of the rest blocks."""
+    return float(np.mean([_logit(s) for s in rest_scores])) if rest_scores else None
+
+
+def personal_z_level(score: float | None, level_logit: float | None,
+                     sigma: float = None) -> float | None:
+    """z of a score against a log-odds resting level, in log-odds sigmas."""
+    if score is None or level_logit is None:
+        return None
+    return float((_logit(score) - level_logit) / (sigma or PERSONAL_SIGMA_LOGIT))
+
+
+def personal_decision_thresholds_logit(base: DecisionThresholds, level_logit: float,
+                                       sigma: float = None) -> DecisionThresholds:
+    """personal_decision_thresholds() on the log-odds scale: every limit is
+    sigmoid(level + k x sigma_logit), so it sits the same number of spreads
+    above rest whatever the device's absolute score range."""
+    s = sigma or PERSONAL_SIGMA_LOGIT
+    alert = inv_logit(level_logit + PERSONAL_K_ALERT * s)
+    brk = inv_logit(level_logit + PERSONAL_K_BREAK * s)
+    return replace(base, high_load_p=alert, cooldown_high_p=alert, break_p=brk,
+                   cooldown_low_p=min(alert, inv_logit(level_logit)))
+
+
+def task_response_z_logit(level_logit: float | None, task_scores: list[float],
+                          sigma: float = None) -> float | None:
+    """Onboarding responsiveness on the log-odds scale: mean task log-odds
+    above the resting level, in log-odds sigmas."""
+    if level_logit is None or not task_scores:
+        return None
+    return float((np.mean([_logit(s) for s in task_scores]) - level_logit) / (sigma or PERSONAL_SIGMA_LOGIT))
 
 
 def personal_z_logit(score: float | None, mu_rest: float | None,

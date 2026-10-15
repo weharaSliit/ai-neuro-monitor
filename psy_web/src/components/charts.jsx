@@ -299,6 +299,12 @@ export function MultiLineChart({
             <path key={p.key} d={p.d} fill="none" stroke={p.color} strokeWidth={p.width || 2}
               strokeDasharray={p.dash ? '5 4' : undefined} strokeLinejoin="round" strokeLinecap="round" />
           ))}
+          {/* series.dots: a marker on every point (sparse series, e.g. calibration blocks) */}
+          {shown.filter((s) => s.dots).map((s) => points.map((p) => (p[s.key] != null && Number.isFinite(p[s.key])
+            && p.x >= geo.x0 && p.x <= geo.x1 ? (
+              <circle key={`${s.key}-${p.x}`} cx={geo.sx(p.x)} cy={geo.sy(p[s.key])} r={4} fill={s.color}
+                stroke="var(--surface)" strokeWidth={1.5} />
+            ) : null)))}
           {hover && (
             <g pointerEvents="none">
               <line className="crosshair" x1={hx} x2={hx} y1={PAD.top} y2={PAD.top + innerH} />

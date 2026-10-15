@@ -280,3 +280,35 @@ td.up, td.down { color: var(--ink-2); }
 /* chart title row with a scale switch on the right */
 .chart-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
 .chart-head .section-title { margin-bottom: 0; }
+
+/* amplitude-gain preview chart inside the Task state card */
+.preview-box { margin-top: 14px; padding: 10px 12px 12px; border-radius: 10px; border: 1px dashed var(--axis); }
+
+/* calibration dashboard: label strips (one row per component) */
+.label-strips { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
+.label-strip { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 8px; align-items: center; font-size: 12px; }
+.label-strip-name { color: var(--ink-2); }
+.label-strip-track { position: relative; height: 14px; border-radius: 4px; background: var(--page); overflow: hidden; }
+.label-strip-track i { position: absolute; top: 0; bottom: 0; }
+.label-strip-track i.on, i.lg.on { background: var(--critical); }
+.label-strip-track i.off, i.lg.off { background: var(--good); }
+.label-strip-track i.na, i.lg.na { background: var(--grid); }
+i.lg { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; }
+@media (max-width: 600px) { .label-strip { grid-template-columns: minmax(0, 1fr); } }
+
+
+/* recalibrate-both panel */
+.recal-progress { height: 8px; border-radius: 999px; background: var(--page); overflow: hidden; margin: 4px 0 12px; }
+.recal-progress i { display: block; height: 100%; background: var(--series); transition: width 0.4s; }
+.recal-step { padding: 12px; border-radius: 10px; background: var(--wash); font-size: 14px; display: flex; flex-direction: column; gap: 10px; }
+.arith { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.arith-q { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; min-width: 120px; }
+.arith input { font: inherit; font-size: 22px; width: 110px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--axis); background: var(--surface); color: var(--ink); }
+.recal-result { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.recal-result h3 { margin: 0 0 4px; }
+.recal-result p { margin: 0; }
+.recal-result .caption { grid-column: 1 / -1; }
+@media (max-width: 700px) { .recal-result { grid-template-columns: minmax(0, 1fr); } }
+
+/* Stroop stressor inside the recalibration panel */
+.stroop { padding: 12px; border-radius: 12px; background: var(--surface); }

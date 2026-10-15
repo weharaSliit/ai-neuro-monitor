@@ -5,7 +5,7 @@ import {
 import ValidationPanel from './ValidationPanel';
 
 // The researcher view: raw signal, every feature, model internals.
-export default function TechView({ raw, health, picker, sessionData, profile, now, onBack, openFusion, openPhysio }) {
+export default function TechView({ raw, health, picker, sessionData, profile, now, onBack, openFusion, openPhysio, openCalibration }) {
   return (
     <div className="page">
       <header className="top">
@@ -14,12 +14,13 @@ export default function TechView({ raw, health, picker, sessionData, profile, no
             <button type="button" className="back-link" onClick={onBack}>← Back to simple view</button>
             <button type="button" className="back-link" onClick={openPhysio}>Wearable 01 HRV + GSR monitor →</button>
             <button type="button" className="back-link" onClick={openFusion}>Fusion engine monitor →</button>
+            <button type="button" className="back-link" onClick={openCalibration}>Calibration, scores &amp; alerts →</button>
           </div>
           <p className="eyebrow">MindPulse · psychological component · technical view</p>
           <h1>Wearable 02 EEG monitor</h1>
           <p className="muted">
             Live T7–T8 EEG from wearable 02, through calibration, feature extraction and the task-state model.
-            Read-only: this page doesn&apos;t write to Firebase or the API.
+            Read-only, except the Recalibrate button in the Calibration card.
           </p>
         </div>
         <SessionPicker picker={picker} />
@@ -34,6 +35,10 @@ export default function TechView({ raw, health, picker, sessionData, profile, no
       </div>
       <ValidationPanel raw={raw} sessionData={sessionData} now={now} />
       <CalibrationPanel sessionData={sessionData} profile={profile} raw={raw} now={now} picker={picker} />
+      <p className="caption">
+        EEG, HRV/GSR and fused calibration graphs, each component&apos;s scores and labels, rising alerts and feature graphs are on the{' '}
+        <button type="button" className="link" onClick={openCalibration}>Calibration, scores &amp; alerts dashboard</button>.
+      </p>
       <FeaturesPanel sessionData={sessionData} profile={profile} />
       <BlockLog sessionData={sessionData} />
       <ApiPanel health={health} picker={picker} now={now} />

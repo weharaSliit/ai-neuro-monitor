@@ -56,7 +56,8 @@ from backend.psychological.calibration_service import (
 )
 from backend.psychological.mqtt_bridge import (
     BLOCK_SAMPLES, BLOCK_SEC, EEG_MQTT_BROKER, EEG_MQTT_CA_CERT, EEG_MQTT_PASSWORD,
-    EEG_MQTT_PORT, EEG_MQTT_TOPIC, EEG_MQTT_USER, N_CALIBRATION_BLOCKS, N_THRESHOLD_TASK_BLOCKS,
+    CALIBRATION_SETTLE_SEC, EEG_MQTT_PORT, EEG_MQTT_TOPIC, EEG_MQTT_USER, N_CALIBRATION_BLOCKS,
+    N_RECOVERY_BLOCKS, N_THRESHOLD_TASK_BLOCKS,
 )
 from backend.psychological.realtime.mqtt_client import parse_bipolar_payload
 from backend.psychological.realtime.raw_cleaning import start_after_last_gap
@@ -64,7 +65,7 @@ from backend.psychological.realtime.raw_cleaning import start_after_last_gap
 # Electrode contact settles faster than the ring's GSR strap (whose own
 # SETTLE_SEC is 30) -- 10s is enough for the amplifier/contact to stabilize
 # once the headband is first put on, before the real capture starts.
-EEG_SETTLE_SEC = 10
+EEG_SETTLE_SEC = CALIBRATION_SETTLE_SEC   # protocol phase 1: 2 min, discarded (was 10 s)
 
 # Hard wall-clock ceiling on both block-capture loops below. Both loops
 # only ever advance when buffered_count() >= BLOCK_SAMPLES, which needs
@@ -82,7 +83,6 @@ EEG_SETTLE_SEC = 10
 # the SHARED client is left connected (see module docstring) -- only this
 # one capture attempt aborts, so a retry reuses the live connection
 # immediately instead of registering yet another one with EMQX.
-CAPTURE_TIMEOUT_SEC = 120
 
 # run_eeg_threshold_capture() below needs its own, much larger ceiling now
 # that N_THRESHOLD_TASK_BLOCKS is 14 (~350s of real data needed) instead
@@ -91,7 +91,9 @@ CAPTURE_TIMEOUT_SEC = 120
 # EXTRA_RETRY_BLOCKS gives the same kind of rejected-block tolerance
 # margin physiological's EXTRA_RETRY_WINDOWS does.
 EXTRA_RETRY_BLOCKS = 4
+CAPTURE_TIMEOUT_SEC = (N_CALIBRATION_BLOCKS + EXTRA_RETRY_BLOCKS) * BLOCK_SEC     # resting baseline
 THRESHOLD_CAPTURE_TIMEOUT_SEC = (N_THRESHOLD_TASK_BLOCKS + EXTRA_RETRY_BLOCKS) * BLOCK_SEC
+RECOVERY_CAPTURE_TIMEOUT_SEC = (N_RECOVERY_BLOCKS + EXTRA_RETRY_BLOCKS) * BLOCK_SEC
 
 # Fail-fast companion to CAPTURE_TIMEOUT_SEC above: rather than always
 # waiting out the full ceiling, abort as soon as no new MQTT sample has
@@ -441,9 +443,32 @@ def run_eeg_threshold_capture(session_state: dict, on_progress=None, on_live=Non
         _notify('capturing', block_idx=len(blocks_samples), n_blocks=N_THRESHOLD_TASK_BLOCKS,
                 scores=list(live_scores), resting_scores=resting_scores)
 
+    # Protocol phase 4: recovery rest. The task is over; the user sits still
+    # and relaxes while N_RECOVERY_BLOCKS more blocks are recorded. A
+    # problem here doesn't lose the threshold -- the task blocks are scored
+    # either way, recovery is reported only if it completed.
+    recovery_samples = []
+    recovery_scores = []
+    _notify('recovery', block_idx=0, n_blocks=N_RECOVERY_BLOCKS, scores=list(live_scores), resting_scores=resting_scores)
+    recovery_deadline = time.time() + RECOVERY_CAPTURE_TIMEOUT_SEC
+    while len(recovery_samples) < N_RECOVERY_BLOCKS:
+        if time.time() > recovery_deadline or _shared_last_sample_age() > INACTIVITY_TIMEOUT_SEC:
+            print(f"[threshold] recovery rest incomplete ({len(recovery_samples)}/{N_RECOVERY_BLOCKS} blocks) "
+                  f"-- saving the threshold without it")
+            break
+        if _shared_buffered_count() >= BLOCK_SAMPLES and _shared_discard_before_gap(BLOCK_SAMPLES)[0]:
+            continue
+        if _shared_buffered_count() < BLOCK_SAMPLES:
+            time.sleep(0.5)
+            continue
+        recovery_samples.append(_shared_drain(BLOCK_SAMPLES))
+        recovery_scores.append(_live_task_score(live_engine, recovery_samples[-1]))
+        _notify('recovery', block_idx=len(recovery_samples), n_blocks=N_RECOVERY_BLOCKS,
+                scores=list(live_scores), recovery_scores=list(recovery_scores), resting_scores=resting_scores)
+
     _notify('saving')
     try:
-        result = run_eeg_threshold_from_blocks(session_state, blocks_samples)
+        result = run_eeg_threshold_from_blocks(session_state, blocks_samples, recovery_samples)
     except Exception as e:
         _notify('error', message=str(e))
         return None
