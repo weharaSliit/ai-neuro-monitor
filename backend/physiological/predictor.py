@@ -141,7 +141,46 @@ def update_baseline_ema(old_mean, old_std,
 PERSONAL_THRESHOLD_MIN_SEPARATION = 0.10
 
 
+# Midpoint threshold calibration -- same method as EEG
+# (backend/psychological/sam40/decision.py midpoint_threshold_logit()), on
+# prob_stress directly (ring scores sit mid-range, so no log-odds needed):
+#   baseline   = median(resting scores)
+#   task_level = mean(task scores after the ramp-up: first 2 x 60 s windows)
+#   limit      = (baseline + task_level) / 2
+#   personal   = task_level - baseline >= 1 x SD(rest), with the SD floored
+#                at PERSONAL_THRESHOLD_MIN_SEPARATION (4 rest windows give a
+#                noisy, sometimes ~0 SD).
+TASK_RAMP_SKIP_WINDOWS = 2
+
+
+def midpoint_stress_threshold(resting_scores, task_scores, skip=TASK_RAMP_SKIP_WINDOWS):
+    """Baseline, sustained task level, midpoint limit and whether it is
+    personal (separated enough). None without rest or task scores."""
+    if len(resting_scores) < 1 or len(task_scores) < 1:
+        return None
+    k = min(skip, len(task_scores) // 2)
+    baseline = float(np.median(resting_scores))
+    task_level = float(np.mean(task_scores[k:]))
+    rest_sd = float(np.std(resting_scores, ddof=1)) if len(resting_scores) > 1 else 0.0
+    needed = max(rest_sd, PERSONAL_THRESHOLD_MIN_SEPARATION)
+    return {
+        'baseline': baseline, 'task_level': task_level,
+        'limit': max(0.0, min(1.0, (baseline + task_level) / 2.0)),
+        'rest_sd': rest_sd, 'needed_separation': needed,
+        'separated': bool(task_level - baseline >= needed),
+        'n_task_used': len(task_scores) - k, 'n_task_skipped': k,
+    }
+
+
 def compute_personal_stress_threshold(resting_scores, task_scores):
+    """Personal threshold by the midpoint method (midpoint_stress_threshold()
+    above), or None when rest and the sustained task aren't separated enough
+    (the caller then keeps the population STRESS_DECISION_THRESHOLD)."""
+    m = midpoint_stress_threshold(resting_scores, task_scores)
+    return m['limit'] if m and m['separated'] else None
+
+
+def _old_compute_personal_stress_threshold(resting_scores, task_scores):
     """Personal STRESS_DECISION_THRESHOLD from a deliberate onboarding task
     (a short, known high-load period run right after baseline calibration):
     threshold = midpoint between this user's own resting and task

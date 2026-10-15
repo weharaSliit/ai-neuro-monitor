@@ -40,7 +40,12 @@ class DecisionThresholds:
     in a high-load state" = the same bar as the high-load alert itself).
     """
     high_load_p: float = 0.7933008189294708
-    high_load_persistence_blocks: int = 3          # spec: ">=3 consecutive blocks"
+    high_load_persistence_blocks: int = 3          # kept for reference; the alert now uses high_load_k of high_load_n
+    # Persistence: high load when at least high_load_k of the last
+    # high_load_n blocks are at/above the limit (2 of 3) -- tolerates one
+    # noisy block in either direction, unlike "3 consecutive".
+    high_load_k: int = 2
+    high_load_n: int = 3
     break_p: float = 0.8104568085102677
     break_persistence_blocks: int = 20              # spec: "sustained over 10 min"; blocks, not minutes -- see module docstring
     fatigue_theta_ratio_p75: float = None            # filled in per-series (75th percentile) if None
@@ -173,12 +178,28 @@ MIN_TASK_RESPONSE_Z = 0.5      # onboarding task must sit >= 0.5 sigma above own
 # 0.547; at z_logit >= PERSONAL_K_ALERT that flags 15.8% of rest blocks and
 # 46.9% of task blocks (vs 16.7% / 40.6% for the probability-space rule).
 PERSONAL_SIGMA_LOGIT = 0.55
-_LOGIT_EPS = 1e-9
+_LOGIT_EPS = 1e-300   # only guards log(0); was 1e-9, which flattened every score below it
 
 
 def _logit(p: float) -> float:
-    p = min(max(float(p), _LOGIT_EPS), 1.0 - _LOGIT_EPS)
-    return float(np.log(p / (1.0 - p)))
+    p = min(max(float(p), _LOGIT_EPS), 1.0 - 1e-16)
+    return float(np.log(p) - np.log1p(-p))
+
+
+# Plausibility on the log-odds scale. The probability-scale gate (scores
+# outside 1e-6..1-1e-6 rejected) assumed a 0.161 probability spread, under
+# which such scores carry no usable distance. In log-odds the logistic
+# model's output stays linear in its features far below that (wearable02
+# rest blocks: 1e-12..1e-9 = log-odds -28..-21), so only outputs beyond
+# +-LOGIT_PLAUSIBLE_BOUND (p < 4e-18, e.g. the 1e-63 artefacts seen before)
+# are treated as broken.
+LOGIT_PLAUSIBLE_BOUND = 40.0
+
+
+def plausible_logit_score(p: float | None) -> bool:
+    if p is None or not np.isfinite(p) or p <= 0.0 or p >= 1.0:
+        return False
+    return abs(_logit(p)) <= LOGIT_PLAUSIBLE_BOUND
 
 
 # Which scale the Personal Scale runs on. 'logit' (default): resting level,
@@ -201,9 +222,69 @@ def inv_logit(x: float) -> float:
     return float(1.0 / (1.0 + np.exp(-x)))
 
 
+# Personal spread: with enough rest blocks (the protocol now records 10),
+# sigma is this person's own rest SD in log-odds, never below the SAM40
+# prior. SAM40 had only 3 rest blocks per person, so its analyses (and any
+# calibration with fewer than MIN_BLOCKS_PERSONAL_SIGMA usable blocks) keep
+# the prior. On wearable02 the rest SD was 3.97 log-odds -- 7x the prior --
+# so with the prior every ordinary rest-to-rest change read as a huge z.
+MIN_BLOCKS_PERSONAL_SIGMA = 5
+
+
+def personal_sigma_logit(rest_scores: list[float]) -> tuple[float, str]:
+    """(sigma, source): own rest SD in log-odds (>= the prior) when there
+    are enough blocks, else the SAM40 prior."""
+    if len(rest_scores) < MIN_BLOCKS_PERSONAL_SIGMA:
+        return PERSONAL_SIGMA_LOGIT, 'prior'
+    sd = float(np.std([_logit(s) for s in rest_scores], ddof=1))
+    return (sd, 'personal') if sd > PERSONAL_SIGMA_LOGIT else (PERSONAL_SIGMA_LOGIT, 'prior (own spread smaller)')
+
+
+# ── Midpoint threshold calibration (current method) ────────────────
+# baseline   = median(rest)                       (robust to one odd block)
+# task_level = mean(task after the ramp-up)       (skip ~2 min = 5 x 25 s blocks)
+# limit      = (baseline + task_level) / 2
+# responsive = task_level - baseline >= 1 x SD(rest), where SD(rest) is the
+#              Personal Scale spread (own rest SD, never below the SAM40
+#              prior, prior with < 5 rest blocks) -- a raw SD of 2-3 blocks
+#              can be ~0 and would pass any task.
+# All on the log-odds scale (scale-free: wearable02 scores sit at 1e-12..1e-3).
+# Until the task has run, the limit is provisional: baseline + 0.84 sigma.
+TASK_RAMP_SKIP_BLOCKS = 5
+MIN_TASK_RESPONSE_SD = 1.0
+
+
+def ramp_skip(n_task: int, skip: int = TASK_RAMP_SKIP_BLOCKS) -> int:
+    """Blocks to drop from the start of the task: `skip`, but always
+    keeping at least half of a short task."""
+    return min(skip, n_task // 2)
+
+
+def midpoint_threshold_logit(rest_scores: list[float], task_scores: list[float],
+                             skip: int = TASK_RAMP_SKIP_BLOCKS, sigma: float | None = None) -> dict | None:
+    """Baseline, sustained task level, midpoint limit and responsiveness,
+    all in log-odds. None if there are no rest or task scores."""
+    if not rest_scores or not task_scores:
+        return None
+    rest_L = [_logit(s) for s in rest_scores]
+    k = ramp_skip(len(task_scores), skip)
+    task_L = [_logit(s) for s in task_scores[k:]]
+    baseline = float(np.median(rest_L))
+    task_level = float(np.mean(task_L))
+    rest_sd = sigma if sigma else personal_sigma_logit(rest_scores)[0]
+    return {
+        'baseline_logit': baseline, 'task_level_logit': task_level,
+        'limit_logit': (baseline + task_level) / 2.0, 'rest_sd_logit': rest_sd,
+        'separation_sd': None if rest_sd <= 0 else (task_level - baseline) / rest_sd,
+        'responsive': bool(task_level - baseline >= MIN_TASK_RESPONSE_SD * rest_sd and task_level > baseline),
+        'n_task_used': len(task_L), 'n_task_skipped': k,
+    }
+
+
 def rest_level_logit(rest_scores: list[float]) -> float | None:
-    """Resting level on the log-odds scale: mean log-odds of the rest blocks."""
-    return float(np.mean([_logit(s) for s in rest_scores])) if rest_scores else None
+    """Resting level (baseline) on the log-odds scale: MEDIAN log-odds of the
+    rest blocks, so one odd block doesn't move it."""
+    return float(np.median([_logit(s) for s in rest_scores])) if rest_scores else None
 
 
 def personal_z_level(score: float | None, level_logit: float | None,
@@ -280,12 +361,11 @@ def compute_states(series: pd.DataFrame, thresholds: DecisionThresholds = Decisi
     df = series.reset_index(drop=True).copy()
     p = df.calibrated_p.to_numpy()
 
-    # 1. High Load Alert: P >= high_load_p for >= N consecutive blocks
-    above = p >= thresholds.high_load_p
-    run = np.zeros(len(p), dtype=int)
-    for i in range(len(p)):
-        run[i] = (run[i - 1] + 1) if (i > 0 and above[i]) else int(above[i])
-    df['high_load_alert'] = run >= thresholds.high_load_persistence_blocks
+    # 1. High Load Alert: at least k of the last n blocks at/above the limit (2 of 3)
+    above = (p >= thresholds.high_load_p).astype(int)
+    k, n = thresholds.high_load_k, thresholds.high_load_n
+    recent = np.array([above[max(0, i - n + 1): i + 1].sum() for i in range(len(p))], dtype=int)
+    df['high_load_alert'] = recent >= k
 
     # 2. Micro-Break Recommendation: P >= break_p sustained for >= N blocks
     above_break = p >= thresholds.break_p

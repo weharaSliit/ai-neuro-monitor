@@ -49,7 +49,7 @@ from backend.common.config import EMA_ALPHA
 from backend.physiological.extract_features import extract_features, adc_to_conductance
 from backend.physiological.ema_service import build_ema_summary, interpret_ema_change
 from backend.physiological.predictor import (
-    compute_baseline, compute_personal_stress_threshold, feature_cols, predict_window,
+    compute_baseline, compute_personal_stress_threshold, feature_cols, midpoint_stress_threshold, predict_window,
     update_baseline_ema,
 )
 from backend.physiological.firebase_service import (
@@ -653,9 +653,14 @@ def run_task_calibration_capture(user_id, on_progress=None, on_live=None):
                 return None
 
             threshold = compute_personal_stress_threshold(resting_scores, task_scores)
+            mid = midpoint_stress_threshold(resting_scores, task_scores) or {}
             result = {
                 'status': 'ok' if threshold is not None else 'not_separated',
                 'personal_stress_threshold': threshold,
+                'method': 'midpoint (median rest, sustained task)',
+                'baseline': mid.get('baseline'), 'task_level': mid.get('task_level'),
+                'needed_separation': mid.get('needed_separation'),
+                'n_task_used': mid.get('n_task_used'), 'n_task_skipped': mid.get('n_task_skipped'),
                 'resting_mean': float(np.mean(resting_scores)),
                 'task_mean': float(np.mean(task_scores)),
                 'n_task_windows': len(task_scores),
@@ -692,7 +697,7 @@ def run_task_calibration_capture(user_id, on_progress=None, on_live=None):
                 recovery_scores.append(float(predict_window(features_2d, baseline_mean, baseline_std)['prob_stress']))
         if recovery_scores:
             rec_mean = float(np.mean(recovery_scores))
-            limit = threshold if threshold is not None else (result['resting_mean'] + result['task_mean']) / 2.0
+            limit = threshold if threshold is not None else mid.get('limit', (result['resting_mean'] + result['task_mean']) / 2.0)
             result.update({
                 'recovery_scores': recovery_scores, 'recovery_mean': rec_mean,
                 'recovered': bool(rec_mean < limit), 'n_recovery_windows': len(recovery_scores),

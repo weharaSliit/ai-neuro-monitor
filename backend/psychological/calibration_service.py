@@ -187,6 +187,9 @@ def run_eeg_threshold_from_blocks(session_state: dict, blocks_samples: list[list
     for samples in recovery_samples or []:
         engine.score_recovery_block(samples)
     outcome.update(engine.recovery_outcome())
+    # When this threshold was set -- lets a viewer tell whether it belongs to
+    # the current calibration (a later recalibration supersedes it).
+    outcome["updated_at"] = time.time()
     # Saved whether or not the user was responsive -- a 'not_separated'
     # (non-responsive) result must also persist, so later sessions keep EEG
     # out of fusion until the task is redone.
