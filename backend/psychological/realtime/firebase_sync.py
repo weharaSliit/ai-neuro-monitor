@@ -150,6 +150,10 @@ def make_eeg_output_record(result: dict, window_sec: float, model_version: str,
             'personal_rest_mean': result.get('mu_rest'),
             'personal_sigma': result.get('personal_sigma'),
             'personal_scale': result.get('personal_scale'),
+            # Where this session's high-load limit sits on the z scale (0.84
+            # until the task calibrates the midpoint limit).
+            'personal_z_alert': result.get('personal_z_alert'),
+            'personal_z_alert': result.get('personal_z_alert'),
             'eeg_responsive': result.get('eeg_responsive'),
         })
     else:
@@ -409,5 +413,5 @@ def make_eeg_fusion_record(record: dict) -> dict:
         # threshold/threshold_scale).
         'z_logit_eeg': (fin['z'] if record.get('personal_scale') == 'logit'
                         else personal_z_logit(p, record.get('personal_rest_mean')) if p is not None else None),
-        'z_alert_eeg': PERSONAL_K_ALERT,
+        'z_alert_eeg': record.get('personal_z_alert') or PERSONAL_K_ALERT,
     }

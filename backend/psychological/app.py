@@ -503,6 +503,35 @@ def calibrate_threshold_blocks():
     return jsonify({"success": True, "session_id": session_id, **outcome})
 
 
+# -- /calibrate/preview -- one block's score for the live calibration graph --
+# Stateless: nothing is stored. Rest blocks are scored by a shared engine
+# (no calibration needed); task/recovery blocks by the session's engine, at
+# its amplitude gain.
+#
+# REQUEST FORMAT: {"session_id": "...", "phase": "rest"|"task"|"recovery", "millis": [...], "code": [...]}
+_preview_engine = None
+
+
+@app.route("/calibrate/preview", methods=["POST"])
+@require_auth
+def calibrate_preview():
+    global _preview_engine
+    data = request.json or {}
+    phase = data.get("phase", "rest")
+    try:
+        samples = _samples_from_payload(data)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    session_state = eeg_sessions.get(data.get("session_id", "session_001"))
+    if phase != "rest" and session_state is not None:
+        engine, use_gain = session_state["engine"], True
+    else:
+        if _preview_engine is None:
+            _preview_engine = RealtimeInference(MODEL_DIR, disable_quality_gate=DISABLE_QUALITY_GATE)
+        engine, use_gain = _preview_engine, False
+    return jsonify({"phase": phase, **engine.preview_block_score(samples, use_gain=use_gain)})
+
+
 @app.route("/calibrate/threshold/status", methods=["GET"])
 @require_auth
 def calibrate_threshold_status():

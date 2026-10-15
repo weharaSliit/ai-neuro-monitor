@@ -227,6 +227,10 @@ export function MultiLineChart({
       let d = ''; let pen = false;
       for (const p of points) {
         const v = p[s.key];
+        // series.connect: a point that simply has no key for this series (a
+        // reading from another series at that time) is skipped, not a gap;
+        // an explicit null still breaks the line.
+        if (s.connect && v === undefined) continue;
         if (v == null || !Number.isFinite(v) || p.x < x0 || p.x > x1) { pen = false; continue; }
         d += `${pen ? 'L' : 'M'}${sx(p.x).toFixed(1)},${sy(v).toFixed(1)}`; pen = true;
       }

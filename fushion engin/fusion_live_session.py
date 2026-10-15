@@ -23,7 +23,8 @@ from backend.common.firebase_config import (
 )
 from backend.psychological.realtime.firebase_sync import _trend_direction  # noqa: E402
 
-BASELINE_N = 3 
+BASELINE_N = 3
+FUSED_PERSIST_K, FUSED_PERSIST_N = 2, 3   # 2 of the last 3 windows (persistent high stress) 
 
 
 def _init_firebase(cred_path: str, db_url: str):
@@ -163,6 +164,13 @@ def poll_once(session_ref, session_meta_ref) -> dict:
         # FUSION_TREND_LABELS is keyed on exactly this) -- NOT
         # recomputed by a second, differently-vocabularied trend calc.
         trend = _trend_direction(fused_history[: i + 1])
+        # Persistent condition (same rule as EEG's high-load alert): high
+        # stress when at least FUSED_PERSIST_K of the last FUSED_PERSIST_N
+        # fused windows are at/above the fused limit -- one noisy window
+        # neither raises nor clears it.
+        recent = [windows[kk].get("fused_label") for kk in ordered_keys[: i + 1]
+                  if windows[kk].get("fused_label") is not None][-FUSED_PERSIST_N:]
+        fused_high_persistent = sum(1 for lab in recent if lab == 1) >= FUSED_PERSIST_K
         fused = fused_by_key[k]
         weights = fused["modality_weights"]
         stress_phase, stress_alert_message = _compute_stress_phase(
@@ -176,6 +184,7 @@ def poll_once(session_ref, session_meta_ref) -> dict:
             "fused_probability": windows[k]["fused_probability"],
             "fused_threshold": windows[k]["fused_threshold"],
             "fused_label": windows[k]["fused_label"],
+            "fused_high_persistent": fused_high_persistent,
             "stress_trend": trend,
             # ADDITIVE -- fused_label/fused_probability/fused_threshold above
             # are completely unchanged; see _compute_stress_phase()'s own

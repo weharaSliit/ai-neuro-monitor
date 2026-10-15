@@ -5,6 +5,7 @@ import { ref, update } from 'firebase/database';
 import { db, requestRecalibration } from '../lib/firebase';
 import StroopStressor from './StroopStressor';
 import { fmt } from '../lib/model';
+import { eegLimitInfo, lgt, mean, num, plausible, sig } from '../lib/limits';
 
 import { CALIBRATION_SETTLE_SEC, N_CALIBRATION_BLOCKS, N_RECOVERY_BLOCKS } from '../lib/config';
 
@@ -54,6 +55,24 @@ export default function RecalibratePanel({ picker, now, streaming }) {
   const sid = picker?.sessionId;
   const live = sid && sid === picker.liveSession;
   const req = useFirebaseValue(sid ? `eeg_recalibration/${sid}` : null);
+  // Result in the current method (median baseline, own spread, midpoint
+  // limit), from the backend's values when it has them, else worked out here
+  // from the stored scores -- same helpers as the dashboard cards.
+  // The request only carries summaries; the block scores are in the session's results.
+  const uid = req?.user_id || picker?.userId;
+  const base = uid && sid ? `psychological/${uid}/${sid}` : null;
+  const calStored = useFirebaseValue(base ? `${base}/calibration_result` : null);
+  const thrStored = useFirebaseValue(base ? `${base}/threshold_result` : null);
+  // Only trust stored results written by this run (not an earlier calibration).
+  const fresh = (r) => r && (!req?.requested_at || !r.updated_at || r.updated_at >= req.requested_at - 5);
+  const thr = fresh(thrStored) ? thrStored : req?.threshold || null;
+  const cal = fresh(calStored) ? calStored : req;
+  const restScores = thr?.rest_scores || cal?.rest_scores || [];
+  const info = req ? eegLimitInfo({ ...cal, rest_scores: restScores }, thr) : null;
+  const restN = restScores.map(num).filter(plausible).length || req?.usable_blocks || 0;
+  const recScores = (thr?.recovery_scores || req?.recovery?.recovery_scores || []).map(num).filter(plausible);
+  const recMean = mean(recScores);
+  const recovery = info && recMean != null ? { mean: recMean, dist: (lgt(recMean) - info.limitL) / info.sd } : null;
   const [taskBlocks, setTaskBlocks] = useState(19);
   const [taskKind, setTaskKind] = useState('stroop');      // stroop (recommended) | arithmetic
   const [colourSafe, setColourSafe] = useState(false);
@@ -197,31 +216,37 @@ export default function RecalibratePanel({ picker, now, streaming }) {
           phases yet, so the high-load task was skipped. Redeploy the EEG bridge and API on Render, then recalibrate again.
         </p>
       )}
-      {status === 'done' && (
+      {status === 'done' && info && (
         <div className="recal-result">
           <div>
             <h3>Resting threshold (personal baseline)</h3>
-            <p>μ_rest <b>{fmt(req.mu_rest, 4)}</b> from {req.usable_blocks ?? '—'} rest block(s){req.baseline_degraded ? ' (degraded)' : ''}
-              {req.amplitude_gain ? ` · amplitude gain ${fmt(req.amplitude_gain, 1)}×` : ''}</p>
+            <p>Baseline <b>{fmt(sig(info.level), 4)}</b> (median of {restN} rest block{restN === 1 ? '' : 's'}) · spread {info.sd.toFixed(2)} log-odds
+              {req.baseline_degraded ? ' (degraded)' : ''}{req.amplitude_gain ? ` · amplitude gain ${fmt(req.amplitude_gain, 1)}×` : ''}</p>
           </div>
           <div>
             <h3>High-load threshold</h3>
-            {req.threshold ? (
-              <p>Limit <b>{fmt(req.threshold.personal_high_load_p ?? req.personal_high_load_p, 4)}</b> ·
-                task z {req.threshold.task_response_z == null ? '—' : req.threshold.task_response_z.toFixed(2)} (needs ≥ 0.5) ·{' '}
-                {req.threshold.responsive ? 'responsive' : 'not responsive: re-seat the electrodes and repeat'}</p>
+            {info.taskL != null ? (
+              <p>Limit <b>{fmt(sig(info.limitL), 4)}</b> ({info.method}) · sustained task {fmt(sig(info.taskL), 4)} ·
+                separation {info.sepSd == null ? '—' : info.sepSd.toFixed(2)} spreads (needs ≥ 1) ·{' '}
+                {info.responsive ? 'responsive'
+                  : info.sepSd < 0 ? 'not responsive: the score fell during the task. Re-seat the electrodes, keep hands and jaw relaxed, and repeat'
+                    : 'not responsive: re-seat the electrodes and repeat'}</p>
             ) : req.task_skipped ? (
-              <p className="warn-text">Task skipped: {req.task_skipped}. Limit stays μ_rest + 0.84σ = {fmt(req.personal_high_load_p, 4)}.</p>
+              <p className="warn-text">Task skipped: {req.task_skipped}. Limit stays rest + 0.84 spread = {fmt(sig(info.limitL), 4)}.</p>
             ) : req.threshold_error ? (
-              <p className="warn-text">Task failed: {req.threshold_error}. Limit stays μ_rest + 0.84σ = {fmt(req.personal_high_load_p, 4)}.</p>
-            ) : <p>Limit μ_rest + 0.84σ = <b>{fmt(req.personal_high_load_p, 4)}</b> (no task in this run).</p>}
+              <p className="warn-text">Task failed: {req.threshold_error}. Limit stays rest + 0.84 spread = {fmt(sig(info.limitL), 4)}.</p>
+            ) : <p>Limit rest + 0.84 spread = <b>{fmt(sig(info.limitL), 4)}</b> (no task in this run).</p>}
           </div>
-          {req.recovery && req.recovery.n_recovery_blocks > 0 && (
+          {recovery && (
             <div>
               <h3>Recovery rest</h3>
-              <p>Mean score {fmt(req.recovery.recovery_mean, 3)} · z {req.recovery.recovery_z == null ? '—' : req.recovery.recovery_z.toFixed(2)} ·{' '}
-                {req.recovery.recovered ? 'back below the high-load limit' : 'still above the high-load limit'}</p>
+              <p>Mean score {fmt(recovery.mean, 3)} · {recovery.dist.toFixed(2)} spreads {recovery.dist < 0 ? 'below' : 'above'} the limit ·{' '}
+                {recovery.dist < 0 ? 'back below the high-load limit' : 'still above the high-load limit'}</p>
             </div>
+          )}
+          {info.src === 'computed' && (
+            <p className="caption warn-text">▲ Worked out here from the stored scores with the midpoint method. The server still runs the old
+              method until it is redeployed, so live alerts use its older limit until then.</p>
           )}
           <p className="caption">Finished {req.updated_at ? ago(req.updated_at * 1000, now) : ''}. The graphs below update with the new calibration.</p>
         </div>
