@@ -742,6 +742,29 @@ class RealtimeInference:
                     **self._personal_outcome()}
         return {'status': 'failed', 'baseline_degraded': None}
 
+    def preview_block_score(self, samples: list[BipolarRawSample], use_gain: bool) -> dict:
+        """Score ONE block for psy_web's live calibration graph without
+        touching any state (baseline, scores, block counters). Rest blocks
+        (use_gain=False) are scored like calibrate_bipolar_block() does --
+        clamped signal, before any gain is fitted; task/recovery blocks
+        (use_gain=True) like score_threshold_task_block(), at this session's
+        amplitude gain. The values that count are still the ones the
+        batch /calibrate and /calibrate/threshold calls compute."""
+        raw_code = _raw_bipolar_codes(samples)
+        if not (self.disable_quality_gate or raw_magnitude_ok(bipolar_code_to_microvolts(raw_code))):
+            return {"score": None, "trusted": False, "reason": "raw signal exceeds MAX_RAW_UV"}
+        millis = np.array([s.millis for s in samples], dtype=float)
+        if not (self.disable_quality_gate or timing_ok(millis)):
+            return {"score": None, "trusted": False, "reason": "dropped-packet gap exceeds MAX_GAP_SEC"}
+        unclamped = preprocess_bipolar_block_unclamped(samples)
+        feats = self._model_features(unclamped) if use_gain else channel_features(
+            clip_physiological_uv(unclamped), fs=TARGET_FS)
+        quality = self.quality_validator.assess_only_single(raw_code, unclamped)
+        trusted = self.disable_quality_gate or (
+            RATING_ORDER.get(quality['gate_rating'], -1) >= RATING_ORDER[self.calibration_min_rating])
+        return {"score": self._score_calibration_bipolar_block(feats), "trusted": bool(trusted),
+                "gate_rating": quality.get('gate_rating')}
+
     def score_threshold_task_block(self, samples: list[BipolarRawSample]) -> dict:
         """Scores one block captured during a DELIBERATE high-load task
         (e.g. a timed mental-arithmetic quiz) run immediately after

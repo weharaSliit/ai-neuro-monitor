@@ -185,6 +185,21 @@ def _post_threshold(blocks: list[dict], recovery_blocks: list[dict] | None = Non
     return None
 
 
+def _post_live_point(samples, phase: str, n: int) -> None:
+    """Live calibration graph (psy_web): score this block (stateless
+    /calibrate/preview) and append it to eeg_recalibration/{sid}/live/{n}.
+    One attempt, best-effort -- a missed point only leaves a gap in the
+    graph; the calibration itself still uses the batch calls."""
+    try:
+        resp = requests.post(f"{FLASK_URL}/calibrate/preview", headers=AUTH_HEADERS, timeout=20,
+                             json={"session_id": SESSION_ID, "phase": phase, **block_payload(samples)})
+        body = resp.json() if resp.ok and resp.content else {}
+    except (requests.RequestException, ValueError):
+        body = {}
+    update_recalibration_request(SESSION_ID, {f"live/{n}": {
+        "phase": phase, "t": time.time(), "score": body.get("score"), "trusted": body.get("trusted")}})
+
+
 def block_payload(samples) -> dict:
     return {
         "millis": [s.millis for s in samples],
@@ -327,6 +342,7 @@ def run():
     recal_rest_result: dict = {}
     recal_recovery_needed = 0          # recovery-rest blocks still to record (protocol phase 4)
     recal_recovery_blocks: list[dict] = []
+    recal_live_n = 0                   # next eeg_recalibration/{sid}/live/{n} point
     block_idx = 0
     last_pointer_poll = 0.0
     last_empty_buffer_warn = 0.0
@@ -391,10 +407,11 @@ def run():
                         recal_recovery_needed = 0
                         recal_recovery_blocks = []
                         recal_task_blocks = []
+                        recal_live_n = 0
                         recal_task_needed = (int(req.get("task_blocks") or N_THRESHOLD_TASK_BLOCKS)
                                              if req.get("include_threshold") else 0)
                         update_recalibration_request(SESSION_ID, {
-                            "status": "capturing", "phase": "settle", "blocks_captured": 0,
+                            "status": "capturing", "phase": "settle", "blocks_captured": 0, "live": None,
                             "settle_sec": CALIBRATION_SETTLE_SEC, "settle_until": settle_until,
                             "blocks_needed": N_CALIBRATION_BLOCKS, "handled_at": now,
                             "task_blocks_needed": recal_task_needed,
@@ -472,6 +489,8 @@ def run():
                     if recal_active:
                         update_recalibration_request(SESSION_ID, {"status": "capturing", "phase": "rest",
                                                                   "blocks_captured": calibration_blocks_seen})
+                        _post_live_point(samples, "rest", recal_live_n)
+                        recal_live_n += 1
                     if len(calibration_blocks) >= N_CALIBRATION_BLOCKS:
                         fallback = calibration_blocks_seen >= DEGRADED_FALLBACK_AFTER_BLOCKS
                         outcome, data = _post_calibrate(calibration_blocks, allow_degraded=fallback)
@@ -553,6 +572,8 @@ def run():
                     recal_recovery_blocks.append(block_payload(samples))
                     n_rec = len(recal_recovery_blocks)
                     print(f"[calibrate] captured recovery block {n_rec}/{recal_recovery_needed}")
+                    _post_live_point(samples, "recovery", recal_live_n)
+                    recal_live_n += 1
                     update_recalibration_request(SESSION_ID, {"status": "capturing", "phase": "recovery",
                                                               "blocks_captured": n_rec,
                                                               "blocks_needed": recal_recovery_needed})
@@ -585,6 +606,8 @@ def run():
                     recal_task_blocks.append(block_payload(samples))
                     n_task = len(recal_task_blocks)
                     print(f"[calibrate] captured task block {n_task}/{recal_task_needed}")
+                    _post_live_point(samples, "task", recal_live_n)
+                    recal_live_n += 1
                     update_recalibration_request(SESSION_ID, {"status": "capturing", "phase": "task",
                                                               "blocks_captured": n_task})
                     if n_task >= recal_task_needed:
