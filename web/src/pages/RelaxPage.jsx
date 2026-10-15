@@ -6,7 +6,9 @@ import { DEFAULT_RING_THRESHOLD, timeAgo } from '../lib/levels';
 import { TECHNIQUES, findTechnique } from '../lib/techniques';
 import { getBanditState, getIntervention, submitRating, validateIntervention } from '../lib/relaxApi';
 import { Card, CardHead, Badge } from '../components/ui';
-import RelaxSession from '../components/RelaxSession';
+import RelaxGame from '../components/RelaxGame';
+import DailyQuests from '../components/DailyQuests';
+import { QUESTS, readQuests } from '../lib/quests';
 
 const LIVE_WINDOW_MS = 3 * 60 * 1000;
 const LOG_KEY = (uid) => `mindpulse.relax.log.${uid}`;
@@ -48,7 +50,6 @@ export default function RelaxPage() {
   }
   const probability = latest?.fused_probability ?? ringLatest?.prob_stress ?? null;
   const state = STATE[stateKey];
-  const liveScl = ringLatest?.features?.SCL_mean ?? null;
 
   // ── Recommendation from the Relaxation Guide service ──
   const [rec, setRec] = useState(null);
@@ -76,19 +77,19 @@ export default function RelaxPage() {
   }, [userId, token, log.length]);
 
   const [active, setActive] = useState(null);
+  const [questsOpen, setQuestsOpen] = useState(false);
 
-  const finish = useCallback(async ({ stars, better }) => {
+  const finish = useCallback(async ({ stars, better, postState, postArousal, susScore }) => {
     const t = active;
-    const postLabel = better ? 'normal' : preLabel;
-    const entry = { id: t.id, title: t.title, icon: t.icon, stars, better, at: Date.now() };
+    const postLabel = postState || (better ? 'normal' : preLabel);
+    const entry = { id: t.id, title: t.title, icon: t.icon, stars, better, postArousal, susScore, at: Date.now() };
     const next = [entry, ...readLog(userId)];
     writeLog(userId, next);
     setLog(next);
     submitRating(userId, token, t.id, stars);
-    validateIntervention(userId, token, {
+    return validateIntervention(userId, token, {
       techniqueId: t.id, preLabel, postLabel, contextClusterId: rec?.context_cluster_id ?? 0, stars,
     });
-    setActive(null);
   }, [active, userId, token, preLabel, rec]);
 
   const todayCount = useMemo(() => {
@@ -96,6 +97,8 @@ export default function RelaxPage() {
     return log.filter((r) => r.at >= d.getTime()).length;
   }, [log]);
 
+  const questState = readQuests(userId);
+  const questsDone = QUESTS.filter((q) => (questState[q.counter] || 0) >= q.target).length;
   const recent = log.slice(0, 6);
   const learned = bandit?.preference_history?.recent_interventions;
 
@@ -144,16 +147,24 @@ export default function RelaxPage() {
       </div>
 
       <Card>
-        <CardHead title="All exercises" sub="Pick any one. Each takes one to four minutes." />
-        <div className="tech-grid">
+        <CardHead title="Relaxation Arcade" sub="Choose a technique. Each one is a short interactive game." />
+        <button type="button" className="quest-row" onClick={() => setQuestsOpen(true)}>
+          <span className="tech-icon" style={{ background: '#3B82F622' }}>📜</span>
+          <span className="tech-text">
+            <b>Daily Tasks &amp; Quests</b>
+            <span>{questsDone} of {QUESTS.length} done today · complete tasks for rewards</span>
+          </span>
+          <span className="tech-go" style={{ background: '#3B82F6' }}>Open</span>
+        </button>
+        <div className="tech-grid" style={{ marginTop: 'var(--sp-md)' }}>
           {TECHNIQUES.map((t) => (
-            <button key={t.id} className="tech-card" onClick={() => setActive(t)}>
-              <span className="tech-icon" style={{ background: `${t.color}22` }}>{t.icon}</span>
+            <button key={t.id} className="tech-card" style={{ borderColor: `${t.color}50` }} onClick={() => setActive(t)}>
+              <span className="tech-icon" style={{ background: `${t.color}18` }}>{t.icon}</span>
               <span className="tech-text">
-                <b>{t.title}</b>
+                <b>{t.listTitle || t.title}</b>
                 <span>{t.description}</span>
               </span>
-              <span className="tech-go" style={{ background: t.color }}>Start</span>
+              <span className="tech-go" style={{ background: t.color }}>Play</span>
             </button>
           ))}
         </div>
@@ -183,11 +194,22 @@ export default function RelaxPage() {
       </Card>
 
       {active && (
-        <RelaxSession
+        <RelaxGame
+          key={active.id}
           technique={active}
-          liveScl={liveScl}
+          userId={userId}
+          preLabel={preLabel}
           onClose={() => setActive(null)}
+          onSwitch={(id) => { const t = findTechnique(id); if (t) setActive(t); }}
           onFinish={finish}
+        />
+      )}
+
+      {questsOpen && !active && (
+        <DailyQuests
+          userId={userId}
+          onClose={() => setQuestsOpen(false)}
+          onStart={(id) => { setQuestsOpen(false); const t = findTechnique(id); if (t) setActive(t); }}
         />
       )}
     </div>
