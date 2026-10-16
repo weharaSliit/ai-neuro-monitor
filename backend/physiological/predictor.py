@@ -153,9 +153,19 @@ PERSONAL_THRESHOLD_MIN_SEPARATION = 0.10
 TASK_RAMP_SKIP_WINDOWS = 2
 
 
-def midpoint_stress_threshold(resting_scores, task_scores, skip=TASK_RAMP_SKIP_WINDOWS):
+# ABA drift check, same rule as EEG (sam40/decision.py
+# MIN_RECOVERY_REVERSAL_SD): recovery must come back down from the task
+# level by at least half the separation needed, or the rise is treated as
+# slow drift (sweat build-up on the GSR electrodes, fatigue), not the task.
+# Upward only here: prob_stress is autonomic arousal, which rises under load.
+MIN_RECOVERY_REVERSAL = 0.5
+
+
+def midpoint_stress_threshold(resting_scores, task_scores, skip=TASK_RAMP_SKIP_WINDOWS, recovery_scores=None):
     """Baseline, sustained task level, midpoint limit and whether it is
-    personal (separated enough). None without rest or task scores."""
+    personal (separated enough, and confirmed by recovery when recovery
+    windows exist). None without rest or task scores.
+    status: 'ok' | 'not_separated' | 'drift_suspected'."""
     if len(resting_scores) < 1 or len(task_scores) < 1:
         return None
     k = min(skip, len(task_scores) // 2)
@@ -163,20 +173,29 @@ def midpoint_stress_threshold(resting_scores, task_scores, skip=TASK_RAMP_SKIP_W
     task_level = float(np.mean(task_scores[k:]))
     rest_sd = float(np.std(resting_scores, ddof=1)) if len(resting_scores) > 1 else 0.0
     needed = max(rest_sd, PERSONAL_THRESHOLD_MIN_SEPARATION)
+    separated = bool(task_level - baseline >= needed)
+    rec = [float(r) for r in (recovery_scores or []) if r is not None]
+    recovery_level = float(np.median(rec)) if rec else None
+    reversal = None if recovery_level is None else task_level - recovery_level
+    aba = None if reversal is None else bool(reversal >= MIN_RECOVERY_REVERSAL * needed)
+    personal = separated and aba is not False
     return {
         'baseline': baseline, 'task_level': task_level,
         'limit': max(0.0, min(1.0, (baseline + task_level) / 2.0)),
         'rest_sd': rest_sd, 'needed_separation': needed,
-        'separated': bool(task_level - baseline >= needed),
+        'separated': personal,
+        'recovery_level': recovery_level, 'reversal': reversal, 'aba_confirmed': aba,
+        'status': 'ok' if personal else ('drift_suspected' if separated else 'not_separated'),
         'n_task_used': len(task_scores) - k, 'n_task_skipped': k,
     }
 
 
-def compute_personal_stress_threshold(resting_scores, task_scores):
+def compute_personal_stress_threshold(resting_scores, task_scores, recovery_scores=None):
     """Personal threshold by the midpoint method (midpoint_stress_threshold()
     above), or None when rest and the sustained task aren't separated enough
-    (the caller then keeps the population STRESS_DECISION_THRESHOLD)."""
-    m = midpoint_stress_threshold(resting_scores, task_scores)
+    or recovery shows drift (the caller then keeps the population
+    STRESS_DECISION_THRESHOLD)."""
+    m = midpoint_stress_threshold(resting_scores, task_scores, recovery_scores=recovery_scores)
     return m['limit'] if m and m['separated'] else None
 
 

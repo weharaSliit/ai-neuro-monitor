@@ -252,6 +252,14 @@ def personal_sigma_logit(rest_scores: list[float]) -> tuple[float, str]:
 # Until the task has run, the limit is provisional: baseline + 0.84 sigma.
 TASK_RAMP_SKIP_BLOCKS = 5
 MIN_TASK_RESPONSE_SD = 1.0
+# ABA check (rest -> task -> recovery): the recovery level must come back
+# from the task level towards rest by at least this many spreads, or the
+# "response" is treated as slow drift (electrode settling, sweat, fatigue),
+# not the task. Live wearable02 runs showed both: a step that never came
+# back (mindpulse_user7: +3.3 spreads vs rest, recovery as high as the task)
+# and a clean reversible change (mindpulse_user8: -1.4 vs rest, recovery
+# back up by 1.2).
+MIN_RECOVERY_REVERSAL_SD = 0.5
 
 
 def ramp_skip(n_task: int, skip: int = TASK_RAMP_SKIP_BLOCKS) -> int:
@@ -261,9 +269,20 @@ def ramp_skip(n_task: int, skip: int = TASK_RAMP_SKIP_BLOCKS) -> int:
 
 
 def midpoint_threshold_logit(rest_scores: list[float], task_scores: list[float],
-                             skip: int = TASK_RAMP_SKIP_BLOCKS, sigma: float | None = None) -> dict | None:
+                             skip: int = TASK_RAMP_SKIP_BLOCKS, sigma: float | None = None,
+                             recovery_scores: list[float] | None = None) -> dict | None:
     """Baseline, sustained task level, midpoint limit and responsiveness,
-    all in log-odds. None if there are no rest or task scores."""
+    all in log-odds. None if there are no rest or task scores.
+
+    Direction-aware: the population model's "load" class is not the
+    direction every person's T7-T8 signal moves under load on this
+    headband (live runs moved both ways), so the task may sit above OR
+    below rest. `direction` (+1 / -1) is the side it moved to; the limit is
+    still the midpoint, and "high load" means being on the task's side of
+    it. Responsive = |task - rest| >= MIN_TASK_RESPONSE_SD spreads AND, when
+    recovery blocks exist, recovery reverses towards rest by
+    MIN_RECOVERY_REVERSAL_SD spreads (ABA design: rules out drift).
+    status: 'ok' | 'not_separated' | 'drift_suspected'."""
     if not rest_scores or not task_scores:
         return None
     rest_L = [_logit(s) for s in rest_scores]
@@ -272,11 +291,22 @@ def midpoint_threshold_logit(rest_scores: list[float], task_scores: list[float],
     baseline = float(np.median(rest_L))
     task_level = float(np.mean(task_L))
     rest_sd = sigma if sigma else personal_sigma_logit(rest_scores)[0]
+    direction = 1 if task_level >= baseline else -1
+    separation = None if rest_sd <= 0 else (task_level - baseline) / rest_sd
+    separated = separation is not None and abs(separation) >= MIN_TASK_RESPONSE_SD
+    rec_L = [_logit(s) for s in (recovery_scores or [])]
+    recovery_level = float(np.median(rec_L)) if rec_L else None
+    reversal = (None if recovery_level is None or rest_sd <= 0
+                else direction * (task_level - recovery_level) / rest_sd)
+    reversed_ok = None if reversal is None else reversal >= MIN_RECOVERY_REVERSAL_SD
+    responsive = bool(separated and reversed_ok is not False)
     return {
         'baseline_logit': baseline, 'task_level_logit': task_level,
         'limit_logit': (baseline + task_level) / 2.0, 'rest_sd_logit': rest_sd,
-        'separation_sd': None if rest_sd <= 0 else (task_level - baseline) / rest_sd,
-        'responsive': bool(task_level - baseline >= MIN_TASK_RESPONSE_SD * rest_sd and task_level > baseline),
+        'separation_sd': separation, 'direction': direction,
+        'recovery_level_logit': recovery_level, 'reversal_sd': reversal, 'aba_confirmed': reversed_ok,
+        'responsive': responsive,
+        'status': 'ok' if responsive else ('drift_suspected' if separated else 'not_separated'),
         'n_task_used': len(task_L), 'n_task_skipped': k,
     }
 

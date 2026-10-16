@@ -237,7 +237,8 @@ def save_user_calibration_profile(user_id: str, baseline_shift: float, threshold
     })
 
 
-def save_user_responsiveness(user_id: str, task_response_z: float | None, responsive: bool | None) -> None:
+def save_user_responsiveness(user_id: str, task_response_z: float | None, responsive: bool | None,
+                              direction: int | None = None, z_alert: float | None = None) -> None:
     """Onboarding task outcome on the Personal Scale -- the only per-user
     calibration fact reused across sessions (a non-responsive user keeps EEG
     out of fusion until they redo the task with re-seated electrodes)."""
@@ -247,6 +248,9 @@ def save_user_responsiveness(user_id: str, task_response_z: float | None, respon
     ref.update({
         'task_response_z': task_response_z,
         'eeg_responsive': responsive,
+        # +1 score rises under load, -1 it falls (sam40/decision.py midpoint_threshold_logit()).
+        'eeg_direction': direction if responsive else None,
+        'eeg_z_alert': z_alert if responsive else None,
         'personal_threshold_calibrated_at': time.time(),
         'adc_uv_per_count': ADC_SCALE_TAG,
     })

@@ -24,6 +24,26 @@ export async function shallowKeys(path) {
 // opts.includeThreshold: after the rest blocks, the bridge also records
 // opts.taskBlocks live blocks while the user does the high-load task and
 // recalibrates the high-load threshold from them (/calibrate/threshold).
+// Live stimulator (backend/simulation/live_stimulator.py, run on a laptop):
+// it polls stimulator/control every 3 s and acts on a new nonce.
+export function sendStimulatorCommand(command, opts = {}) {
+  return set(ref(db, 'stimulator/control'), {
+    command, nonce: Date.now(), profile: opts.profile || 'typical', recalibrate: opts.recalibrate !== false,
+  });
+}
+
+// Ring (HRV/GSR) twin: the ring API (backend/physiological/ring_recalibration.py)
+// polls ring_recalibration/ every 5 s, runs settle -> rest -> task -> recovery
+// on the ring stream and reports progress and each window's score back here.
+// Keyed by user: the ring baseline and limit are per user, not per session.
+export function requestRingRecalibration(userId, opts = {}) {
+  return set(ref(db, `ring_recalibration/${userId}`), {
+    status: 'requested', source: 'psy_web', requested_at: Date.now() / 1000,
+    include_threshold: opts.includeThreshold !== false,
+    ...(opts.taskWindows ? { task_windows: opts.taskWindows } : {}),
+  });
+}
+
 export function requestRecalibration(sessionId, userId, opts = {}) {
   return set(ref(db, `eeg_recalibration/${sessionId}`), {
     status: 'requested', source: 'psy_web', user_id: userId || null, requested_at: Date.now() / 1000,

@@ -12,7 +12,8 @@ import { fmt } from '../lib/model';
 import { useSessionData } from '../hooks/useData';
 import { usePhysioData } from '../hooks/usePhysio';
 import useEegCalibrations from '../hooks/useEegCalibrations';
-import { eegLimitInfo, persistent, pickEeg, ringLimitInfo, sig } from '../lib/limits';
+import { eegLimitInfo, eegStatusText, persistent, pickEeg, ringLimitInfo, sig } from '../lib/limits';
+import { useStimulator } from '../hooks/useStimulator';
 
 const WINDOW_SEC = 25;
 const clockMs = (ms) => (ms == null ? '—' : new Date(ms).toLocaleTimeString());
@@ -144,10 +145,10 @@ function LimitsPanel({ eegInfo, eegCal, eegThr, ringInfo, ring, latest, now }) {
           {!eegInfo ? <p className="muted">Not calibrated.</p> : (
             <KV rows={[
               ['Baseline (median rest)', `${sig(eegInfo.level).toExponential(1)} · log-odds ${eegInfo.level.toFixed(1)}`],
-              ['Sustained task', eegInfo.taskL == null ? 'task not run' : `${sig(eegInfo.taskL).toExponential(1)} · log-odds ${eegInfo.taskL.toFixed(1)}`],
-              ['Limit', `${sig(eegInfo.limitL).toExponential(1)} · ${eegInfo.method}`],
+              ['Sustained task', eegInfo.rawTaskL == null ? 'task not run' : `${sig(eegInfo.rawTaskL).toExponential(1)} · log-odds ${eegInfo.rawTaskL.toFixed(1)}`],
+              ['Limit', `${sig(eegInfo.rawLimitL).toExponential(1)} · ${eegInfo.method}`],
               ['Spread', `${eegInfo.sd.toFixed(2)} log-odds`],
-              ['Responsive', eegInfo.responsive == null ? '—' : eegInfo.responsive ? `yes (${eegInfo.sepSd?.toFixed(2)} spreads)` : 'no: provisional limit'],
+              ['Responsive', eegInfo.status == null ? '—' : `${eegStatusText(eegInfo)} (${eegInfo.sepSd?.toFixed(2)} spreads vs rest${eegInfo.reversalSd != null ? `, recovery back ${eegInfo.reversalSd.toFixed(2)}` : ''})${eegInfo.responsive ? '' : ' · provisional limit'}`],
               ['Calibrated', at(eegThr?.updated_at || eegCal?.updated_at)],
             ]} />
           )}
@@ -241,7 +242,7 @@ function BreakdownPanel({ windows }) {
 }
 
 // ── 3. timelines ──────────────────────────────────────────────────
-function TimelinePanel({ windows }) {
+function TimelinePanel({ windows, stimBands = [] }) {
   const points = useMemo(() => windows.map((w) => {
     const b = breakdown(w);
     return {
@@ -271,17 +272,17 @@ function TimelinePanel({ windows }) {
     <Card title="Over the session" subtitle={`One point per ${WINDOW_SEC}s fusion window`}>
       <h3>On one shared scale (each model&apos;s own limit = 0.5)</h3>
       <MultiLineChart points={points} height={240} yDomain={[0, 1]} xFormat={clockMs} yFormat={(v) => v.toFixed(2)}
-        ariaLabel="Aligned mind, body and fused values per window"
+        bands={stimBands} ariaLabel="Aligned mind, body and fused values per window"
         refLines={[{ y: 0.5, label: 'limit 0.5' }]}
         series={[
           { key: 'eeg', label: 'Mind (EEG)', color: 'var(--c1)' },
           { key: 'hrv', label: 'Body (HRV + GSR)', color: 'var(--c2)' },
           { key: 'fused', label: 'Fused', color: 'var(--ink)', width: 2.5 },
         ]} />
-      <p className="caption">Gaps are windows where that input didn&apos;t report. Mind values for older windows without a stored aligned value are recomputed with the current rule.</p>
+      <p className="caption">{stimBands.length ? 'Orange bands: the live stimulator\'s high-load periods (simulated demand on). ' : ''}Gaps are windows where that input didn&apos;t report. Mind values for older windows without a stored aligned value are recomputed with the current rule.</p>
 
       <h3 className="section-title">Weight share</h3>
-      <MultiLineChart points={points} height={170} yDomain={[0, 1]} xFormat={clockMs} yFormat={(v) => pct(v)}
+      <MultiLineChart points={points} height={170} yDomain={[0, 1]} xFormat={clockMs} yFormat={(v) => pct(v)} bands={stimBands}
         ariaLabel="Weight share per window"
         series={[
           { key: 'weeg', label: 'Mind weight', color: 'var(--c1)' },
@@ -436,6 +437,7 @@ export default function FusionView({ picker, data, now, onBack }) {
   const { cal: eegCal, thr: eegThr } = pickEeg(eeg, history, sid);
   const eegInfo = eegLimitInfo(eegCal, eegThr);
   const ringInfo = ringLimitInfo(ring);
+  const stim = useStimulator(now, sid);
   return (
     <div className="page">
       <header className="top">
@@ -457,7 +459,7 @@ export default function FusionView({ picker, data, now, onBack }) {
       <CurrentPanel windows={data.windows} baseline={data.baseline} now={now} />
       <LimitsPanel eegInfo={eegInfo} eegCal={eegCal} eegThr={eegThr} ringInfo={ringInfo} ring={ring} latest={latest} now={now} />
       <BreakdownPanel windows={data.windows} />
-      <TimelinePanel windows={data.windows} />
+      <TimelinePanel windows={data.windows} stimBands={stim.bands} />
       <SummaryPanel data={data} now={now} />
       <WindowLog windows={data.windows} />
       <FusionSourcesPanel picker={picker} latest={latest} />
