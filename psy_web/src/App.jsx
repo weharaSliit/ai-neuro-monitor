@@ -5,6 +5,7 @@ import TechView from './components/TechView';
 import FusionView from './components/FusionView';
 import PhysioView from './components/PhysioView';
 import CalibrationDashboard from './components/CalibrationDashboard';
+import StimulatorBanner from './components/StimulatorBanner';
 import { useFusionData, useFusionPicker } from './hooks/useFusion';
 import {
   Breathing, CalibrateScreen, HomeScreen, NavBar, ProfileScreen, ProgressScreen, TABS, WavesScreen, Welcome,
@@ -56,19 +57,26 @@ export default function App() {
   };
   const closeBreathing = useCallback(() => setBreathing(false), []);
 
+  // Live stimulator controls live on the Calibration page (#stimulator).
+  const openStimulator = () => {
+    go('calibration');
+    setTimeout(() => document.getElementById('stimulator')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+  };
+  const banner = <StimulatorBanner now={now} openControls={openStimulator} />;
   if (view === 'tech') {
-    return <TechView raw={raw} health={health} picker={picker} sessionData={sessionData} profile={profile} now={now}
-      onBack={() => go('profile')} openFusion={() => go('fusion')} openPhysio={() => go('physio')} openCalibration={() => go('calibration')} />;
+    return <>{banner}<TechView raw={raw} health={health} picker={picker} sessionData={sessionData} profile={profile} now={now}
+      onBack={() => go('profile')} openFusion={() => go('fusion')} openPhysio={() => go('physio')} openCalibration={() => go('calibration')}
+      openStimulator={openStimulator} /></>;
   }
   if (view === 'fusion') {
-    return <FusionView picker={fusionPicker} data={fusionData} now={now} onBack={() => go('tech')} />;
+    return <>{banner}<FusionView picker={fusionPicker} data={fusionData} now={now} onBack={() => go('tech')} /></>;
   }
   if (view === 'calibration') {
-    return <CalibrationDashboard now={now} onBack={() => go('tech')} />;
+    return <>{banner}<CalibrationDashboard now={now} onBack={() => go('tech')} /></>;
   }
   if (view === 'physio') {
     // Mounted only here, so the ring's MQTT/Firebase subscriptions run only while it's open.
-    return <PhysioView now={now} onBack={() => go('tech')} openFusion={() => go('fusion')} />;
+    return <>{banner}<PhysioView now={now} onBack={() => go('tech')} openFusion={() => go('fusion')} /></>;
   }
 
   const shared = { raw, now, sessionData, profile, picker };

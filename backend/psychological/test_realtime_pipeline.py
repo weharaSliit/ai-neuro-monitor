@@ -490,6 +490,41 @@ def main() -> bool:
     except Exception as e:
         check("Amplitude gain checks raised no exception", False, repr(e))
 
+    # 15. Direction-aware ABA calibration (sam40/decision.py
+    # midpoint_threshold_logit()) and score orientation (pipeline.py).
+    print("\n[15] Direction-aware ABA calibration")
+    try:
+        from backend.psychological.sam40.decision import inv_logit, logit, midpoint_threshold_logit
+        P = lambda xs: [inv_logit(x) for x in xs]
+        rest = P([-4.0, -4.5, -3.5, -4.2, -3.8, -4.1, -3.9, -4.3])          # sd ~0.33 -> floored 0.55
+        fall = P([-4.0] * 5 + [-6.0] * 10)                                   # falls 2 log-odds (~3.6 spreads)
+        rise = P([-4.0] * 5 + [-2.0] * 10)
+        m = midpoint_threshold_logit(rest, fall, recovery_scores=P([-4.1, -3.9, -4.0]))
+        check("a reversible FALL is responsive with direction -1",
+              m["responsive"] and m["direction"] == -1 and m["status"] == "ok", str({k: m[k] for k in ("status", "direction")}))
+        m = midpoint_threshold_logit(rest, rise, recovery_scores=P([-2.1, -1.9, -2.0]))
+        check("a rise that never comes back is 'drift_suspected', not responsive",
+              not m["responsive"] and m["status"] == "drift_suspected", m["status"])
+        m = midpoint_threshold_logit(rest, rise, recovery_scores=P([-3.9, -4.0, -4.1]))
+        check("a reversible RISE is responsive with direction +1", m["responsive"] and m["direction"] == 1, m["status"])
+        m = midpoint_threshold_logit(rest, P([-4.0] * 15), recovery_scores=P([-4.0] * 3))
+        check("no change is 'not_separated'", m["status"] == "not_separated", m["status"])
+
+        e = RealtimeInference(MODEL_DIR)
+        e.personal_scale, e.mu_rest_logit, e.sigma = "logit", -4.0, 0.55
+        e.direction = -1
+        low, high = inv_logit(-6.0), inv_logit(-2.0)
+        check("direction -1: a score BELOW rest is oriented above it (more load)",
+              e.oriented_score(low) > inv_logit(-4.0) > e.oriented_score(high)
+              and abs(logit(e.oriented_score(low)) - (-2.0)) < 1e-6,
+              f"{e.oriented_score(low):.3g} / {e.oriented_score(high):.3g}")
+        check("direction -1: personal z is positive when the score falls", e.personal_z(low) > 0 > e.personal_z(high),
+              f"{e.personal_z(low):.2f} / {e.personal_z(high):.2f}")
+        e.direction = 1
+        check("direction +1: scores are left as they are", e.oriented_score(low) == low)
+    except Exception as e:
+        check("Direction-aware checks raised no exception", False, repr(e))
+
     print("\n" + "=" * 60)
     print("ALL CHECKS PASSED" if all_passed else "SOME CHECKS FAILED")
     print("=" * 60)

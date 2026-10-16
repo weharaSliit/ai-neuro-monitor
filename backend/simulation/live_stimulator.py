@@ -1,0 +1,457 @@
+"""
+Live stimulator: a virtual person wearing the EEG headband (wearable02) and
+the HRV/GSR ring (wearable01), streaming over MQTT exactly like the real
+devices, so the REAL pipeline handles it end to end -- the Render bridges,
+the EEG and ring APIs, the fusion engine, Firebase, psy_web and StressApp.
+Nothing downstream knows it isn't a person.
+
+  EEG   mindpulse/wearable02/eeg       "millis,code;millis,code;..." batches, 250 SPS,
+                                       T7-T8 bipolar ADC codes (adc.microvolts_to_bipolar_code)
+  Ring  mindpulse/wearable01/sensors   JSON every 200 ms: ibi (beats that ended in this
+                                       packet, ms), gsr (Grove ADC), acc_x/y/z (m/s^2), ir, finger
+
+Users are NOT changed: the stimulator streams for whoever is logged in with
+the devices (the app's device pointer), and only while someone has started
+it -- otherwise the real headband and ring readings are used, as always. It
+never logs anyone in, never writes the pointer, never ends a session; it
+follows the logged-in session if the app rotates it, and stops by itself if
+the user logs out.
+
+What it does when started (from psy_web's Stimulator panel or --autostart):
+  1. (optional, on by default) asks both devices to recalibrate for the logged-in
+     user (eeg_recalibration/{sid}, ring_recalibration/{uid}) -- psy_web's Recalibrate
+  2. follows the protocol the bridges report: rests through settle/rest, does the task
+     (cognitive demand rises), relaxes in recovery (demand drops)
+  3. then live monitoring on a loop: calm 4 -> demand 4 -> calm 4 -> demand 4 -> calm 5 min
+
+The body is simulated, not scripted: demand drives physiological states with
+their own time constants (EEG ~20 s, heart ~15 s, skin conductance rises over
+~40 s and decays over ~2 min), on top of natural variability -- breathing-linked
+heart-rate oscillation (RSA, 0.25 Hz), slower 0.1 Hz waves, alpha waxing and
+waning, slowly wandering rhythms, eye blinks, jaw/temporal muscle bursts while
+tapping during the task, spontaneous skin-conductance responses, tiny movements.
+
+Profiles (simkit/profiles.py -- the same virtual users as the offline study):
+  typical, eeg_strong_ring_weak, eeg_weak_ring_strong, ring_missing, inverted,
+  noisy (artifacts, dropouts), drowsy, drift. Signals: real SAM40 T7-T8 EEG +
+  a headband layer measured on real wearable02 blocks; ring beats / skin
+  conductance sized from real ring readings (see simkit/__init__.py).
+
+Run on a laptop (keep it running; it idles until psy_web starts it):
+  venv/bin/python backend/simulation/live_stimulator.py
+  venv/bin/python backend/simulation/live_stimulator.py --autostart --profile typical
+Switch the real headband and ring OFF while it runs -- both publish on the same topics.
+"""
+import argparse
+import json
+import math
+import os
+import sys
+import threading
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+import numpy as np
+import paho.mqtt.client as mqtt
+import requests
+from scipy.signal import butter, sosfilt, sosfilt_zi
+
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from backend.common.config import GSR_CAL  # noqa: E402
+from backend.common.firebase_config import FIREBASE_DB_URL  # noqa: E402
+from backend.psychological.realtime.adc import microvolts_to_bipolar_code  # noqa: E402
+
+BROKER = os.environ.get("STIM_MQTT_BROKER", "ob1f0f10.ala.asia-southeast1.emqxsl.com")
+PORT = 8883
+CA_CERT = str(REPO / "iot_firmware" / "emqxsl-ca.crt")
+EEG_TOPIC, RING_TOPIC = "mindpulse/wearable02/eeg", "mindpulse/wearable01/sensors"
+EEG_AUTH = (os.environ.get("EEG_MQTT_USER", "wearable02"), os.environ.get("EEG_MQTT_PASSWORD", "wearable02"))
+RING_AUTH = (os.environ.get("RING_MQTT_USER", "wearable01"), os.environ.get("RING_MQTT_PASSWORD", "wearable01"))
+# Fixed client ids (one per simulated device), never per-run unique -- keeps
+# the EMQX client list clean.
+EEG_CLIENT_ID, RING_CLIENT_ID = "mindpulse_stimulator_eeg", "mindpulse_stimulator_ring"
+
+FS = 250                     # headband sampling rate (realtime/resample.py SOURCE_FS)
+EEG_BATCH = 50               # samples per MQTT message (~5 messages/s, like the firmware)
+RING_PERIOD = 0.2            # ring packet every 200 ms
+DB = FIREBASE_DB_URL.rstrip("/")
+PICKUP_TIMEOUT_SEC = 120         # a recalibration request nobody acts on is withdrawn after this
+LIVE_SCENARIO = [("calm", 240), ("demand", 240), ("calm", 240), ("demand", 240), ("calm", 300)]
+RNG = np.random.default_rng()
+
+
+# ── Firebase (REST; same open rules psy_web writes through) ─────────
+def fb_get(path):
+    try:
+        r = requests.get(f"{DB}/{path}.json", timeout=10)
+        return r.json() if r.ok else None
+    except requests.RequestException:
+        return None
+
+
+def fb_patch(path, value):
+    try:
+        requests.patch(f"{DB}/{path}.json", data=json.dumps(value), timeout=10)
+    except requests.RequestException as e:
+        print(f"[firebase] write failed: {e}")
+
+
+# ── The virtual person ──────────────────────────────────────────────
+class Person:
+    """Demand (0 = calm, 1 = full load) drives physiological states, each
+    following it with its own time constant."""
+
+    def __init__(self, profile):
+        self.profile = profile
+        self.demand = 0.0
+        self.eeg_load = 0.0
+        self.hr_load = 0.0
+        self.eda_load = 0.0
+        self.tapping = False
+        self.drift = 0.0                      # electrode-contact drift (profile 'drift')
+        self._t = time.time()
+        self.lock = threading.Lock()
+
+    def step(self, dt=None):
+        """Advance the body states; dt from the wall clock (live) or given
+        (offline runs on a simulated clock, e.g. export_session_excel.py)."""
+        with self.lock:
+            now = time.time()
+            if dt is None:
+                dt = min(1.0, now - self._t)
+            self._t = now
+            d = self.demand
+
+            def follow(x, tau):
+                return x + (d - x) * (1 - math.exp(-dt / tau))
+            self.eeg_load = follow(self.eeg_load, 20.0)
+            self.hr_load = follow(self.hr_load, 15.0)
+            self.eda_load = follow(self.eda_load, 40.0 if d > self.eda_load else 120.0)
+            if self.profile == "drift" and self.started_task:
+                self.drift = min(1.6, self.drift + dt / 600.0)   # creeps up over ~15 min, never returns
+
+    started_task = False
+
+
+# ── EEG: continuous T7-T8 signal with filter state carried across batches ─
+class EEGGenerator:
+    BANDS = {"theta": (4.0, 7.5), "alpha": (8.0, 12.5), "beta": (13.0, 30.0), "gamma": (30.0, 45.0)}
+    REST = {"theta": 4.0, "alpha": 12.0, "beta": 2.5, "gamma": 0.6, "pink": 6.0}   # uV RMS
+
+    def __init__(self, person):
+        self.p = person
+        self.sos = {k: butter(4, b, btype="bandpass", fs=FS, output="sos") for k, b in self.BANDS.items()}
+        self.zi = {k: sosfilt_zi(s) * 0 for k, s in self.sos.items()}
+        self.emg_sos = butter(4, (30.0, 90.0), btype="bandpass", fs=FS, output="sos")
+        self.emg_zi = sosfilt_zi(self.emg_sos) * 0
+        self.gain = {k: self._unit_gain(s) for k, s in self.sos.items()}
+        self.emg_gain = self._unit_gain(self.emg_sos)
+        self.pink_b = np.zeros(7)              # Paul Kellet's pink-noise filter state
+        self.pink_scale = 1.0 / 3.3
+        self.wander = {"theta": 0.0, "alpha": 0.0}     # slowly wandering rhythms (OU, tau 60 s)
+        self.t = 0.0
+        self.blink_left = 0
+        self.millis = int(time.time() * 1000) % 1_000_000_000
+
+    @staticmethod
+    def _unit_gain(sos):
+        x = sosfilt(sos, RNG.normal(size=FS * 60))
+        return 1.0 / x[FS * 2:].std()
+
+    def _pink(self, n):
+        out = np.empty(n)
+        b = self.pink_b
+        for i, w in enumerate(RNG.normal(size=n)):
+            b[0] = 0.99886 * b[0] + w * 0.0555179
+            b[1] = 0.99332 * b[1] + w * 0.0750759
+            b[2] = 0.96900 * b[2] + w * 0.1538520
+            b[3] = 0.86650 * b[3] + w * 0.3104856
+            b[4] = 0.55000 * b[4] + w * 0.5329522
+            b[5] = -0.7616 * b[5] - w * 0.0168980
+            out[i] = b[0] + b[1] + b[2] + b[3] + b[4] + b[5] + b[6] + w * 0.5362
+            b[6] = w * 0.115926
+        return out * self.pink_scale
+
+    def batch(self, n):
+        p = self.p
+        dt = n / FS
+        for k in self.wander:                  # OU process: tau 60 s, sd 0.12 uV
+            self.wander[k] += -self.wander[k] * dt / 60.0 + 0.12 * math.sqrt(2 * dt / 60.0) * RNG.normal()
+        load = p.eeg_load * {"typical": 1.0, "inverted": -1.0, "drift": 0.15}[p.profile]
+        theta = self.REST["theta"] + 0.55 * load + self.wander["theta"] + 0.5 * p.drift
+        alpha = self.REST["alpha"] - 1.1 * load + self.wander["alpha"] - 1.0 * p.drift
+        alpha *= 1.0 + 0.15 * math.sin(2 * math.pi * 0.08 * self.t)       # alpha waxing and waning
+        amps = {"theta": theta, "alpha": alpha, "beta": self.REST["beta"] + 0.3 * abs(load), "gamma": self.REST["gamma"]}
+        uv = self.REST["pink"] * self._pink(n)
+        for k, sos in self.sos.items():
+            y, self.zi[k] = sosfilt(sos, RNG.normal(size=n), zi=self.zi[k])
+            uv += amps[k] * self.gain[k] * y
+        # Muscle (jaw/temporal) bursts while tapping during the task -- what T7-T8 really picks up.
+        emg, self.emg_zi = sosfilt(self.emg_sos, RNG.normal(size=n), zi=self.emg_zi)
+        if p.tapping and RNG.random() < 0.25:
+            uv += 2.5 * self.emg_gain * emg
+        # Occasional eye blink (small at temporal sites): ~10 per minute, ~300 ms.
+        if self.blink_left == 0 and RNG.random() < 10 / 60 * dt:
+            self.blink_left = int(0.3 * FS)
+        if self.blink_left:
+            k = min(n, self.blink_left)
+            ph = np.linspace(0, math.pi, int(0.3 * FS))[-self.blink_left:][:k]
+            uv[:k] += 18.0 * np.sin(ph)
+            self.blink_left -= k
+        uv += 1.5 * RNG.normal(size=n)                       # amplifier / electrode noise
+        uv += 0.8 * np.sin(2 * math.pi * 50.0 * (self.t + np.arange(n) / FS))   # mains pickup (notched downstream)
+        self.t += dt
+        codes = microvolts_to_bipolar_code(uv)
+        stamps = self.millis + (np.arange(n) * 1000 // FS)
+        self.millis += n * 1000 // FS
+        return ";".join(f"{int(m)},{int(c)}" for m, c in zip(stamps, codes))
+
+
+# ── Ring: beats, skin conductance, movement ─────────────────────────
+class RingGenerator:
+    def __init__(self, person):
+        self.p = person
+        self.t = 0.0
+        self.next_beat = 0.8
+        self.scl_drift = 0.0
+        self.scrs = []                        # (onset_t, amplitude)
+        self.ir = 115000.0
+
+    def packet(self):
+        p = self.p
+        dt = RING_PERIOD
+        resp = {"typical": 1.0, "inverted": 1.0, "drift": 0.15}[p.profile]
+        hl, el = p.hr_load * resp, p.eda_load * resp
+        hr = 70.0 + 9.0 * hl
+        hrv = 45.0 - 12.0 * hl                 # ms, variability falls under load
+        beats = []
+        while self.next_beat <= self.t + dt:
+            ibi = (60000.0 / hr + hrv * 0.9 * math.sin(2 * math.pi * 0.25 * self.next_beat)   # RSA
+                   + hrv * 0.5 * math.sin(2 * math.pi * 0.1 * self.next_beat)               # 0.1 Hz wave
+                   + RNG.normal(0, hrv * 0.35))
+            ibi = float(np.clip(ibi, 350.0, 1500.0))
+            beats.append(round(ibi, 1))
+            self.next_beat += ibi / 1000.0
+        # Skin conductance: tonic level + spontaneous/demand-driven responses.
+        self.scl_drift += -self.scl_drift * dt / 300.0 + 0.004 * math.sqrt(dt) * RNG.normal()
+        scl = 3.0 + 0.8 * el + self.scl_drift
+        if RNG.random() < (1.0 + 3.0 * el) / 60.0 * dt:
+            self.scrs.append((self.t, scl * RNG.uniform(0.15, 0.45)))
+        g = scl
+        alive = []
+        for onset, amp in self.scrs:
+            s = self.t - onset
+            if s < 40:
+                g += amp * (1 - math.exp(-s / 1.0)) * math.exp(-s / 6.0)
+                alive.append((onset, amp))
+        self.scrs = alive
+        R = 1e6 / max(g, 0.05)
+        adc = (R * GSR_CAL - 10240000) / (R + 20000) + RNG.normal(0, 1.5)
+        move = 0.25 if p.tapping and RNG.random() < 0.3 else 0.04
+        ax, ay, az = RNG.normal(0, move, 3) + (0.0, 0.0, 9.81)
+        self.ir += -0.02 * (self.ir - 115000.0) + RNG.normal(0, 150)
+        self.t += dt
+        return {"device_id": "wearable01", "ibi": beats, "gsr": int(round(adc)), "acc_x": round(float(ax), 3),
+                "acc_y": round(float(ay), 3), "acc_z": round(float(az), 3), "ir": int(self.ir), "finger": True}
+
+
+# ── Stimulator: control, protocol following, streaming ──────────────
+class Stimulator:
+    def __init__(self, profile):
+        self.profile = profile
+        self.running = False
+        self.uid = self.sid = None
+        self.person = None
+        self.stage = "idle"
+        self.live_started = None
+        self.sent = {"eeg": 0, "ring": 0}
+        self.prev_pointer = None
+        self.threads = []
+        self.eeg_client = self._client(EEG_CLIENT_ID, EEG_AUTH)
+        self.ring_client = self._client(RING_CLIENT_ID, RING_AUTH)
+
+    @staticmethod
+    def _client(cid, auth):
+        c = mqtt.Client(client_id=cid, callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
+        c.tls_set(ca_certs=CA_CERT)
+        c.username_pw_set(*auth)
+        c.connect_async(BROKER, PORT, 60)
+        c.loop_start()
+        return c
+
+    # The LOGGED-IN user is used as is: the stimulator never logs anyone in,
+    # never writes the device pointer and never ends a session. Its data
+    # stand in for the real devices' readings only while the user has it
+    # started; otherwise the real headband and ring are what the system sees.
+    @staticmethod
+    def _pointer():
+        return fb_get("fusion_en_sessions/current_user_id"), fb_get("fusion_en_sessions/current_session_id")
+
+    def start(self, profile, recalibrate=True):
+        if self.running:
+            return "already running"
+        uid, sid = self._pointer()
+        if not uid or not sid:
+            return "no user is logged in with the devices -- log in on StressApp first"
+        self.profile, self.uid, self.sid = profile, uid, sid
+        from simkit.profiles import PROFILES
+        if recalibrate:
+            # Same request psy_web's Recalibrate button writes, for this user's session.
+            now = time.time()
+            fb_patch(f"eeg_recalibration/{sid}", {"status": "requested", "source": "stimulator", "user_id": uid,
+                                                  "requested_at": now, "include_threshold": True, "task_blocks": 19})
+            if PROFILES[profile].ring_present:
+                fb_patch(f"ring_recalibration/{uid}", {"status": "requested", "source": "stimulator", "requested_at": now,
+                                                       "include_threshold": True, "task_windows": 8, "live": None,
+                                                       "result": None, "error": None})
+        # The realistic virtual user (simkit): SAM40-based EEG + headband layer, IPFM ring,
+        # latent load with per-user time constants -- the same generator as the offline study.
+        from simkit.session import VirtualUser
+        self.vu = VirtualUser(profile, seed=int(time.time()) % 100000)
+        self.demand, self.phase = 0.0, "settle" if recalibrate else "calm"
+        self.started_at, self.stage_since = time.time(), time.time()
+        self.warnings = {}
+        self.running = True
+        self.live_started = None
+        self.sent = {"eeg": 0, "ring": 0}
+        self.threads = [threading.Thread(target=f, daemon=True) for f in (self._stream_loop, self._mind_loop)]
+        for t in self.threads:
+            t.start()
+        print(f"[stimulator] started for logged-in {uid} / {sid}, profile {profile}, recalibrate {recalibrate}")
+        return "started"
+
+    def stop(self, reason="stopped"):
+        if not self.running:
+            return
+        self.running = False
+        for t in self.threads:
+            if t is not threading.current_thread():
+                t.join(timeout=3)
+        self.stage = "idle"
+        fb_patch("stimulator/status", {"running": False, "stage": "idle", "last_message": reason, "ts": time.time()})
+        print(f"[stimulator] {reason} -- the real devices' readings apply again (user unchanged)")
+
+    # What the person is doing: follow the calibration protocol, then the live scenario.
+    def _mind_loop(self):
+        while self.running:
+            uid, sid = self._pointer()
+            if not uid:
+                self.stop("stopped: the user logged out")
+                return
+            if (uid, sid) != (self.uid, self.sid):        # the app opened a new session for the same / another user
+                print(f"[stimulator] following the logged-in session: {uid} / {sid}")
+                self.uid, self.sid = uid, sid
+            eeg = fb_get(f"eeg_recalibration/{self.sid}") or {}
+            ring = fb_get(f"ring_recalibration/{self.uid}") or {} if self.vu.ring else {}
+            # A request no service picks up (e.g. the ring API on Render without the
+            # recalibration poller) must not hold the whole run in "settle": after
+            # PICKUP_TIMEOUT_SEC it is withdrawn (it's the stimulator's own request) and
+            # reported, and the run continues with the device that did calibrate.
+            for name, r, path in (("EEG", eeg, f"eeg_recalibration/{self.sid}"), ("ring", ring, f"ring_recalibration/{self.uid}")):
+                if (r.get("status") == "requested" and r.get("source") == "stimulator"
+                        and time.time() - (r.get("requested_at") or time.time()) > PICKUP_TIMEOUT_SEC):
+                    why = (f"the {name} service didn't pick up the recalibration request within "
+                           f"{PICKUP_TIMEOUT_SEC // 60} min -- is the {'ring API' if name == 'ring' else 'EEG bridge'} on Render redeployed?")
+                    fb_patch(path, {"status": "failed", "error": why})
+                    r["status"] = "failed"
+                    self.warnings[name] = why
+                    print(f"[stimulator] {why}")
+            active = [r for r in (eeg, ring) if r.get("status") in ("requested", "capturing", "saving")]
+            phases = {r.get("phase") for r in active}
+            if active:
+                phase = "task" if "task" in phases else "recovery" if "recovery" in phases else (
+                    "rest" if "rest" in phases else "settle")
+                stage, demand = phase, 1.0 if phase == "task" else 0.0
+            else:
+                if self.live_started is None:
+                    self.live_started = time.time()
+                    print("[stimulator] calibration finished -- live monitoring scenario")
+                t = (time.time() - self.live_started) % sum(d for _, d in LIVE_SCENARIO)
+                for name, dur in LIVE_SCENARIO:
+                    if t < dur:
+                        break
+                    t -= dur
+                phase, stage, demand = name, f"live: {name}", 1.0 if name == "demand" else 0.0
+            self.phase, self.demand = phase, demand
+            now = time.time()
+            if stage != self.stage:
+                print(f"[stimulator] {self.stage} -> {stage}")
+                self.stage_since = now
+            self.stage = stage
+            lo = self.vu.latent.loads
+            ring = self.vu.ring
+            hr = round(float(getattr(ring, "now_hr", 0)), 1) if ring else None
+            scl = round(float(getattr(ring, "now_scl", 0)), 3) if ring else None
+            # Demand timeline for the dashboards' shaded bands (own node only; every ~10 s and on change).
+            if now - getattr(self, "last_tl", 0) >= 10 or stage != getattr(self, "last_tl_stage", None):
+                self.last_tl, self.last_tl_stage = now, stage
+                fb_patch(f"stimulator/timeline/{self.sid}/{int(now)}", {
+                    "phase": phase, "demand": demand, "brain": round(lo["brain"], 3), "heart": round(lo["heart"], 3),
+                    "skin": round(lo["skin"], 3), "hr": hr, "scl": scl, "calibration": bool(active)})
+            fb_patch("stimulator/status", {
+                "online": True, "running": True, "ts": time.time(), "uid": self.uid, "sid": self.sid,
+                "profile": self.profile, "stage": stage, "phase": phase, "demand": demand,
+                "stage_since": getattr(self, "stage_since", now), "calibrating": bool(active),
+                "hr_bpm": hr, "scl_us": scl, "started_at": self.started_at, "warnings": dict(self.warnings) or None,
+                "eeg_load": round(lo["brain"], 3), "hr_load": round(lo["heart"], 3), "eda_load": round(lo["skin"], 3),
+                "eeg_subject": self.vu.params.eeg["subject"], "eeg_samples": self.sent["eeg"], "ring_packets": self.sent["ring"],
+                "mqtt": {"eeg": self.eeg_client.is_connected(), "ring": self.ring_client.is_connected()}})
+            time.sleep(3)
+
+    # One 0.2 s step of the virtual user per tick: 50 EEG samples + one ring packet.
+    def _stream_loop(self):
+        base_ms = int(time.time() * 1000) % 1_000_000_000
+        nxt = time.time()
+        while self.running:
+            st = self.vu.step(self.demand, self.phase)
+            keep = st["keep"]
+            if keep.any():          # a dropout leaves a real gap in the device clock, as the firmware would
+                codes = microvolts_to_bipolar_code(st["uv"][keep])
+                ms = base_ms + st["millis"][keep]
+                self.eeg_client.publish(EEG_TOPIC, ";".join(f"{int(m)},{int(c)}" for m, c in zip(ms, codes)), qos=0)
+                self.sent["eeg"] += int(keep.sum())
+            if st["packet"] is not None:
+                self.ring_client.publish(RING_TOPIC, json.dumps(st["packet"]), qos=0)
+                self.sent["ring"] += 1
+            nxt += RING_PERIOD
+            time.sleep(max(0.0, nxt - time.time()))
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    from simkit.profiles import PROFILES
+    ap.add_argument("--profile", default="typical", choices=list(PROFILES))
+    ap.add_argument("--autostart", action="store_true", help="start now instead of waiting for psy_web")
+    ap.add_argument("--no-recalibrate", action="store_true", help="stream only; keep the user's current thresholds")
+    args = ap.parse_args()
+    stim = Stimulator(args.profile)
+    if args.autostart:
+        print(stim.start(args.profile, recalibrate=not args.no_recalibrate))
+    print("[stimulator] ready -- start/stop it from psy_web (Calibration, scores & alerts -> Stimulator), Ctrl+C to quit")
+    last_nonce = (fb_get("stimulator/control") or {}).get("nonce")
+    try:
+        while True:
+            ctl = fb_get("stimulator/control") or {}
+            if ctl.get("nonce") and ctl.get("nonce") != last_nonce:
+                last_nonce = ctl["nonce"]
+                if ctl.get("command") == "start":
+                    msg = stim.start(ctl.get("profile") or "typical", recalibrate=ctl.get("recalibrate", True) is not False)
+                    fb_patch("stimulator/status", {"last_message": msg, "ts": time.time()})
+                elif ctl.get("command") == "stop":
+                    stim.stop()
+                    fb_patch("stimulator/status", {"last_message": "stopped", "running": False, "stage": "idle", "ts": time.time()})
+            if not stim.running:
+                fb_patch("stimulator/status", {"online": True, "running": False, "stage": "idle", "ts": time.time(),
+                                               "mqtt": {"eeg": stim.eeg_client.is_connected(), "ring": stim.ring_client.is_connected()}})
+            time.sleep(3)
+    except KeyboardInterrupt:
+        stim.stop()
+        fb_patch("stimulator/status", {"online": False, "running": False, "stage": "idle", "ts": time.time()})
+
+
+if __name__ == "__main__":
+    main()

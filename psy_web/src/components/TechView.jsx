@@ -5,7 +5,7 @@ import {
 import ValidationPanel from './ValidationPanel';
 
 // The researcher view: raw signal, every feature, model internals.
-export default function TechView({ raw, health, picker, sessionData, profile, now, onBack, openFusion, openPhysio, openCalibration }) {
+export default function TechView({ raw, health, picker, sessionData, profile, now, onBack, openFusion, openPhysio, openCalibration, openStimulator }) {
   return (
     <div className="page">
       <header className="top">
@@ -15,6 +15,7 @@ export default function TechView({ raw, health, picker, sessionData, profile, no
             <button type="button" className="back-link" onClick={openPhysio}>Wearable 01 HRV + GSR monitor →</button>
             <button type="button" className="back-link" onClick={openFusion}>Fusion engine monitor →</button>
             <button type="button" className="back-link" onClick={openCalibration}>Calibration, scores &amp; alerts →</button>
+            {openStimulator && <button type="button" className="back-link" onClick={openStimulator}>Live stimulator →</button>}
           </div>
           <p className="eyebrow">MindPulse · psychological component · technical view</p>
           <h1>Wearable 02 EEG monitor</h1>

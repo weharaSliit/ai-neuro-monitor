@@ -31,7 +31,7 @@ export const TASK_SKIP_RING = 2;  // windows (2 min) -- physiological/predictor.
 // A calibration made by the new backend carries its own values (src 'backend');
 // for older ones the same method is computed here from the stored scores
 // (src 'computed' -- redeploy so the live system uses it too).
-export const newBackend = (cal, thr) => Boolean(thr?.threshold_method || cal?.sigma_source);
+export const newBackend = (cal, thr) => Boolean(thr ? thr.calibration_status : cal?.sigma_source);
 
 export function restLevel(cal) {          // baseline, log-odds
   if (!cal) return null;
@@ -46,30 +46,69 @@ export function restSigma(cal) {          // spread, log-odds: own rest SD (>= 5
   const L = (cal?.rest_scores || []).map(num).filter(plausible).map(lgt);
   return L.length < 5 ? SIGMA_LOGIT : Math.max(SIGMA_LOGIT, sdOf(L));
 }
+// Direction-aware ABA rule (sam40/decision.py midpoint_threshold_logit()):
+// the task may move this person's score UP or DOWN from rest; responsive if
+// |task - rest| >= 1 spread AND recovery comes back towards rest by >= 0.5
+// spread (otherwise 'drift_suspected'). For a person whose score falls
+// (dir -1) everything is mirrored around their resting level, so on the
+// returned ORIENTED scale higher = more load and limitL >= level always.
+// rawLimitL / rawTaskL are the model's own values, for display.
+export const MIN_RECOVERY_REVERSAL_SD = 0.5;
 export function eegLimitInfo(cal, thr) {
   const level = restLevel(cal); const sd = restSigma(cal);
   if (level == null) return null;
-  const provisional = { level, sd, limitL: level + K_ALERT * sd, taskL: null, responsive: null,
-    method: 'provisional · rest + 0.84 spread', src: newBackend(cal, thr) ? 'backend' : 'computed' };
-  if (thr?.threshold_method) {
-    const ok = thr.responsive && num(thr.limit_logit) != null;
-    return { ...provisional, limitL: ok ? num(thr.limit_logit) : provisional.limitL, taskL: num(thr.task_level_logit),
-      responsive: thr.responsive, sepSd: num(thr.separation_sd), used: thr.n_task_used, skipped: thr.n_task_skipped,
-      method: ok ? 'midpoint of rest and task' : provisional.method, src: 'backend' };
+  const provisional = { level, sd, dir: 1, limitL: level + K_ALERT * sd, rawLimitL: level + K_ALERT * sd, taskL: null, rawTaskL: null,
+    responsive: null, status: null, method: 'provisional · rest + 0.84 spread', src: newBackend(cal, thr) ? 'backend' : 'computed' };
+  const finish = (o) => {
+    const dir = o.responsive ? o.dir : 1;
+    const orient = (L) => (L == null ? null : level + dir * (L - level));
+    return { ...o, dir, taskL: orient(o.rawTaskL), limitL: o.responsive ? orient(o.rawLimitL) : provisional.limitL,
+      rawLimitL: o.responsive ? o.rawLimitL : provisional.limitL,
+      method: o.responsive ? `midpoint of rest and task${dir < 0 ? ' · score falls under load' : ''}` : provisional.method };
+  };
+  // Only a direction-aware backend (calibration_status) is taken as-is; older
+  // results are recomputed here with the current rule.
+  if (thr?.calibration_status) {
+    const dir = num(thr.personal_direction) === -1 ? -1 : 1;
+    return finish({ ...provisional, dir, rawTaskL: num(thr.task_level_logit), rawLimitL: num(thr.limit_logit),
+      responsive: Boolean(thr.responsive && num(thr.limit_logit) != null), sepSd: num(thr.separation_sd),
+      reversalSd: num(thr.reversal_sd), aba: thr.aba_confirmed ?? null,
+      status: thr.calibration_status || (thr.responsive ? 'ok' : 'not_separated'),
+      used: thr.n_task_used, skipped: thr.n_task_skipped, src: 'backend' });
   }
   const task = (thr?.task_scores || []).map(num).filter(plausible);
   if (!task.length) return provisional;
   const k = Math.min(TASK_SKIP_EEG, Math.floor(task.length / 2));
   const taskL = mean(task.slice(k).map(lgt));
-  const responsive = taskL > level && taskL - level >= sd;
-  return { ...provisional, taskL, responsive, sepSd: (taskL - level) / sd, used: task.length - k, skipped: k,
-    limitL: responsive ? (level + taskL) / 2 : provisional.limitL,
-    method: responsive ? 'midpoint of rest and task' : provisional.method, src: 'computed' };
+  const dir = taskL >= level ? 1 : -1;
+  const sepSd = (taskL - level) / sd;
+  const rec = (thr?.recovery_scores || []).map(num).filter(plausible).map(lgt);
+  const reversalSd = rec.length ? (dir * (taskL - median(rec))) / sd : null;
+  const aba = reversalSd == null ? null : reversalSd >= MIN_RECOVERY_REVERSAL_SD;
+  const separated = Math.abs(sepSd) >= 1;
+  const responsive = separated && aba !== false;
+  return finish({ ...provisional, dir, rawTaskL: taskL, rawLimitL: (level + taskL) / 2, responsive, sepSd, reversalSd, aba,
+    status: responsive ? 'ok' : separated ? 'drift_suspected' : 'not_separated', used: task.length - k, skipped: k, src: 'computed' });
 }
+// Log-odds of a score on the ORIENTED scale. Stored calibration scores are
+// raw; live block scores from the new backend are already oriented (they
+// carry personal_direction) -- pass oriented=true for those.
+export const eegL = (p, info, oriented = false) => {
+  if (info == null || !plausible(p)) return null;
+  const L = lgt(p);
+  return oriented ? L : info.level + info.dir * (L - info.level);
+};
 // EEG score -> distance from the limit in spreads -> fusion scale (limit = 0.5).
-export const eegD = (p, info) => (info == null || !plausible(p) ? null : (lgt(p) - info.limitL) / info.sd);
+export const eegD = (p, info, oriented = false) => { const L = eegL(p, info, oriented); return L == null ? null : (L - info.limitL) / info.sd; };
 export const dShow = (d) => (d == null ? null : sig(clampD(d)));
-export const eegAligned = (p, info) => dShow(eegD(p, info));
+export const eegAligned = (p, info, oriented = false) => dShow(eegD(p, info, oriented));
+// A live block record: its score is already oriented if the backend wrote personal_direction.
+export const blockAligned = (b, info) => eegAligned(b?.task_state_score, info, b?.personal_direction != null);
+// Plain-language calibration outcome.
+export const eegStatusText = (info) => (!info || info.status == null ? null
+  : info.status === 'ok' ? (info.dir < 0 ? 'responsive · score falls under load' : 'responsive')
+    : info.status === 'drift_suspected' ? 'drift suspected: recovery did not come back'
+      : 'not separated from rest');
 
 export function ringLimitInfo(ring) {
   const t = ring.thresholds;
@@ -80,14 +119,20 @@ export function ringLimitInfo(ring) {
   if (t?.task_result?.method) {
     const personal = num(t.personal_stress_threshold);
     return { base: num(t.task_result.baseline) ?? base, taskLevel: num(t.task_result.task_level), limit: personal ?? population,
-      personal: personal != null, needed: num(t.task_result.needed_separation), src: 'backend', ran: true };
+      personal: personal != null, needed: num(t.task_result.needed_separation), aba: t.task_result.aba_confirmed ?? null,
+      status: t.task_result.status, src: 'backend', ran: true };
   }
   if (task.length && base != null) {
     const k = Math.min(TASK_SKIP_RING, Math.floor(task.length / 2));
     const taskLevel = mean(task.slice(k));
     const needed = Math.max(sdOf(rest), PERSONAL_THRESHOLD_MIN_SEPARATION);
-    const ok = taskLevel - base >= needed;
-    return { base, taskLevel, limit: ok ? (base + taskLevel) / 2 : population, personal: ok, needed, src: 'computed', ran: true };
+    const separated = taskLevel - base >= needed;
+    // ABA check (predictor.py MIN_RECOVERY_REVERSAL): recovery must come back down.
+    const rec = (t?.task_result?.recovery_scores || []).map(num).filter((v) => v != null);
+    const aba = rec.length ? taskLevel - median(rec) >= 0.5 * needed : null;
+    const ok = separated && aba !== false;
+    return { base, taskLevel, limit: ok ? (base + taskLevel) / 2 : population, personal: ok, needed, aba,
+      status: ok ? 'ok' : separated ? 'drift_suspected' : 'not_separated', src: 'computed', ran: true };
   }
   return { base, taskLevel: null, limit: num(t?.personal_stress_threshold) ?? population, personal: num(t?.personal_stress_threshold) != null,
     needed: null, src: 'backend', ran: false };

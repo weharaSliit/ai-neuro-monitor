@@ -153,14 +153,23 @@ def make_eeg_output_record(result: dict, window_sec: float, model_version: str,
             # Where this session's high-load limit sits on the z scale (0.84
             # until the task calibrates the midpoint limit).
             'personal_z_alert': result.get('personal_z_alert'),
-            'personal_z_alert': result.get('personal_z_alert'),
+            'personal_direction': result.get('personal_direction'),
             'eeg_responsive': result.get('eeg_responsive'),
         })
     else:
         p = result.get('calibrated_p')
         confidence = abs(p - 0.5) * 2 if p is not None else None
         record.update({
+            # ORIENTED to this person's load direction (pipeline.py
+            # oriented_score()): higher = more load for everyone. The model's
+            # own output is raw_task_state_score.
             'task_state_score': p,
+            'raw_task_state_score': result.get('raw_task_state_score'),
+            'personal_direction': result.get('personal_direction'),
+            # Where this session's limit sits on the z scale -- fusion's
+            # z_alert_eeg (was only written for skipped blocks, so fusion
+            # fell back to 0.84 for every trusted block).
+            'personal_z_alert': result.get('personal_z_alert'),
             # Personal Scale (sam40/decision.py): distance above this
             # session's own rest, in units of resting noise. The alert is
             # z >= PERSONAL_K_ALERT, i.e. task_state_score >= effective_high_load_p.
