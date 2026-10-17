@@ -153,12 +153,21 @@ PERSONAL_THRESHOLD_MIN_SEPARATION = 0.10
 TASK_RAMP_SKIP_WINDOWS = 2
 
 
-# ABA drift check, same rule as EEG (sam40/decision.py
-# MIN_RECOVERY_REVERSAL_SD): recovery must come back down from the task
-# level by at least half the separation needed, or the rise is treated as
+# ABA drift check (the idea of EEG's sam40/decision.py MIN_RECOVERY_REVERSAL_SD):
+# recovery must come back down from the task level, or the rise is treated as
 # slow drift (sweat build-up on the GSR electrodes, fatigue), not the task.
 # Upward only here: prob_stress is autonomic arousal, which rises under load.
-MIN_RECOVERY_REVERSAL = 0.5
+#
+# Tuned for the ring, not copied from EEG. Skin conductance takes minutes to
+# come back down while the recovery rest is only N_RECOVERY_WIN (3) minutes,
+# and prob_stress saturates near 1 under a strong response, so the MEDIAN of
+# the recovery windows barely moves and wrongly flagged most genuine limits as
+# drift (simulated strong responders: 22 of 30 rejected). The rule now asks
+# whether the BEST (lowest) recovery window came back down by a full
+# 'needed_separation'. A drifting sensor never comes back down, so it is still
+# caught (simulated pure drift: 29 of 30 rejected, same as before) while
+# genuine responders are accepted (strong 8 -> 18 of 30, typical 17 -> 20).
+MIN_RECOVERY_REVERSAL = 1.0
 
 
 def midpoint_stress_threshold(resting_scores, task_scores, skip=TASK_RAMP_SKIP_WINDOWS, recovery_scores=None):
@@ -175,7 +184,7 @@ def midpoint_stress_threshold(resting_scores, task_scores, skip=TASK_RAMP_SKIP_W
     needed = max(rest_sd, PERSONAL_THRESHOLD_MIN_SEPARATION)
     separated = bool(task_level - baseline >= needed)
     rec = [float(r) for r in (recovery_scores or []) if r is not None]
-    recovery_level = float(np.median(rec)) if rec else None
+    recovery_level = float(np.min(rec)) if rec else None      # best recovery window, see MIN_RECOVERY_REVERSAL
     reversal = None if recovery_level is None else task_level - recovery_level
     aba = None if reversal is None else bool(reversal >= MIN_RECOVERY_REVERSAL * needed)
     personal = separated and aba is not False

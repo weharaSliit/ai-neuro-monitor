@@ -100,6 +100,20 @@ DEFAULT_SCENARIO = "four_state"  # simkit.session FOUR_STATE: relaxed, mental lo
 # gradual rise, demand, calm, moderate-load plateau, calm -- for the early warning).
 RNG = np.random.default_rng()
 
+# Safety: the stimulator calibrates the account that is logged in with the devices
+# (it writes that account's ring baseline + limits and asks the headband to
+# recalibrate), and everything it streams is stored under that account. On a REAL
+# account that would silently replace the person's own calibration and mix simulated
+# readings into their history. So it only runs for test accounts (ids starting "sim_" --
+# the offline study / real_iot_ranges.py convention -- or "mp_", the accounts the team
+# already uses for simulation runs), unless explicitly allowed.
+SIM_USER_PREFIXES = tuple(p.strip() for p in os.environ.get("STIM_TEST_PREFIXES", "sim_,mp_").split(",") if p.strip())
+ALLOW_REAL_USER = os.environ.get("STIM_ALLOW_REAL_USER") == "1"
+
+
+def is_test_account(uid):
+    return bool(uid) and uid.startswith(SIM_USER_PREFIXES)
+
 
 # ── Firebase (REST; same open rules psy_web writes through) ─────────
 def fb_get(path):
@@ -324,6 +338,13 @@ class Stimulator:
         from simkit.profiles import ALL_PROFILES as PROFILES
         if profile not in PROFILES:
             return f"unknown profile '{profile}'"
+        if not is_test_account(uid) and not ALLOW_REAL_USER:
+            return (f"not started: '{uid}' is a real account. The simulation would replace its ring baseline, limits and EEG "
+                    f"calibration and add simulated readings to its history. Log in as a test account (id starting with "
+                    f"{' or '.join(repr(p) for p in SIM_USER_PREFIXES)}, e.g. sim_demo), or set STIM_ALLOW_REAL_USER=1 to run on "
+                    f"this account anyway (its current calibration is then backed up to stimulator/backups/{uid}).")
+        if not is_test_account(uid):
+            self._backup_calibration(uid)
         self.profile, self.uid, self.sid = profile, uid, sid
         self.recalibrate, self.eeg_retries = recalibrate, 0
         if recalibrate:
@@ -359,10 +380,31 @@ class Stimulator:
         print(f"[stimulator] started for logged-in {uid} / {sid}, profile {profile}, recalibrate {recalibrate}")
         return "started"
 
+    @staticmethod
+    def _backup_calibration(uid):
+        """Only reached with STIM_ALLOW_REAL_USER=1: keep a copy of the account's own calibration
+        (ring baseline + limits, EEG profile) before the simulation writes over it."""
+        saved = {}
+        for key, path in (("ring_baseline", f"physiological/baselines/{uid}"),
+                          ("ring_thresholds", f"physiological/personal_thresholds/{uid}"),
+                          ("eeg_profile", f"user_profiles/{uid}/eeg")):
+            val = fb_get(path)
+            if val and val.get("calibrated_by") != "live_stimulator":
+                saved[key] = {"path": path, "value": val}
+        if saved:
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            fb_put(f"stimulator/backups/{uid}/{stamp}", saved)
+            print(f"[stimulator] backed up {uid}'s calibration to stimulator/backups/{uid}/{stamp} ({', '.join(saved)})")
+
     def _request_eeg_calibration(self):
         """Same request psy_web's Recalibrate button writes, for this user's session."""
+        # null clears what an earlier run on this session left in the same document (phase, live
+        # points, progress). Otherwise the new request starts in that stale phase (e.g. 'rest'), and
+        # when the bridge restarts the protocol at 'settle' the ring calibration is cut short.
         fb_patch(f"eeg_recalibration/{self.sid}", {"status": "requested", "source": "stimulator", "user_id": self.uid,
-                                                   "requested_at": time.time(), "include_threshold": True, "task_blocks": 19})
+                                                   "requested_at": time.time(), "include_threshold": True, "task_blocks": 19,
+                                                   "phase": None, "live": None, "blocks_captured": None, "handled_at": None,
+                                                   "error": None})
 
     def _eeg_retry(self, eeg):
         """After the stimulator's own EEG calibration finished: if it didn't pass
@@ -402,6 +444,11 @@ class Stimulator:
             uid, sid = self._pointer()
             if not uid:
                 self.stop("stopped: the user logged out")
+                return
+            if uid != self.uid and not is_test_account(uid) and not ALLOW_REAL_USER:
+                # Another (real) account took the devices while the simulation ran: stop at once so
+                # nothing simulated is written to, or calibrated for, a real person.
+                self.stop(f"stopped: '{uid}' (a real account) is now logged in with the devices")
                 return
             if (uid, sid) != (self.uid, self.sid):        # the app opened a new session for the same / another user
                 print(f"[stimulator] following the logged-in session: {uid} / {sid}")
@@ -482,6 +529,13 @@ class Stimulator:
         if (prev == "recovery" and phase in ("done", "settle", "rest") and self.demand < 0.05 and self.body < 0.05
                 and rc.n_windows("recovery") < RING_RECOVERY_WINDOWS):
             phase = "recovery"
+        if prev == "rest" and phase == "settle":
+            # The EEG protocol restarted (a retry, or a stale phase from an earlier run): start the
+            # ring's rest again too -- finishing it on a partial minute would fail the calibration.
+            rc.packets["rest"].clear()
+            self.ring_cal_phase = "settle"
+            fb_patch(path, {"status": "capturing", "phase": "settle", "blocks_captured": 0, "blocks_needed": 4})
+            return
         if phase != prev:
             self.ring_cal_phase = phase
             if prev == "rest":
