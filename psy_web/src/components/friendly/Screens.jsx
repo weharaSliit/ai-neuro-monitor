@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import Face from './Face';
+import CalibrationRun from './CalibrationRun';
+import { useFirebaseValue } from '../../hooks/useData';
+import { isTestAccount } from '../../lib/testAccounts';
 import { FaceLine, LiveWave, LoadBars, MoodLegend, bucketize } from './MoodCharts';
 import { BLOCK_SEC, CALIBRATION_SETTLE_SEC, N_CALIBRATION_BLOCKS, POPULATION_HIGH_LOAD_P } from '../../lib/config';
 import { mindOrientedP } from '../../lib/limits';
@@ -289,83 +292,29 @@ export function WavesScreen({ raw, now, sessionData }) {
 }
 
 // ── Calibrate ──────────────────────────────────────────────────────
-export function CalibrateScreen({ sessionData, profile, limits, raw, now }) {
+export function CalibrateScreen({ sessionData, limits, profile, picker, now }) {
   const c = sessionData.calibration;
-  const tr = sessionData.threshold;
-  const head = headbandOf(raw, now);
-  const personal = profile?.personal_high_load_p ?? c?.personal_high_load_p ?? null;
-  // resting_mean / resting_calibrated_p are raw model probabilities; the
-  // mind load shown everywhere else is raw − baseline_shift (pipeline.py),
-  // so put resting on that same scale.
-  const restRaw = tr?.resting_mean ?? c?.resting_calibrated_p;
-  const shift = c?.baseline_shift ?? profile?.baseline_shift ?? 0;
-  // With a calibration: the calibrated baseline and threshold every dashboard uses (lib/limits calibratedLimits).
-  const m = limits?.mind;
-  const restingLoad = m ? Math.round(m.baseline * 100)
-    : restRaw == null ? null : Math.round(Math.min(1, Math.max(0, restRaw - shift)) * 100);
-  const alertLevel = m ? m.thresholdOriented : personal ?? POPULATION_HIGH_LOAD_P;
-  const alertPersonal = m ? m.personal : personal != null;
-  const done = !c ? (head.kind === 'good' ? 1 : 0) : c.status === 'capturing' ? 2 : c.status === 'failed' ? 1 : 3 + (personal != null ? 1 : 0);
-  const steps = [
-    { icon: '🎧', title: 'Put on the headband', text: 'Sensors on both temples, then switch it on.' },
-    { icon: '🧘', title: 'Relax for about a minute', text: 'Sit comfortably, breathe normally and stay still.' },
-    { icon: '🧭', title: 'Calm baseline saved', text: 'The system now knows what your resting mind looks like.' },
-    { icon: '🎯', title: 'Personal alert level (optional)', text: 'A short set of puzzles shows how your brain looks when you’re working hard.' },
-  ];
   const statusWord = !c ? 'Not calibrated yet' : c.status === 'ok' ? 'Calibrated' : c.status === 'degraded' ? 'Calibrated, but the signal was weak' : c.status === 'capturing' ? 'Calibrating…' : 'Calibration didn’t work. Try again.';
 
   return (
     <>
-      <ScreenTitle sub="Teaching the system what your calm looks like">Calibration</ScreenTitle>
+      <ScreenTitle sub="Teaching the system what your calm and your stress look like">Calibration</ScreenTitle>
       <section className="fcard hero-cal">
         <Face mood={c?.status === 'ok' ? 'very_relaxed' : 'relaxed'} size={72} />
         <div>
           <h2 className="serif">{statusWord}</h2>
-          <p>Everyone’s brain is different. Calibration measures you while you are calm, so the readings that follow compare you with yourself and not with an average person.</p>
+          <p>Everyone’s brain and body are different. The calibration measures you while you are calm, then while you do a short set of quick rounds, so the readings that follow compare you with yourself and not with an average person. It takes about 17 minutes, for the headband and the ring together.</p>
         </div>
       </section>
-
-      <section className="fcard">
-        <ol className="fsteps">
-          {steps.map((s, i) => (
-            <li key={s.title} className={i < done ? 'done' : i === done ? 'current' : ''}>
-              <span className="fs-icon" aria-hidden="true">{i < done ? '✓' : s.icon}</span>
-              <div><b>{s.title}</b><p>{s.text}</p></div>
-            </li>
-          ))}
-        </ol>
-      </section>
-
-      <section className="fcard">
-        <h2 className="serif">Your personal settings</h2>
-        <div className="settings">
-          <div className="setting tone-peach">
-            <small>Break alert level</small>
-            <b>{Math.round(alertLevel * 100)} / 100</b>
-            <span>{alertPersonal ? 'Set from your own puzzle session' : m ? 'From your calm baseline (puzzle step not separated yet)' : 'Standard level (puzzle step not done yet)'}</span>
-          </div>
-          <div className="setting tone-blue">
-            <small>Your resting mind load</small>
-            <b>{restingLoad == null ? '—' : `${restingLoad} / 100`}</b>
-            <span>What “calm” looks like for you</span>
-          </div>
-          <div className="setting tone-green">
-            <small>Last calibrated</small>
-            <b>{profile?.calibrated_at ? friendlyAgo(profile.calibrated_at * 1000, now) : c?.updated_at ? friendlyAgo(c.updated_at * 1000, now) : '—'}</b>
-            <span>{c?.skip_ahead_used ? 'Your saved calm baseline was reused' : 'Measured in this session'}</span>
-          </div>
-        </div>
-        {tr?.status === 'not_separated' && (
-          <p className="callout">The puzzle session didn’t show a clear difference from your calm state, so the standard alert level is used. That’s common, and you can try again later.</p>
-        )}
-        <p className="muted-s" style={{ marginTop: 12 }}>To calibrate again, start a new session in the MindPulse app. This page only shows results and never changes anything.</p>
-      </section>
+      <CalibrationRun picker={picker} now={now} limits={limits} profile={profile} />
     </>
   );
 }
 
 // ── Profile ────────────────────────────────────────────────────────
 export function ProfileScreen({ picker, sessionData, profile, limits, now, openTech, openWelcome, openBreathing }) {
+  const stimStatus = useFirebaseValue('stimulator/status');
+  const simUser = stimStatus?.uid || null;
   const reading = useReading(sessionData, profile, limits);
   const scored = reading.blocks.filter((b) => reading.p(b) != null);
   const calm = scored.filter((b) => ['relaxed', 'very_relaxed'].includes(moodOf(reading.p(b), reading.threshold).key)).length;
@@ -383,6 +332,11 @@ export function ProfileScreen({ picker, sessionData, profile, limits, now, openT
           <div><b>🍃 {scored.length ? Math.round((calm / scored.length) * 100) : 0}%</b><small>Calm</small></div>
           <div><b>🗓️ {picker.sessions.length}</b><small>Sessions</small></div>
         </div>
+        {simUser && isTestAccount(simUser) && simUser !== picker.userId && (
+          <button type="button" className="pill" style={{ marginTop: 12 }} onClick={() => picker.choose({ userId: simUser, sessionId: stimStatus?.sid || null })}>
+            Switch to the simulation user ({simUser})
+          </button>
+        )}
       </section>
 
       <section className="fcard">
@@ -398,7 +352,7 @@ export function ProfileScreen({ picker, sessionData, profile, limits, now, openT
             <select value={picker.userId || ''} onChange={(e) => picker.choose({ userId: e.target.value || null, sessionId: null })}>
               <option value="">Choose…</option>
               {[...new Set([...(picker.userId ? [picker.userId] : []), ...picker.users])].map((u) => (
-                <option key={u} value={u}>{u}{u === picker.liveUser ? ' (wearing now)' : ''}</option>
+                <option key={u} value={u}>{u}{isTestAccount(u) ? ' (test)' : ''}{u === picker.liveUser ? ' (wearing now)' : ''}</option>
               ))}
             </select>
           </label>

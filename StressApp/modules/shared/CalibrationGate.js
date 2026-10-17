@@ -159,7 +159,22 @@ export function useDeviceStatus(userId, db) {
   // Claim the shared device pointer once this account's own ring/headband is
   // on. Only for the signed-in account's own screens (an admin viewing another
   // user's devices must not take it), and never from another account.
-  const online = ringOnline || eegOnline;
+  // A test account ("sim_..." / "mp_...") also claims it while the live stimulator is running
+  // (the simulation needs a logged-in user to stream for, and its readings are what
+  // would make the devices "online" -- it cannot start before the pointer exists).
+  const [stimTs, setStimTs] = useState(null);
+  useEffect(() => {
+    if (!db) return undefined;
+    const stRef = ref(db, 'stimulator/status');
+    const handler = onValue(stRef, (snap) => {
+      const v = snap.val();
+      setStimTs(v?.online ? (v.ts ?? null) : null);
+    });
+    return () => off(stRef, 'value', handler);
+  }, [db]);
+  const stimulatorUp = stimTs != null && (now / 1000 - stimTs) <= 20;
+  const isSimUser = typeof userId === 'string' && (userId.startsWith('sim_') || userId.startsWith('mp_'));
+  const online = ringOnline || eegOnline || (stimulatorUp && isSimUser);
   const mine = !!auth?.user?.userId && auth.user.userId === userId;
   useEffect(() => {
     if (online && mine && auth?.claimDevices) auth.claimDevices();

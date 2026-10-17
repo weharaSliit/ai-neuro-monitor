@@ -503,8 +503,9 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
         let stress = 0;
         predictions.forEach((p) => {
             const z = typeof p.composite_z === 'number' ? p.composite_z : (p.stress_score || 0) * 3.0;
-            if (p.is_anomaly || z > 2.0) stress++;
-            else if (z > 1.0) drift++;
+            const lbl = (p.label || '').toLowerCase();
+            if (lbl.includes('high') || z > 2.0 || (p.stress_score != null && p.stress_score >= 0.70)) stress++;
+            else if (lbl.includes('pre') || z > 1.0 || (p.stress_score != null && p.stress_score >= 0.45)) drift++;
             else normal++;
         });
         return { normal, drift, stress, total: predictions.length };
@@ -642,7 +643,8 @@ export default function PhenotypingAnalysisScreen({ navigation, route }) {
         let episodes = 0;
         let inEpisode = false;
         rangePreds.forEach((p) => {
-            const flagged = p.is_anomaly || (typeof p.composite_z === 'number' && p.composite_z > 2.0);
+            const lbl = (p.label || '').toLowerCase();
+            const flagged = lbl.includes('high') || (typeof p.composite_z === 'number' && p.composite_z > 2.0) || (p.stress_score != null && p.stress_score >= 0.70);
             if (flagged && !inEpisode) episodes++;
             inEpisode = flagged;
         });
