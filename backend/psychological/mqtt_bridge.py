@@ -238,6 +238,31 @@ def _latest_block_reason(data: dict | None) -> str:
     return " | newest block: " + ", ".join(parts)
 
 
+# A new session started within this long of a finished recalibration
+# inherits it (same rest/task/recovery blocks, re-posted for the new
+# session id) instead of settling and calibrating from scratch.
+RECAL_CARRY_MAX_AGE_SEC = 30 * 60
+
+
+def _carry_recalibration(carry: dict, old_session_id: str) -> bool:
+    """Calibrates the (new) SESSION_ID from a just-finished recalibration's
+    blocks. True if the resting baseline was set."""
+    outcome, data = _post_calibrate(carry["rest"], allow_degraded=True)
+    if outcome != "ok":
+        print(f"[calibrate] couldn't carry the recalibration over ({outcome}) -- calibrating afresh")
+        return False
+    print(f"[calibrate] new session inherits the recalibration from {old_session_id!r} "
+          f"({len(carry['rest'])} rest, {len(carry['task'])} task, {len(carry['recovery'])} recovery blocks)")
+    fields = {"status": "done", "phase": "done", "carried_from": old_session_id, "user_id": USER_ID,
+              "mu_rest": (data or {}).get("mu_rest"), "usable_blocks": (data or {}).get("n_blocks")}
+    if carry["task"]:
+        thr = _post_threshold(carry["task"], carry["recovery"]) or {}
+        fields["threshold"] = {k: thr.get(k) for k in ("status", "responsive", "calibration_status", "personal_direction",
+                                                        "separation_sd", "reversal_sd", "threshold_method")}
+    update_recalibration_request(SESSION_ID, fields)
+    return True
+
+
 def _post_calibrate(blocks: list[dict], allow_degraded: bool) -> tuple[str, dict | None]:
     """One /calibrate attempt -> ('ok', body) on success, ('rejected', body)
     when the server answered but no block met the quality bar (a 400 --
@@ -343,6 +368,11 @@ def run():
     recal_recovery_needed = 0          # recovery-rest blocks still to record (protocol phase 4)
     recal_recovery_blocks: list[dict] = []
     recal_live_n = 0                   # next eeg_recalibration/{sid}/live/{n} point
+    # A finished recalibration's blocks, kept so a new session the app
+    # starts right afterwards inherits it instead of starting over.
+    recal_carry: dict | None = None
+    recal_rest_blocks: list[dict] = []
+    deferred_rotation_to: str | None = None
     block_idx = 0
     last_pointer_poll = 0.0
     last_empty_buffer_warn = 0.0
@@ -364,9 +394,26 @@ def run():
                 now = time.time()
                 if now - last_pointer_poll >= POINTER_POLL_INTERVAL_SEC:
                     pointer_session_id = _poll_session_pointer()
+                    pointer_user_id = _poll_user_pointer()
+                    # A recalibration in progress for the SAME user isn't
+                    # thrown away when the app opens a new session (reopen,
+                    # re-login, device takeover): the switch waits until it
+                    # finishes, then the new session inherits it (below).
+                    # Two runs were lost this way, one 11 blocks into the task.
+                    same_user = pointer_user_id in (None, USER_ID)
+                    if (pointer_session_id and pointer_session_id != SESSION_ID and same_user
+                            and (recal_active or recal_task_needed or recal_recovery_needed)):
+                        if deferred_rotation_to != pointer_session_id:
+                            print(f"[session] app started {pointer_session_id!r} -- switching after the "
+                                  f"recalibration in progress on {SESSION_ID!r} finishes")
+                            update_recalibration_request(SESSION_ID, {"deferred_session": pointer_session_id})
+                            deferred_rotation_to = pointer_session_id
+                        pointer_session_id = None
                     if pointer_session_id and pointer_session_id != SESSION_ID:
                         print(f"[session] rotating {SESSION_ID!r} -> {pointer_session_id!r} "
                               f"(app started a new session) -- recalibrating")
+                        deferred_rotation_to = None
+                        old_session_id = SESSION_ID
                         if recal_active or recal_task_needed or recal_recovery_needed:
                             update_recalibration_request(SESSION_ID, {"status": "superseded"})
                             recal_active = False
@@ -376,13 +423,20 @@ def run():
                             recal_recovery_blocks = []
                         SESSION_ID = pointer_session_id
                         settle_until = now + CALIBRATION_SETTLE_SEC
-                        print(f"[calibrate] settling for {CALIBRATION_SETTLE_SEC:.0f}s before the resting baseline")
                         calibrated = False
                         calibration_blocks = []
                         calibration_blocks_seen = 0
                         block_idx = 0
+                        carry = recal_carry
+                        recal_carry = None
+                        if (carry and same_user and carry["user"] == USER_ID
+                                and now - carry["at"] <= RECAL_CARRY_MAX_AGE_SEC):
+                            if _carry_recalibration(carry, old_session_id):
+                                settle_until = now
+                                calibrated = True
+                        if not calibrated:
+                            print(f"[calibrate] settling for {CALIBRATION_SETTLE_SEC:.0f}s before the resting baseline")
 
-                    pointer_user_id = _poll_user_pointer()
                     if pointer_user_id and pointer_user_id != USER_ID:
                         print(f"[user] rotating {USER_ID!r} -> {pointer_user_id!r} "
                               f"(app is now logged in as a different user)")
@@ -500,6 +554,7 @@ def run():
                             calibration_blocks_seen = 0
                             if recal_active:
                                 recal_active = False
+                                recal_rest_blocks = list(calibration_blocks)
                                 recal_rest_result = {
                                     "outcome": data.get("status"),
                                     "usable_blocks": n_trusted, "mu_rest": data.get("mu_rest"),
@@ -525,6 +580,8 @@ def run():
                                         "status": "done", "phase": "done", **recal_rest_result,
                                         **({"task_skipped": "no usable resting level"} if skipped else {}),
                                     })
+                                    recal_carry = {"user": USER_ID, "at": time.time(), "rest": list(calibration_blocks),
+                                                   "task": [], "recovery": []}
                             print(f"[calibrate] done: status={data.get('status')} usable_blocks={n_trusted} "
                                   f"mu_rest={data.get('mu_rest')} personal_threshold={data.get('personal_high_load_p')} "
                                   f"degraded={data.get('baseline_degraded')}")
@@ -580,6 +637,8 @@ def run():
                     if n_rec >= recal_recovery_needed:
                         update_recalibration_request(SESSION_ID, {"status": "saving", "phase": "recovery"})
                         thr = _post_threshold(recal_task_blocks, recal_recovery_blocks)
+                        recal_carry = {"user": USER_ID, "at": time.time(), "rest": list(recal_rest_blocks),
+                                       "task": list(recal_task_blocks), "recovery": list(recal_recovery_blocks)}
                         recal_recovery_needed = 0
                         recal_task_blocks = []
                         recal_recovery_blocks = []
@@ -591,7 +650,9 @@ def run():
                                 "status": "done", "phase": "done", **recal_rest_result,
                                 "threshold": {k: thr.get(k) for k in (
                                     "status", "responsive", "task_response_z", "personal_high_load_p",
-                                    "resting_mean", "task_mean", "n_task_blocks")},
+                                    "resting_mean", "task_mean", "n_task_blocks", "calibration_status",
+                                    "personal_direction", "separation_sd", "reversal_sd", "aba_confirmed",
+                                    "threshold_method")},
                                 "recovery": {k: thr.get(k) for k in (
                                     "recovery_mean", "recovery_z", "recovered", "n_recovery_blocks")},
                             })

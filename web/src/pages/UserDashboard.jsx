@@ -16,8 +16,11 @@ import LiveSignals from '../components/LiveSignals';
 import TakeOverBanner from '../components/TakeOverBanner';
 import BreathingModal from '../components/BreathingModal';
 import BaselineDriftCard from '../components/BaselineDriftCard';
+import useCondition from '../hooks/useCondition';
+import StimulatorCard, { StimulatorBanner } from '../components/Stimulator';
 
 const LIVE_WINDOW_MS = 3 * 60 * 1000;
+const fmtS = (v) => (v == null ? '—' : Math.abs(v) < 0.01 && v !== 0 ? v.toExponential(1) : v.toFixed(2));
 
 // Same plain-language copy as the app's Fusion hub.
 const HERO = {
@@ -25,6 +28,10 @@ const HERO = {
   rising: { word: 'Rising',        line: 'Stress is building up a little.',                       tip: 'A short pause would help',       icon: '😐' },
   high:   { word: 'Stressed',      line: 'Your body and mind are under strain right now.',        tip: 'Try a 1-minute breathing break', icon: '😟' },
   idle:   { word: 'Not connected', line: 'Put on your ring or headband to see how you’re doing.', tip: 'Waiting for devices',            icon: '🔌' },
+  // Condition from mind x body, each against its own calibrated limit (useCondition).
+  mental:  { word: 'High mental load', line: 'You’re concentrating hard.', tip: 'Short pause when you can', icon: '🧠' },
+  arousal: { word: 'Physical arousal', line: 'Your body is activated (movement, caffeine, emotion?).', tip: 'Slow breathing helps', icon: '💓' },
+  calibrating: { word: 'Calibrating', line: 'Your personal calm level and limits are being set. Readings are judged after this.', tip: 'Sit still and relax', icon: '⏳' },
   stale:  { word: 'Recalibrate',   line: 'Your skin signal is far from your saved calm level, so the stress reading can’t be trusted.', tip: 'Recalibrate to fix this', icon: '🔄' },
 };
 const HERO_GRAD = {
@@ -33,6 +40,9 @@ const HERO_GRAD = {
   high: 'linear-gradient(135deg, #EE8A71 0%, #E56B4E 100%)',
   idle: 'linear-gradient(135deg, #A29DD4 0%, #6E68B2 100%)',
   stale: 'linear-gradient(135deg, #B9B3A6 0%, #8C8678 100%)',
+  mental: 'linear-gradient(135deg, #7FA7E8 0%, #4F7FD0 100%)',
+  arousal: 'linear-gradient(135deg, #F2A277 0%, #E07B4C 100%)',
+  calibrating: 'linear-gradient(135deg, #A29DD4 0%, #6E68B2 100%)',
 };
 
 const BANDS = [
@@ -61,6 +71,8 @@ export default function UserDashboard() {
   const fusion = useFusion(userId, liveSid);
   const ring = useRingHistory(userId, { pollMs: 10000 });
   const eeg = useEegBlocks(userId, pointer.userId === userId ? eegSessionId : null);
+  // Mind / body / condition against the calibrated baseline and limits (decisions only after calibration).
+  const cond = useCondition(userId, pointer.userId === userId ? eegSessionId : null, eeg.blocks, ring.windows);
 
   const [rhythmTab, setRhythmTab] = useState('all');
   const [bodyTab, setBodyTab] = useState('stress');
@@ -84,24 +96,30 @@ export default function UserDashboard() {
   // The ring's newest reading is far from the saved baseline: the stress
   // label would be unreliable, so say so instead of showing "Stressed".
   const baselineStale = (fusion.latestBody?.baseline_stale ?? ringLatest?.baseline_stale) === true;
-  if (baselineStale && heroKey !== 'idle') heroKey = 'stale';
+  if (cond.condition) {
+    heroKey = { relaxed: 'calm', mental: 'mental', arousal: 'arousal', stress: 'high' }[cond.condition.key];
+  } else if (cond.gate.paused && (cond.recal.eeg?.status === 'capturing' || cond.recal.ring?.status === 'capturing')) {
+    heroKey = 'calibrating';
+  }
+  if (baselineStale && heroKey !== 'idle' && heroKey !== 'calibrating') heroKey = 'stale';
   const hero = HERO[heroKey];
   const lastMs = fusion.latestMs ?? fusion.lastAnyMs ?? (ringLatest ? new Date(ringLatest.timestamp).getTime() : null);
   const heroWhen = isLive ? 'Live · updated just now' : lastMs ? `Last reading ${timeAgo(lastMs)}` : 'No readings yet';
 
-  const ringThr = ringCal?.personal_stress_threshold ?? DEFAULT_RING_THRESHOLD;
+  const ringThr = cond.body.limit ?? ringCal?.personal_stress_threshold ?? DEFAULT_RING_THRESHOLD;
   const eegThr = eegCal?.personal_high_load_p ?? DEFAULT_EEG_THRESHOLD;
 
-  const mindP = fusion.latestMind?.prob_eeg ?? null;
-  const mindT = fusion.latestMind?.threshold_eeg ?? latest?.threshold_eeg ?? eegThr;
-  const mindLevel = levelOf(mindP, mindT);
+  // Mind and body on the 0-1 scale where each one's OWN calibrated limit is 0.50
+  // (the raw EEG score is often ~1e-9..1e-3 on this headband, so comparing raw
+  // values made the ring read "Relaxed" whatever happened).
+  const mindP = cond.mind.value;
+  const mindLevel = levelOf(mindP, 0.5);
   // Non-calibrated EEG (weak signal, no personal baseline) still shows, but
   // labelled -- it only enters fusion at reduced weight.
   const mindBasis = EEG_BASIS[fusion.latestMind?.eeg_basis] || null;
   const mindCaveat = mindBasis && fusion.latestMind?.eeg_basis !== 'calibrated' ? mindBasis.word : null;
-  const bodyP = fusion.latestBody?.prob_hrv_gsr ?? (latest ? null : ringLatest?.prob_stress ?? null);
-  const bodyT = fusion.latestBody?.threshold_hrv_gsr ?? latest?.threshold_hrv_gsr ?? ringThr;
-  const bodyLevel = levelOf(bodyP, bodyT);
+  const bodyP = cond.body.value;
+  const bodyLevel = levelOf(bodyP, 0.5);
   const fusedP = latest?.fused_probability ?? null;
   const fusedT = latest?.fused_threshold ?? DEFAULT_RING_THRESHOLD;
   const fusedLevel = levelOf(fusedP, fusedT);
@@ -165,12 +183,9 @@ export default function UserDashboard() {
 
   // Trusted scores and provisional (weak-signal) scores as two series, so a
   // session with imperfect contact still shows a trace -- clearly separate.
-  const loadRows = useMemo(() => eeg.blocks
-    .filter((b) => b.task_state_score != null)
-    .map((b) => ({
-      date: new Date(b.timestamp_end * 1000),
-      values: [Math.round(b.task_state_score * 100)],
-    })), [eeg.blocks]);
+  // Mental load against this user's calibrated limit (0-1 scale, limit = 50%).
+  const loadRows = useMemo(() => cond.mind.rows.filter((r) => r.v != null)
+    .map((r) => ({ date: new Date(r.t), values: [Math.round(r.v * 100)] })), [cond.mind.rows]);
 
   const firstName = (user?.name || userId || '').split(/[\s_.]/)[0];
   const displayName = firstName ? firstName.charAt(0).toUpperCase() + firstName.slice(1) : 'there';
@@ -188,6 +203,7 @@ export default function UserDashboard() {
           <button className="btn sm" onClick={() => navigate('/setup')}>Start setup</button>
         </div>
       )}
+      <StimulatorBanner />
       {sessionMode === 'view' && (
         <TakeOverBanner holder={pointer.userId} style={{ marginBottom: 20 }} />
       )}
@@ -214,13 +230,25 @@ export default function UserDashboard() {
         </div>
 
         <Card>
-          <CardHead title="Your balance" sub="Judged against your own personal limits" />
+          <CardHead title="Your balance" sub="Judged against your own calibrated calm level and limit (50 = your limit)" />
           <div className="rings">
             <BalanceRing title="Mind" value={mindP != null ? mindP * 100 : null}
               word={mindLevel ? MIND_WORDS[mindLevel] : undefined}
               color={mindCaveat ? COLORS.textMuted : (LEVEL_COLOR[mindLevel] || COLORS.eeg)} />
             <BalanceRing title="Body" value={bodyP != null ? bodyP * 100 : null}
               word={BODY_WORDS[bodyLevel]} color={LEVEL_COLOR[bodyLevel] || COLORS.hrv} />
+          </div>
+          <div className="limits-row">
+            <div><span>Mind calm level · limit</span><b>{fmtS(cond.mind.baseline)} · {fmtS(cond.mind.limit)}</b>
+              <em>{cond.eegInfo ? (cond.mind.personal ? 'personal limit' : 'provisional limit') : 'not calibrated'}</em></div>
+            <div><span>Body calm level · limit</span><b>{fmtS(cond.body.baseline)} · {fmtS(cond.body.limit)}</b>
+              <em>{cond.body.hasBaseline ? (cond.body.personal ? 'personal limit' : 'population limit') : 'not calibrated'}</em></div>
+          </div>
+          <div className={`condition ${cond.condition?.key || 'none'}`}>
+            <span>Your condition</span>
+            <b>{cond.condition ? cond.condition.label : cond.gate.paused ? 'Calibrating…' : '—'}</b>
+            <em>{cond.condition ? (cond.condition.message || 'Mind and body below their limits.') + (cond.condition.partial ? ` (${cond.condition.partial})` : '')
+              : 'Shown once calibration is done.'}</em>
           </div>
           <LevelSlider title="Overall stress" position={sliderPosition(fusedP, fusedT)}
             word={OVERALL_WORDS[fusedLevel]} color={LEVEL_COLOR[fusedLevel]} />
@@ -282,7 +310,7 @@ export default function UserDashboard() {
         </Card>
 
         <Card>
-          <CardHead title="Mind" sub="From your headband"
+          <CardHead title="Mind" sub="From your headband · 50% = your calibrated limit"
             right={eegLatest ? <Badge color={eegLatest.eeg_quality_flag ? COLORS.normal : COLORS.warning} dot>
               {eegLatest.eeg_quality_flag ? 'Good contact' : 'Adjust headband'}</Badge> : null} />
           {!eegLatest && <p className="body">Put on your headband to see this.</p>}
@@ -290,7 +318,7 @@ export default function UserDashboard() {
             <Chart
               rows={loadRows}
               series={[{ name: 'Mental load', color: COLORS.eeg }]}
-              limit={Math.round((eegLatest?.effective_high_load_p ?? eegThr) * 100)}
+              limit={50}
               domain={[0, 100]} suffix="%" height={190} empty="No headband readings yet." />
           </div>
         </Card>
@@ -306,6 +334,8 @@ export default function UserDashboard() {
             detail={eegOnline ? 'Streaming brainwaves' : 'Not connected'} />
         </div>
       </div>
+
+      <div style={{ marginTop: 20 }}><StimulatorCard loggedIn={pointer.userId || null} /></div>
 
       <div style={{ marginTop: 20 }}>
         <BaselineDriftCard userId={userId} ringCal={ringCal} />

@@ -4,6 +4,8 @@ import { Card, KV, SessionPicker, Stat, Status, ago } from './panels';
 import useRingStream from '../hooks/useRingStream';
 import { useHealth } from '../hooks/useData';
 import { usePhysioData, usePhysioPicker } from '../hooks/usePhysio';
+import useCalibratedLimits from '../hooks/useCalibratedLimits';
+import LimitsStrip from './LimitsStrip';
 import {
   CALIBRATION_HARD_AGE_DAYS, CALIBRATION_SOFT_AGE_DAYS, GSR_CAL, MQTT_TOPIC_RING, MQTT_URL,
   PERSONAL_THRESHOLD_MIN_SEPARATION, PHYSIO_API_BASE, RAW_DECISION_THRESHOLD, RING_MSG_HZ, RING_SLIDE_SEC,
@@ -215,6 +217,7 @@ function CalibrationPanel({ data, thr, now }) {
             ['Sessions since baseline', b?.session_count ?? '—'],
             ['Resting scores', rest.length ? rest.map((v) => fmt(v, 3)).join(', ') : 'none'],
             ['Resting mean prob_stress', fmt(restMean, 3)],
+            ['Calibrated baseline', thr.baseline == null ? '—' : `${fmt(thr.baseline, 4)} (median of the resting scores)`],
             ['Personal threshold', t?.personal_stress_threshold != null ? `${fmt(t.personal_stress_threshold, 4)} (set ${t.threshold_updated_at ? ago(Date.parse(t.threshold_updated_at), now) : '—'})` : 'not set'],
             ['Threshold in use', `${fmt(thr.value, 4)} (${thr.source})`],
           ]} />
@@ -377,7 +380,14 @@ export default function PhysioView({ now, onBack, openFusion }) {
   const data = usePhysioData(picker.userId, picker.sessionId);
   const ring = useRingStream();
   const health = useHealth(30000, PHYSIO_API_BASE);
-  const thr = effectiveThreshold(data.thresholds, data.baseline);
+  // The calibrated baseline / threshold every dashboard uses (lib/limits calibratedLimits);
+  // without a ring calibration, the stored personal or population threshold.
+  const limits = useCalibratedLimits(picker.userId, picker.sessionId);
+  const fallback = effectiveThreshold(data.thresholds, data.baseline);
+  const body = limits.body;
+  const thr = body?.threshold != null
+    ? { value: body.threshold, source: body.personal ? 'calibrated personal midpoint' : 'population (calibration not separated)', baseline: body.baseline }
+    : { ...fallback, baseline: null };
   return (
     <div className="page">
       <header className="top">
@@ -396,6 +406,7 @@ export default function PhysioView({ now, onBack, openFusion }) {
         <SessionPicker picker={picker} />
       </header>
 
+      <LimitsStrip limits={limits} />
       <PhysioSources ring={ring} data={data} health={health} picker={picker} now={now} />
       {data.loading ? <p className="muted">Loading ring windows…</p> : null}
       <RawRingPanel ring={ring} now={now} />

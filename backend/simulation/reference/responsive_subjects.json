@@ -1,0 +1,363 @@
+{
+ "source": "simkit/responders.py (SIMULATED: SAM40 T7-T8 + headband layer, bridge EEG calibration, deployed model)",
+ "rule": "calibration_status 'ok' in >= 62% of 8 runs (seeds 900..907)",
+ "responsive": [
+  8,
+  10,
+  32,
+  38
+ ],
+ "overall_ok_share": 0.159375,
+ "subjects": {
+  "1": {
+   "ok": 2,
+   "runs": 8,
+   "median_separation_sd": 0.9376015293006528,
+   "statuses": {
+    "ok": 2,
+    "not_separated": 4,
+    "drift_suspected": 2
+   }
+  },
+  "2": {
+   "ok": 2,
+   "runs": 8,
+   "median_separation_sd": 0.7089050459174691,
+   "statuses": {
+    "ok": 2,
+    "drift_suspected": 1,
+    "not_separated": 5
+   }
+  },
+  "3": {
+   "ok": 0,
+   "runs": 8,
+   "median_separation_sd": 0.43571553838664145,
+   "statuses": {
+    "drift_suspected": 1,
+    "not_separated": 7
+   }
+  },
+  "4": {
+   "ok": 0,
+   "runs": 8,
+   "median_separation_sd": 0.17541751872547123,
+   "statuses": {
+    "not_separated": 8
+   }
+  },
+  "5": {
+   "ok": 2,
+   "runs": 8,
+   "median_separation_sd": 0.4313457505770339,
+   "statuses": {
+    "ok": 2,
+    "not_separated": 6
+   }
+  },
+  "6": {
+   "ok": 1,
+   "runs": 8,
+   "median_separation_sd": -0.449577094421426,
+   "statuses": {
+    "ok": 1,
+    "not_separated": 7
+   }
+  },
+  "7": {
+   "ok": 3,
+   "runs": 8,
+   "median_separation_sd": 0.9451081202205769,
+   "statuses": {
+    "ok": 3,
+    "not_separated": 5
+   }
+  },
+  "8": {
+   "ok": 6,
+   "runs": 8,
+   "median_separation_sd": 1.6697898947483572,
+   "statuses": {
+    "ok": 6,
+    "not_separated": 2
+   }
+  },
+  "9": {
+   "ok": 0,
+   "runs": 8,
+   "median_separation_sd": -0.13739035833063293,
+   "statuses": {
+    "not_separated": 8
+   }
+  },
+  "10": {
+   "ok": 7,
+   "runs": 8,
+   "median_separation_sd": 1.2997281359871726,
+   "statuses": {
+    "ok": 7,
+    "not_separated": 1
+   }
+  },
+  "11": {
+   "ok": 2,
+   "runs": 8,
+   "median_separation_sd": -0.9611665085672878,
+   "statuses": {
+    "ok": 2,
+    "drift_suspected": 1,
+    "not_separated": 5
+   }
+  },
+  "12": {
+   "ok": 0,
+   "runs": 8,
+   "median_separation_sd": 0.263563890902989,
+   "statuses": {
+    "not_separated": 8
+   }
+  },
+  "13": {
+   "ok": 1,
+   "runs": 8,
+   "median_separation_sd": 0.7664479796715161,
+   "statuses": {
+    "ok": 1,
+    "not_separated": 7
+   }
+  },
+  "14": {
+   "ok": 3,
+   "runs": 8,
+   "median_separation_sd": 0.7545371370414844,
+   "statuses": {
+    "ok": 3,
+    "not_separated": 5
+   }
+  },
+  "15": {
+   "ok": 0,
+   "runs": 8,
+   "median_separation_sd": 0.4408822506718185,
+   "statuses": {
+    "not_separated": 8
+   }
+  },
+  "16": {
+   "ok": 0,
+   "runs": 8,
+   "median_separation_sd": 0.028793375569674866,
+   "statuses": {
+    "not_separated": 8
+   }
+  },
+  "17": {
+   "ok": 0,
+   "runs": 8,
+   "median_separation_sd": 0.30076990728107106,
+   "statuses": {
+    "drift_suspected": 1,
+    "not_separated": 7
+   }
+  },
+  "18": {
+   "ok": 0,
+   "runs": 8,
+   "median_separation_sd": -0.08147131770197193,
+   "statuses": {
+    "not_separated": 8
+   }
+  },
+  "19": {
+   "ok": 0,
+   "runs": 8,
+   "median_separation_sd": 0.009770584515411514,
+   "statuses": {
+    "not_separated": 8
+   }
+  },
+  "20": {
+   "ok": 0,
+   "runs": 8,
+   "median_separation_sd": 0.3995628030557503,
+   "statuses": {
+    "not_separated": 8
+   }
+  },
+  "21": {
+   "ok": 2,
+   "runs": 8,
+   "median_separation_sd": 0.8848739555153947,
+   "statuses": {
+    "ok": 2,
+    "not_separated": 6
+   }
+  },
+  "22": {
+   "ok": 0,
+   "runs": 8,
+   "median_separation_sd": -0.007937295465586911,
+   "statuses": {
+    "not_separated": 8
+   }
+  },
+  "23": {
+   "ok": 0,
+   "runs": 8,
+   "median_separation_sd": 0.4977499314339205,
+   "statuses": {
+    "not_separated": 8
+   }
+  },
+  "24": {
+   "ok": 0,
+   "runs": 8,
+   "median_separation_sd": 0.2555367037006301,
+   "statuses": {
+    "drift_suspected": 1,
+    "not_separated": 7
+   }
+  },
+  "25": {
+   "ok": 1,
+   "runs": 8,
+   "median_separation_sd": 0.2252484524120293,
+   "statuses": {
+    "ok": 1,
+    "not_separated": 7
+   }
+  },
+  "26": {
+   "ok": 1,
+   "runs": 8,
+   "median_separation_sd": -0.7884468707838101,
+   "statuses": {
+    "ok": 1,
+    "drift_suspected": 1,
+    "not_separated": 6
+   }
+  },
+  "27": {
+   "ok": 0,
+   "runs": 8,
+   "median_separation_sd": -0.07270381669130208,
+   "statuses": {
+    "not_separated": 8
+   }
+  },
+  "28": {
+   "ok": 0,
+   "runs": 8,
+   "median_separation_sd": 0.6345146007931985,
+   "statuses": {
+    "not_separated": 8
+   }
+  },
+  "29": {
+   "ok": 0,
+   "runs": 8,
+   "median_separation_sd": 0.4749385278544316,
+   "statuses": {
+    "not_separated": 8
+   }
+  },
+  "30": {
+   "ok": 1,
+   "runs": 8,
+   "median_separation_sd": 0.6041178734975294,
+   "statuses": {
+    "ok": 1,
+    "drift_suspected": 1,
+    "not_separated": 6
+   }
+  },
+  "31": {
+   "ok": 0,
+   "runs": 8,
+   "median_separation_sd": 0.21518765739150134,
+   "statuses": {
+    "not_separated": 8
+   }
+  },
+  "32": {
+   "ok": 6,
+   "runs": 8,
+   "median_separation_sd": 1.2424911171259367,
+   "statuses": {
+    "ok": 6,
+    "not_separated": 2
+   }
+  },
+  "33": {
+   "ok": 2,
+   "runs": 8,
+   "median_separation_sd": 0.6430523212531192,
+   "statuses": {
+    "ok": 2,
+    "not_separated": 6
+   }
+  },
+  "34": {
+   "ok": 0,
+   "runs": 8,
+   "median_separation_sd": 0.23788202764572658,
+   "statuses": {
+    "not_separated": 8
+   }
+  },
+  "35": {
+   "ok": 1,
+   "runs": 8,
+   "median_separation_sd": 0.34349935800180964,
+   "statuses": {
+    "ok": 1,
+    "not_separated": 6,
+    "drift_suspected": 1
+   }
+  },
+  "36": {
+   "ok": 1,
+   "runs": 8,
+   "median_separation_sd": 0.5904050072487295,
+   "statuses": {
+    "ok": 1,
+    "drift_suspected": 1,
+    "not_separated": 6
+   }
+  },
+  "37": {
+   "ok": 0,
+   "runs": 8,
+   "median_separation_sd": 0.1799689034751003,
+   "statuses": {
+    "not_separated": 8
+   }
+  },
+  "38": {
+   "ok": 5,
+   "runs": 8,
+   "median_separation_sd": 1.1219338086526909,
+   "statuses": {
+    "ok": 5,
+    "not_separated": 3
+   }
+  },
+  "39": {
+   "ok": 2,
+   "runs": 8,
+   "median_separation_sd": 0.5382394601411418,
+   "statuses": {
+    "ok": 2,
+    "not_separated": 6
+   }
+  },
+  "40": {
+   "ok": 0,
+   "runs": 8,
+   "median_separation_sd": -0.3140670598303258,
+   "statuses": {
+    "not_separated": 8
+   }
+  }
+ }
+}

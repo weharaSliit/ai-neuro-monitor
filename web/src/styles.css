@@ -396,3 +396,16 @@ table.data.users tr.clickable:focus-visible { outline: 2px solid var(--brand); o
   background: var(--card); border: 1px solid var(--border-soft, rgba(0,0,0,0.08)); border-radius: var(--r-md); padding: var(--sp-md);
 }
 .quest-row:hover { box-shadow: var(--shadow-up); }
+
+/* calibrated limits + condition (UserDashboard) */
+.limits-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 6px 0 10px; }
+.limits-row > div, .condition { display: flex; flex-direction: column; gap: 1px; padding: 8px 10px; border-radius: 12px; background: var(--pill); }
+.limits-row span, .condition span { font-size: 11px; color: var(--text-muted); font-weight: 600; }
+.limits-row b { font-size: 15px; font-variant-numeric: tabular-nums; }
+.limits-row em, .condition em { font-style: normal; font-size: 12px; color: var(--text-sub); }
+.condition { margin-bottom: 12px; }
+.condition b { font-size: 18px; }
+.condition.relaxed b { color: var(--normal, #5E935A); }
+.condition.mental b { color: #4F7FD0; }
+.condition.arousal b { color: #E07B4C; }
+.condition.stress b { color: var(--stress, #E56B4E); }

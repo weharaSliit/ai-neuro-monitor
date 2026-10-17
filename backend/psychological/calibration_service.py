@@ -91,10 +91,17 @@ def finish_personal_calibration(engine: RealtimeInference, user_id: str, outcome
             and stored.get("adc_uv_per_count") == ADC_SCALE_TAG):
         engine.eeg_responsive = bool(stored["eeg_responsive"])
         engine.task_response_z = stored.get("task_response_z")
+        # The person's load direction carries over (a property of how their
+        # signal responds, not of today's electrode contact); the limit's
+        # position is re-derived from this session's own rest (0.84 spreads,
+        # provisional) until the task is redone.
+        if engine.eeg_responsive and stored.get("eeg_direction") in (1, -1):
+            engine.direction = int(stored["eeg_direction"])
     elif stored is not None and stored.get("eeg_responsive") is not None:
         outcome["stale_onboarding_ignored"] = True
     outcome["eeg_responsive"] = engine.eeg_responsive
     outcome["task_response_z"] = engine.task_response_z
+    outcome["personal_direction"] = engine.direction
     if engine.thresholds_personalized:
         save_user_calibration_profile(user_id, engine.baseline_shift, engine.thresholds_personalized,
                                       mu_rest=engine.mu_rest, personal_high_load_p=engine.personal_high_load_p)
@@ -180,12 +187,14 @@ def run_eeg_threshold_from_blocks(session_state: dict, blocks_samples: list[list
 
     for samples in blocks_samples:
         engine.score_threshold_task_block(samples)
-
-    outcome = engine.finalize_personal_threshold()
-    # Recovery rest after the task (protocol phase 4): scored and reported,
-    # never used to set either threshold.
+    # Recovery rest (protocol phase 4) is scored BEFORE the decision: the ABA
+    # check needs it to tell a real task response (recovery comes back
+    # towards rest) from slow drift (it doesn't) -- see
+    # sam40/decision.py midpoint_threshold_logit().
     for samples in recovery_samples or []:
         engine.score_recovery_block(samples)
+
+    outcome = engine.finalize_personal_threshold()
     outcome.update(engine.recovery_outcome())
     # When this threshold was set -- lets a viewer tell whether it belongs to
     # the current calibration (a later recalibration supersedes it).
@@ -194,7 +203,8 @@ def run_eeg_threshold_from_blocks(session_state: dict, blocks_samples: list[list
     # (non-responsive) result must also persist, so later sessions keep EEG
     # out of fusion until the task is redone.
     if outcome.get("task_response_z") is not None:
-        save_user_responsiveness(firebase.user_id, outcome["task_response_z"], outcome["responsive"])
+        save_user_responsiveness(firebase.user_id, outcome["task_response_z"], outcome["responsive"],
+                                 direction=outcome.get("personal_direction"), z_alert=outcome.get("z_alert"))
 
     # Written regardless of status (including "not_separated") -- see
     # push_threshold_result()'s docstring (firebase_service.py).

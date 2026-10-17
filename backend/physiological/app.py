@@ -62,6 +62,7 @@ BASELINE_STALE_RATIO = 6.0
 from backend.physiological.extract_features import (
     extract_features, compute_signal_quality
 )
+from backend.physiological.ring_recalibration import start_poller as start_ring_recalibration_poller
 from backend.physiological.calibration_capture import (
     save_calibration_windows, run_calibration_capture, run_task_calibration_capture
 )
@@ -91,6 +92,28 @@ _threshold_sessions = {}
 # thread competing with the first for the same status dict. Observed live
 # as calibration progress reading "1/2" then suddenly "0/2".
 _session_start_lock = threading.Lock()
+
+# Recalibration requested from psy_web (ring_recalibration/{uid}, see
+# ring_recalibration.py): users whose dashboard-started run is in progress.
+# The app's own Calibrate / limit-test buttons and a dashboard run would
+# open two captures on the same ring stream, so each refuses while the
+# other runs.
+_dashboard_recal_users = set()
+_ACTIVE = ('settling', 'capturing', 'saving', 'recovery')
+
+
+def _calibration_busy(user_id):
+    return (user_id in _dashboard_recal_users
+            or (_calibration_sessions.get(user_id) or {}).get('status') in _ACTIVE
+            or (_threshold_sessions.get(user_id) or {}).get('status') in _ACTIVE)
+
+
+def _set_dashboard_recal(user_id, on):
+    with _session_start_lock:
+        (_dashboard_recal_users.add if on else _dashboard_recal_users.discard)(user_id)
+
+
+start_ring_recalibration_poller(_calibration_busy, _set_dashboard_recal)
 
 USER_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{3,30}$')
 
@@ -190,6 +213,8 @@ def calibrate_start():
         current = _calibration_sessions.get(user_id)
         if current and current.get('status') in ('settling', 'capturing', 'saving'):
             return jsonify({'error': 'Calibration already in progress'}), 409
+        if user_id in _dashboard_recal_users:
+            return jsonify({'error': 'A recalibration started from the dashboard is in progress'}), 409
 
         _calibration_sessions[user_id] = {
             'status': 'settling', 'window_idx': 0, 'n_windows': N_BASELINE_WIN
@@ -260,6 +285,8 @@ def calibrate_threshold_start():
         current = _threshold_sessions.get(user_id)
         if current and current.get('status') in ('capturing', 'saving', 'recovery'):
             return jsonify({'error': 'Threshold calibration already in progress'}), 409
+        if user_id in _dashboard_recal_users:
+            return jsonify({'error': 'A recalibration started from the dashboard is in progress'}), 409
 
         _threshold_sessions[user_id] = {'status': 'capturing'}
 

@@ -40,6 +40,7 @@ import RingSummaryScreen from './modules/physiological/screens/RingSummaryScreen
 import EegSummaryScreen from './modules/eeg/screens/EegSummaryScreen';
 import EegThresholdTaskScreen from './modules/eeg/screens/EegThresholdTaskScreen';
 import CalibrationTrendScreen from './modules/shared/CalibrationTrendScreen';
+import MyLimitsScreen from './modules/fusion/screens/MyLimitsScreen';
 import PhenotypingEmaScreen from './modules/phenotyping/screens/PhenotypingEmaScreen';
 import PhenotypingSignalDetailScreen from './modules/phenotyping/screens/PhenotypingSignalDetailScreen';
 import PhenotypingSignalHistoryScreen from './modules/phenotyping/screens/PhenotypingSignalHistoryScreen';
@@ -64,6 +65,7 @@ const linking = {
       AccountSetup: 'account-setup',
       ThresholdCalibration: 'threshold-calibration',
       CalibrationTrend: 'calibration-trend',
+      MyLimits: 'my-limits',
       Admin: 'admin',
       Physiological: {
         path: '',
@@ -156,6 +158,11 @@ function RootNavigator() {
             name="CalibrationTrend"
             component={CalibrationTrendScreen}
             options={{ headerShown: true, title: 'Calibration Progress' }}
+          />
+          <Stack.Screen
+            name="MyLimits"
+            component={MyLimitsScreen}
+            options={{ headerShown: true, title: 'Your calm level & limits' }}
           />
           <Stack.Screen name="Physiological" component={PhysiologicalNavigator} />
           <Stack.Screen

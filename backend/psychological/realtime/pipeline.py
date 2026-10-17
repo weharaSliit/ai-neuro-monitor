@@ -11,7 +11,7 @@ from scipy.signal import detrend
 from backend.psychological.sam40.decision import (  # noqa: E402
     MIN_TASK_RESPONSE_Z, PERSONAL_K_ALERT, PERSONAL_SCALE, PERSONAL_SIGMA_LOGIT, PERSONAL_SIGMA_PRIOR,
     DecisionThresholds, compute_states, personal_decision_thresholds, personal_decision_thresholds_logit,
-    inv_logit, midpoint_threshold_logit, personal_sigma_logit, personal_z, personal_z_level, plausible_logit_score,
+    inv_logit, logit, midpoint_threshold_logit, personal_sigma_logit, personal_z, personal_z_level, plausible_logit_score,
     rest_level_logit, task_response_z,
     task_response_z_logit,
 )
@@ -446,6 +446,13 @@ class RealtimeInference:
         self.sigma: float = PERSONAL_SIGMA_LOGIT if PERSONAL_SCALE == 'logit' else PERSONAL_SIGMA_PRIOR
         self.task_response_z: float | None = None
         self.eeg_responsive: bool | None = None
+        # +1: this person's score RISES under load (the model's training
+        # direction); -1: it FALLS (seen on wearable02). Set by the task
+        # (finalize_personal_threshold), else carried over from the user's
+        # last responsive calibration. Every live score is mirrored around
+        # this person's own resting level when -1 (oriented_score()), so
+        # "higher = more load" holds for alerts, fusion and the apps.
+        self.direction: int = 1
         self.n_implausible_rest_blocks: int = 0
         self._live_blocks: int = 0  # infer_bipolar_block() calls, scored or not -> Firebase key
         self._itakura_ref_from_live: bool = False  # see infer_bipolar_block()
@@ -458,11 +465,23 @@ class RealtimeInference:
         return s is not None and PLAUSIBLE_SCORE_EPS <= s <= 1.0 - PLAUSIBLE_SCORE_EPS
 
     def personal_z(self, score: float | None) -> float | None:
-        """Distance of a score above this person's resting level, in the
-        Personal Scale's own spreads (log-odds or probability)."""
+        """Distance of a RAW model score from this person's resting level
+        towards load (their own direction), in the Personal Scale's own
+        spreads (log-odds or probability)."""
         if self.personal_scale == 'logit':
-            return personal_z_level(score, self.mu_rest_logit, self.sigma)
-        return personal_z(score, self.mu_rest, self.sigma)
+            z = personal_z_level(score, self.mu_rest_logit, self.sigma)
+        else:
+            z = personal_z(score, self.mu_rest, self.sigma)
+        return None if z is None else self.direction * z
+
+    def oriented_score(self, score: float | None) -> float | None:
+        """The raw score mirrored around this person's resting level
+        (log-odds) when their direction is -1, so a higher score always
+        means more load. Unchanged when +1 or without a resting level."""
+        if (score is None or self.direction == 1 or self.mu_rest_logit is None
+                or self.personal_scale != 'logit' or not self._plausible(score)):
+            return score
+        return inv_logit(2.0 * self.mu_rest_logit - logit(score))
 
     def continue_block_numbering(self, previous: "RealtimeInference") -> None:
         """Start this engine's Firebase block keys after `previous`'s last
@@ -886,7 +905,8 @@ class RealtimeInference:
             # ramp-up, limit = their midpoint, responsive if the task sits
             # >= 1 rest SD above baseline.
             rest_ok = [s for s in self._calibration_scores if self._plausible(s)]
-            midpoint = midpoint_threshold_logit(rest_ok, plausible_task, sigma=self.sigma)
+            rec_ok = [s for s in self._recovery_scores if self._plausible(s)]
+            midpoint = midpoint_threshold_logit(rest_ok, plausible_task, sigma=self.sigma, recovery_scores=rec_ok)
             z_task = (None if midpoint is None or self.mu_rest_logit is None
                       else (midpoint['task_level_logit'] - self.mu_rest_logit) / self.sigma)
             self.task_response_z = z_task
@@ -894,12 +914,16 @@ class RealtimeInference:
             if self.eeg_responsive:
                 lim = midpoint['limit_logit']
                 self.limit_logit = lim
-                self.z_alert = (lim - self.mu_rest_logit) / self.sigma
-                limit_p = inv_logit(lim)
+                self.direction = midpoint['direction']
+                # Limit on the ORIENTED scale (mirrored when direction -1):
+                # always above rest, so every "score >= limit" rule holds.
+                self.z_alert = abs(lim - self.mu_rest_logit) / self.sigma
+                limit_p = inv_logit(self.mu_rest_logit + self.z_alert * self.sigma)
                 self.thresholds = replace(self.thresholds, high_load_p=limit_p, cooldown_high_p=limit_p,
                                           break_p=max(self.thresholds.break_p, limit_p))
                 self.personal_high_load_p = limit_p
-                self.threshold_method = 'midpoint (median rest, sustained task)'
+                self.threshold_method = ('midpoint (median rest, sustained task'
+                                         + (', score falls under load)' if self.direction < 0 else ')'))
         else:
             z_task = (task_response_z([self.mu_rest], plausible_task, self.sigma)
                       if self.mu_rest is not None else None)
@@ -909,7 +933,10 @@ class RealtimeInference:
             'threshold_method': self.threshold_method,
             'z_alert': self.z_alert,
             **({k: midpoint[k] for k in ('baseline_logit', 'task_level_logit', 'limit_logit', 'rest_sd_logit',
-                                         'separation_sd', 'n_task_used', 'n_task_skipped')} if midpoint else {}),
+                                         'separation_sd', 'n_task_used', 'n_task_skipped', 'recovery_level_logit',
+                                         'reversal_sd', 'aba_confirmed')} if midpoint else {}),
+            'personal_direction': self.direction,
+            'calibration_status': midpoint['status'] if midpoint else None,
             'baseline': None if not midpoint else inv_logit(midpoint['baseline_logit']),
             'task_level': None if not midpoint else inv_logit(midpoint['task_level_logit']),
             'status': 'ok' if self.eeg_responsive else 'not_separated',
@@ -973,7 +1000,8 @@ class RealtimeInference:
 
         X = np.array([[row[c] for c in self.feature_columns]])
         raw_score = float(self.model.predict_proba(X)[:, 1][0])
-        calibrated_p = max(0.0, min(1.0, raw_score - self.baseline_shift))
+        # Oriented to this person's load direction (see oriented_score()).
+        calibrated_p = max(0.0, min(1.0, self.oriented_score(raw_score) - self.baseline_shift))
 
         row['raw_score'] = raw_score
         row['calibrated_p'] = calibrated_p
@@ -1007,7 +1035,7 @@ class RealtimeInference:
         if not (PLAUSIBLE_SCORE_EPS <= p <= 1.0 - PLAUSIBLE_SCORE_EPS):
             return {}   # saturated: the model is outside its range, not confident
         return {
-            'provisional_score': p,
+            'provisional_score': self.oriented_score(p),
             'provisional_z': self.personal_z(p),
             'provisional_quality': provisional_quality(oor),
         }
@@ -1129,6 +1157,7 @@ class RealtimeInference:
                 'mu_rest': self.mu_rest,
                 'personal_sigma': self.sigma,
                 'personal_z_alert': self.z_alert,
+                'personal_direction': self.direction,
                 'amplitude_gain': self.amplitude_gain,
                 **provisional,
                 **raw_feats,
@@ -1143,7 +1172,8 @@ class RealtimeInference:
 
         X = np.array([[row[c] for c in self.feature_columns]])
         raw_score = float(self.model.predict_proba(X)[:, 1][0])
-        calibrated_p = max(0.0, min(1.0, raw_score - self.baseline_shift))
+        # Oriented to this person's load direction (see oriented_score()).
+        calibrated_p = max(0.0, min(1.0, self.oriented_score(raw_score) - self.baseline_shift))
 
         row['raw_score'] = raw_score
         row['calibrated_p'] = calibrated_p
@@ -1168,6 +1198,8 @@ class RealtimeInference:
         result['personal_sigma'] = self.sigma
         result['personal_scale'] = self.personal_scale
         result['personal_z_alert'] = self.z_alert
+        result['personal_direction'] = self.direction
+        result['raw_task_state_score'] = raw_score
         result['amplitude_gain'] = self.amplitude_gain
         result.update({f'quality_{k}': v for k, v in quality.items()})
         result.update({f'session_{k}': v for k, v in health.items()})

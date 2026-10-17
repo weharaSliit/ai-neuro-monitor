@@ -17,6 +17,7 @@ import ActionTile from '../../shared/ActionTile';
 import { useCalibrationSummary, useDeviceStatus } from '../../shared/CalibrationGate';
 import LineChart from '../../shared/LineChart';
 import BaselineDriftCard from '../../shared/BaselineDriftCard';
+import SimulatedBanner from '../../shared/SimulatedBanner';
 import {
     levelOf, LEVEL_COLOR, MIND_WORDS, BODY_WORDS, OVERALL_WORDS, sliderPosition,
     DEFAULT_RING_THRESHOLD, DEFAULT_EEG_THRESHOLD, fusionKeyToMs,
@@ -364,6 +365,7 @@ export default function FusionSessionScreen({ navigation, route }) {
                     </View>
                     <AvatarButton userId={userId} onPress={() => navigation.navigate('Profile')} />
                 </View>
+                <SimulatedBanner userId={userId} sessionId={sessionId || null} />
 
                 {/* ── State hero ── */}
                 <View style={styles.heroCard}>
@@ -458,6 +460,14 @@ export default function FusionSessionScreen({ navigation, route }) {
                         caption="Typing & scrolling"
                         icon={NAMES.phenotyping} tint={COLORS.gsr}
                         onPress={() => navigation.navigate('Phenotyping')}
+                        style={{ minHeight: 0 }}
+                    />
+                    <View style={{ width: SPACE.md }} />
+                    <ActionTile
+                        lead="Your " bold="calm level" tail=" & limits"
+                        caption="Calibration, scores & alerts"
+                        icon={NAMES.calibration} tint={COLORS.eeg}
+                        onPress={() => navigation.navigate('MyLimits')}
                         style={{ minHeight: 0 }}
                     />
                 </View>
