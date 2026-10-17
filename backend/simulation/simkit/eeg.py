@@ -90,12 +90,16 @@ class EEGSource:
             k0, m = r.integers(0, n - FS), int(0.3 * FS)
             noise[k0:k0 + m] += r.uniform(10, 30) * np.sin(np.linspace(0, math.pi, m))
         clench = np.zeros(n)
-        for _ in range(r.poisson(self.clench_rate * 25 / 60)):
+        n_clench = r.poisson(self.clench_rate * 25 / 60) + int(getattr(self, "force_clench", 0))
+        self.force_clench = 0
+        for _ in range(n_clench):
             k0 = r.integers(0, n - 3 * FS)
             k1 = k0 + int(r.uniform(1, 3) * FS)
             clench[k0:k1] = 8 * self.emg_uv * _colored(r, k1 - k0, SOS["emg"])
         gap = None
-        if r.random() < self.dropout_rate * 25 / 60:
+        forced_gap = getattr(self, "force_dropout", False)
+        self.force_dropout = False
+        if forced_gap or r.random() < self.dropout_rate * 25 / 60:
             k0 = int(r.integers(FS, n - 4 * FS))
             gap = (k0, k0 + int(r.uniform(1, 3) * FS))
         self.c = {"rest": rest, "task": task, "a_rest": sosfiltfilt(SOS["alpha"], rest), "a_task": sosfiltfilt(SOS["alpha"], task),

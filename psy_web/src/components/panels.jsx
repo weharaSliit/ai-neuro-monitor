@@ -4,6 +4,7 @@ import {
 } from './charts';
 import { useFirebaseValue } from '../hooks/useData';
 import { requestRecalibration } from '../lib/firebase';
+import { blockAligned, mindOrientedP } from '../lib/limits';
 import {
   BATCH_SIZE, BIPOLAR_HIGHPASS_HZ, BLOCK_SEC, CLIP_UV, EEG_API_BASE, MQTT_TOPIC_EEG, MQTT_TOPIC_STATUS,
   CALIBRATION_SETTLE_SEC, MIN_USABLE_REST_BLOCKS, MQTT_URL, N_CALIBRATION_BLOCKS, POPULATION_HIGH_LOAD_P, RAW_WINDOW_SEC, SOURCE_FS, TARGET_FS,
@@ -14,6 +15,27 @@ import {
 } from '../lib/model';
 
 // ── small shared pieces ───────────────────────────────────────────
+// A block judged against the calibrated limits every dashboard uses
+// (lib/limits calibratedLimits; the Concept dashboard's Mind card): the model's
+// own score vs the calibrated threshold, decided on the 0-1 fusion scale
+// (own limit 0.50) so a score that falls under load is judged the right way.
+// Without a calibration: the backend's effective threshold, else the population one.
+export const blockScore = (b) => b?.raw_task_state_score ?? b?.task_state_score ?? null;
+export function mindDecision(b, limits, profile) {
+  const score = blockScore(b);
+  const m = limits?.mind; const info = limits?.eegInfo;
+  if (m) {
+    const aligned = b ? blockAligned(b, info) : null;
+    return { score, thr: m.threshold, baseline: m.baseline, personal: m.personal, calibrated: true,
+      source: m.personal ? 'calibrated personal' : 'calibrated provisional',
+      high: aligned == null ? null : aligned >= 0.5, level: levelOf(mindOrientedP(b, info), m.thresholdOriented) };
+  }
+  const thr = b?.effective_high_load_p ?? profile?.personal_high_load_p ?? POPULATION_HIGH_LOAD_P;
+  const personal = profile?.personal_high_load_p != null && Math.abs(profile.personal_high_load_p - thr) < 1e-9;
+  return { score, thr, baseline: null, personal, calibrated: false, source: personal ? 'personal' : 'population',
+    high: score == null ? null : score >= thr, level: levelOf(score, thr) };
+}
+
 export function ago(ms, now) {
   if (ms == null) return 'never';
   const s = Math.max(0, Math.round((now - ms) / 1000));
@@ -139,14 +161,14 @@ export function SessionPicker({ picker }) {
 }
 
 // ── pipeline overview: each stage with its own live evidence ───────
-export function PipelineStrip({ raw, health, sessionData, picker, now }) {
+export function PipelineStrip({ raw, health, sessionData, picker, now, limits }) {
   const latest = sessionData.blocks[sessionData.blocks.length - 1];
   const hbAge = raw.status.heartbeatAt ? now - raw.status.heartbeatAt : null;
   const drdy = raw.status.heartbeat?.drdy_ok;
   const pktFresh = raw.stats.lastPacketAt && now - raw.stats.lastPacketAt < 5000;
   const nFeat = latest?.features_eeg?.bipolar ? Object.values(latest.features_eeg.bipolar).filter((v) => v != null).length : 0;
   const ex = explain(latest?.features_eeg?.bipolar);
-  const thr = latest?.effective_high_load_p;
+  const dec = mindDecision(latest, limits);
 
   const stages = [
     {
@@ -185,10 +207,10 @@ export function PipelineStrip({ raw, health, sessionData, picker, now }) {
       value: ex ? `raw p = ${ex.rawScore.toFixed(3)}` : '—',
     },
     {
-      name: 'Decision', detail: 'score vs personal/population threshold',
-      kind: latest?.task_state_score == null ? 'idle' : latest.task_state_score >= thr ? 'critical' : 'good',
-      value: latest?.task_state_score == null ? (latest?.skipped ? 'skipped' : '—')
-        : `${fmtScore(latest.task_state_score)} ${latest.task_state_score >= thr ? '≥' : '<'} ${fmt(thr, 3)}`,
+      name: 'Decision', detail: `score vs ${dec.calibrated ? 'the calibrated' : 'the personal/population'} threshold`,
+      kind: dec.score == null ? 'idle' : dec.high ? 'critical' : 'good',
+      value: dec.score == null ? (latest?.skipped ? 'skipped' : '—')
+        : `${fmtScore(dec.score)} ${dec.high ? 'above' : 'below'} ${fmtScore(dec.thr)}`,
     },
   ];
 
@@ -302,36 +324,37 @@ export function RawPanel({ raw, now }) {
 }
 
 // ── 2. task state ──────────────────────────────────────────────────
-export function TaskStatePanel({ sessionData, profile, now }) {
+export function TaskStatePanel({ sessionData, profile, now, limits }) {
   const { blocks } = sessionData;
   const latest = blocks[blocks.length - 1];
   const lastScored = [...blocks].reverse().find((b) => b.task_state_score != null);
   const shown = latest && !latest.skipped ? latest : lastScored;
-  const thr = shown?.effective_high_load_p ?? profile?.personal_high_load_p ?? POPULATION_HIGH_LOAD_P;
-  const personal = profile?.personal_high_load_p != null && Math.abs(profile.personal_high_load_p - thr) < 1e-9;
-  const level = levelOf(shown?.task_state_score, thr);
+  // Calibrated baseline / threshold (the same on every dashboard), see mindDecision().
+  const dec = mindDecision(shown, limits, profile);
+  const { thr, level } = dec;
 
   // Chart scale: 'log' is picked automatically when every score is tiny
   // (wearable02 often sits around 0.001, a flat line on a 0..1 axis).
   const [scalePick, setScalePick] = useState(null);
-  const autoScale = autoScoreScale(blocks.map((b) => b.task_state_score));
+  const autoScale = autoScoreScale(blocks.map(blockScore));
   const scale = scalePick || autoScale;
-  const scored = blocks.filter((b) => b.task_state_score != null);
-  const muRest = sessionData.calibration?.mu_rest;
+  const scored = blocks.filter((b) => blockScore(b) != null);
+  const muRest = dec.baseline ?? sessionData.calibration?.mu_rest;
   const chart = useMemo(() => {
     // x = block number, not time: a re-run can overwrite an early window key
     // with a later timestamp, so time isn't monotonic across windows.
     const base = (f) => blocks.map((b) => ({ x: b.window, y: f(b), b }));
-    const refs = [{ y: thr, label: `threshold ${fmt(thr, 3)}` }, { y: TASK_STATE_LABEL_THRESHOLD, label: 'label cut 0.5' }];
+    const refs = [{ y: thr, label: `threshold ${fmtScore(thr)}` }, { y: TASK_STATE_LABEL_THRESHOLD, label: 'label cut 0.5' }];
+    const restLabel = dec.calibrated ? `baseline ${fmtScore(muRest)}` : 'own rest';
     if (scale === 'log') {
       return {
-        points: base((b) => log10Safe(b.task_state_score)),
-        refLines: [...refs, ...(muRest > 0 ? [{ y: muRest, label: 'own rest' }] : [])].map((r) => ({ ...r, y: Math.log10(r.y) })),
+        points: base((b) => log10Safe(blockScore(b))),
+        refLines: [...refs, ...(muRest > 0 ? [{ y: muRest, label: restLabel }] : [])].map((r) => ({ ...r, y: Math.log10(r.y) })),
         yFormat: (v) => fmtScore(10 ** v),
       };
     }
     if (scale === 'zoom') {
-      return { points: base((b) => b.task_state_score ?? null), refLines: [], yFormat: fmtScore };
+      return { points: base(blockScore), refLines: [], yFormat: fmtScore };
     }
     if (scale === 'z') {
       return {
@@ -340,10 +363,11 @@ export function TaskStatePanel({ sessionData, profile, now }) {
         yFormat: (v) => v.toFixed(2),
       };
     }
-    return { points: base((b) => b.task_state_score ?? null), refLines: refs, yDomain: [0, 1], yFormat: (v) => v.toFixed(2) };
-  }, [blocks, scale, thr, muRest]);
+    return { points: base(blockScore), refLines: [...refs, ...(dec.calibrated && muRest != null ? [{ y: muRest, label: restLabel }] : [])],
+      yDomain: [0, 1], yFormat: (v) => v.toFixed(2) };
+  }, [blocks, scale, thr, muRest, dec.calibrated]);
   const range = scored.length
-    ? [Math.min(...scored.map((b) => b.task_state_score)), Math.max(...scored.map((b) => b.task_state_score))] : null;
+    ? [Math.min(...scored.map(blockScore)), Math.max(...scored.map(blockScore))] : null;
 
   // Preview of blocks stored before this session had an amplitude gain:
   // what the backend scores them at the session's gain (model.js previewGain).
@@ -376,7 +400,7 @@ export function TaskStatePanel({ sessionData, profile, now }) {
         <>
           <div className="task-grid">
             <div className="gauge-box">
-              <ScoreGauge value={shown?.task_state_score ?? null} threshold={thr} level={level} />
+              <ScoreGauge value={dec.score} threshold={thr} level={level} />
               <div className={`level-pill lvl-${level || 'none'}`}>
                 {level ? LEVEL_WORDS[level] : 'No score'}
               </div>
@@ -389,8 +413,10 @@ export function TaskStatePanel({ sessionData, profile, now }) {
             </div>
             <KV rows={[
               ['Task label (model)', modelLabelText(shown?.task_state_label), `firebase_sync.py: int(score >= ${TASK_STATE_LABEL_THRESHOLD})`],
-              ['Decision vs threshold', shown?.task_state_score == null ? '—' : shown.task_state_score >= thr ? 'High task state' : 'Low task state'],
-              ['Effective threshold', `${fmt(thr, 4)} (${personal ? 'personal' : 'population'})`],
+              ['Decision vs threshold', dec.high == null ? '—' : dec.high ? 'High task state' : 'Low task state'],
+              ['Threshold in use', `${fmtScore(thr)} (${dec.source})`, dec.calibrated ? limits.mind.source : 'no calibration: backend / population threshold'],
+              ['Calibrated baseline', dec.baseline == null ? '—' : fmtScore(dec.baseline)],
+              ...(dec.calibrated && shown?.effective_high_load_p != null ? [['Backend live threshold', fmt(shown.effective_high_load_p, 4), 'effective_high_load_p stored with the block']] : []),
               ['Trend (last 3)', shown?.task_state_trend || '—'],
               ['Model confidence', shown?.model_confidence == null ? '—' : `${(shown.model_confidence * 100).toFixed(0)}%`, '|p − 0.5| × 2'],
               ['Signal quality', latest ? `${fmt(latest.eeg_quality_score, 0)}/100 (${latest.eeg_quality_flag ? 'trusted' : 'rejected'})` : '—'],
@@ -565,7 +591,7 @@ function RecalibrateBar({ picker, raw, now }) {
   );
 }
 
-export function CalibrationPanel({ sessionData, profile, raw, now, picker }) {
+export function CalibrationPanel({ sessionData, profile, raw, now, picker, limits }) {
   const c = sessionData.calibration;
   const t = sessionData.threshold;
   const streaming = raw.stats.lastPacketAt && now - raw.stats.lastPacketAt < 5000;
@@ -596,6 +622,10 @@ export function CalibrationPanel({ sessionData, profile, raw, now, picker }) {
         ))}
       </ol>
       <RecalibrateBar picker={picker} raw={raw} now={now} />
+      {limits?.mind ? (
+        <p className="caption">In use on every dashboard: baseline <b>{fmtScore(limits.mind.baseline)}</b>, high-load threshold <b>{fmtScore(limits.mind.threshold)}</b> ({limits.mind.source}
+          {limits.mind.statusText && !limits.mind.personal ? `; ${limits.mind.statusText}` : ''}{limits.mind.fromSid ? `; calibration from ${limits.mind.fromSid}` : ''}). The records below are what the backend stored.</p>
+      ) : null}
       <div className="cal-grid">
         <div>
           <h3>This session: calibration_result</h3>
@@ -638,7 +668,7 @@ export function CalibrationPanel({ sessionData, profile, raw, now, picker }) {
               ['Personal high_load_p', fmt(profile.personal_high_load_p, 4)],
               ['Population high_load_p', fmt(POPULATION_HIGH_LOAD_P, 4)],
             ]} />
-          ) : <p className="muted">No stored profile for this user. The population threshold {POPULATION_HIGH_LOAD_P.toFixed(4)} applies.</p>}
+          ) : <p className="muted">No stored profile for this user.{limits?.mind ? ` The calibrated threshold ${fmtScore(limits.mind.threshold)} applies.` : ` The population threshold ${POPULATION_HIGH_LOAD_P.toFixed(4)} applies.`}</p>}
         </div>
       </div>
     </Card>

@@ -7,12 +7,14 @@ import { useFusionData } from '../hooks/useFusion';
 import useEegCalibrations from '../hooks/useEegCalibrations';
 import RecalibratePanel from './RecalibratePanel';
 import LiveCalibrationCard from './LiveCalibrationCard';
+import LimitsStrip from './LimitsStrip';
 import StimulatorPanel from './StimulatorPanel';
 import { useStimulator } from '../hooks/useStimulator';
+import { decisionGate, fusedQuadrant } from '../lib/simDemo';
 import { keyToMs } from '../lib/fusion';
 import { fmt } from '../lib/model';
 import {
-  TASK_SKIP_RING, blockAligned, dShow, eegD, eegLimitInfo, eegStatusText, mean, median, num, persistent, pickEeg, plausible, ringAligned, ringLimitInfo,
+  blockAligned, calibratedLimits, dShow, eegStatusText, mean, num, persistent, ringAligned,
 } from '../lib/limits';
 
 const C = { eeg: 'var(--c1)', hrv: 'var(--c2)', fused: 'var(--c7)', mean: 'var(--ink)', task: 'var(--c4)', rec: 'var(--c3)' };
@@ -26,52 +28,6 @@ const clock = (ms) => (ms == null ? '—' : new Date(ms).toLocaleTimeString());
 // `show` maps the underlying values (EEG: z) to the plotted scale; running
 // means are taken on the underlying scale first, so the mean line ends at
 // the settled value (EEG rest: exactly 0.30) instead of a skewed average.
-// Every calibration phase for mind, body and fused. EEG and body are put on
-// the fusion scale (own limit = 0.50); fused = their equal-weight average,
-// windows matched by position within each phase (the two calibrations don't
-// share timestamps). With one input the fused value is that input, as in the
-// fusion engine when the other has weight 0.
-function calibrationPhases(cal, thr, eegInfo, ring, ringInfo) {
-  const P = (a) => (a || []).map(num);
-  const out = {};
-  if (eegInfo) {
-    const d = (arr) => P(arr).map((p) => eegD(p, eegInfo)).filter((v) => v != null);
-    const at = (L) => (L == null ? null : dShow((L - eegInfo.limitL) / eegInfo.sd));
-    const recP = P(thr?.recovery_scores).filter(plausible);
-    const rest = d(thr?.rest_scores || cal?.rest_scores); const task = d(thr?.task_scores); const recovery = d(thr?.recovery_scores);
-    out.mind = { rest, task, recovery, skip: eegInfo.skipped || 0, show: dShow, limit: 0.5,
-      // recovery level = mean score, as the backend judges recovery
-      levels: { rest: at(eegInfo.level), task: at(eegInfo.taskL), recovery: recP.length ? dShow(eegD(mean(recP), eegInfo)) : null } };
-  }
-  const t = ring.thresholds;
-  const rr = P(t?.resting_scores).filter((v) => v != null); const rt = P(t?.task_scores).filter((v) => v != null);
-  const rc = P(t?.task_result?.recovery_scores).filter((v) => v != null);
-  if (rr.length) {
-    const skip = rt.length ? Math.min(TASK_SKIP_RING, Math.floor(rt.length / 2)) : 0;
-    out.bodyRaw = { rest: rr, task: rt, recovery: rc, skip, limit: ringInfo.limit,
-      levels: { rest: ringInfo.base, task: ringInfo.taskLevel, recovery: rc.length ? mean(rc) : null } };
-    const al = (v) => ringAligned(v, ringInfo.limit);
-    out.body = { rest: rr.map(al), task: rt.map(al), recovery: rc.map(al), skip, limit: 0.5,
-      levels: { rest: al(ringInfo.base), task: ringInfo.taskLevel == null ? null : al(ringInfo.taskLevel), recovery: rc.length ? al(mean(rc)) : null } };
-  }
-  const m = out.mind && { rest: out.mind.rest.map(dShow), task: out.mind.task.map(dShow), recovery: out.mind.recovery.map(dShow) };
-  const b = out.body;
-  if (m || b) {
-    const pair = (x = [], y = []) => {
-      const n = Math.max(x.length, y.length);
-      return Array.from({ length: n }, (_, i) => mean([x.length ? x[Math.floor((i * x.length) / n)] : null,
-        y.length ? y[Math.floor((i * y.length) / n)] : null].filter((v) => v != null)));
-    };
-    const rest = pair(m?.rest, b?.rest); const task = pair(m?.task, b?.task); const recovery = pair(m?.recovery, b?.recovery);
-    const frac = Math.max(m?.task.length ? out.mind.skip / m.task.length : 0, b?.task.length ? b.skip / b.task.length : 0);
-    const skip = Math.min(Math.round(task.length * frac), Math.floor(task.length / 2));
-    out.fused = { rest, task, recovery, skip, limit: 0.5, inputs: m && b ? 'mind + body' : m ? 'mind only' : 'body only',
-      levels: { rest: rest.length ? median(rest) : null, task: task.length > skip ? mean(task.slice(skip)) : null,
-        recovery: recovery.length ? mean(recovery) : null } };
-  }
-  return out;
-}
-
 // All three trends on one chart; x = position within each phase, so the
 // different block/window counts line up phase by phase.
 function TrendCard({ phases }) {
@@ -132,7 +88,7 @@ function NowCard({ title, value, valueNote, label, high, alert, color }) {
   );
 }
 
-function NowCards({ eeg, ring, fusion, eegInfo, ringInfo }) {
+function NowCards({ eeg, ring, fusion, eegInfo, ringInfo, gate }) {
   const scored = eeg.blocks.filter((b) => b.task_state_score != null);
   const lastE = scored[scored.length - 1];
   const lastR = ring.windows[ring.windows.length - 1];
@@ -152,6 +108,18 @@ function NowCards({ eeg, ring, fusion, eegInfo, ringInfo }) {
     + (eegInfo?.src === 'computed' && hasMind ? ' · live EEG limit differs until redeploy' : '');
   const fusedAlert = lastF?.stress_alert_message
     || (fusedHigh ? 'High stress (2 of the last 3 windows)' : lastF?.stress_phase === 'trending_towards_stress' ? 'Stress is rising towards the limit' : null);
+  // Decisions start only once calibration is done (lib/simDemo decisionGate).
+  if (gate?.paused) {
+    return (
+      <div className="now-grid">
+        {[['Mind (EEG) · task state', C.eeg], ['Body (HRV + GSR) · stress', C.hrv], ['Fused · state', C.fused]].map(([t, c]) => (
+          <NowCard key={t} title={t} color={c} value="—" valueNote="decisions start after calibration" high={null} label="Calibrating" />
+        ))}
+      </div>
+    );
+  }
+  // Fused state from mind x body, each against its own limit.
+  const q = fusedQuadrant(mindHigh, ring.windows.length ? bodyHigh : null);
   return (
     <div className="now-grid">
       <NowCard title="Mind (EEG) · task state" color={C.eeg} value={eA == null ? '—' : eA.toFixed(2)} valueNote="fusion scale · limit 0.50"
@@ -160,8 +128,9 @@ function NowCards({ eeg, ring, fusion, eegInfo, ringInfo }) {
         valueNote={`limit ${fmt(ringInfo.limit, 2)}`}
         high={bodyHigh} label={bodyHigh == null ? 'No window' : bodyHigh ? 'Stressed' : 'Normal'}
         alert={bodyHigh ? 'Body stress (2 of the last 3 windows)' : lastR?.trending_toward_stress ? 'Body signals trending toward stress' : null} />
-      <NowCard title="Fused · stress" color={C.fused} value={lastF ? lastF.fused_probability.toFixed(2) : '—'} valueNote={fusedNote}
-        high={fusedHigh} label={fusedHigh == null ? 'No window' : fusedHigh ? 'High stress' : 'Normal'} alert={fusedAlert} />
+      <NowCard title="Fused · state" color={C.fused} value={lastF ? lastF.fused_probability.toFixed(2) : '—'} valueNote={fusedNote}
+        high={q ? q.key !== 'relaxed' : fusedHigh} label={q ? `${q.label}${q.partial ? ` (${q.partial})` : ''}` : fusedHigh == null ? 'No window' : fusedHigh ? 'High stress' : 'Normal'}
+        alert={q?.message || fusedAlert} />
     </div>
   );
 }
@@ -386,15 +355,18 @@ export default function CalibrationDashboard({ now, onBack }) {
   const eeg = useSessionData(uid, sid);
   const ring = usePhysioData(uid, sid);
   const fusion = useFusionData(uid, sid);
-  const history = useEegCalibrations(uid, `${sid}|${eeg.calibration?.updated_at ?? ''}`);
+  const history = useEegCalibrations(uid, `${sid}|${eeg.calibration?.updated_at ?? ''}|${eeg.threshold?.updated_at ?? ''}`);
   const device = useFirebaseValue('eeg_devices/wearable02');
   const streaming = device?.last_seen != null && now / 1000 - device.last_seen < 60;
 
-  const { cal, thr } = pickEeg(eeg, history, sid);
+  // The calibrated baseline / threshold in use (lib/limits calibratedLimits): every dashboard uses the same.
+  const limits = calibratedLimits({ eeg, history, sid, ring });
+  const { cal, thr, eegInfo, ringInfo, phases } = limits;
   const stim = useStimulator(now, sid);
-  const eegInfo = eegLimitInfo(cal, thr);
-  const ringInfo = ringLimitInfo(ring);
-  const phases = calibrationPhases(cal, thr, eegInfo, ring, ringInfo);
+  const recalReq = useFirebaseValue(sid ? `eeg_recalibration/${sid}` : null);
+  const ringReq = useFirebaseValue(uid ? `ring_recalibration/${uid}` : null);
+  const gate = decisionGate({ cal, thr, ringThresholds: ring.thresholds, ringPresent: ring.windows.length > 0 || Boolean(ring.baseline),
+    recalActive: ['requested', 'capturing', 'saving'].includes(recalReq?.status) || ['capturing', 'saving'].includes(ringReq?.status) });
   const xDomain = useMemo(() => {
     const ts = [...eeg.blocks.map((b) => (b.timestamp_end ? b.timestamp_end * 1000 : null)), ...ring.windows.map((w) => w.t),
       ...fusion.windows.map((w) => keyToMs(w.key))].filter((t) => t != null && Number.isFinite(t));
@@ -411,8 +383,9 @@ export default function CalibrationDashboard({ now, onBack }) {
         <SessionPicker picker={picker} />
       </header>
 
+      <LimitsStrip limits={limits} />
       <StimulatorPanel now={now} />
-      <NowCards eeg={eeg} ring={ring} fusion={fusion} eegInfo={eegInfo} ringInfo={ringInfo} />
+      <NowCards eeg={eeg} ring={ring} fusion={fusion} eegInfo={eegInfo} ringInfo={ringInfo} gate={gate} />
 
       <TrendCard phases={phases} />
       <div className="grid-2">

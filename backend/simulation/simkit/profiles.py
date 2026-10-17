@@ -36,11 +36,14 @@ REF = Path(__file__).resolve().parents[1] / "reference"
 def sam40_strata():
     subs = json.loads((REF / "sam40_reference.json").read_text())["subjects"]
     sh = {s["subject"]: s["shift_sd"] for s in subs}
+    resp = REF / "responsive_subjects.json"      # simkit/responders.py
     return {
         "typical": [s for s, v in sh.items() if v >= 0.5],
         "strong": [s for s, v in sh.items() if v >= 1.2],
         "weak": [s for s, v in sh.items() if abs(v) < 0.4],
         "inverted": [s for s, v in sh.items() if v <= -0.6],
+        # subjects whose simulated EEG calibration (headband layer included) passes reliably
+        "responsive": json.loads(resp.read_text())["responsive"] if resp.exists() else [s for s, v in sh.items() if v >= 1.2],
         "all": list(sh),
     }
 
@@ -57,6 +60,12 @@ class Profile:
     drift: bool = False
     low_arousal: bool = False
     tests: str = ""
+    body_response: str = "lab"        # 'lab': cognitive-task size below; 'wesad': WESAD baseline -> TSST class means
+
+
+# WESAD (15 subjects, 913 windows; physiological_signals notebook 03), baseline -> TSST
+# class means: HR 72.2 -> 95.0 bpm, RMSSD 50.1 -> 41.7 ms, SCL 1.17 -> 2.27 uS, SCRs 3.6 -> 6.8 /min.
+WESAD_BODY = {"d_hr": 95.0 - 72.2, "rsa_drop": 1 - 41.7 / 50.1, "d_scl": 2.27 - 1.17, "scr_rest": 3.6, "scr_stress": 6.8}
 
 
 PROFILES = {p.key: p for p in [
@@ -70,6 +79,15 @@ PROFILES = {p.key: p for p in [
     Profile("drift", "Drift", "typical", 1.0, drift=True, tests="drift_suspected, fusion down-weighting"),
 ]}
 
+# Live-demo profiles (live_stimulator.py, four_state_session.py): NOT part of the
+# offline multi-seed study, which keeps iterating PROFILES above.
+DEMO_PROFILES = {p.key: p for p in [
+    Profile("responsive", "Responsive (demo)", "responsive", 1.0, body_response="wesad",
+            tests="EEG calibration passes (simkit/responders.py) and a WESAD-sized body response: "
+                  "calibrated mind and body, all four states"),
+]}
+ALL_PROFILES = {**PROFILES, **DEMO_PROFILES}
+
 
 @dataclass
 class UserParams:
@@ -82,7 +100,7 @@ class UserParams:
 
 
 def sample_user(profile_key, seed):
-    p = PROFILES[profile_key]
+    p = ALL_PROFILES[profile_key]
     r = np.random.default_rng(seed)
     strata = sam40_strata()
     subj = int(r.choice(strata[p.eeg_stratum]))
@@ -91,19 +109,24 @@ def sample_user(profile_key, seed):
             "skin": Taus(u(20, 60), u(120, 300))}
     eeg = {"subject": subj, "rms_uv": float(np.clip(r.lognormal(np.log(11.4), 0.25), 6.0, 30.0)),
            "drift_frac": u(0.30, 0.50), "emg_frac": u(0.10, 0.22), "blink_rate": u(10, 20)}
-    # Ring stress effects: sized so the deployed ring model's AUC on simulated
-    # rest-vs-task windows is ~0.78 (fidelity.py), i.e. a mild cognitive
-    # stressor, not WESAD's TSST (+23 bpm, AUC 0.986); literature lab-stress
-    # ranges (HR +3..+12 bpm) give AUC ~0.94-0.97 with this model.
+    # Ring stress effects: HR +1.5..+4.5 bpm, SCL +0.15..0.6 uS, +1..2.5 skin
+    # responses/min (low end of lab cognitive-stress literature; WESAD's TSST is
+    # +23 bpm, AUC 0.986). Sized so the deployed ring model's AUC on simulated
+    # rest-vs-task windows is ~0.90 (fidelity.py) and the ring calibration
+    # separates for most users (~70 % typical). The earlier +0.9..+3.2 bpm was
+    # swamped by natural heart-rate drift: live demand could read lower than
+    # calm and the ring calibration was "not separated" for about half the users.
     k = p.ring_effect
     ring = {"hr0": u(76, 102) - (4 if p.low_arousal else 0), "rmssd_phys": u(25, 45),
-            "d_hr": k * u(0.9, 3.2), "rsa_drop": min(0.6, k * u(0.03, 0.10)),
+            "d_hr": k * u(1.5, 4.5), "rsa_drop": min(0.6, k * u(0.03, 0.10)),
             "scl0": float(np.clip(r.lognormal(np.log(2.6), 0.4), 1.4, 6.4)) * (0.7 if p.low_arousal else 1.0),
-            "d_scl": k * u(0.1, 0.6), "scr_rest": u(1, 3), "scr_stress": 0.0,
+            "d_scl": k * u(0.15, 0.6), "scr_rest": u(1, 3), "scr_stress": 0.0,
             "scr_amp": u(0.05, 0.3), "jitter_ms": u(30, 55), "resp_hz": u(0.2, 0.3),
             "hr_wander": 4.0, "scl_wander": 0.06, "gsr_noise": 5.0, "gsr_noise_var": 0.9,
             "motion_rate": 1.5 if p.artifacts else 0.0, "contact_loss_rate": 0.4 if p.artifacts else 0.0}
-    ring["scr_stress"] = ring["scr_rest"] + k * u(0.9, 2.1)
+    ring["scr_stress"] = ring["scr_rest"] + k * u(1.0, 2.5)
+    if p.body_response == "wesad":
+        ring.update(WESAD_BODY)
     eeg["clench_rate"] = 1.0 if p.artifacts else 0.0           # per minute
     eeg["dropout_rate"] = 0.5 if p.artifacts else 0.0
     fatigue = u(0.0, 0.3)

@@ -16,14 +16,14 @@ function useWidth(initial = 320) {
 
 // Groups consecutive blocks into at most `n` buckets (averaging the scored
 // ones) so the chart stays readable however long the session is.
-export function bucketize(blocks, n, threshold, moodOf) {
+export function bucketize(blocks, n, threshold, moodOf, score = (b) => b.task_state_score) {
   if (!blocks.length) return [];
   const size = Math.ceil(blocks.length / n);
   const out = [];
   for (let i = 0; i < blocks.length; i += size) {
     const g = blocks.slice(i, i + size);
-    const scored = g.filter((b) => b.task_state_score != null);
-    const p = scored.length ? scored.reduce((a, b) => a + b.task_state_score, 0) / scored.length : null;
+    const scored = g.filter((b) => score(b) != null);
+    const p = scored.length ? scored.reduce((a, b) => a + score(b), 0) / scored.length : null;
     const end = g[g.length - 1].timestamp_end;
     out.push({ p, end, n: g.length, nScored: scored.length, mood: moodOf(p, threshold) });
   }

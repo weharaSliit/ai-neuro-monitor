@@ -1,0 +1,174 @@
+{
+ "chosen_on": "dev seeds 500-519",
+ "confirmed_on": "seeds 900-919",
+ "default_params": {
+  "n": 6,
+  "k": 4,
+  "buffer_spreads": 0.5,
+  "rise_spreads": 0.5,
+  "alpha": 0.3,
+  "persist": 2,
+  "clear_blocks": 2,
+  "cooldown_blocks": 7
+ },
+ "chosen_params": {
+  "n": 6,
+  "k": 3,
+  "buffer_spreads": 0.0,
+  "rise_spreads": 0.25,
+  "alpha": 0.5,
+  "persist": 2,
+  "clear_blocks": 2,
+  "cooldown_blocks": 7
+ },
+ "dev": {
+  "default": {
+   "typical.mind_ew_sensitivity": 0.0,
+   "typical.mind_ew_precision": null,
+   "typical.mind_ew_false_per_hour_calm": 0.0,
+   "typical.mind_ew_lead_time_s": null,
+   "typical.fused_ew_sensitivity": 0.125,
+   "typical.fused_ew_precision": 0.4444444444444444,
+   "typical.fused_ew_false_per_hour_calm": 0.37500000000008527,
+   "typical.fused_ew_lead_time_s": 25.000000000005684,
+   "eeg_strong_ring_weak.mind_ew_sensitivity": 0.0,
+   "eeg_strong_ring_weak.mind_ew_precision": 1.0,
+   "eeg_strong_ring_weak.mind_ew_false_per_hour_calm": 0.0,
+   "eeg_strong_ring_weak.mind_ew_lead_time_s": null,
+   "eeg_strong_ring_weak.fused_ew_sensitivity": 0.0,
+   "eeg_strong_ring_weak.fused_ew_precision": 0.0,
+   "eeg_strong_ring_weak.fused_ew_false_per_hour_calm": 0.37500000000008527,
+   "eeg_strong_ring_weak.fused_ew_lead_time_s": null
+  },
+  "chosen": {
+   "typical.mind_ew_sensitivity": 0.6,
+   "typical.mind_ew_precision": 0.8333333333333334,
+   "typical.mind_ew_false_per_hour_calm": 1.500000000000341,
+   "typical.mind_ew_lead_time_s": 116.66666666669319,
+   "typical.fused_ew_sensitivity": 0.25,
+   "typical.fused_ew_precision": 0.5333333333333333,
+   "typical.fused_ew_false_per_hour_calm": 1.1250000000002558,
+   "typical.fused_ew_lead_time_s": 112.50000000002558,
+   "eeg_strong_ring_weak.mind_ew_sensitivity": 0.3333333333333333,
+   "eeg_strong_ring_weak.mind_ew_precision": 0.6666666666666666,
+   "eeg_strong_ring_weak.mind_ew_false_per_hour_calm": 3.000000000000682,
+   "eeg_strong_ring_weak.mind_ew_lead_time_s": 143.75000000003268,
+   "eeg_strong_ring_weak.fused_ew_sensitivity": 0.25,
+   "eeg_strong_ring_weak.fused_ew_precision": 0.3125,
+   "eeg_strong_ring_weak.fused_ew_false_per_hour_calm": 0.37500000000008527,
+   "eeg_strong_ring_weak.fused_ew_lead_time_s": 275.0000000000625
+  },
+  "chosen_feasible": false
+ },
+ "confirm": {
+  "default": {
+   "typical.mind_ew_sensitivity": 0.0,
+   "typical.mind_ew_precision": null,
+   "typical.mind_ew_false_per_hour_calm": 0.0,
+   "typical.mind_ew_lead_time_s": null,
+   "typical.fused_ew_sensitivity": 0.0,
+   "typical.fused_ew_precision": 0.0,
+   "typical.fused_ew_false_per_hour_calm": 0.0,
+   "typical.fused_ew_lead_time_s": null,
+   "eeg_strong_ring_weak.mind_ew_sensitivity": 0.0,
+   "eeg_strong_ring_weak.mind_ew_precision": 1.0,
+   "eeg_strong_ring_weak.mind_ew_false_per_hour_calm": 0.0,
+   "eeg_strong_ring_weak.mind_ew_lead_time_s": null,
+   "eeg_strong_ring_weak.fused_ew_sensitivity": 0.0,
+   "eeg_strong_ring_weak.fused_ew_precision": 0.0,
+   "eeg_strong_ring_weak.fused_ew_false_per_hour_calm": 0.0,
+   "eeg_strong_ring_weak.fused_ew_lead_time_s": null
+  },
+  "chosen": {
+   "typical.mind_ew_sensitivity": 0.13333333333333333,
+   "typical.mind_ew_precision": 1.0,
+   "typical.mind_ew_false_per_hour_calm": 0.0,
+   "typical.mind_ew_lead_time_s": 162.50000000003695,
+   "typical.fused_ew_sensitivity": 0.0,
+   "typical.fused_ew_precision": 0.0,
+   "typical.fused_ew_false_per_hour_calm": 0.0,
+   "typical.fused_ew_lead_time_s": null,
+   "eeg_strong_ring_weak.mind_ew_sensitivity": 0.3095238095238095,
+   "eeg_strong_ring_weak.mind_ew_precision": 1.0,
+   "eeg_strong_ring_weak.mind_ew_false_per_hour_calm": 1.071428571428815,
+   "eeg_strong_ring_weak.mind_ew_lead_time_s": 112.50000000002558,
+   "eeg_strong_ring_weak.fused_ew_sensitivity": 0.0,
+   "eeg_strong_ring_weak.fused_ew_precision": 0.2,
+   "eeg_strong_ring_weak.fused_ew_false_per_hour_calm": 0.37500000000008527,
+   "eeg_strong_ring_weak.fused_ew_lead_time_s": null
+  },
+  "chosen_feasible": false
+ },
+ "top5_dev": [
+  {
+   "params": {
+    "n": 6,
+    "k": 3,
+    "buffer_spreads": 0.0,
+    "rise_spreads": 0.25,
+    "alpha": 0.5,
+    "persist": 2,
+    "clear_blocks": 2,
+    "cooldown_blocks": 7
+   },
+   "feasible": false,
+   "mean_sensitivity": 0.35833333333333334
+  },
+  {
+   "params": {
+    "n": 6,
+    "k": 3,
+    "buffer_spreads": 0.0,
+    "rise_spreads": 0.5,
+    "alpha": 0.5,
+    "persist": 2,
+    "clear_blocks": 2,
+    "cooldown_blocks": 7
+   },
+   "feasible": false,
+   "mean_sensitivity": 0.35
+  },
+  {
+   "params": {
+    "n": 6,
+    "k": 3,
+    "buffer_spreads": 0.0,
+    "rise_spreads": 0.25,
+    "alpha": 0.3,
+    "persist": 2,
+    "clear_blocks": 2,
+    "cooldown_blocks": 7
+   },
+   "feasible": false,
+   "mean_sensitivity": 0.3208333333333333
+  },
+  {
+   "params": {
+    "n": 6,
+    "k": 3,
+    "buffer_spreads": 0.0,
+    "rise_spreads": 0.5,
+    "alpha": 0.3,
+    "persist": 2,
+    "clear_blocks": 2,
+    "cooldown_blocks": 7
+   },
+   "feasible": false,
+   "mean_sensitivity": 0.3125
+  },
+  {
+   "params": {
+    "n": 6,
+    "k": 4,
+    "buffer_spreads": 0.0,
+    "rise_spreads": 0.25,
+    "alpha": 0.5,
+    "persist": 2,
+    "clear_blocks": 2,
+    "cooldown_blocks": 7
+   },
+   "feasible": false,
+   "mean_sensitivity": 0.30833333333333335
+  }
+ ]
+}

@@ -9,11 +9,13 @@ import {
   breakdown, keyToMs,
 } from '../lib/fusion';
 import { fmt } from '../lib/model';
-import { useSessionData } from '../hooks/useData';
+import { useFirebaseValue, useSessionData } from '../hooks/useData';
 import { usePhysioData } from '../hooks/usePhysio';
 import useEegCalibrations from '../hooks/useEegCalibrations';
-import { eegLimitInfo, eegStatusText, persistent, pickEeg, ringLimitInfo, sig } from '../lib/limits';
+import { calibratedLimits, eegStatusText, num, persistent, sig } from '../lib/limits';
+import LimitsStrip from './LimitsStrip';
 import { useStimulator } from '../hooks/useStimulator';
+import { decisionGate, fusedQuadrant } from '../lib/simDemo';
 
 const WINDOW_SEC = 25;
 const clockMs = (ms) => (ms == null ? '—' : new Date(ms).toLocaleTimeString());
@@ -59,7 +61,7 @@ function FusionSources({ windows, picker, now }) {
 }
 
 // ── 1. current fused result ───────────────────────────────────────
-function CurrentPanel({ windows, baseline, now }) {
+function CurrentPanel({ windows, baseline, fusedBase, now, gate }) {
   const fw = windows.filter((w) => w.fused_probability != null);
   const lastF = fw[fw.length - 1];
   const persistentHigh = lastF?.fused_high_persistent ?? persistent(fw.map((w) => w.fused_probability >= 0.5));
@@ -76,6 +78,10 @@ function CurrentPanel({ windows, baseline, now }) {
   }
   const thr = shown.fused_threshold ?? 0.5;
   const level = fusedLevel(shown.fused_probability, thr);
+  // Fused state: mind x body, each 2 of its last 3 against its own limit (lib/simDemo QUADRANTS).
+  const flagsOf = (key) => windows.map((w) => (num(w[key]) == null ? null : num(w[key]) >= 0.5));
+  const anyBody = windows.some((w) => num(w.hrv_gsr_aligned) != null);
+  const q = gate?.paused ? null : fusedQuadrant(persistent(flagsOf('eeg_aligned')), anyBody ? persistent(flagsOf('hrv_gsr_aligned')) : null);
   const elevated = shown.modality_elevated || {};
   const flags = [
     ...(shown.saturated_modalities || []).map((m) => `${m} saturated (kept at ${SATURATED_WEIGHT}× weight)`),
@@ -87,6 +93,8 @@ function CurrentPanel({ windows, baseline, now }) {
       subtitle="Reliability-weighted combination of the mind and body readings"
       right={<span className="muted">window {shown.key} · {ago(keyToMs(shown.key), now)}</span>}
     >
+      <p className={`sd-gate ${q ? 'ok' : ''}`}>{gate?.paused ? '⏳ Calibrating: the fused state starts once calibration is done.'
+        : q ? <>Fused state: <b>{q.label}</b>{q.partial ? ` (${q.partial})` : ''}{q.message ? ` · “${q.message}”` : ''}</> : 'Fused state: —'}</p>
       <div className="task-grid">
         <div className="gauge-box">
           <ScoreGauge value={shown.fused_probability} threshold={thr} level={level} label="fused" />
@@ -103,8 +111,10 @@ function CurrentPanel({ windows, baseline, now }) {
           ['Raw-scale result', `${fmt(shown.fused_probability_raw, 3)} vs ${fmt(shown.fused_threshold_raw, 3)}`, 'Old rule, averaging raw model outputs'],
           ['Trend', shown.stress_trend || '—'],
           ['Phase', PHASE_TEXT[shown.stress_phase] || shown.stress_phase || '—'],
-          ['Session baseline', baseline == null ? 'not yet (first 3 windows)' : fmt(baseline, 3)],
-          ['Deviation from baseline', signed(shown.stress_deviation, 3)],
+          ['Calibrated baseline', fusedBase == null ? 'not calibrated' : fmt(fusedBase, 3), 'Fused calm level from the calibration rest blocks (the same on every dashboard)'],
+          ['Deviation from calibrated baseline', fusedBase == null ? '—' : signed(shown.fused_probability - fusedBase, 3)],
+          ['Session start level', baseline == null ? 'not yet (first 3 windows)' : `${fmt(baseline, 3)} · deviation ${signed(shown.stress_deviation, 3)}`,
+            'Fusion engine trend reference: mean of the first 3 fused windows of this session'],
         ]} />
         <div className="alerts">
           <h3>Agreement</h3>
@@ -132,7 +142,7 @@ function CurrentPanel({ windows, baseline, now }) {
 }
 
 // ── Limits in use (live: updates as soon as a calibration changes) ──
-function LimitsPanel({ eegInfo, eegCal, eegThr, ringInfo, ring, latest, now }) {
+function LimitsPanel({ eegInfo, eegCal, eegThr, ringInfo, ring, latest, now, fusedCal }) {
   const at = (sec) => (sec ? ago(sec * 1000, now) : '—');
   const ringSet = ring.thresholds?.threshold_updated_at || ring.thresholds?.resting_scores_updated_at;
   const winZ = latest?.z_alert_eeg;
@@ -173,7 +183,8 @@ function LimitsPanel({ eegInfo, eegCal, eegThr, ringInfo, ring, latest, now }) {
           <KV rows={[
             ['Limit', '0.50 (each input aligned to its own limit)'],
             ['Condition', 'high stress when 2 of the last 3 windows ≥ 0.50'],
-            ['Baseline', 'first 3 fused windows of the session (trend and phase)'],
+            ['Calibrated baseline', fusedCal?.baseline == null ? '— (no calibration yet)' : `${fmt(fusedCal.baseline, 3)} · calm level from the calibration rest blocks`],
+            ['Session start level', 'first 3 fused windows of the session (fusion engine trend and phase)'],
           ]} />
         </div>
       </div>
@@ -315,7 +326,7 @@ function TimelinePanel({ windows, stimBands = [] }) {
 }
 
 // ── 4. session summary ────────────────────────────────────────────
-function SummaryPanel({ data, now }) {
+function SummaryPanel({ data, now, fusedBase }) {
   const ws = data.windows;
   const fused = ws.filter((w) => w.fused_probability != null);
   const high = fused.filter((w) => w.fused_label === 1).length;
@@ -336,7 +347,7 @@ function SummaryPanel({ data, now }) {
         <Stat label="Mean mind weight" value={pct(meanEegW)} sub="across fused windows" />
         <Stat label="Agree / disagree" value={`${conc} / ${disc}`} sub="windows with both inputs" />
         <Stat label="Saturated EEG" value={sat} sub="kept at reduced weight" />
-        <Stat label="Baseline" value={fmt(data.baseline, 3)} sub="mean of first 3 fused" />
+        <Stat label="Calibrated baseline" value={fmt(fusedBase, 3)} sub={`session start ${fmt(data.baseline, 3)} (first 3 fused)`} />
       </div>
     </Card>
   );
@@ -434,10 +445,13 @@ export default function FusionView({ picker, data, now, onBack }) {
   const eeg = useSessionData(uid, sid);
   const ring = usePhysioData(uid, sid);
   const history = useEegCalibrations(uid, `${sid}|${eeg.calibration?.updated_at ?? ''}|${eeg.threshold?.updated_at ?? ''}`);
-  const { cal: eegCal, thr: eegThr } = pickEeg(eeg, history, sid);
-  const eegInfo = eegLimitInfo(eegCal, eegThr);
-  const ringInfo = ringLimitInfo(ring);
+  // The calibrated baseline / threshold in use (lib/limits calibratedLimits): every dashboard uses the same.
+  const limits = calibratedLimits({ eeg, history, sid, ring });
+  const { cal: eegCal, thr: eegThr, eegInfo, ringInfo, fusedCal } = limits;
   const stim = useStimulator(now, sid);
+  const recalReq = useFirebaseValue(sid ? `eeg_recalibration/${sid}` : null);
+  const gate = decisionGate({ cal: eegCal, thr: eegThr, ringThresholds: ring.thresholds, ringPresent: ring.windows.length > 0 || Boolean(ring.baseline),
+    recalActive: ['requested', 'capturing', 'saving'].includes(recalReq?.status) });
   return (
     <div className="page">
       <header className="top">
@@ -453,14 +467,15 @@ export default function FusionView({ picker, data, now, onBack }) {
         <SessionPicker picker={picker} />
       </header>
 
+      <LimitsStrip limits={limits} />
       <FusionSources windows={data.windows} picker={picker} now={now} />
       {data.loading && picker.sessionId ? <p className="muted">Loading fusion windows…</p> : null}
 
-      <CurrentPanel windows={data.windows} baseline={data.baseline} now={now} />
-      <LimitsPanel eegInfo={eegInfo} eegCal={eegCal} eegThr={eegThr} ringInfo={ringInfo} ring={ring} latest={latest} now={now} />
+      <CurrentPanel windows={data.windows} baseline={data.baseline} fusedBase={fusedCal?.baseline ?? null} now={now} gate={gate} />
+      <LimitsPanel eegInfo={eegInfo} eegCal={eegCal} eegThr={eegThr} ringInfo={ringInfo} ring={ring} latest={latest} now={now} fusedCal={fusedCal} />
       <BreakdownPanel windows={data.windows} />
       <TimelinePanel windows={data.windows} stimBands={stim.bands} />
-      <SummaryPanel data={data} now={now} />
+      <SummaryPanel data={data} now={now} fusedBase={fusedCal?.baseline ?? null} />
       <WindowLog windows={data.windows} />
       <FusionSourcesPanel picker={picker} latest={latest} />
     </div>
