@@ -250,11 +250,6 @@ export default function EegSummaryScreen() {
     .map((w) => ({ value: Math.round(w.task_state_score * 100), date: new Date(w.timestamp_end * 1000) }))
     .slice(-120), [windowsList]);
 
-  // Relative band powers already sum to ~1 -- shown as one friendly bar.
-  const bands = BANDS.map((b) => ({ ...b, v: latest?.features_eeg?.bipolar?.[b.key] }))
-    .filter((b) => b.v != null && b.v > 0);
-  const bandTotal = bands.reduce((s, b) => s + b.v, 0);
-  const topBand = bands.length ? bands.reduce((a, b) => (b.v > a.v ? b : a)) : null;
   const totalSessions = sessionDist.normal + sessionDist.stress;
 
   return (
@@ -291,33 +286,10 @@ export default function EegSummaryScreen() {
           </View>
         </Card>
 
-        {bands.length >= 3 && bandTotal > 0 && (
-          <Card style={styles.block}>
-            <Text style={styles.blockTitle}>Your brainwaves now</Text>
-            <Text style={styles.blockSub}>
-              Mostly <Text style={{ fontWeight: '800', color: topBand.color }}>{topBand.name.toLowerCase()}</Text> — {topBand.meaning}
-            </Text>
-            <View style={styles.bandBar}>
-              {bands.map((b) => (
-                <View key={b.key} style={{ flex: b.v / bandTotal, backgroundColor: b.color }} />
-              ))}
-            </View>
-            <View style={styles.bandLegend}>
-              {bands.map((b) => (
-                <View key={b.key} style={styles.bandItem}>
-                  <View style={[styles.bandSwatch, { backgroundColor: b.color }]} />
-                  <Text style={styles.bandName}>{b.name}</Text>
-                  <Text style={styles.bandPct}>{Math.round((b.v / bandTotal) * 100)}%</Text>
-                </View>
-              ))}
-            </View>
-          </Card>
-        )}
-
         {loadSeries.length > 1 && (
           <Card style={styles.block}>
             <Text style={styles.blockTitle}>Mental load over time</Text>
-            <Text style={styles.blockSub}>Higher means a busier mind · dashed line is your limit</Text>
+            <Text style={styles.blockSub}>Dashed line is your limit</Text>
             <View style={{ marginTop: SPACE.md }}>
               <LineChart
                 points={loadSeries}
@@ -374,13 +346,6 @@ export default function EegSummaryScreen() {
 }
 
 // Friendly names for the 5 relative band powers.
-const BANDS = [
-  { key: 'delta_rel_power', name: 'Deep rest',  color: '#94A3B8', meaning: 'very slow waves, typical of deep relaxation or drowsiness.' },
-  { key: 'theta_rel_power', name: 'Daydream',   color: '#A78BFA', meaning: 'slow waves linked to drifting thoughts and light rest.' },
-  { key: 'alpha_rel_power', name: 'Relaxed',    color: '#5E935A', meaning: 'calm, awake and relaxed.' },
-  { key: 'beta_rel_power',  name: 'Focused',    color: '#E8A238', meaning: 'active thinking and concentration.' },
-  { key: 'gamma_rel_power', name: 'Intense',    color: '#E56B4E', meaning: 'fast waves seen during heavy mental effort.' },
-];
 
 const styles = StyleSheet.create({
   scroll: { paddingTop: SPACE.lg, paddingBottom: SPACE.xxxl },
@@ -394,12 +359,6 @@ const styles = StyleSheet.create({
   heroWord: { fontSize: 26, fontWeight: '800', color: COLORS.light.text, letterSpacing: -0.5 },
   heroLine: { ...TYPE.body, color: COLORS.light.textSub, marginTop: 4 },
 
-  bandBar: { flexDirection: 'row', height: 14, borderRadius: 7, overflow: 'hidden', marginTop: SPACE.md },
-  bandLegend: { flexDirection: 'row', flexWrap: 'wrap', marginTop: SPACE.md, rowGap: SPACE.sm },
-  bandItem: { width: '33%', flexDirection: 'row', alignItems: 'center', gap: 5 },
-  bandSwatch: { width: 10, height: 10, borderRadius: 5 },
-  bandName: { fontSize: 12, fontWeight: '600', color: COLORS.light.textSub },
-  bandPct: { fontSize: 12, fontWeight: '800', color: COLORS.light.text },
 
   banner: {
     flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,

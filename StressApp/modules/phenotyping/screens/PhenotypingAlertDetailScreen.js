@@ -49,8 +49,8 @@ export default function PhenotypingAlertDetailScreen({ navigation, route }) {
     }, [deviceId]);
 
     const compositeZ = typeof latest?.composite_z === 'number' ? latest.composite_z : 0;
-    const isActive = !!latest && (latest.is_anomaly || compositeZ > 1.0);
     const severity = compositeZ > 2.0 ? 'stress' : compositeZ > 1.0 ? 'drift' : 'normal';
+    const isActive = !!latest && severity !== 'normal';
 
     const severityColor = severity === 'stress' ? COLORS.stress : severity === 'drift' ? COLORS.warning : COLORS.normal;
     const severityBg = severity === 'stress' ? (COLORS.stressSoft || COLORS.stress + '18') : severity === 'drift' ? (COLORS.warningSoft || COLORS.warning + '18') : (COLORS.normalSoft || COLORS.normal + '18');

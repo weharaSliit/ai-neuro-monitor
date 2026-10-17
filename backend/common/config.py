@@ -77,7 +77,17 @@ AUTH_TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 30  # 30 days
 
 
 #  App settings
-N_BASELINE_WIN    = 3    # windows for personal baseline -- SETTLE_SEC(30s) +
+# Calibration protocol (both wearables, run together):
+#   1. settle (discarded)            2 min   CALIBRATION_SETTLE_SEC
+#   2. resting baseline, natural     4 min   ring N_BASELINE_WIN x 60 s;
+#      breathing, eyes open                  EEG N_CALIBRATION_BLOCKS x 25 s
+#   3. high-load task                8 min   ring N_TASK_WIN; EEG 19 blocks
+#   4. recovery rest                 3 min   ring N_RECOVERY_WIN; EEG 7 blocks
+#   total about 17 min.
+CALIBRATION_SETTLE_SEC = 120   # discarded before the resting baseline (both wearables)
+N_RECOVERY_WIN = 3             # ring recovery-rest windows after the task (3 min)
+N_BASELINE_WIN    = 4    # ring resting-baseline windows: 4 x 60 s = 4 min after the 2 min settle.
+                          # History: was 3 (30 s settle + 3 min) --
                           # 3*WINDOW_SEC(60s) = 210s (3.5min). Was briefly
                           # dropped to 2 (2.5min) this session, then reverted
                           # -- the real lever for tolerating skipped/rejected
@@ -137,7 +147,12 @@ MIN_CONFIDENCE_FOR_RETRAIN     = 0.75
 MIN_SIGNAL_QUALITY_FOR_RETRAIN = 0.70
 
 # Fraction of state-machine "rising" votes needed to flag trending_toward_stress
-TREND_RISING_THRESHOLD = 0.35
+TREND_RISING_THRESHOLD = 0.25
+# Retuned 0.35 -> 0.25 together with the minimum-change rule in
+# predictor.StressStateMachine (a feature only votes when it moved by more
+# than calm variability). WESAD validation at 0.25: 100% of onsets detected,
+# 3.2% false alarms in calm windows (the old rule at 0.35: 100% / 18.4%);
+# on a real calm ring session 7% flagged against 45% before.
 
 # Normal/Stress decision cutoff on the model's P(Stress) output. Previously
 # an unvalidated implicit 0.5 (XGBoost's own default predict() cutoff, never

@@ -6,6 +6,7 @@ import { useTheme } from '../physiological/config/ThemeContext';
 import physiologicalApi from '../physiological/api/client';
 import { API_BASE, DEVICE_ID } from '../physiological/config/config';
 import { eegClient } from './eegApiClient';
+import { useAuth } from '../../context/AuthContext';
 
 const DEVICE_POLL_MS = 5000;
 // The backend no longer pushes a ~1s raw live_raw preview (raw EEG samples
@@ -66,6 +67,7 @@ export function useCalibrationSummary(userId, token) {
 }
 
 export function useDeviceStatus(userId, db) {
+  const auth = useAuth();
   const [ringOnline, setRingOnline] = useState(false);
   const [sessionId, setSessionId] = useState(null);
   const [eegLastSeen, setEegLastSeen] = useState(null); // epoch seconds, from the latest block record's timestamp_end
@@ -77,6 +79,9 @@ export function useDeviceStatus(userId, db) {
   // EEG-related screen showed "Offline" for the device's entire ~10-85s
   // calibration span even though it was live and streaming the whole time.
   const [calibrationLastSeen, setCalibrationLastSeen] = useState(null);
+  // epoch seconds of the headband's own heartbeat (eeg_devices/wearable02),
+  // written about every 5 s while it streams -- same idea as the ring's.
+  const [deviceLastSeen, setDeviceLastSeen] = useState(null);
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -134,14 +139,46 @@ export function useDeviceStatus(userId, db) {
   }, [userId, sessionId, db]);
 
   useEffect(() => {
+    if (!db) return undefined;
+    const hbRef = ref(db, 'eeg_devices/wearable02/last_seen');
+    const handler = onValue(hbRef, (snap) => setDeviceLastSeen(snap.val() ?? null));
+    return () => off(hbRef, 'value', handler);
+  }, [db]);
+
+  useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), DEVICE_POLL_MS);
     return () => clearInterval(id);
   }, []);
 
+  const eegHeartbeatFresh = deviceLastSeen != null && (now / 1000 - deviceLastSeen) <= 20;
   const eegWindowFresh = eegLastSeen != null && (now / 1000 - eegLastSeen) <= EEG_LATEST_WINDOW_FRESH_SEC;
   const eegCalibratingFresh = calibrationLastSeen != null
     && (now / 1000 - calibrationLastSeen) <= EEG_LATEST_WINDOW_FRESH_SEC;
-  const eegOnline = eegWindowFresh || eegCalibratingFresh;
+  const eegOnline = eegHeartbeatFresh || eegWindowFresh || eegCalibratingFresh;
+
+  // Claim the shared device pointer once this account's own ring/headband is
+  // on. Only for the signed-in account's own screens (an admin viewing another
+  // user's devices must not take it), and never from another account.
+  // A test account ("sim_..." / "mp_...") also claims it while the live stimulator is running
+  // (the simulation needs a logged-in user to stream for, and its readings are what
+  // would make the devices "online" -- it cannot start before the pointer exists).
+  const [stimTs, setStimTs] = useState(null);
+  useEffect(() => {
+    if (!db) return undefined;
+    const stRef = ref(db, 'stimulator/status');
+    const handler = onValue(stRef, (snap) => {
+      const v = snap.val();
+      setStimTs(v?.online ? (v.ts ?? null) : null);
+    });
+    return () => off(stRef, 'value', handler);
+  }, [db]);
+  const stimulatorUp = stimTs != null && (now / 1000 - stimTs) <= 20;
+  const isSimUser = typeof userId === 'string' && (userId.startsWith('sim_') || userId.startsWith('mp_'));
+  const online = ringOnline || eegOnline || (stimulatorUp && isSimUser);
+  const mine = !!auth?.user?.userId && auth.user.userId === userId;
+  useEffect(() => {
+    if (online && mine && auth?.claimDevices) auth.claimDevices();
+  }, [online, mine, auth?.sessionId]);
 
   return { ringOnline, eegOnline, eegSessionId: sessionId };
 }

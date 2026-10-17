@@ -1,16 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, Keyboard, Vibration } from 'react-native';
-import { ref, onValue, off } from 'firebase/database';
+import { ref, onValue, off, set, update } from 'firebase/database';
 import { db } from '../firebase';
 import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
 import Button from '../../shared/Button';
+import LiveCalibrationGraphs from '../../shared/LiveCalibrationGraphs';
 import Icon, { NAMES } from '../../shared/Icon';
 import { eegClient } from '../../shared/eegApiClient';
 import physiologicalApi from '../../physiological/api/client';
 import { useTheme } from '../../physiological/config/ThemeContext';
 import { useAuth } from '../../../context/AuthContext';
 import { useCalibrationSummary } from '../../shared/CalibrationGate';
+import StroopStressor from '../components/StroopStressor';
 
 // Five back-to-back timed activities (serial subtraction -> maths quiz ->
 // sequence-recall puzzle -> ticking-clock sorter -> Stroop), 8 minutes
@@ -32,20 +34,26 @@ import { useCalibrationSummary } from '../../shared/CalibrationGate';
 // around abrupt, punitive negative feedback (a harsh buzz + a real
 // speed setback on a miss, not just "try again") rather than pure
 // cognitive load, on top of the escalating-speed pressure itself.
-const SERIAL_SUB_DURATION_SEC = 150;
-const MATH_DURATION_SEC = 100;
-const PUZZLE_DURATION_SEC = 70;
-const SORTER_DURATION_SEC = 90;
-const STROOP_DURATION_SEC = 70;
+// 8 min in all (backend: 19 EEG blocks, 8 ring windows). The Stroop
+// stressor gets 3 min (components/StroopStressor.js); the other rounds were
+// shortened to keep the total at 480 s. Same as web/ThresholdTask.jsx.
+const SERIAL_SUB_DURATION_SEC = 120;
+const MATH_DURATION_SEC = 90;
+const PUZZLE_DURATION_SEC = 45;
+const SORTER_DURATION_SEC = 45;
+const STROOP_DURATION_SEC = 180;
 // Comfortably above the ~480s this task now takes end-to-end (backend
 // capture ceilings are far higher still, see calibration_capture.py/
 // eeg_calibration_capture.py) but still tight enough to flag a genuinely
 // stuck capture during the review screen.
-const STUCK_WARNING_SEC = 520;
+// Protocol phase 4: 3 min recovery rest after the 8 min task (both backends
+// record it: EEG 7 x 25 s blocks, ring 3 x 60 s windows -- status 'recovery').
+const RECOVERY_DURATION_SEC = 180;
+const STUCK_WARNING_SEC = 480 + RECOVERY_DURATION_SEC + 60;
 const POLL_INTERVAL_MS = 2000;
 const TICK_MS = 100;
-const IN_PROGRESS = ['capturing', 'saving'];
-const TASK_PHASES = ['serialSub', 'quiz', 'puzzle', 'sorter', 'stroop'];
+const IN_PROGRESS = ['capturing', 'saving', 'recovery'];
+const TASK_PHASES = ['serialSub', 'quiz', 'puzzle', 'sorter', 'stroop', 'recovery'];
 
 function randomInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -211,48 +219,10 @@ const SORTER_DROP_SPEEDUP = 0.9; // multiply on a correct sort
 const SORTER_DROP_SETBACK = 1.4; // multiply on a miss
 const SORTER_BUZZ_PATTERN = [0, 120, 60, 120];
 
-// ── Stroop colour-word test ──────────────────────────────────────────
-// 10 visually distinct colours (not the common 4) and 92% incongruent
-// trials (word says one colour, ink is another -- almost every trial is
-// a genuine conflict trial now, not just most of them), PLUS a
-// randomized per-trial task switch: roughly half the trials ask for the
-// INK colour, the other half ask for what the WORD SAYS -- decided fresh
-// every trial and shown as the instruction the user must actively read
-// each time, rather than a fixed rule they can settle into. On top of
-// that cognitive-conflict difficulty, the last STROOP_URGENCY_FRAC of
-// EACH trial's own shrinking clock now pulses the screen and vibrates
-// the device -- the same escalating-urgency mechanic Serial Subtraction
-// uses, reused here so Stroop also carries a felt, autonomic (GSR/HRV-
-// facing) time-pressure cue on top of its purely cognitive conflict,
-// not just a background countdown.
-const STROOP_COLORS = [
-  { name: 'Red', hex: '#E53935' },
-  { name: 'Blue', hex: '#1E88E5' },
-  { name: 'Green', hex: '#43A047' },
-  { name: 'Yellow', hex: '#FDD835' },
-  { name: 'Purple', hex: '#8E24AA' },
-  { name: 'Orange', hex: '#FB8C00' },
-  { name: 'Teal', hex: '#00897B' },
-  { name: 'Pink', hex: '#D81B60' },
-  { name: 'Cyan', hex: '#00ACC1' },
-  { name: 'Brown', hex: '#6D4C41' },
-];
-const STROOP_INCONGRUENT_PROB = 0.92;
-const STROOP_TRIAL_SEC_BASE = 2.8;
-const STROOP_TRIAL_SEC_MIN = 1.0;
-const STROOP_TRIAL_SEC_STEP = 0.15;
-const STROOP_URGENCY_FRAC = 0.25;
-const STROOP_VIBRATE_INTERVAL_MS = 700;
-
-function generateStroopTrial() {
-  const inkColor = STROOP_COLORS[randomInt(0, STROOP_COLORS.length - 1)];
-  const others = STROOP_COLORS.filter((c) => c.name !== inkColor.name);
-  const labelColor = Math.random() < STROOP_INCONGRUENT_PROB
-    ? others[randomInt(0, others.length - 1)]
-    : inkColor;
-  const askMode = Math.random() < 0.5 ? 'ink' : 'word';
-  return { inkColor, labelColor, askMode, options: shuffle(STROOP_COLORS) };
-}
+// ── Stroop colour-word stressor ──────────────────────────────────────
+// See components/StroopStressor.js: 4 colours, 78% incongruent, ink-colour
+// rule, fixation cross, MIST-style adaptive response window (2.0 s start,
+// 0.8-2.5 s), countdown bar, red flash + buzz on errors, running score.
 
 export default function EegThresholdTaskScreen({ navigation }) {
   const { theme: t, COLORS } = useTheme();
@@ -317,14 +287,11 @@ export default function EegThresholdTaskScreen({ navigation }) {
   const sorterResolvedRef = useRef(true);
 
   // Stroop phase state
-  const [stroopDeadline, setStroopDeadline] = useState(null);
-  const [stroopTrial, setStroopTrial] = useState(null);
-  const [stroopTrialDeadline, setStroopTrialDeadline] = useState(null);
-  const [stroopTrialTotalMs, setStroopTrialTotalMs] = useState(1);
-  const [stroopScore, setStroopScore] = useState({ correct: 0, total: 0 });
-  const [stroopStreak, setStroopStreak] = useState(0);
-  const [stroopFeedback, setStroopFeedback] = useState(null); // { correct, correctName, timeout }
-  const stroopFeedbackHandledRef = useRef(false);
+  const [recoveryDeadline, setRecoveryDeadline] = useState(null);
+  const [colourSafe, setColourSafe] = useState(false);   // purple instead of green
+  const [stroopLog, setStroopLog] = useState(null);      // { settings, trials, summary }
+  const [stressRating, setStressRating] = useState(null);
+  const taskStartedAt = useRef(null);
 
   const [eegResult, setEegResult] = useState(null);
   const [eegTriggeredAt, setEegTriggeredAt] = useState(null);
@@ -417,6 +384,7 @@ export default function EegThresholdTaskScreen({ navigation }) {
     if (!userId) return;
     triggerEeg();
     triggerRing();
+    taskStartedAt.current = Date.now();
     const start = randomInt(SERIAL_SUB_START_MIN, SERIAL_SUB_START_MAX);
     setSerialStart(start);
     setSerialCurrent(start);
@@ -569,41 +537,27 @@ export default function EegThresholdTaskScreen({ navigation }) {
   }, [phase, sorterFeedback, sorterDropMs, spawnSorterItem]);
 
   // ── Stroop phase ─────────────────────────────────────────────────
-  const nextStroopTrial = useCallback((streak) => {
-    const trialSec = Math.max(STROOP_TRIAL_SEC_MIN, STROOP_TRIAL_SEC_BASE - streak * STROOP_TRIAL_SEC_STEP);
-    setStroopTrial(generateStroopTrial());
-    setStroopTrialDeadline(Date.now() + trialSec * 1000);
-    setStroopTrialTotalMs(trialSec * 1000);
-    setStroopFeedback(null);
-    stroopFeedbackHandledRef.current = false;
-  }, []);
-
-  const startStroop = useCallback(() => {
-    setStroopScore({ correct: 0, total: 0 });
-    setStroopStreak(0);
-    setStroopDeadline(Date.now() + STROOP_DURATION_SEC * 1000);
-    nextStroopTrial(0);
-    setPhase('stroop');
-  }, [nextStroopTrial]);
-
-  const submitStroopAnswer = useCallback((colorName) => {
-    if (!stroopTrial || stroopFeedback || stroopFeedbackHandledRef.current) return;
-    stroopFeedbackHandledRef.current = true;
-    const correctName = stroopTrial.askMode === 'ink' ? stroopTrial.inkColor.name : stroopTrial.labelColor.name;
-    const isCorrect = colorName === correctName;
-    setStroopScore((s) => ({ correct: s.correct + (isCorrect ? 1 : 0), total: s.total + 1 }));
-    setStroopStreak((s) => (isCorrect ? s + 1 : 0));
-    setStroopFeedback({ correct: isCorrect, correctName, timeout: false });
-  }, [stroopTrial, stroopFeedback]);
-
-  const stroopTimeout = useCallback(() => {
-    if (!stroopTrial || stroopFeedbackHandledRef.current) return;
-    stroopFeedbackHandledRef.current = true;
-    const correctName = stroopTrial.askMode === 'ink' ? stroopTrial.inkColor.name : stroopTrial.labelColor.name;
-    setStroopScore((s) => ({ correct: s.correct, total: s.total + 1 }));
-    setStroopStreak(0);
-    setStroopFeedback({ correct: false, correctName, timeout: true });
-  }, [stroopTrial]);
+  const startStroop = useCallback(() => setPhase('stroop'), []);
+  // Trial log + summary: engagement check, and alignment of trials with EEG
+  // blocks / ring windows by timestamp (calibration_tasks/{uid}/{session}).
+  const taskPath = userId && sessionId ? `calibration_tasks/${userId}/${sessionId}` : null;
+  const finishStroop = useCallback((log) => {
+    setStroopLog(log);
+    setRecoveryDeadline(Date.now() + RECOVERY_DURATION_SEC * 1000);
+    setPhase('recovery');
+    if (taskPath) {
+      set(ref(db, taskPath), {
+        started_at: taskStartedAt.current, stroop_finished_at: Date.now(), source: 'app',
+        durations_sec: { serial: SERIAL_SUB_DURATION_SEC, maths: MATH_DURATION_SEC, puzzle: PUZZLE_DURATION_SEC,
+          sorter: SORTER_DURATION_SEC, stroop: STROOP_DURATION_SEC, recovery: RECOVERY_DURATION_SEC },
+        stroop: log,
+      }).catch(() => {});
+    }
+  }, [taskPath]);
+  const saveRating = (r) => {
+    setStressRating(r);
+    if (taskPath) update(ref(db, taskPath), { manipulation_check: { stress_rating_1_9: r, at: Date.now() } }).catch(() => {});
+  };
 
   // Single 100ms clock drives every phase's overall + per-item countdowns --
   // a plain deadline-timestamp comparison rather than a separate
@@ -678,22 +632,11 @@ export default function EegThresholdTaskScreen({ navigation }) {
     }
   }, [phase, nowFine, sorterDeadline, sorterItemDeadline, startStroop]);
 
-  useEffect(() => {
-    if (phase !== 'stroop' || !stroopDeadline) return;
-    if (nowFine >= stroopDeadline) {
-      setPhase('review');
-      return;
-    }
-    if (stroopTrialDeadline && nowFine >= stroopTrialDeadline && !stroopFeedbackHandledRef.current) {
-      stroopTimeout();
-    }
-  }, [phase, nowFine, stroopDeadline, stroopTrialDeadline, stroopTimeout]);
 
   useEffect(() => {
-    if (phase !== 'stroop' || !stroopFeedback) return undefined;
-    const id = setTimeout(() => nextStroopTrial(stroopStreak), 500);
-    return () => clearTimeout(id);
-  }, [phase, stroopFeedback, stroopStreak, nextStroopTrial]);
+    if (phase === 'recovery' && recoveryDeadline && nowFine >= recoveryDeadline) setPhase('review');
+  }, [phase, nowFine, recoveryDeadline]);
+
 
   useEffect(() => {
     if (!eegTriggeredAt || eegResult != null) return undefined;
@@ -777,19 +720,6 @@ export default function EegThresholdTaskScreen({ navigation }) {
   const sorterFallFrac = sorterItemDeadline
     ? Math.max(0, Math.min(1, 1 - (sorterItemDeadline - nowFine) / sorterDropMs))
     : 0;
-  const stroopSecondsLeft = stroopDeadline ? Math.max(0, Math.ceil((stroopDeadline - nowFine) / 1000)) : STROOP_DURATION_SEC;
-  const stroopTrialFrac = stroopTrialDeadline
-    ? Math.max(0, Math.min(1, (stroopTrialDeadline - nowFine) / stroopTrialTotalMs))
-    : 1;
-  const stroopUrgent = phase === 'stroop' && !stroopFeedback && stroopTrialFrac <= STROOP_URGENCY_FRAC;
-  const stroopPulseOn = stroopUrgent && Math.floor(nowFine / 300) % 2 === 0;
-
-  useEffect(() => {
-    if (!stroopUrgent) return undefined;
-    Vibration.vibrate(80);
-    const id = setInterval(() => Vibration.vibrate(80), STROOP_VIBRATE_INTERVAL_MS);
-    return () => { clearInterval(id); Vibration.cancel(); };
-  }, [stroopUrgent]);
 
   return (
     <ScreenBackground>
@@ -804,7 +734,7 @@ export default function EegThresholdTaskScreen({ navigation }) {
               Your high-load (EEG) and stress (Ring) thresholds are already personalized -- EEG at
               {' '}{Math.round(eegCalib.personal_high_load_p * 100)}%, Ring at{' '}
               {Math.round(ringCalib.personal_stress_threshold * 100)}%. You can keep these, or redo
-              the ~8 minute task to refresh them against your current physiology.
+              the ~11 minute task to refresh them against your current physiology.
             </Text>
             <Button label="Keep Current & Continue" onPress={finish} variant="primary" style={{ marginTop: 16 }} />
             <TouchableOpacity onPress={startSerialSub} disabled={!userId} activeOpacity={0.7} style={styles.skipRow}>
@@ -823,15 +753,20 @@ export default function EegThresholdTaskScreen({ navigation }) {
               <Text style={[styles.title, { color: t.text }]}>Personalize Your Threshold</Text>
             </View>
             <Text style={[styles.body, { color: t.textMuted }]}>
-              About 8 minutes, five rounds back to back -- serial subtraction (count down by 13,
+              About 11 minutes: 8 minutes of five rounds back to back, then 3 minutes of quiet rest. Rest the phone on a table and tap your answers -- don't say them out loud. Rounds: serial subtraction (count down by 13,
               any mistake restarts you), a speed maths quiz with unpredictable question types that
               gets harder the better you do, a sequence-recall puzzle, a ticking-clock sorter that
-              punishes any miss with a buzz and a real speed setback, then a color-word (Stroop)
-              test that randomly switches what it's asking each round. Deliberately sustained, real
+              punishes any miss with a buzz and a real speed setback, then a 3-minute color-word (Stroop)
+              test: tap the ink colour, not the word, against a clock that speeds up as you get better. Deliberately sustained, real
               pressure -- a short task barely registers before your body's response even catches up
               -- so this measures how YOUR signal moves between rest and a genuine high-load state,
               for both your Ring and EEG, instead of relying on a population average.
             </Text>
+            <TouchableOpacity onPress={() => setColourSafe((v) => !v)} activeOpacity={0.7} style={styles.skipRow}>
+              <Text style={[styles.skipText, { color: t.textMuted }]}>
+                {colourSafe ? '☑' : '☐'} I find red and green hard to tell apart (use purple instead of green)
+              </Text>
+            </TouchableOpacity>
             <Button label="Start Task" onPress={startSerialSub} disabled={!userId || calibLoading} variant="primary" style={{ marginTop: 16 }} />
             <TouchableOpacity onPress={finish} activeOpacity={0.7} style={styles.skipRow}>
               <Text style={[styles.skipText, { color: t.textMuted }]}>Skip for now →</Text>
@@ -1012,48 +947,27 @@ export default function EegThresholdTaskScreen({ navigation }) {
           </Card>
         )}
 
-        {phase === 'stroop' && stroopTrial && (
-          <Card elevated style={[styles.card, stroopPulseOn && { borderColor: COLORS.stress, borderWidth: 2 }]}>
-            {stroopPulseOn && <View style={[styles.urgentOverlay, { backgroundColor: COLORS.stress }]} pointerEvents="none" />}
-            <View style={styles.headerRow}>
-              <Text style={[styles.timer, { color: stroopUrgent ? COLORS.stress : COLORS.brand }]}>{stroopSecondsLeft}s</Text>
-              <Text style={[styles.scoreText, { color: t.textMuted }]}>
-                Streak {stroopStreak} · {stroopScore.correct}/{stroopScore.total} correct
-              </Text>
-            </View>
-            <Text style={[styles.stroopInstruction, { color: COLORS.brand }]}>
-              {stroopTrial.askMode === 'ink'
-                ? 'Tap the INK COLOR — ignore the word'
-                : "Tap the color the WORD SAYS — ignore the ink"}
-            </Text>
-
-            {stroopFeedback ? (
-              <View style={styles.feedbackWrap}>
-                <Text style={[styles.feedbackText, { color: stroopFeedback.correct ? COLORS.normal : COLORS.stress }]}>
-                  {stroopFeedback.correct ? '✓ Correct!' : stroopFeedback.timeout ? '⏱ Too slow!' : '✗ Wrong'}
-                </Text>
-                {!stroopFeedback.correct && (
-                  <Text style={[styles.feedbackSub, { color: t.textMuted }]}>It was {stroopFeedback.correctName}</Text>
-                )}
-              </View>
-            ) : (
-              <Text style={[styles.stroopWord, { color: stroopTrial.inkColor.hex }]}>
-                {stroopTrial.labelColor.name.toUpperCase()}
-              </Text>
-            )}
-
-            <View style={styles.stroopGrid}>
-              {stroopTrial.options.map((c) => (
-                <TouchableOpacity
-                  key={c.name}
-                  disabled={!!stroopFeedback}
-                  onPress={() => submitStroopAnswer(c.name)}
-                  style={[styles.stroopSwatch, { backgroundColor: c.hex, opacity: stroopFeedback ? 0.5 : 1 }]}
-                />
-              ))}
-            </View>
-          </Card>
+        {phase === 'stroop' && (
+          <StroopStressor durationSec={STROOP_DURATION_SEC} colourSafe={colourSafe} roundLabel="Round 5 of 5"
+            onDone={finishStroop} theme={t} COLORS={COLORS} />
         )}
+
+        {phase === 'recovery' && (() => {
+          const secs = recoveryDeadline ? Math.max(0, Math.ceil((recoveryDeadline - nowFine) / 1000)) : RECOVERY_DURATION_SEC;
+          return (
+            <Card elevated style={styles.card}>
+              <View style={styles.headerRow}>
+                <Icon name={NAMES.eeg} size={22} color={COLORS.brand} />
+                <Text style={[styles.title, { color: t.text }]}>Recovery Rest · {Math.floor(secs / 60)}:{String(secs % 60).padStart(2, '0')}</Text>
+              </View>
+              <Text style={[styles.body, { color: t.textMuted }]}>
+                Well done -- the task is over. Now just rest: sit still, eyes open, breathe normally and look at one spot.
+                This shows how quickly you settle after stress. Keep both devices on.
+              </Text>
+              <Button label="Skip the Rest" onPress={() => setPhase('review')} variant="secondary" style={{ marginTop: 16 }} />
+            </Card>
+          );
+        })()}
 
         {phase === 'review' && (
           <Card elevated style={styles.card}>
@@ -1065,9 +979,21 @@ export default function EegThresholdTaskScreen({ navigation }) {
               Serial subtraction: best streak {serialBestStreak}, {serialRestarts} restart{serialRestarts === 1 ? '' : 's'}.
               Maths: {mathScore.correct}/{mathScore.total} correct. Puzzle: {puzzleScore.correct} solved, {puzzleScore.misses} missed.
               Sorter: {sorterScore.correct} sorted, {sorterScore.misses} missed.
-              Stroop: {stroopScore.correct}/{stroopScore.total} correct.
+              Stroop: {stroopLog ? `${Math.round((stroopLog.summary.accuracy ?? 0) * 100)}% of ${stroopLog.summary.n_trials}` : '—'}
+              {stroopLog ? ` (engagement: ${stroopLog.summary.engagement}; aim 50–85%)` : ''}.
               Each device reports independently below -- one taking longer doesn't hold up the other.
             </Text>
+
+            <Text style={[styles.resultLabel, { color: t.text, marginTop: 12 }]}>How stressful did the tasks feel?</Text>
+            <View style={styles.ratingRow}>
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((r) => (
+                <TouchableOpacity key={r} onPress={() => saveRating(r)} activeOpacity={0.7}
+                  style={[styles.ratingBtn, { borderColor: COLORS.brand, backgroundColor: stressRating === r ? COLORS.brand : 'transparent' }]}>
+                  <Text style={{ color: stressRating === r ? '#FFFFFF' : COLORS.brand, fontWeight: '800' }}>{r}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text style={[styles.skipText, { color: t.textMuted }]}>1 = not at all · 9 = extremely{stressRating != null ? ' · thanks!' : ''}</Text>
 
             <View style={styles.resultRow}>
               <View style={styles.resultRowHeader}>
@@ -1098,6 +1024,16 @@ export default function EegThresholdTaskScreen({ navigation }) {
             </TouchableOpacity>
           </Card>
         )}
+
+        {phase !== 'intro' && (
+          <LiveCalibrationGraphs
+            key={phase === 'review' ? 'review' : 'task'}
+            phase="task"
+            token={token}
+            collapsible={phase !== 'review'}
+            defaultOpen={phase === 'review'}
+          />
+        )}
       </View>
     </ScreenBackground>
   );
@@ -1122,10 +1058,8 @@ const styles = StyleSheet.create({
   feedbackWrap: { alignItems: 'center', justifyContent: 'center', minHeight: 140 },
   feedbackText: { fontSize: 26, fontWeight: '900', textAlign: 'center' },
   feedbackSub: { fontSize: 13, marginTop: 6, fontWeight: '600' },
-  stroopInstruction: { fontSize: 12, fontWeight: '700', textAlign: 'center', marginBottom: 8 },
-  stroopWord: { fontSize: 34, fontWeight: '900', textAlign: 'center', marginVertical: 20 },
-  stroopGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 12, marginTop: 8 },
-  stroopSwatch: { width: 64, height: 64, borderRadius: 14 },
+  ratingRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+  ratingBtn: { width: 34, height: 34, borderRadius: 17, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
   puzzleGrid: {
     flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center',
     width: 3 * 68 + 2 * 10, alignSelf: 'center', gap: 10, marginVertical: 12,

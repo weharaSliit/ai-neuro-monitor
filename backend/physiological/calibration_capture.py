@@ -43,19 +43,104 @@ import paho.mqtt.client as mqtt
 
 from backend.common.config import (
     MQTT_BROKER, MQTT_PORT, MQTT_TOPIC, MQTT_USER, MQTT_PASSWORD, MQTT_CA_CERT,
-    GSR_CAL, WINDOW_SEC, SETTLE_SEC, N_BASELINE_WIN
+    GSR_CAL, WINDOW_SEC, SETTLE_SEC, N_BASELINE_WIN, CALIBRATION_SETTLE_SEC, N_RECOVERY_WIN
 )
 from backend.common.config import EMA_ALPHA
-from backend.physiological.extract_features import extract_features
+from backend.physiological.extract_features import extract_features, adc_to_conductance
 from backend.physiological.ema_service import build_ema_summary, interpret_ema_change
 from backend.physiological.predictor import (
-    compute_baseline, compute_personal_stress_threshold, feature_cols, predict_window,
+    compute_baseline, feature_cols, midpoint_stress_threshold, predict_window,
     update_baseline_ema,
 )
 from backend.physiological.firebase_service import (
-    baseline_exists, load_baseline, load_resting_scores, save_baseline,
-    save_baseline_adaptation, save_personal_stress_threshold, save_resting_scores,
+    baseline_exists, clear_personal_stress_threshold, load_baseline, load_resting_scores, save_baseline,
+    save_baseline_adaptation, save_personal_stress_threshold, save_resting_scores, save_task_calibration_result,
 )
+
+LIVE_GSR_POINTS = 100   # about the last 20 s at the ring's ~5 Hz
+LIVE_IBI_BEATS = 20
+LIVE_EMIT_GAP_SEC = 1.0
+
+
+def _live_tail(state):
+    """What has arrived so far in the window being captured, as processed
+    values only (skin conductance in uS, recent beat intervals). Handed to the
+    status route in memory so the calibration screens can draw a moving wave
+    between the one-per-minute block points. Never saved anywhere."""
+    gsr = state['gsr_buf'][-LIVE_GSR_POINTS:]
+    ibi = [float(v) for v in state['ibi_buf'][-LIVE_IBI_BEATS:] if 300 <= v <= 2000]
+    elapsed = max(0.001, time.time() - state['window_start'])
+    hz = max(1.0, min(50.0, len(state['gsr_buf']) / elapsed)) if state['gsr_buf'] else 5.0
+    us = [round(float(c), 3) for c in adc_to_conductance(gsr, GSR_CAL)] if gsr else []
+    return {'gsr_us': us, 'gsr_hz': round(hz, 1), 'ibi_ms': [round(v, 1) for v in ibi],
+            'elapsed': round(elapsed, 1), 'ts': time.time()}
+
+
+def _live_block(window, baseline_mean=None, baseline_std=None):
+    """Display-only summary of one just-captured window for the live
+    calibration graphs: heart variability (SD1, ms), heart rate, skin
+    conductance (uS) and, when a baseline is known (the limit test), the
+    window's stress score. Never saved and never fed to the model beyond
+    the same extract_features()/predict_window() calls the save step makes
+    anyway; any failure just returns an unusable marker."""
+    try:
+        features_2d, motion_rejected, feat_dict, hrv_is_fallback, _wave = extract_features(
+            window['ibi_array'], window['gsr_adc_array'], window['acc_array'],
+            window['gsr_calibration'], actual_fs=window['actual_fs'],
+        )
+        if motion_rejected or hrv_is_fallback:
+            return {'valid': False}
+        block = {
+            'valid': True,
+            'hrv': round(float(feat_dict.get('SD1', 0.0)), 2),
+            'hr': round(float(feat_dict.get('MeanHR', 0.0)), 1),
+            'gsr': round(float(feat_dict.get('SCL_mean', 0.0)), 3),
+        }
+        if baseline_mean is not None:
+            block['score'] = round(float(predict_window(features_2d, baseline_mean, baseline_std)['prob_stress']), 3)
+        return block
+    except Exception:
+        return {'valid': False}
+
+
+def _provisional_rest_scores(windows):
+    """Live calibration graph only: every rest window so far scored against
+    a baseline built from those same windows (compute_baseline floors the
+    std, so this works from the first window). The values move a little as
+    windows are added -- that IS the calm level settling. The saved resting
+    scores (save_calibration_windows) replace them at the end; they can
+    differ slightly where an earlier baseline is EMA-blended in."""
+    rows = []
+    for w in windows:
+        try:
+            f2d, motion, _fd, fallback, _wd = extract_features(
+                w['ibi_array'], w['gsr_adc_array'], w['acc_array'], w['gsr_calibration'], actual_fs=w['actual_fs'])
+        except Exception:
+            continue
+        if not (motion or fallback):
+            rows.append(f2d[0])
+    if not rows:
+        return []
+    arr = np.array(rows)
+    try:
+        b_mean, b_std = compute_baseline(arr, n_windows=len(arr))
+        return [round(float(predict_window(arr[i:i + 1], b_mean, b_std)['prob_stress']), 4) for i in range(len(arr))]
+    except Exception:
+        return []
+
+
+def _window_score(window, baseline_mean, baseline_std):
+    """prob_stress of one window against the saved baseline, or None."""
+    try:
+        f2d, motion, _fd, fallback, _wd = extract_features(
+            window['ibi_array'], window['gsr_adc_array'], window['acc_array'], window['gsr_calibration'],
+            actual_fs=window['actual_fs'])
+        if motion or fallback:
+            return None
+        return round(float(predict_window(f2d, baseline_mean, baseline_std)['prob_stress']), 4)
+    except Exception:
+        return None
+
 
 # Task-calibration capture size, in WINDOW_SEC=60 windows. Was 1 (only
 # ~1 minute of task data), then 6 (6 minutes) -- now 8 (8 minutes) to
@@ -285,7 +370,7 @@ def save_calibration_windows(user_id, raw_windows):
     }
 
 
-def run_calibration_capture(user_id, on_progress=None):
+def run_calibration_capture(user_id, on_progress=None, on_live=None, live_scores=False):
     """Settles, captures N_BASELINE_WIN windows of raw sensor data from a
     fresh MQTT connection dedicated to this one call (see
     _connect_capture_client()), then saves them as user_id's personal
@@ -310,7 +395,7 @@ def run_calibration_capture(user_id, on_progress=None):
         # the server logs someone's actually watching during a capture --
         # a rejected/failed calibration used to be completely silent here.
         if status == 'settling':
-            print(f"[calibrate {user_id}] settling for {SETTLE_SEC}s...")
+            print(f"[calibrate {user_id}] settling for {CALIBRATION_SETTLE_SEC}s (discarded)...")
         elif status == 'window_captured':
             print(f"[calibrate {user_id}] window {extra['window_idx']}/{N_BASELINE_WIN} "
                   f"captured (fs={extra['fs']}Hz)")
@@ -329,6 +414,7 @@ def run_calibration_capture(user_id, on_progress=None):
             on_progress(status, extra)
 
     collected_windows = []
+    live_blocks = []
     state = {
         'window_start': time.time(),
         'ibi_buf': [], 'gsr_buf': [], 'acc_buf': [],
@@ -355,8 +441,10 @@ def run_calibration_capture(user_id, on_progress=None):
                 "gsr_calibration": GSR_CAL,
                 "actual_fs":       actual_fs
             })
+            live_blocks.append(_live_block(collected_windows[-1]))
             _notify('window_captured',
-                    window_idx=len(collected_windows), fs=actual_fs)
+                    window_idx=len(collected_windows), fs=actual_fs, blocks=list(live_blocks),
+                    rest_scores=_provisional_rest_scores(collected_windows) if live_scores else None)
 
         state['ibi_buf'], state['gsr_buf'], state['acc_buf'] = [], [], []
         state['window_start'] = time.time()
@@ -379,6 +467,13 @@ def run_calibration_capture(user_id, on_progress=None):
         az = data.get("acc_z", 0)
         state['acc_buf'].append(math.sqrt(ax * ax + ay * ay + az * az) / 9.81)
 
+        if on_live is not None and time.time() - state.get('last_live', 0) >= LIVE_EMIT_GAP_SEC:
+            state['last_live'] = time.time()
+            try:
+                on_live(_live_tail(state))
+            except Exception:
+                pass
+
         if time.time() - state['window_start'] >= WINDOW_SEC:
             close_window()
 
@@ -389,8 +484,8 @@ def run_calibration_capture(user_id, on_progress=None):
         return None
 
     try:
-        _notify('settling')
-        time.sleep(SETTLE_SEC)
+        _notify('settling', settle_sec=CALIBRATION_SETTLE_SEC)
+        time.sleep(CALIBRATION_SETTLE_SEC)   # protocol phase 1: 2 min, discarded (was SETTLE_SEC = 30 s)
 
         # Discard whatever accumulated during settling and start the real
         # capture window fresh from here.
@@ -437,8 +532,8 @@ def run_calibration_capture(user_id, on_progress=None):
         _disconnect_capture_client(client)
 
 
-def run_task_calibration_capture(user_id, on_progress=None):
-    """Personal-threshold task-phase capture: captures N_TASK_WIN
+def run_task_calibration_capture(user_id, on_progress=None, on_live=None, n_task_win=N_TASK_WIN):
+    """Personal-threshold task-phase capture: captures n_task_win
     consecutive windows (WINDOW_SEC=60 each -- see EEG's mirror,
     backend/psychological/mqtt_bridge.py's N_THRESHOLD_TASK_BLOCKS /
     BLOCK_SEC) from a fresh MQTT connection dedicated to this one call
@@ -451,7 +546,7 @@ def run_task_calibration_capture(user_id, on_progress=None):
     capture already saved (see compute_personal_stress_threshold(),
     predictor.py).
 
-    N_TASK_WIN > 1 matters here specifically: a single 60s window's
+    n_task_win > 1 matters here specifically: a single 60s window's
     average is heavily diluted by the first ~15-20s of physiological
     ramp-up (autonomic/HRV response has real latency) before the task's
     own difficulty has had time to build any sustained load -- averaging
@@ -488,9 +583,11 @@ def run_task_calibration_capture(user_id, on_progress=None):
         return None
 
     collected_windows = []
+    recovery_windows = []      # protocol phase 4, after the task
+    live_blocks = []
     state = {
         'window_start': time.time(), 'ibi_buf': [], 'gsr_buf': [], 'acc_buf': [],
-        'last_sample_time': time.time(),
+        'last_sample_time': time.time(), 'phase': 'task',
     }
 
     def close_window():
@@ -500,13 +597,22 @@ def run_task_calibration_capture(user_id, on_progress=None):
         actual_fs = max(1, round(len(state['gsr_buf']) / duration))
         if (len(state['ibi_buf']) < 10 or len(state['gsr_buf']) < 20 or len(state['acc_buf']) < 10):
             _notify('window_skipped', ibi=len(state['ibi_buf']), gsr=len(state['gsr_buf']), acc=len(state['acc_buf']),
-                    window_idx=len(collected_windows), n_windows=N_TASK_WIN)
+                    window_idx=len(collected_windows), n_windows=n_task_win)
+        elif state['phase'] == 'recovery':
+            recovery_windows.append({
+                "ibi_array": state['ibi_buf'], "gsr_adc_array": state['gsr_buf'],
+                "acc_array": state['acc_buf'], "gsr_calibration": GSR_CAL, "actual_fs": actual_fs,
+            })
+            _notify('recovery', window_idx=len(recovery_windows), n_windows=N_RECOVERY_WIN,
+                    score=_window_score(recovery_windows[-1], baseline_mean, baseline_std))
         else:
             collected_windows.append({
                 "ibi_array": state['ibi_buf'], "gsr_adc_array": state['gsr_buf'],
                 "acc_array": state['acc_buf'], "gsr_calibration": GSR_CAL, "actual_fs": actual_fs,
             })
-            _notify('capturing', window_idx=len(collected_windows), n_windows=N_TASK_WIN)
+            live_blocks.append(_live_block(collected_windows[-1], baseline_mean, baseline_std))
+            _notify('capturing', window_idx=len(collected_windows), n_windows=n_task_win,
+                    blocks=list(live_blocks), resting_scores=[round(float(r), 3) for r in resting_scores])
         state['ibi_buf'], state['gsr_buf'], state['acc_buf'] = [], [], []
         state['window_start'] = time.time()
 
@@ -514,8 +620,12 @@ def run_task_calibration_capture(user_id, on_progress=None):
         # Same overshoot guard as run_calibration_capture()'s identical
         # fix -- this callback runs on the dedicated connection's own
         # background thread and would otherwise keep closing/appending
-        # windows past N_TASK_WIN for as long as messages keep arriving.
-        if len(collected_windows) >= N_TASK_WIN:
+        # windows past n_task_win for as long as messages keep arriving.
+        if state['phase'] == 'task' and len(collected_windows) >= n_task_win:
+            return
+        if state['phase'] == 'recovery' and len(recovery_windows) >= N_RECOVERY_WIN:
+            return
+        if state['phase'] == 'scoring':
             return
 
         try:
@@ -527,6 +637,12 @@ def run_task_calibration_capture(user_id, on_progress=None):
         state['gsr_buf'].append(data.get("gsr", 0))
         ax, ay, az = data.get("acc_x", 0), data.get("acc_y", 0), data.get("acc_z", 0)
         state['acc_buf'].append(math.sqrt(ax * ax + ay * ay + az * az) / 9.81)
+        if on_live is not None and time.time() - state.get('last_live', 0) >= LIVE_EMIT_GAP_SEC:
+            state['last_live'] = time.time()
+            try:
+                on_live(_live_tail(state))
+            except Exception:
+                pass
         if time.time() - state['window_start'] >= WINDOW_SEC:
             close_window()
 
@@ -537,12 +653,12 @@ def run_task_calibration_capture(user_id, on_progress=None):
         return None
 
     try:
-        _notify('capturing', window_idx=0, n_windows=N_TASK_WIN)
-        capture_deadline = time.time() + _capture_timeout_sec(N_TASK_WIN)
-        while len(collected_windows) < N_TASK_WIN:
+        _notify('capturing', window_idx=0, n_windows=n_task_win)
+        capture_deadline = time.time() + _capture_timeout_sec(n_task_win)
+        while len(collected_windows) < n_task_win:
             if time.time() > capture_deadline:
                 _notify('error', message=(
-                    f'Took too long to capture {N_TASK_WIN} clean window(s) -- '
+                    f'Took too long to capture {n_task_win} clean window(s) -- '
                     f'too many were rejected for insufficient heart-rate signal '
                     f'or movement. Check ring fit/contact and try again.'
                 ))
@@ -555,12 +671,14 @@ def run_task_calibration_capture(user_id, on_progress=None):
                 return None
             time.sleep(1)
 
+        state['phase'] = 'scoring'   # stop collecting while the task is scored
+        provisional_limit = None
         _notify('saving')
         try:
             # Score every collected window individually and drop only the
             # individual ones that fail (movement/insufficient heart-rate
             # signal) rather than aborting the whole capture over one bad
-            # window out of N_TASK_WIN -- with several minutes of task
+            # window out of n_task_win -- with several minutes of task
             # data now, the user's hands being busy typing during any
             # single window is expected, not fatal.
             task_scores = []
@@ -576,19 +694,76 @@ def run_task_calibration_capture(user_id, on_progress=None):
                 _notify('error', message='Every task window was rejected (movement or insufficient heart-rate data)')
                 return None
 
-            threshold = compute_personal_stress_threshold(resting_scores, task_scores)
+            # The limit is decided AFTER the recovery rest below (ABA check:
+            # does the score come back down?). Task scores are saved now so
+            # the graphs show them while recovery runs.
+            mid = midpoint_stress_threshold(resting_scores, task_scores) or {}
             result = {
-                'status': 'ok' if threshold is not None else 'not_separated',
-                'personal_stress_threshold': threshold,
+                'status': 'recovery_pending', 'personal_stress_threshold': None,
+                'method': 'midpoint (median rest, sustained task) + recovery check',
+                'baseline': mid.get('baseline'), 'task_level': mid.get('task_level'),
+                'needed_separation': mid.get('needed_separation'),
+                'n_task_used': mid.get('n_task_used'), 'n_task_skipped': mid.get('n_task_skipped'),
                 'resting_mean': float(np.mean(resting_scores)),
                 'task_mean': float(np.mean(task_scores)),
                 'n_task_windows': len(task_scores),
             }
-            if threshold is not None:
-                save_personal_stress_threshold(user_id, threshold)
+            save_task_calibration_result(user_id, task_scores, result)
+            # Save the limit now (task separated from rest), so a restart or a
+            # lost ring during the 3-minute recovery rest below doesn't leave the
+            # person without it. The recovery check can still withdraw it (drift).
+            if mid.get('separated'):
+                provisional_limit = mid['limit']
+                save_personal_stress_threshold(user_id, provisional_limit)
         except Exception as e:
             _notify('error', message=str(e))
             return None
+
+        # Protocol phase 4: recovery rest. Does prob_stress come back down? If it
+        # does not, the rise was drift and the provisional limit above is withdrawn.
+        state['ibi_buf'], state['gsr_buf'], state['acc_buf'] = [], [], []
+        state['window_start'] = time.time()
+        state['last_sample_time'] = time.time()
+        state['phase'] = 'recovery'
+        _notify('recovery', window_idx=0, n_windows=N_RECOVERY_WIN)
+        recovery_deadline = time.time() + _capture_timeout_sec(N_RECOVERY_WIN)
+        while len(recovery_windows) < N_RECOVERY_WIN:
+            if time.time() > recovery_deadline or time.time() - state['last_sample_time'] > INACTIVITY_TIMEOUT_SEC:
+                print(f"[calibrate {user_id}] recovery rest incomplete "
+                      f"({len(recovery_windows)}/{N_RECOVERY_WIN} windows) -- threshold already saved")
+                break
+            time.sleep(1)
+        state['phase'] = 'scoring'
+        recovery_scores = []
+        for w in recovery_windows:
+            features_2d, motion_rejected, _fd, hrv_is_fallback, _wd = extract_features(
+                w['ibi_array'], w['gsr_adc_array'], w['acc_array'], w['gsr_calibration'], actual_fs=w['actual_fs'],
+            )
+            if not (motion_rejected or hrv_is_fallback):
+                recovery_scores.append(float(predict_window(features_2d, baseline_mean, baseline_std)['prob_stress']))
+        # Decide now, with recovery (without it if recovery was cut short).
+        mid = midpoint_stress_threshold(resting_scores, task_scores, recovery_scores=recovery_scores) or {}
+        threshold = mid['limit'] if mid.get('separated') else None
+        result.update({
+            'status': 'ok' if threshold is not None else mid.get('status', 'not_separated'),
+            'personal_stress_threshold': threshold,
+            'aba_confirmed': mid.get('aba_confirmed'), 'reversal': mid.get('reversal'),
+        })
+        if recovery_scores:
+            rec_mean = float(np.mean(recovery_scores))
+            limit = threshold if threshold is not None else mid.get('limit', (result['resting_mean'] + result['task_mean']) / 2.0)
+            result.update({
+                'recovery_scores': recovery_scores, 'recovery_mean': rec_mean,
+                'recovered': bool(rec_mean < limit), 'n_recovery_windows': len(recovery_scores),
+            })
+        try:
+            if threshold is not None:
+                save_personal_stress_threshold(user_id, threshold)
+            elif provisional_limit is not None:
+                clear_personal_stress_threshold(user_id)
+            save_task_calibration_result(user_id, task_scores, result)
+        except Exception as e:
+            print(f"[calibrate {user_id}] couldn't save the threshold result: {e}")
 
         _notify('done', **result)
         return result

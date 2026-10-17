@@ -22,9 +22,16 @@
 
 import os
 import re
+import sys
 import threading
 import time
 from dataclasses import replace as replace_thresholds
+
+# Line-buffered output: off a terminal (Render, gunicorn, nohup) Python
+# block-buffers stdout, so print() lines can sit unflushed and the service
+# looks silent in its log viewer. Same as the two mqtt_bridge.py files.
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 from pathlib import Path
 
 from flask import jsonify, request, g
@@ -35,10 +42,9 @@ from backend.psychological.eeg_calibration_capture import run_eeg_calibration_ca
 from backend.psychological.firebase_service import (
     EegFirebaseSession,
     get_calibration_status,
-    load_user_calibration_profile,
-    save_user_calibration_profile,
     compute_eeg_baseline_drift_history,
 )
+from backend.psychological.calibration_service import finish_personal_calibration, run_eeg_threshold_from_blocks
 from backend.psychological.mqtt_bridge import N_CALIBRATION_BLOCKS, N_THRESHOLD_TASK_BLOCKS
 from backend.psychological.realtime.csv_logger import CsvLogger, RAW_FIELDS_BIPOLAR, log_raw_block_bipolar
 from backend.psychological.realtime.firebase_sync import make_eeg_output_record
@@ -97,6 +103,33 @@ _calibration_sessions: dict[str, dict] = {}
 # a concurrent baseline capture's own status polling. Mirrors
 # backend/physiological/app.py's identical split.
 _threshold_sessions: dict[str, dict] = {}
+
+
+# A bridge-supplied capture time outside this window (relative to this
+# server's clock) is treated as a host-clock fault and ignored: the bridge
+# buffers at most 60s and retries a block for a few minutes at most, so a
+# genuine capture time is never far in the past, and never in the future
+# beyond normal clock skew.
+CAPTURE_TS_MAX_AGE_SEC = 900
+CAPTURE_TS_MAX_AHEAD_SEC = 60
+
+
+def _capture_end_ts(data: dict) -> float | None:
+    """Validated capture_end_ts from mqtt_bridge.py's /predict payload, or
+    None (-> make_eeg_output_record() falls back to processing time)."""
+    raw = data.get("capture_end_ts")
+    if raw is None:
+        return None
+    try:
+        ts = float(raw)
+    except (TypeError, ValueError):
+        return None
+    now = time.time()
+    if not (now - CAPTURE_TS_MAX_AGE_SEC <= ts <= now + CAPTURE_TS_MAX_AHEAD_SEC):
+        print(f"[predict] ignoring implausible capture_end_ts={ts} ({ts - now:+.0f}s vs server clock) "
+              f"-- check the bridge host's clock; using processing time instead")
+        return None
+    return ts
 
 
 def _samples_from_payload(data: dict) -> list[BipolarRawSample]:
@@ -182,61 +215,30 @@ def calibrate():
     firebase.push_calibration_result({"status": "capturing", "updated_at": time.time()})
 
     engine = RealtimeInference(MODEL_DIR, disable_quality_gate=DISABLE_QUALITY_GATE)
+    block_reports = []
     for i, block in enumerate(blocks):
         try:
             samples = _samples_from_payload(block)
         except ValueError as e:
             return jsonify({"error": f"block {i}: {e}"}), 400
         log_raw_block_bipolar(csv_logger, samples)
-        engine.calibrate_bipolar_block(samples)
+        q = engine.calibrate_bipolar_block(samples)
+        # Why each rest block was (not) accepted -- returned so the bridge
+        # can say what to fix instead of only "no block passed".
+        block_reports.append({
+            "block": i, "trusted": bool(q.get("is_trusted")), "gate_rating": q.get("gate_rating"),
+            "quality_score": q.get("quality_score"), "reason": q.get("reason"),
+            "ptp_uV_unclamped": q.get("ptp_uV_unclamped"), "std_uV_unclamped": q.get("std_uV_unclamped"),
+            "out_of_range_fraction": q.get("out_of_range_fraction"),
+        })
 
     outcome = engine.finalize_calibration_bipolar(allow_degraded=bool(data.get("allow_degraded", False)))
+    outcome["block_reports"] = block_reports
 
-    # "You've done this before, skip ahead": a returning user (g.user_id
-    # already has a recent calibration on file) reuses that baseline_shift
-    # instead of this session's own fresh 3-block estimate -- the stored
-    # one typically rests on more/less-noisy history than a single 3-block
-    # SEM check can achieve (see compute_baseline_shift()'s docstring).
-    # Only the probability-correction offset is restored, not the
-    # feature-level UserBaseline or Itakura signal reference -- those still
-    # come from THIS session's real blocks, captured normally above,
-    # because the deployed bipolar-only model doesn't read baseline-relative
-    # features anyway (see pipeline.py's AdaptiveBaselineTracker docstring)
-    # and the Itakura check specifically needs a same-session clean
-    # reference (electrode placement isn't stable across sessions).
-    if outcome["status"] == "ok":
-        stored_profile = load_user_calibration_profile(g.user_id)
-        if stored_profile is not None:
-            engine.baseline_shift = stored_profile["baseline_shift"]
-            engine.thresholds_personalized = stored_profile["thresholds_personalized"]
-            outcome["baseline_shift"] = engine.baseline_shift
-            outcome["thresholds_personalized"] = engine.thresholds_personalized
-            outcome["skip_ahead_used"] = True
-            # A previously-computed personal high_load_p (see /calibrate/threshold
-            # below) also carries forward here -- same skip-ahead spirit as
-            # baseline_shift just above, so a returning user's personal
-            # threshold applies immediately without redoing the task phase
-            # every session.
-            personal_high_load_p = stored_profile.get("personal_high_load_p")
-            if personal_high_load_p is not None:
-                engine.personal_high_load_p = personal_high_load_p
-                engine.thresholds = replace_thresholds(
-                    engine.thresholds, high_load_p=personal_high_load_p, cooldown_high_p=personal_high_load_p
-                )
-                outcome["personal_high_load_p"] = personal_high_load_p
-        else:
-            # New user, or this user's stored profile is now too stale to
-            # trust -- this session's own fresh result (already in outcome/
-            # engine from finalize_calibration() above) becomes the new
-            # baseline. Only persisted when a real shift was actually
-            # computed (thresholds_personalized) -- saving a 0.0-shift
-            # result here would let one noisy session lock out
-            # personalization for CALIBRATION_PROFILE_MAX_AGE_DAYS.
-            outcome["skip_ahead_used"] = False
-            if engine.thresholds_personalized:
-                save_user_calibration_profile(
-                    g.user_id, engine.baseline_shift, engine.thresholds_personalized
-                )
+    # Personal Scale: this session's own rest blocks set mu_rest (never
+    # reused across sessions); only the user's onboarding responsiveness
+    # carries over -- see finish_personal_calibration().
+    finish_personal_calibration(engine, g.user_id, outcome)
 
     # updated_at so useDeviceStatus() can treat a fresh calibration outcome
     # (not just a fresh /predict window) as evidence the device is alive --
@@ -259,12 +261,23 @@ def calibrate():
                     "success": False,
                     "status": "failed",
                     "message": "No calibration block reached the required quality bar "
-                    "(GOOD by default) -- check electrode contact, or retry with "
+                    "-- check electrode contact, or retry with "
                     "allow_degraded=true to proceed with a flagged degraded baseline.",
+                    "block_reports": block_reports,
                 }
             ),
             400,
         )
+
+    # Recalibrating a live session (psy_web's Recalibrate button, see
+    # mqtt_bridge.py): keep numbering blocks after the previous engine's last
+    # one, so the new blocks don't overwrite psychological/{uid}/{sid}/0, 1, ...
+    if existing is not None:
+        engine.continue_block_numbering(existing["engine"])
+    # After an API restart the old engine is gone (existing is None) but the
+    # session's blocks are still in Firebase -- continue after them, or the
+    # recalibrated session would overwrite blocks 0, 1, ... again.
+    engine.start_block_numbering_at(firebase.next_block_number())
 
     eeg_sessions[session_id] = {
         "engine": engine,
@@ -331,10 +344,19 @@ def calibrate_start():
             }
         else:  # 'settling' / 'saving'
             entry = {"status": status, "session_id": session_id, "n_blocks": N_CALIBRATION_BLOCKS}
+        # Keep the live per-block scores across later status updates.
+        prev = _calibration_sessions.get(user_id, {})
+        if "scores" not in entry and prev.get("scores"):
+            entry["scores"] = prev["scores"]
         _calibration_sessions[user_id] = entry
 
+    def on_live(tail):
+        cur = _calibration_sessions.get(user_id)
+        if cur is not None and cur.get("status") in ("settling", "capturing", "saving"):
+            _calibration_sessions[user_id] = {**cur, "live": tail}
+
     def worker():
-        run_eeg_calibration_capture(user_id, session_id, on_progress=on_progress)
+        run_eeg_calibration_capture(user_id, session_id, on_progress=on_progress, on_live=on_live)
 
     threading.Thread(target=worker, daemon=True).start()
     return jsonify({"status": "started"})
@@ -423,19 +445,91 @@ def calibrate_threshold_start():
     def on_progress(status, extra):
         if status == "capturing":
             entry = {"status": "capturing", "session_id": session_id, "n_blocks": N_THRESHOLD_TASK_BLOCKS, **extra}
+        elif status == "recovery":
+            # Protocol phase 4: the task is over, the user rests (see
+            # eeg_calibration_capture.py run_eeg_threshold_capture()).
+            entry = {"status": "recovery", "session_id": session_id, **extra}
         elif status == "error":
             entry = {"status": "error", "session_id": session_id, "error": extra.get("message", "Unknown error")}
         elif status == "done":
             entry = {"status": "done", "session_id": session_id, **extra}
         else:  # 'saving'
             entry = {"status": status, "session_id": session_id}
+        prev = _threshold_sessions.get(user_id, {})
+        for k in ("scores", "resting_scores"):
+            if k not in entry and prev.get(k):
+                entry[k] = prev[k]
         _threshold_sessions[user_id] = entry
 
+    def on_live(tail):
+        cur = _threshold_sessions.get(user_id)
+        if cur is not None and cur.get("status") in ("capturing", "saving"):
+            _threshold_sessions[user_id] = {**cur, "live": tail}
+
     def worker():
-        run_eeg_threshold_capture(session_state, on_progress=on_progress)
+        run_eeg_threshold_capture(session_state, on_progress=on_progress, on_live=on_live)
 
     threading.Thread(target=worker, daemon=True).start()
     return jsonify({"status": "started"})
+
+
+# -- /calibrate/threshold -- personal high-load threshold from given blocks --
+#
+# Same method as /calibrate/threshold/start (run_eeg_threshold_from_blocks():
+# each block scored with score_threshold_task_block(), then
+# finalize_personal_threshold() against this session's rest blocks), but the
+# task blocks are POSTed by the caller -- mqtt_bridge.py sends the live
+# blocks it captured during a psy_web recalibration's task phase -- instead
+# of being captured over a separate MQTT connection.
+#
+# REQUEST FORMAT: {"session_id": "...", "blocks": [{"millis": [...], "code": [...]}, ...]}
+@app.route("/calibrate/threshold", methods=["POST"])
+@require_auth
+def calibrate_threshold_blocks():
+    data = request.json or {}
+    session_id = data.get("session_id", "session_001")
+    blocks = data.get("blocks", [])
+    if not blocks:
+        return jsonify({"error": "No blocks provided"}), 400
+    session_state = eeg_sessions.get(session_id)
+    if session_state is None:
+        return jsonify({"error": f"Session {session_id!r} not calibrated -- call /calibrate first"}), 400
+    try:
+        samples = [_samples_from_payload(b) for b in blocks]
+        recovery = [_samples_from_payload(b) for b in data.get("recovery_blocks") or []]
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    outcome = run_eeg_threshold_from_blocks(session_state, samples, recovery)
+    return jsonify({"success": True, "session_id": session_id, **outcome})
+
+
+# -- /calibrate/preview -- one block's score for the live calibration graph --
+# Stateless: nothing is stored. Rest blocks are scored by a shared engine
+# (no calibration needed); task/recovery blocks by the session's engine, at
+# its amplitude gain.
+#
+# REQUEST FORMAT: {"session_id": "...", "phase": "rest"|"task"|"recovery", "millis": [...], "code": [...]}
+_preview_engine = None
+
+
+@app.route("/calibrate/preview", methods=["POST"])
+@require_auth
+def calibrate_preview():
+    global _preview_engine
+    data = request.json or {}
+    phase = data.get("phase", "rest")
+    try:
+        samples = _samples_from_payload(data)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    session_state = eeg_sessions.get(data.get("session_id", "session_001"))
+    if phase != "rest" and session_state is not None:
+        engine, use_gain = session_state["engine"], True
+    else:
+        if _preview_engine is None:
+            _preview_engine = RealtimeInference(MODEL_DIR, disable_quality_gate=DISABLE_QUALITY_GATE)
+        engine, use_gain = _preview_engine, False
+    return jsonify({"phase": phase, **engine.preview_block_score(samples, use_gain=use_gain)})
 
 
 @app.route("/calibrate/threshold/status", methods=["GET"])
@@ -483,6 +577,7 @@ def predict():
         # default the engine was constructed with. See
         # make_eeg_output_record()'s 'effective_high_load_p' docstring.
         high_load_p=state["engine"].thresholds.high_load_p,
+        capture_end_ts=_capture_end_ts(data),
     )
     state["firebase"].push(record)
 
@@ -490,12 +585,23 @@ def predict():
         {
             "session_id": session_id,
             "window": record.get("window"),
+            "timestamp_source": record.get("timestamp_source"),
             "skipped": record.get("skipped"),
             "task_state_score": record.get("task_state_score"),
             "task_state_label": record.get("task_state_label"),
+            "task_state_z": record.get("task_state_z"),
             "task_state_trend": record.get("task_state_trend"),
             "eeg_quality_score": record.get("eeg_quality_score"),
             "eeg_quality_flag": record.get("eeg_quality_flag"),
+            "eeg_quality_reason": record.get("eeg_quality_reason"),
+            "eeg_out_of_range_fraction": record.get("eeg_out_of_range_fraction"),
+            "eeg_ptp_uv_unclamped": record.get("eeg_ptp_uv_unclamped"),
+            "eeg_std_uv_unclamped": record.get("eeg_std_uv_unclamped"),
+            "eeg_quality_checks": record.get("eeg_quality_checks"),
+            # Soft-rejected blocks only: flagged, untrusted score (see
+            # pipeline.py PROVISIONAL_MAX_OUT_OF_RANGE).
+            "provisional_task_state_score": record.get("provisional_task_state_score"),
+            "provisional_quality": record.get("provisional_quality"),
             "baseline_degraded": record.get("baseline_degraded"),
             "high_load_alert": record.get("high_load_alert"),
             "micro_break_recommended": record.get("micro_break_recommended"),

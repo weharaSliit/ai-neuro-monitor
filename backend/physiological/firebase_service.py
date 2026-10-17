@@ -196,6 +196,26 @@ def save_personal_stress_threshold(user_id, threshold: float) -> None:
     })
 
 
+def clear_personal_stress_threshold(user_id) -> None:
+    """Remove only the personal limit (used when the recovery check after the
+    task decides the rise was drift, after a provisional limit was saved)."""
+    _ref(f'personal_thresholds/{user_id}').update({'personal_stress_threshold': None})
+
+
+def save_task_calibration_result(user_id, task_scores: list, result: dict) -> None:
+    """Per-window task prob_stress scores and the outcome of the onboarding
+    task (ok / not_separated), next to resting_scores -- so a calibration
+    graph can show both groups and the midpoint chosen. .update(): never
+    clobbers resting_scores or personal_stress_threshold."""
+    ref = _ref(f'personal_thresholds/{user_id}')
+    ref.update({
+        'task_scores': [float(s) for s in task_scores],
+        'task_result': {k: (float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v)
+                        for k, v in result.items()},
+        'task_updated_at': datetime.now(timezone.utc).isoformat(),
+    })
+
+
 def load_personal_stress_threshold(user_id):
     data = _ref(f'personal_thresholds/{user_id}').get()
     if not data or 'personal_stress_threshold' not in data:
@@ -249,8 +269,12 @@ def save_prediction(user_id, session_id, window_idx,
                     prob_normal, prob_stress,
                     trending_toward_stress,
                     features_dict,
-                    wave_dict=None):
-    """wave_dict (extract_features.py's 5th return value) is the one
+                    wave_dict=None,
+                    baseline_stale=None, baseline_ratio=None):
+    """baseline_stale / baseline_ratio: set when this window's skin level is
+    far from the user's saved baseline (see app.py's BASELINE_STALE_RATIO), so
+    clients can say "recalibrate" instead of showing a confident stress label.
+    wave_dict (extract_features.py's 5th return value) is the one
     exception to "raw sensor arrays never reach Firebase" below --
     it's already processed (wave_gsr: filtered/decimated to
     WAVE_GSR_POINTS, never the raw gsr_adc_array) and/or already
@@ -273,6 +297,10 @@ def save_prediction(user_id, session_id, window_idx,
     if wave_dict:
         record['wave_gsr'] = wave_dict.get('wave_gsr', [])
         record['ibi_sequence'] = wave_dict.get('ibi_sequence', [])
+    if baseline_stale is not None:
+        record['baseline_stale'] = bool(baseline_stale)
+        if baseline_ratio is not None:
+            record['baseline_ratio'] = round(float(baseline_ratio), 2)
     new_ref = ref.push(record)
 
     session_ref = _ref(f'sessions/{user_id}/{session_id}/window_count')
@@ -417,7 +445,8 @@ def save_fusion_en_rtdb(user_id, session_id, window_idx,
                         confidence, signal_quality,
                         prob_normal, prob_stress,
                         label, trending_toward_stress,
-                        feat_dict=None, threshold=None):
+                        feat_dict=None, threshold=None,
+                        baseline_stale=None, baseline_ratio=None):
     """Writes this session's HRV/GSR fusion fields (via the shared
     _hrv_gsr_fusion_fields() helper) to fusion_en/{user_id}/{session_id}/{key}
     -- user-scoped like every other per-session store, since a "session" is
@@ -440,6 +469,10 @@ def save_fusion_en_rtdb(user_id, session_id, window_idx,
     fields = _hrv_gsr_fusion_fields(user_id, session_id, window_idx, confidence, signal_quality,
                                     prob_normal, prob_stress, label, trending_toward_stress, feat_dict,
                                     threshold, capture_ts)
+    if baseline_stale is not None:
+        fields['baseline_stale'] = bool(baseline_stale)
+        if baseline_ratio is not None:
+            fields['baseline_ratio'] = round(float(baseline_ratio), 2)
     key = fusion_window_key(capture_ts)
     try:
         _global_ref(f'{FUSION_EN_ROOT}/{user_id}/{session_id}/{key}').update(fields)

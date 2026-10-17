@@ -7,6 +7,12 @@ from pathlib import Path
 
 import numpy as np
 
+# Line-buffered output: off a terminal (Render, gunicorn, nohup) Python
+# block-buffers stdout, so print() lines can sit unflushed and the service
+# looks silent in its log viewer. Same as the two mqtt_bridge.py files.
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
@@ -17,7 +23,8 @@ from backend.common.firebase_config import (
 )
 from backend.psychological.realtime.firebase_sync import _trend_direction  # noqa: E402
 
-BASELINE_N = 3 
+BASELINE_N = 3
+FUSED_PERSIST_K, FUSED_PERSIST_N = 2, 3   # 2 of the last 3 windows (persistent high stress) 
 
 
 def _init_firebase(cred_path: str, db_url: str):
@@ -68,6 +75,10 @@ def _modality_input(window: dict, m: str) -> dict:
         "model_acc": window.get(f"model_acc_{m}"),
         "threshold": window.get(f"threshold_{m}"),
         "threshold_scale": window.get(f"threshold_scale_{m}"),
+        # Optional own-scale distance (EEG: log-odds personal z); see
+        # fusion_engin.py USE_MODALITY_Z.
+        "z": window.get(f"z_logit_{m}"),
+        "z_alert": window.get(f"z_alert_{m}"),
     }
 
 
@@ -125,7 +136,7 @@ def poll_once(session_ref, session_meta_ref) -> dict:
         fused = fusion_engin.compute_realtime_multimodal_fusion({
             "eeg": _modality_input(w, "eeg"),
             "hrv_gsr": _modality_input(w, "hrv_gsr"),
-        })
+        }, scale=fusion_engin.FUSION_SCALE)
         fused_by_key[k] = fused
         if fused["fused_stress_probability"] is not None:
             windows[k]["fused_probability"] = fused["fused_stress_probability"]
@@ -153,6 +164,13 @@ def poll_once(session_ref, session_meta_ref) -> dict:
         # FUSION_TREND_LABELS is keyed on exactly this) -- NOT
         # recomputed by a second, differently-vocabularied trend calc.
         trend = _trend_direction(fused_history[: i + 1])
+        # Persistent condition (same rule as EEG's high-load alert): high
+        # stress when at least FUSED_PERSIST_K of the last FUSED_PERSIST_N
+        # fused windows are at/above the fused limit -- one noisy window
+        # neither raises nor clears it.
+        recent = [windows[kk].get("fused_label") for kk in ordered_keys[: i + 1]
+                  if windows[kk].get("fused_label") is not None][-FUSED_PERSIST_N:]
+        fused_high_persistent = sum(1 for lab in recent if lab == 1) >= FUSED_PERSIST_K
         fused = fused_by_key[k]
         weights = fused["modality_weights"]
         stress_phase, stress_alert_message = _compute_stress_phase(
@@ -166,6 +184,7 @@ def poll_once(session_ref, session_meta_ref) -> dict:
             "fused_probability": windows[k]["fused_probability"],
             "fused_threshold": windows[k]["fused_threshold"],
             "fused_label": windows[k]["fused_label"],
+            "fused_high_persistent": fused_high_persistent,
             "stress_trend": trend,
             # ADDITIVE -- fused_label/fused_probability/fused_threshold above
             # are completely unchanged; see _compute_stress_phase()'s own
@@ -194,6 +213,9 @@ def poll_once(session_ref, session_meta_ref) -> dict:
             # a domain-shift-style artifact worth investigating, not a
             # silent exclusion.
             "implausible_modalities": fused["implausible_modalities"],
+            # Saturated but kept at reduced weight (aligned scale only; see
+            # fusion_engin.py's SATURATED_WEIGHT).
+            "saturated_modalities": fused.get("saturated_modalities", []),
             # Comparable-across-modalities/users alternative to fused_
             # probability -- see compute_realtime_multimodal_fusion()'s own
             # docstring for the normalization. 0 = exactly at this window's
@@ -202,6 +224,14 @@ def poll_once(session_ref, session_meta_ref) -> dict:
             # ADDITIVE -- fused_probability/fused_threshold/fused_label
             # keep their exact existing values for every current consumer.
             "fused_relative_index": fused["fused_relative_index"],
+            # Which scale fused_probability is on ("aligned": every model's
+            # own limit = 0.5, see fusion_engin.py), each model's value on
+            # that scale, and the raw-scale result for comparison.
+            "fused_scale": fused["fused_scale"],
+            "eeg_aligned": fused["aligned_probs"].get("eeg"),
+            "hrv_gsr_aligned": fused["aligned_probs"].get("hrv_gsr"),
+            "fused_probability_raw": fused["fused_probability_raw"],
+            "fused_threshold_raw": fused["fused_threshold_raw"],
         }
 
         if "eeg" in fused["active_modalities"]:
@@ -353,10 +383,9 @@ def main():
     ap.add_argument("--poll-interval-sec", type=float, default=3.0,
                      help="How often the live session's fusion_en window is recomputed and "
                           "rewritten -- kept within a 2-5s real-time range regardless of "
-                          "FUSION_WINDOW_BUCKET_SEC (backend/common/fusion.py, 60s), which "
-                          "aligns modalities' differing write cadences (EEG reports once per "
-                          "25s block) onto a shared window and is NOT this value -- shrinking "
-                          "the bucket itself would make EEG miss most windows outright.")
+                          "FUSION_WINDOW_BUCKET_SEC (backend/common/fusion.py, 25s, matching "
+                          "EEG's block length), which aligns modalities' differing write "
+                          "cadences onto a shared window and is NOT this value.")
     ap.add_argument(
         "--firebase-cred",
         default=os.environ.get("FIREBASE_CREDENTIALS"),

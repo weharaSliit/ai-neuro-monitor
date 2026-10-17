@@ -505,9 +505,12 @@ export default function AdminEegLiveScreen({ route, navigation }) {
                                 <View style={styles.metaRow}>
                                     <Text style={[styles.metaLabel, { color: t.textSub }]}>Sensitivity</Text>
                                     <Text style={[styles.metaValue, { color: t.text }]}>
+                                        {/* Personal Scale: the session's own rest sets the alert level
+                                            (mu_rest + 0.84 sigma); baseline_shift is always 0 now. */}
                                         {calibrationResult?.status === 'ok' && calibrationResult.thresholds_personalized
-                                            ? `Personalized (${calibrationResult.baseline_shift >= 0 ? '+' : ''}${(calibrationResult.baseline_shift * 100).toFixed(1)}%)`
-                                            : 'Standard (not enough clean blocks to personalize)'}
+                                            && calibrationResult.personal_high_load_p != null
+                                            ? `Personal (rest ${(calibrationResult.mu_rest * 100).toFixed(1)}%, alert at ${(calibrationResult.personal_high_load_p * 100).toFixed(1)}%)`
+                                            : 'Standard (no usable rest baseline this session)'}
                                     </Text>
                                 </View>
 
