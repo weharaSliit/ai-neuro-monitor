@@ -50,20 +50,22 @@ import time
 
 import paho.mqtt.client as mqtt
 
-from backend.psychological.firebase_service import EegFirebaseSession
+from backend.psychological.firebase_service import EegFirebaseSession, save_eeg_device_heartbeat
 from backend.psychological.calibration_service import (
     CalibrationFailedError, run_eeg_calibration_from_blocks, run_eeg_threshold_from_blocks,
 )
 from backend.psychological.mqtt_bridge import (
     BLOCK_SAMPLES, BLOCK_SEC, EEG_MQTT_BROKER, EEG_MQTT_CA_CERT, EEG_MQTT_PASSWORD,
-    EEG_MQTT_PORT, EEG_MQTT_TOPIC, EEG_MQTT_USER, N_CALIBRATION_BLOCKS, N_THRESHOLD_TASK_BLOCKS,
+    CALIBRATION_SETTLE_SEC, EEG_MQTT_PORT, EEG_MQTT_TOPIC, EEG_MQTT_USER, N_CALIBRATION_BLOCKS,
+    N_RECOVERY_BLOCKS, N_THRESHOLD_TASK_BLOCKS,
 )
 from backend.psychological.realtime.mqtt_client import parse_bipolar_payload
+from backend.psychological.realtime.raw_cleaning import start_after_last_gap
 
 # Electrode contact settles faster than the ring's GSR strap (whose own
 # SETTLE_SEC is 30) -- 10s is enough for the amplifier/contact to stabilize
 # once the headband is first put on, before the real capture starts.
-EEG_SETTLE_SEC = 10
+EEG_SETTLE_SEC = CALIBRATION_SETTLE_SEC   # protocol phase 1: 2 min, discarded (was 10 s)
 
 # Hard wall-clock ceiling on both block-capture loops below. Both loops
 # only ever advance when buffered_count() >= BLOCK_SAMPLES, which needs
@@ -81,7 +83,6 @@ EEG_SETTLE_SEC = 10
 # the SHARED client is left connected (see module docstring) -- only this
 # one capture attempt aborts, so a retry reuses the live connection
 # immediately instead of registering yet another one with EMQX.
-CAPTURE_TIMEOUT_SEC = 120
 
 # run_eeg_threshold_capture() below needs its own, much larger ceiling now
 # that N_THRESHOLD_TASK_BLOCKS is 14 (~350s of real data needed) instead
@@ -90,7 +91,9 @@ CAPTURE_TIMEOUT_SEC = 120
 # EXTRA_RETRY_BLOCKS gives the same kind of rejected-block tolerance
 # margin physiological's EXTRA_RETRY_WINDOWS does.
 EXTRA_RETRY_BLOCKS = 4
+CAPTURE_TIMEOUT_SEC = (N_CALIBRATION_BLOCKS + EXTRA_RETRY_BLOCKS) * BLOCK_SEC     # resting baseline
 THRESHOLD_CAPTURE_TIMEOUT_SEC = (N_THRESHOLD_TASK_BLOCKS + EXTRA_RETRY_BLOCKS) * BLOCK_SEC
+RECOVERY_CAPTURE_TIMEOUT_SEC = (N_RECOVERY_BLOCKS + EXTRA_RETRY_BLOCKS) * BLOCK_SEC
 
 # Fail-fast companion to CAPTURE_TIMEOUT_SEC above: rather than always
 # waiting out the full ceiling, abort as soon as no new MQTT sample has
@@ -116,6 +119,7 @@ _shared_client: mqtt.Client | None = None
 _shared_buf: list = []
 _shared_buf_lock = threading.Lock()
 _shared_last_sample_time = [None]  # None until the shared client has ever seen a real sample
+_shared_last_heartbeat = [0.0]
 
 
 def _shared_on_message(client, userdata, msg):
@@ -125,6 +129,12 @@ def _shared_on_message(client, userdata, msg):
     with _shared_buf_lock:
         _shared_buf.extend(samples)
         _shared_last_sample_time[0] = time.time()
+    # Headband heartbeat (throttled to once per 5 s) -- keeps 'Headband on'
+    # true during on-demand calibration even if the always-on bridge is down.
+    now = time.time()
+    if now - _shared_last_heartbeat[0] >= 5:
+        _shared_last_heartbeat[0] = now
+        save_eeg_device_heartbeat()
 
 
 def _get_shared_client() -> mqtt.Client:
@@ -167,6 +177,14 @@ def _shared_drain(n: int) -> list:
         return taken
 
 
+def _shared_discard_before_gap(n: int) -> tuple[int, float]:
+    """Same as RawSampleBuffer.discard_before_gap(), for the shared list."""
+    with _shared_buf_lock:
+        idx, gap = start_after_last_gap([s.millis for s in _shared_buf[:n]])
+        del _shared_buf[:idx]
+        return idx, gap
+
+
 def _shared_clear() -> None:
     with _shared_buf_lock:
         _shared_buf.clear()
@@ -183,7 +201,62 @@ def _shared_last_sample_age() -> float:
     return 0.0 if last is None else time.time() - last
 
 
-def run_eeg_calibration_capture(user_id, session_id, on_progress=None):
+def _live_eeg_point():
+    """Signal amplitude (RMS of the last second, mean removed, in uV) of what
+    the headband is streaming right now -- one number a second, processed,
+    used only for the calibration screens' moving wave. None until a second
+    of samples has arrived."""
+    from backend.psychological.realtime.adc import bipolar_code_to_microvolts
+    import numpy as np
+    with _shared_buf_lock:
+        tail = _shared_buf[-250:]
+    if len(tail) < 125:
+        return None
+    uv = np.asarray(bipolar_code_to_microvolts(np.array([s.code for s in tail])), dtype=float)
+    uv = uv - uv.mean()
+    return round(float(np.sqrt(np.mean(uv ** 2))), 1)
+
+
+def _new_live_engine():
+    """A throwaway engine used only to show per-block scores on the live
+    calibration graph while blocks are still being captured. It is never
+    saved, never used for /predict, and the real calibration below still runs
+    from the raw blocks exactly as before. Returns None if it cannot be built."""
+    try:
+        from backend.psychological.calibration_service import MODEL_DIR
+        from backend.psychological.realtime.pipeline import RealtimeInference
+        return RealtimeInference(MODEL_DIR)
+    except Exception:
+        return None
+
+
+def _live_baseline_score(engine, samples):
+    """Score of one just-captured resting block (None if the block was not
+    usable) using the display-only engine."""
+    if engine is None:
+        return None
+    try:
+        before = len(engine._calibration_scores)
+        engine.calibrate_bipolar_block(samples)
+        if len(engine._calibration_scores) > before:
+            return round(float(engine._calibration_scores[-1]), 3)
+    except Exception:
+        pass
+    return None
+
+
+def _live_task_score(engine, samples):
+    if engine is None:
+        return None
+    try:
+        q = engine.score_threshold_task_block(samples)
+        sc = q.get('score')
+        return None if sc is None else round(float(sc), 3)
+    except Exception:
+        return None
+
+
+def run_eeg_calibration_capture(user_id, session_id, on_progress=None, on_live=None):
     """Blocking: settles (discarding whatever buffered while settling),
     captures N_CALIBRATION_BLOCKS raw bipolar blocks of BLOCK_SAMPLES each
     from the shared MQTT connection (see _get_shared_client()), then calls
@@ -242,6 +315,9 @@ def run_eeg_calibration_capture(user_id, session_id, on_progress=None):
     _shared_clear()
 
     blocks_samples = []
+    live_scores = []
+    _live_series, _live_last = [], [0.0]
+    live_engine = _new_live_engine()
     capture_deadline = time.time() + CAPTURE_TIMEOUT_SEC
     while len(blocks_samples) < N_CALIBRATION_BLOCKS:
         if time.time() > capture_deadline:
@@ -256,11 +332,25 @@ def run_eeg_calibration_capture(user_id, session_id, on_progress=None):
                 f'Check the headband is still on and in range, then try again.'
             ))
             return None
+        if _shared_buffered_count() >= BLOCK_SAMPLES and _shared_discard_before_gap(BLOCK_SAMPLES)[0]:
+            continue  # stream break inside the next block -- start after it
+        if on_live is not None and time.time() - _live_last[0] >= 1.0:
+            _live_last[0] = time.time()
+            pt = _live_eeg_point()
+            if pt is not None:
+                _live_series.append(pt)
+                del _live_series[:-60]
+                try:
+                    on_live({'rms_uv': list(_live_series), 'ts': time.time()})
+                except Exception:
+                    pass
         if _shared_buffered_count() < BLOCK_SAMPLES:
             time.sleep(0.5)
             continue
         blocks_samples.append(_shared_drain(BLOCK_SAMPLES))
-        _notify('capturing', block_idx=len(blocks_samples), n_blocks=N_CALIBRATION_BLOCKS)
+        live_scores.append(_live_baseline_score(live_engine, blocks_samples[-1]))
+        _notify('capturing', block_idx=len(blocks_samples), n_blocks=N_CALIBRATION_BLOCKS,
+                scores=list(live_scores))
 
     _notify('saving')
     try:
@@ -281,7 +371,7 @@ def run_eeg_calibration_capture(user_id, session_id, on_progress=None):
     return result
 
 
-def run_eeg_threshold_capture(session_state: dict, on_progress=None):
+def run_eeg_threshold_capture(session_state: dict, on_progress=None, on_live=None):
     """Blocking: captures N_THRESHOLD_TASK_BLOCKS raw bipolar blocks from
     the shared MQTT connection (see _get_shared_client() -- NO settle
     delay, baseline calibration run moments earlier already confirmed
@@ -312,6 +402,13 @@ def run_eeg_threshold_capture(session_state: dict, on_progress=None):
     _shared_clear()
 
     blocks_samples = []
+    live_scores = []
+    _live_series, _live_last = [], [0.0]
+    live_engine = _new_live_engine()
+    try:
+        resting_scores = [round(float(v), 3) for v in session_state['engine']._calibration_scores]
+    except Exception:
+        resting_scores = []
     capture_deadline = time.time() + THRESHOLD_CAPTURE_TIMEOUT_SEC
     while len(blocks_samples) < N_THRESHOLD_TASK_BLOCKS:
         if time.time() > capture_deadline:
@@ -326,15 +423,52 @@ def run_eeg_threshold_capture(session_state: dict, on_progress=None):
                 f'Check the headband is still on and in range, then try again.'
             ))
             return None
+        if _shared_buffered_count() >= BLOCK_SAMPLES and _shared_discard_before_gap(BLOCK_SAMPLES)[0]:
+            continue  # stream break inside the next block -- start after it
+        if on_live is not None and time.time() - _live_last[0] >= 1.0:
+            _live_last[0] = time.time()
+            pt = _live_eeg_point()
+            if pt is not None:
+                _live_series.append(pt)
+                del _live_series[:-60]
+                try:
+                    on_live({'rms_uv': list(_live_series), 'ts': time.time()})
+                except Exception:
+                    pass
         if _shared_buffered_count() < BLOCK_SAMPLES:
             time.sleep(0.5)
             continue
         blocks_samples.append(_shared_drain(BLOCK_SAMPLES))
-        _notify('capturing', block_idx=len(blocks_samples), n_blocks=N_THRESHOLD_TASK_BLOCKS)
+        live_scores.append(_live_task_score(live_engine, blocks_samples[-1]))
+        _notify('capturing', block_idx=len(blocks_samples), n_blocks=N_THRESHOLD_TASK_BLOCKS,
+                scores=list(live_scores), resting_scores=resting_scores)
+
+    # Protocol phase 4: recovery rest. The task is over; the user sits still
+    # and relaxes while N_RECOVERY_BLOCKS more blocks are recorded. A
+    # problem here doesn't lose the threshold -- the task blocks are scored
+    # either way, recovery is reported only if it completed.
+    recovery_samples = []
+    recovery_scores = []
+    _notify('recovery', block_idx=0, n_blocks=N_RECOVERY_BLOCKS, scores=list(live_scores), resting_scores=resting_scores)
+    recovery_deadline = time.time() + RECOVERY_CAPTURE_TIMEOUT_SEC
+    while len(recovery_samples) < N_RECOVERY_BLOCKS:
+        if time.time() > recovery_deadline or _shared_last_sample_age() > INACTIVITY_TIMEOUT_SEC:
+            print(f"[threshold] recovery rest incomplete ({len(recovery_samples)}/{N_RECOVERY_BLOCKS} blocks) "
+                  f"-- saving the threshold without it")
+            break
+        if _shared_buffered_count() >= BLOCK_SAMPLES and _shared_discard_before_gap(BLOCK_SAMPLES)[0]:
+            continue
+        if _shared_buffered_count() < BLOCK_SAMPLES:
+            time.sleep(0.5)
+            continue
+        recovery_samples.append(_shared_drain(BLOCK_SAMPLES))
+        recovery_scores.append(_live_task_score(live_engine, recovery_samples[-1]))
+        _notify('recovery', block_idx=len(recovery_samples), n_blocks=N_RECOVERY_BLOCKS,
+                scores=list(live_scores), recovery_scores=list(recovery_scores), resting_scores=resting_scores)
 
     _notify('saving')
     try:
-        result = run_eeg_threshold_from_blocks(session_state, blocks_samples)
+        result = run_eeg_threshold_from_blocks(session_state, blocks_samples, recovery_samples)
     except Exception as e:
         _notify('error', message=str(e))
         return None

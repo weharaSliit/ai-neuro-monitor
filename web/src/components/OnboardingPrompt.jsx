@@ -33,8 +33,8 @@ export default function OnboardingPrompt() {
         <img src="/icon.png" alt="" style={{ width: 64, height: 64, borderRadius: 18 }} />
         <h2 className="display" style={{ marginTop: 14 }}>Welcome, {user.name || user.userId}!</h2>
         <p className="body" style={{ marginTop: 8 }}>
-          Before we start, let’s learn what calm looks like for <b>you</b>: about 3½ minutes of slow breathing,
-          then a short limit test. Put on your ring and headband first.
+          Before we start, let’s learn what calm looks like for <b>you</b>: about 6 minutes of quiet rest (2 to settle, then 4 breathing normally with eyes open),
+          then an 11-minute limit test (8 minutes of tasks, 3 of rest). Put on your ring and headband first.
         </p>
         <button className="btn" style={{ width: '100%', marginTop: 22 }} onClick={() => navigate('/setup')}>
           Start calibration

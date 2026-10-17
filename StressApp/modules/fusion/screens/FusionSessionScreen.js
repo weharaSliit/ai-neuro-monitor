@@ -17,9 +17,10 @@ import ActionTile from '../../shared/ActionTile';
 import { useCalibrationSummary, useDeviceStatus } from '../../shared/CalibrationGate';
 import LineChart from '../../shared/LineChart';
 import BaselineDriftCard from '../../shared/BaselineDriftCard';
+import SimulatedBanner from '../../shared/SimulatedBanner';
 import {
     levelOf, LEVEL_COLOR, MIND_WORDS, BODY_WORDS, OVERALL_WORDS, sliderPosition,
-    DEFAULT_RING_THRESHOLD, DEFAULT_EEG_THRESHOLD,
+    DEFAULT_RING_THRESHOLD, DEFAULT_EEG_THRESHOLD, fusionKeyToMs,
 } from '../../shared/levels';
 import { TYPE, SPACE, RADIUS } from '../../shared/theme/tokens';
 import { ref, onValue, off, get } from 'firebase/database';
@@ -29,6 +30,7 @@ import { COLORS } from '../../physiological/config/theme';
 import { useAuth } from '../../../context/AuthContext';
 import api from '../../physiological/api/client';
 import { STRESS_DECISION_THRESHOLD_PERCENT } from '../../physiological/config/config';
+import { alignedOf, fusedAligned } from '../config/aligned';
 
 const CHART_WIDTH = Math.max(260, getContentWidth() - 2 * SPACE.xl - 2 * 18);
 // A window older than this is "last reading", not "live".
@@ -40,6 +42,7 @@ const HERO = {
     calm:   { word: 'Calm',          line: 'Your mind and body are settled.',                     tip: 'All good — keep going',        icon: 'emoticon-happy-outline' },
     rising: { word: 'Rising',        line: 'Stress is building up a little.',                     tip: 'A short pause would help',     icon: 'emoticon-neutral-outline' },
     high:   { word: 'Stressed',      line: 'Your body and mind are under strain right now.',      tip: 'Try a 1-minute breathing break', icon: 'emoticon-sad-outline' },
+    stale:  { word: 'Recalibrate',   line: 'Your skin signal is far from your saved calm level, so the stress reading can’t be trusted.', tip: 'Recalibrate to fix this', icon: 'refresh' },
     idle:   { word: 'Not connected', line: 'Put on your ring or headband to see how you’re doing.', tip: 'Waiting for devices',  icon: 'power-plug-off-outline' },
 };
 
@@ -241,15 +244,6 @@ export default function FusionSessionScreen({ navigation, route }) {
     );
     const latestMind = useMemo(() => latestWindowWith(windows, (w) => w.prob_eeg != null), [windows]);
     const latestBody = useMemo(() => latestWindowWith(windows, (w) => w.prob_hrv_gsr != null), [windows]);
-    const fusedHistory = useMemo(() => {
-        const keys = sortedWindowKeys(combinedWindows);
-        return keys
-            .map((k) => ({ v: combinedWindows[k]?.fused_probability, key: k }))
-            .filter(({ v }) => v !== undefined && v !== null)
-            .map(({ v, key }) => ({ value: Math.round(v * 100), date: new Date(Number(key) * 60000) }))
-            .slice(-CHART_POINTS_MAX);
-    }, [combinedWindows]);
-
     // Cognitive load (EEG), autonomic arousal (HRV/GSR), and the fused
     // probability -- all three already live on the SAME fusion_en/{window}
     // record (prob_eeg/prob_hrv_gsr are written directly by each backend's
@@ -265,7 +259,7 @@ export default function FusionSessionScreen({ navigation, route }) {
         return keys.map((k) => {
             const w = combinedWindows[k] || {};
             return {
-                date: new Date(Number(k) * 60000),
+                date: new Date(fusionKeyToMs(k)),
                 values: [
                     w.prob_eeg != null ? Math.round(w.prob_eeg * 100) : null,
                     w.prob_hrv_gsr != null ? Math.round(w.prob_hrv_gsr * 100) : null,
@@ -274,6 +268,19 @@ export default function FusionSessionScreen({ navigation, route }) {
             };
         });
     }, [combinedWindows]);
+    // Stress rhythm: Fused / Mind / Body, each against its own limit (50%).
+    const rhythmPoints = useMemo(() => {
+        const keys = sortedWindowKeys(combinedWindows).slice(-CHART_POINTS_MAX);
+        const pct = (v) => (v == null ? null : Math.round(v * 100));
+        return keys.map((k) => {
+            const w = combinedWindows[k] || {};
+            return {
+                date: new Date(fusionKeyToMs(k)),
+                values: [pct(fusedAligned(w)), pct(alignedOf(w, 'eeg')), pct(alignedOf(w, 'hrv'))],
+            };
+        });
+    }, [combinedWindows]);
+    const hasRhythm = rhythmPoints.filter((p) => p.values.some((v) => v != null)).length > 1;
     const hasMultiSeriesData = multiSeriesPoints.filter((p) => p.values.some((v) => v != null)).length > 1;
 
     // ── Live freshness -- re-evaluated every 20s so "just now" ages
@@ -287,7 +294,7 @@ export default function FusionSessionScreen({ navigation, route }) {
         const keys = sortedWindowKeys(windows);
         return keys.length ? Number(keys[keys.length - 1]) : null;
     }, [windows]);
-    const lastUpdateMs = latestKey != null ? latestKey * 60000 : null;
+    const lastUpdateMs = latestKey != null ? fusionKeyToMs(latestKey) : null;
     const isLive = lastUpdateMs != null && Date.now() - lastUpdateMs < LIVE_WINDOW_MS;
 
     // ── Overall state (fused) ───────────────────────────────────────────
@@ -306,8 +313,12 @@ export default function FusionSessionScreen({ navigation, route }) {
     } else {
         heroKey = ringConnected || eegConnected ? 'calm' : 'idle';
     }
+    // Ring reading far from the saved baseline: the label can't be trusted.
+    const baselineStale = (latestBody?.baseline_stale ?? lastKnown?.baseline_stale) === true;
+    if (baselineStale && heroKey !== 'idle') heroKey = 'stale';
     const hero = HERO[heroKey];
-    const heroColor = heroKey === 'high' ? COLORS.stress
+    const heroColor = heroKey === 'stale' ? COLORS.warning
+        : heroKey === 'high' ? COLORS.stress
         : heroKey === 'rising' ? COLORS.warning
         : heroKey === 'idle' ? COLORS.light.textMuted
         : COLORS.normal;
@@ -354,6 +365,7 @@ export default function FusionSessionScreen({ navigation, route }) {
                     </View>
                     <AvatarButton userId={userId} onPress={() => navigation.navigate('Profile')} />
                 </View>
+                <SimulatedBanner userId={userId} sessionId={sessionId || null} />
 
                 {/* ── State hero ── */}
                 <View style={styles.heroCard}>
@@ -450,24 +462,33 @@ export default function FusionSessionScreen({ navigation, route }) {
                         onPress={() => navigation.navigate('Phenotyping')}
                         style={{ minHeight: 0 }}
                     />
+                    <View style={{ width: SPACE.md }} />
+                    <ActionTile
+                        lead="Your " bold="calm level" tail=" & limits"
+                        caption="Calibration, scores & alerts"
+                        icon={NAMES.calibration} tint={COLORS.eeg}
+                        onPress={() => navigation.navigate('MyLimits')}
+                        style={{ minHeight: 0 }}
+                    />
                 </View>
 
                 {/* ── Today's rhythm ── */}
-                {fusedHistory.length > 1 && (
+                {hasRhythm && (
                     <Card style={styles.block}>
                         <Text style={styles.blockTitle}>Your stress rhythm</Text>
-                        <Text style={styles.blockSub}>Higher means more stress · dashed line is your limit</Text>
+                        <Text style={styles.blockSub}>Each line against its own limit · dashed line is 50%</Text>
                         <View style={{ marginTop: SPACE.md }}>
                             <LineChart
-                                points={fusedHistory}
-                                color={heroKey === 'idle' ? COLORS.brand : heroColor}
+                                points={rhythmPoints}
+                                multiLine
+                                seriesColors={[COLORS.light.text, COLORS.eeg, COLORS.hrv]}
+                                seriesLabels={['Overall', 'Mind', 'Body']}
                                 width={CHART_WIDTH}
-                                height={150}
+                                height={170}
                                 maxValue={100}
                                 hideValues
-                                baselineValue={fusedLimitPct}
+                                baselineValue={50}
                                 baselineLabel="Your limit"
-                                colorZones
                                 fallback={<Text style={styles.waiting}>Loading chart…</Text>}
                             />
                         </View>

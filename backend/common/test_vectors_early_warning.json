@@ -1,0 +1,239 @@
+{
+ "flat_rest": {
+  "values": [
+   0.1,
+   -0.2,
+   0.0,
+   0.2,
+   -0.1,
+   0.1,
+   0.0,
+   -0.1,
+   0.1,
+   0.0
+  ],
+  "expected": [
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal"
+  ]
+ },
+ "ramp_into_band": {
+  "values": [
+   0.0,
+   0.1,
+   0.0,
+   0.3,
+   0.6,
+   0.8,
+   1.0,
+   1.1,
+   1.3,
+   1.4,
+   1.5,
+   1.6
+  ],
+  "expected": [
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "early_warning",
+   "early_warning",
+   "early_warning",
+   "early_warning"
+  ]
+ },
+ "single_spike": {
+  "values": [
+   0.0,
+   0.1,
+   1.8,
+   0.0,
+   0.1,
+   0.0,
+   0.1,
+   0.0,
+   0.1,
+   0.0
+  ],
+  "expected": [
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal"
+  ]
+ },
+ "flat_plateau": {
+  "values": [
+   1.0,
+   1.1,
+   0.9,
+   1.0,
+   1.1,
+   1.0,
+   0.9,
+   1.0,
+   1.1,
+   1.0
+  ],
+  "expected": [
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal"
+  ]
+ },
+ "escalate_recover": {
+  "values": [
+   0.0,
+   0.2,
+   0.5,
+   0.8,
+   1.0,
+   1.2,
+   1.4,
+   2.2,
+   2.4,
+   1.2,
+   0.9,
+   0.3,
+   0.1,
+   0.0,
+   0.0,
+   0.1,
+   0.0
+  ],
+  "high": [
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   true,
+   true,
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   false
+  ],
+  "expected": [
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "early_warning",
+   "high",
+   "high",
+   "recovering",
+   "recovering",
+   "recovering",
+   "recovering",
+   "recovering",
+   "normal",
+   "normal",
+   "normal"
+  ]
+ },
+ "gappy": {
+  "values": [
+   0.0,
+   0.3,
+   0.6,
+   0.9,
+   1.2,
+   1.4,
+   1.5,
+   1.6
+  ],
+  "valid": [
+   true,
+   false,
+   true,
+   false,
+   true,
+   false,
+   true,
+   false
+  ],
+  "expected": [
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal",
+   "normal"
+  ]
+ },
+ "suppressed": {
+  "values": [
+   0.0,
+   0.1,
+   0.0,
+   0.3,
+   0.6,
+   0.8,
+   1.0,
+   1.1,
+   1.3,
+   1.4
+  ],
+  "suppressed": [
+   "calibration not separated",
+   "calibration not separated",
+   "calibration not separated",
+   "calibration not separated",
+   "calibration not separated",
+   "calibration not separated",
+   "calibration not separated",
+   "calibration not separated",
+   "calibration not separated",
+   "calibration not separated"
+  ],
+  "expected": [
+   "limited",
+   "limited",
+   "limited",
+   "limited",
+   "limited",
+   "limited",
+   "limited",
+   "limited",
+   "limited",
+   "limited"
+  ]
+ }
+}

@@ -709,7 +709,7 @@ const styles = StyleSheet.create({
     },
     scroll: {
         paddingHorizontal: 20,
-        paddingBottom: 40,
+        paddingBottom: 60,
     },
     sectionLabelPink: {
         fontSize: 10.5,

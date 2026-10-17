@@ -1,0 +1,5162 @@
+[
+ {
+  "seed": 200,
+  "eeg_subject": 8,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 0.0,
+    "hit_rate": 0.0,
+    "time_to_state_s": null,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 1.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.4213713034000647,
+    "body_mean": 0.8910674527401651,
+    "hr_mean": 82.26391083389319,
+    "scl_mean": 1.1427110797243583
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 0.8571428571428571,
+    "hit_rate": 0.9166666666666666,
+    "time_to_state_s": 74.99999999993179,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.9166666666666666,
+     "arousal": 0.0,
+     "stress": 0.08333333333333333
+    },
+    "mind_mean": 0.6633749236348373,
+    "body_mean": 0.1633881599330714,
+    "hr_mean": 87.61566675882766,
+    "scl_mean": 0.9910704803339973
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.8947368421052632,
+    "time_to_state_s": 29.999999999972715,
+    "state_share": {
+     "relaxed": 0.8947368421052632,
+     "mental": 0.10526315789473684,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.39332874382541716,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 84.19259626425881,
+    "scl_mean": 0.8906793769947752
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 0.8333333333333334,
+    "time_to_state_s": 54.99999999994998,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.8333333333333334,
+     "stress": 0.16666666666666666
+    },
+    "mind_mean": 0.3637594024672673,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 109.46697409062477,
+    "scl_mean": 1.719628359403779
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.3684210526315789,
+    "time_to_state_s": 384.9999999996501,
+    "state_share": {
+     "relaxed": 0.3684210526315789,
+     "mental": 0.10526315789473684,
+     "arousal": 0.5263157894736842,
+     "stress": 0.0
+    },
+    "mind_mean": 0.4265184843466489,
+    "body_mean": 0.5162021529794415,
+    "hr_mean": 84.34777614360816,
+    "scl_mean": 1.1281627964011767
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 12,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.8333333333333334,
+    "time_to_state_s": 84.9999999999227,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.16666666666666666,
+     "stress": 0.8333333333333334
+    },
+    "mind_mean": 0.7097537520356206,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 104.99767647416769,
+    "scl_mean": 1.715541739088046
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.0,
+    "hit_rate": 0.0,
+    "time_to_state_s": null,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.5263157894736842,
+     "stress": 0.47368421052631576
+    },
+    "mind_mean": 0.5108578344329813,
+    "body_mean": 0.8724861840738857,
+    "hr_mean": 82.6988373936181,
+    "scl_mean": 1.2207479117224582
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "drift_suspected"
+  }
+ },
+ {
+  "seed": 201,
+  "eeg_subject": 10,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.22093302772647164,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 90.38131715738339,
+    "scl_mean": 1.6590006535895192
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 0.8333333333333334,
+    "time_to_state_s": 60.00000000001364,
+    "state_share": {
+     "relaxed": 0.16666666666666666,
+     "mental": 0.8333333333333334,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.6326163959767354,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 86.05145408040714,
+    "scl_mean": 1.7858867709798938
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.8947368421052632,
+    "time_to_state_s": 64.99999999994088,
+    "state_share": {
+     "relaxed": 0.8947368421052632,
+     "mental": 0.10526315789473684,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3006663653049359,
+    "body_mean": 0.13928151999746508,
+    "hr_mean": 90.97277357032614,
+    "scl_mean": 1.824706455727485
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 1.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.20694904153149604,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 115.44268383008226,
+    "scl_mean": 2.5154993850105374
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.75,
+    "hit_rate": 0.5263157894736842,
+    "time_to_state_s": 319.99999999970896,
+    "state_share": {
+     "relaxed": 0.5263157894736842,
+     "mental": 0.10526315789473684,
+     "arousal": 0.3684210526315789,
+     "stress": 0.0
+    },
+    "mind_mean": 0.31781096931457214,
+    "body_mean": 0.35246231181033666,
+    "hr_mean": 94.17395022394143,
+    "scl_mean": 1.9297722660005434
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 94.9999999999136,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.6245408259315514,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 112.54788644080473,
+    "scl_mean": 2.6326497507724675
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.631578947368421,
+    "time_to_state_s": 299.99999999972715,
+    "state_share": {
+     "relaxed": 0.631578947368421,
+     "mental": 0.0,
+     "arousal": 0.21052631578947367,
+     "stress": 0.15789473684210525
+    },
+    "mind_mean": 0.31559932843252275,
+    "body_mean": 0.4394906807072154,
+    "hr_mean": 97.11757417062097,
+    "scl_mean": 1.9978671196100488
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 202,
+  "eeg_subject": 8,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.7142857142857143,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 0.7142857142857143,
+     "mental": 0.0,
+     "arousal": 0.2857142857142857,
+     "stress": 0.0
+    },
+    "mind_mean": 0.2560983147337682,
+    "body_mean": 0.23561273503944027,
+    "hr_mean": 95.80157672735494,
+    "scl_mean": 3.3061518120321693
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 85.00000000001933,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 1.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.7555265013336604,
+    "body_mean": 0.055471161634404076,
+    "hr_mean": 92.64631957958534,
+    "scl_mean": 3.2775351508907242
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.14285714285714285,
+    "hit_rate": 0.5789473684210527,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 0.5789473684210527,
+     "mental": 0.0,
+     "arousal": 0.42105263157894735,
+     "stress": 0.0
+    },
+    "mind_mean": 0.268337278054417,
+    "body_mean": 0.3678914760539152,
+    "hr_mean": 96.5077730278848,
+    "scl_mean": 3.2897210113804087
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 1.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3073808882536955,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 119.61097317353357,
+    "scl_mean": 4.118545352702185
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.5263157894736842,
+    "time_to_state_s": 369.9999999996635,
+    "state_share": {
+     "relaxed": 0.5263157894736842,
+     "mental": 0.0,
+     "arousal": 0.42105263157894735,
+     "stress": 0.05263157894736842
+    },
+    "mind_mean": 0.3550573891342365,
+    "body_mean": 0.4267444622688211,
+    "hr_mean": 93.58239631295409,
+    "scl_mean": 3.390383149067115
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 0.8571428571428571,
+    "hit_rate": 0.9090909090909091,
+    "time_to_state_s": 69.99999999993634,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.09090909090909091,
+     "stress": 0.9090909090909091
+    },
+    "mind_mean": 0.7477114478131495,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 120.20205180702136,
+    "scl_mean": 3.955007446102957
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.631578947368421,
+    "time_to_state_s": 249.99999999977263,
+    "state_share": {
+     "relaxed": 0.631578947368421,
+     "mental": 0.0,
+     "arousal": 0.3684210526315789,
+     "stress": 0.0
+    },
+    "mind_mean": 0.31189933980826096,
+    "body_mean": 0.3841299254725582,
+    "hr_mean": 97.19283749244151,
+    "scl_mean": 3.420754218638617
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "drift_suspected"
+  }
+ },
+ {
+  "seed": 203,
+  "eeg_subject": 10,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.2957390298567419,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 74.7784381977837,
+    "scl_mean": 3.089272275345703
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 35.00000000000796,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 1.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.685010298929159,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 74.52930189995803,
+    "scl_mean": 3.103251518138585
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.8571428571428571,
+    "hit_rate": 0.9473684210526315,
+    "time_to_state_s": 139.99999999987267,
+    "state_share": {
+     "relaxed": 0.9473684210526315,
+     "mental": 0.05263157894736842,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.37859100318510724,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 75.32314171653961,
+    "scl_mean": 3.1192908659680807
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 0.75,
+    "hit_rate": 0.6666666666666666,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.6666666666666666,
+     "stress": 0.3333333333333333
+    },
+    "mind_mean": 0.42800969593123406,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 103.32327101392826,
+    "scl_mean": 3.641843503253696
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.75,
+    "hit_rate": 0.7894736842105263,
+    "time_to_state_s": 194.99999999982265,
+    "state_share": {
+     "relaxed": 0.7894736842105263,
+     "mental": 0.10526315789473684,
+     "arousal": 0.10526315789473684,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3904880945142826,
+    "body_mean": 0.09569181956722295,
+    "hr_mean": 82.91898875257664,
+    "scl_mean": 3.4755619984442925
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 69.99999999993634,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.6250922548671862,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 102.79003486209746,
+    "scl_mean": 3.9923443724617003
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.2857142857142857,
+    "hit_rate": 0.6842105263157895,
+    "time_to_state_s": 149.99999999986358,
+    "state_share": {
+     "relaxed": 0.6842105263157895,
+     "mental": 0.2631578947368421,
+     "arousal": 0.05263157894736842,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3826230264875706,
+    "body_mean": 0.08857611274481691,
+    "hr_mean": 80.45219275645596,
+    "scl_mean": 3.6508831359197025
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 204,
+  "eeg_subject": 32,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.7142857142857143,
+    "time_to_state_s": 85.00000000001933,
+    "state_share": {
+     "relaxed": 0.7142857142857143,
+     "mental": 0.2857142857142857,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.552967098645451,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 80.52443304903498,
+    "scl_mean": 3.731951789985431
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 1.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.7056888440643849,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 78.34296041413656,
+    "scl_mean": 3.5443518978813273
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.5714285714285714,
+    "hit_rate": 0.8421052631578947,
+    "time_to_state_s": 64.99999999994088,
+    "state_share": {
+     "relaxed": 0.8421052631578947,
+     "mental": 0.15789473684210525,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.4154540413894969,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 77.87490513513835,
+    "scl_mean": 3.682856724423013
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 0.6666666666666666,
+    "time_to_state_s": 239.99999999978172,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.6666666666666666,
+     "stress": 0.3333333333333333
+    },
+    "mind_mean": 0.4383329672012892,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 100.89033554456306,
+    "scl_mean": 4.205600828037071
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.25,
+    "hit_rate": 0.42105263157894735,
+    "time_to_state_s": 244.99999999977717,
+    "state_share": {
+     "relaxed": 0.42105263157894735,
+     "mental": 0.5263157894736842,
+     "arousal": 0.05263157894736842,
+     "stress": 0.0
+    },
+    "mind_mean": 0.47616765213811524,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 77.92160304927518,
+    "scl_mean": 3.342544815854986
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 94.9999999999136,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.7646732513311899,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 103.42067601639616,
+    "scl_mean": 3.881383310857864
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.0,
+    "hit_rate": 0.2631578947368421,
+    "time_to_state_s": 199.9999999998181,
+    "state_share": {
+     "relaxed": 0.2631578947368421,
+     "mental": 0.7368421052631579,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.5094859986607567,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 75.70862399760678,
+    "scl_mean": 3.2536688583852365
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 205,
+  "eeg_subject": 32,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 0.8571428571428571,
+    "hit_rate": 0.8571428571428571,
+    "time_to_state_s": 85.00000000001933,
+    "state_share": {
+     "relaxed": 0.8571428571428571,
+     "mental": 0.14285714285714285,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.4071657303317177,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 91.6195995377582,
+    "scl_mean": 2.671933253785309
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.8333333333333334,
+    "time_to_state_s": 60.00000000001364,
+    "state_share": {
+     "relaxed": 0.16666666666666666,
+     "mental": 0.8333333333333334,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.606156325087415,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 96.94453761323145,
+    "scl_mean": 2.559442915442838
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 39.99999999996362,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3985020800129065,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 92.22644441718725,
+    "scl_mean": 2.5831889088900564
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 0.75,
+    "hit_rate": 0.8333333333333334,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.8333333333333334,
+     "stress": 0.16666666666666666
+    },
+    "mind_mean": 0.3978732978135678,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 111.83395969769089,
+    "scl_mean": 3.4507535614583595
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.9473684210526315,
+    "time_to_state_s": 169.9999999998454,
+    "state_share": {
+     "relaxed": 0.9473684210526315,
+     "mental": 0.0,
+     "arousal": 0.05263157894736842,
+     "stress": 0.0
+    },
+    "mind_mean": 0.32934313487260053,
+    "body_mean": 0.13994849713174395,
+    "hr_mean": 95.62699529067808,
+    "scl_mean": 3.0021374878422264
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 0.9090909090909091,
+    "time_to_state_s": 94.9999999999136,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.09090909090909091,
+     "stress": 0.9090909090909091
+    },
+    "mind_mean": 0.6056599092247308,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 118.15650044437255,
+    "scl_mean": 3.6963764295225645
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.8421052631578947,
+    "time_to_state_s": 199.9999999998181,
+    "state_share": {
+     "relaxed": 0.8421052631578947,
+     "mental": 0.0,
+     "arousal": 0.10526315789473684,
+     "stress": 0.05263157894736842
+    },
+    "mind_mean": 0.27611872902977364,
+    "body_mean": 0.1427046367191317,
+    "hr_mean": 92.86234096489962,
+    "scl_mean": 3.039945840788082
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 206,
+  "eeg_subject": 32,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 99.99999999990905,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.2864132478683037,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 99.3809545146856,
+    "scl_mean": 4.63983437103804
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 0.8571428571428571,
+    "hit_rate": 0.9166666666666666,
+    "time_to_state_s": 24.999999999977263,
+    "state_share": {
+     "relaxed": 0.08333333333333333,
+     "mental": 0.9166666666666666,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.7003555828239983,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 104.26799142240871,
+    "scl_mean": 4.299821752219812
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.5714285714285714,
+    "hit_rate": 0.631578947368421,
+    "time_to_state_s": 254.99999999976808,
+    "state_share": {
+     "relaxed": 0.631578947368421,
+     "mental": 0.3684210526315789,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.4178429301009758,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 102.54244856547551,
+    "scl_mean": 4.287879875762203
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 0.42857142857142855,
+    "hit_rate": 0.4166666666666667,
+    "time_to_state_s": 154.99999999985903,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.4166666666666667,
+     "stress": 0.5833333333333334
+    },
+    "mind_mean": 0.5338803945411351,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 123.06912908931362,
+    "scl_mean": 5.151660010085927
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.8571428571428571,
+    "hit_rate": 0.5263157894736842,
+    "time_to_state_s": 209.999999999809,
+    "state_share": {
+     "relaxed": 0.5263157894736842,
+     "mental": 0.3157894736842105,
+     "arousal": 0.05263157894736842,
+     "stress": 0.10526315789473684
+    },
+    "mind_mean": 0.41262683770689096,
+    "body_mean": 0.15568741464021935,
+    "hr_mean": 102.8720170679435,
+    "scl_mean": 4.6188224498016055
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 12,
+    "end_share": 0.8571428571428571,
+    "hit_rate": 0.75,
+    "time_to_state_s": 84.9999999999227,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.25,
+     "stress": 0.75
+    },
+    "mind_mean": 0.702081674442713,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 122.1734377511284,
+    "scl_mean": 4.959860049637575
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.8947368421052632,
+    "time_to_state_s": 139.99999999987267,
+    "state_share": {
+     "relaxed": 0.8947368421052632,
+     "mental": 0.10526315789473684,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.4225388632158542,
+    "body_mean": 0.061381525386215684,
+    "hr_mean": 102.31627169630926,
+    "scl_mean": 4.164421613485822
+   }
+  },
+  "calibration": {
+   "eeg_status": "drift_suspected",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 207,
+  "eeg_subject": 8,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 0.8571428571428571,
+    "hit_rate": 0.8571428571428571,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 0.8571428571428571,
+     "mental": 0.14285714285714285,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.4114567611444463,
+    "body_mean": 0.06009730160788957,
+    "hr_mean": 91.44985301724697,
+    "scl_mean": 1.0842882567180072
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 60.00000000001364,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 1.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.7253830729109133,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 93.57581500474708,
+    "scl_mean": 1.1098282603339633
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.7368421052631579,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 0.7368421052631579,
+     "mental": 0.2631578947368421,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.4323103492293053,
+    "body_mean": 0.05087823739671891,
+    "hr_mean": 91.86820809733335,
+    "scl_mean": 1.1001256961003893
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 0.375,
+    "hit_rate": 0.5,
+    "time_to_state_s": 114.99999999989541,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.5,
+     "stress": 0.5
+    },
+    "mind_mean": 0.4793507763545654,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 114.13325507647956,
+    "scl_mean": 1.8317962347747174
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.875,
+    "hit_rate": 0.42105263157894735,
+    "time_to_state_s": 394.99999999964075,
+    "state_share": {
+     "relaxed": 0.42105263157894735,
+     "mental": 0.05263157894736842,
+     "arousal": 0.5263157894736842,
+     "stress": 0.0
+    },
+    "mind_mean": 0.39303721618142784,
+    "body_mean": 0.47794536938247356,
+    "hr_mean": 90.88076313659978,
+    "scl_mean": 1.4092226952358446
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 94.9999999999136,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.7485164240365592,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 114.03137480905467,
+    "scl_mean": 1.868412745892553
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.5789473684210527,
+    "time_to_state_s": 324.9999999997044,
+    "state_share": {
+     "relaxed": 0.5789473684210527,
+     "mental": 0.10526315789473684,
+     "arousal": 0.3157894736842105,
+     "stress": 0.0
+    },
+    "mind_mean": 0.39908006112978656,
+    "body_mean": 0.2856227820314791,
+    "hr_mean": 94.30302315967243,
+    "scl_mean": 1.3414343328171559
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 208,
+  "eeg_subject": 38,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 24.999999999977263,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3915778670379862,
+    "body_mean": 0.08603597356061059,
+    "hr_mean": 105.57260990199032,
+    "scl_mean": 3.226223816607764
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 0.42857142857142855,
+    "hit_rate": 0.4166666666666667,
+    "time_to_state_s": 99.99999999990905,
+    "state_share": {
+     "relaxed": 0.5833333333333334,
+     "mental": 0.4166666666666667,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.4584043764814494,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 95.68452732634671,
+    "scl_mean": 3.144854862738825
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.0,
+    "hit_rate": 0.42105263157894735,
+    "time_to_state_s": 4.9999999999954525,
+    "state_share": {
+     "relaxed": 0.42105263157894735,
+     "mental": 0.5789473684210527,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.49047952213492907,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 97.15514987849781,
+    "scl_mean": 2.7460558652244007
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 0.5714285714285714,
+    "hit_rate": 0.5,
+    "time_to_state_s": 129.99999999988177,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.5,
+     "stress": 0.5
+    },
+    "mind_mean": 0.506420949262513,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 119.37578872602232,
+    "scl_mean": 3.401216596877113
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.42857142857142855,
+    "hit_rate": 0.2631578947368421,
+    "time_to_state_s": 409.9999999996271,
+    "state_share": {
+     "relaxed": 0.2631578947368421,
+     "mental": 0.631578947368421,
+     "arousal": 0.0,
+     "stress": 0.10526315789473684
+    },
+    "mind_mean": 0.5481815470086363,
+    "body_mean": 0.09506525494834923,
+    "hr_mean": 104.00794928051766,
+    "scl_mean": 3.2320606628272524
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 12,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.8333333333333334,
+    "time_to_state_s": 134.99999999987722,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.16666666666666666,
+     "stress": 0.8333333333333334
+    },
+    "mind_mean": 0.7316730591825323,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 121.19464117501394,
+    "scl_mean": 3.574959876993201
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.42857142857142855,
+    "hit_rate": 0.3157894736842105,
+    "time_to_state_s": 314.9999999997135,
+    "state_share": {
+     "relaxed": 0.3157894736842105,
+     "mental": 0.3157894736842105,
+     "arousal": 0.15789473684210525,
+     "stress": 0.21052631578947367
+    },
+    "mind_mean": 0.47879560078605954,
+    "body_mean": 0.33806528814149694,
+    "hr_mean": 100.47308168458842,
+    "scl_mean": 3.4140019639164882
+   }
+  },
+  "calibration": {
+   "eeg_status": "drift_suspected",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 209,
+  "eeg_subject": 32,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.7142857142857143,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 0.7142857142857143,
+     "mental": 0.2857142857142857,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.43231838273561957,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 94.7929589773229,
+    "scl_mean": 1.152581347418692
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 0.8333333333333334,
+    "time_to_state_s": 35.00000000000796,
+    "state_share": {
+     "relaxed": 0.16666666666666666,
+     "mental": 0.8333333333333334,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.8128162154253347,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 97.3491871747845,
+    "scl_mean": 1.0356184513661444
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.5714285714285714,
+    "hit_rate": 0.5789473684210527,
+    "time_to_state_s": 189.9999999998272,
+    "state_share": {
+     "relaxed": 0.5789473684210527,
+     "mental": 0.3157894736842105,
+     "arousal": 0.05263157894736842,
+     "stress": 0.05263157894736842
+    },
+    "mind_mean": 0.4822022216408395,
+    "body_mean": 0.08947232761190378,
+    "hr_mean": 98.14727794173339,
+    "scl_mean": 1.1815412475627598
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 0.875,
+    "hit_rate": 0.8333333333333334,
+    "time_to_state_s": 114.99999999989541,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.8333333333333334,
+     "stress": 0.16666666666666666
+    },
+    "mind_mean": 0.45805889316469645,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 121.66617051851023,
+    "scl_mean": 1.871862151818562
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.75,
+    "hit_rate": 0.3157894736842105,
+    "time_to_state_s": 469.99999999957254,
+    "state_share": {
+     "relaxed": 0.3157894736842105,
+     "mental": 0.05263157894736842,
+     "arousal": 0.3684210526315789,
+     "stress": 0.2631578947368421
+    },
+    "mind_mean": 0.3835396639028554,
+    "body_mean": 0.6063550429510025,
+    "hr_mean": 101.23477207633395,
+    "scl_mean": 1.3954406756631847
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 44.99999999995907,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.7482157247097785,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 121.61400396699436,
+    "scl_mean": 1.8559861947131757
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.0,
+    "hit_rate": 0.0,
+    "time_to_state_s": null,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.42105263157894735,
+     "stress": 0.5789473684210527
+    },
+    "mind_mean": 0.5781871344994908,
+    "body_mean": 0.8928245369869351,
+    "hr_mean": 101.09052195448707,
+    "scl_mean": 1.42641614786663
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 210,
+  "eeg_subject": 10,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.31743758073466294,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 99.87183506548828,
+    "scl_mean": 2.1502250032329946
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 60.00000000001364,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 1.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.7245668309821726,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 100.75590456423878,
+    "scl_mean": 2.212722676075226
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.9473684210526315,
+    "time_to_state_s": 64.99999999994088,
+    "state_share": {
+     "relaxed": 0.9473684210526315,
+     "mental": 0.05263157894736842,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3946990725410484,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 101.21469850259082,
+    "scl_mean": 2.1672957596646243
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 0.75,
+    "hit_rate": 0.8333333333333334,
+    "time_to_state_s": 139.99999999987267,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.8333333333333334,
+     "stress": 0.16666666666666666
+    },
+    "mind_mean": 0.38035077310023174,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 124.66219993689212,
+    "scl_mean": 3.0807096224421255
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.75,
+    "hit_rate": 0.6842105263157895,
+    "time_to_state_s": 144.99999999986812,
+    "state_share": {
+     "relaxed": 0.6842105263157895,
+     "mental": 0.3157894736842105,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.4064388211476064,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 98.33804809380966,
+    "scl_mean": 2.361203335743808
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 119.99999999989086,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.7265653439475258,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 120.93817411227596,
+    "scl_mean": 2.9447336490256943
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.8421052631578947,
+    "time_to_state_s": 199.9999999998181,
+    "state_share": {
+     "relaxed": 0.8421052631578947,
+     "mental": 0.10526315789473684,
+     "arousal": 0.0,
+     "stress": 0.05263157894736842
+    },
+    "mind_mean": 0.36977335247929594,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 102.56812268001102,
+    "scl_mean": 2.212236708082724
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 211,
+  "eeg_subject": 8,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 0.8571428571428571,
+    "hit_rate": 0.8571428571428571,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 0.8571428571428571,
+     "mental": 0.14285714285714285,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3936517820234999,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 78.88158843006782,
+    "scl_mean": 1.7055032649227897
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 60.00000000001364,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 1.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.7702558745890219,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 81.08403846801687,
+    "scl_mean": 1.6734792939967604
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.30913859839271485,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 80.663183894295,
+    "scl_mean": 1.732231476145413
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 114.99999999989541,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 1.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.2990205508681822,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 103.21463486938997,
+    "scl_mean": 2.31539557208981
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.875,
+    "hit_rate": 0.9473684210526315,
+    "time_to_state_s": 119.99999999989086,
+    "state_share": {
+     "relaxed": 0.9473684210526315,
+     "mental": 0.05263157894736842,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.36854513035805536,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 79.37353107094728,
+    "scl_mean": 1.9096447018749108
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 119.99999999989086,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.7978847880660432,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 97.9580079824988,
+    "scl_mean": 2.458655986165683
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.7894736842105263,
+    "time_to_state_s": 224.99999999979536,
+    "state_share": {
+     "relaxed": 0.7894736842105263,
+     "mental": 0.0,
+     "arousal": 0.21052631578947367,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3768463944226635,
+    "body_mean": 0.19157408546453744,
+    "hr_mean": 79.72995164197289,
+    "scl_mean": 2.056356859106245
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 212,
+  "eeg_subject": 8,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3210434814529123,
+    "body_mean": 0.06811165914985008,
+    "hr_mean": 99.65790281924572,
+    "scl_mean": 1.3309709550726976
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 60.00000000001364,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 1.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.7888169051329884,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 106.51600324386027,
+    "scl_mean": 1.3820420584624828
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 64.99999999994088,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.33878864798320096,
+    "body_mean": 0.06632237202693868,
+    "hr_mean": 103.53231507978943,
+    "scl_mean": 1.3164520633462384
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 1.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3773613485568379,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 121.96807117261018,
+    "scl_mean": 2.160092287199604
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.875,
+    "hit_rate": 0.5263157894736842,
+    "time_to_state_s": 344.9999999996862,
+    "state_share": {
+     "relaxed": 0.5263157894736842,
+     "mental": 0.05263157894736842,
+     "arousal": 0.42105263157894735,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3341409885285799,
+    "body_mean": 0.36797350444489746,
+    "hr_mean": 101.03976168328956,
+    "scl_mean": 1.5676111723775268
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 94.9999999999136,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.7381335506453728,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 124.58353665511953,
+    "scl_mean": 2.045513508048608
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.47368421052631576,
+    "time_to_state_s": 374.99999999965894,
+    "state_share": {
+     "relaxed": 0.47368421052631576,
+     "mental": 0.0,
+     "arousal": 0.47368421052631576,
+     "stress": 0.05263157894736842
+    },
+    "mind_mean": 0.35638953034454546,
+    "body_mean": 0.4883283433819788,
+    "hr_mean": 103.59405272719623,
+    "scl_mean": 1.615412321524518
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 213,
+  "eeg_subject": 8,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 0.2857142857142857,
+    "hit_rate": 0.2857142857142857,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 0.2857142857142857,
+     "mental": 0.2857142857142857,
+     "arousal": 0.42857142857142855,
+     "stress": 0.0
+    },
+    "mind_mean": 0.30711811714534987,
+    "body_mean": 0.34360150676873946,
+    "hr_mean": 92.38034694851645,
+    "scl_mean": 1.240875536207797
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 85.00000000001933,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 1.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.7512863464813391,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 92.16801982721694,
+    "scl_mean": 1.0753353183668877
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.14285714285714285,
+    "hit_rate": 0.42105263157894735,
+    "time_to_state_s": 64.99999999994088,
+    "state_share": {
+     "relaxed": 0.42105263157894735,
+     "mental": 0.0,
+     "arousal": 0.5789473684210527,
+     "stress": 0.0
+    },
+    "mind_mean": 0.29745398376150833,
+    "body_mean": 0.5638367549229663,
+    "hr_mean": 102.59259798823335,
+    "scl_mean": 1.1507479355112344
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 64.99999999994088,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 1.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.23704759001601397,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 123.63200554916334,
+    "scl_mean": 1.9311993918250165
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.625,
+    "hit_rate": 0.2631578947368421,
+    "time_to_state_s": 444.9999999995953,
+    "state_share": {
+     "relaxed": 0.2631578947368421,
+     "mental": 0.0,
+     "arousal": 0.7368421052631579,
+     "stress": 0.0
+    },
+    "mind_mean": 0.27384993695247334,
+    "body_mean": 0.6499817388226625,
+    "hr_mean": 97.21386452469227,
+    "scl_mean": 1.340504728646947
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 94.9999999999136,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.7903253390711238,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 114.75981857507836,
+    "scl_mean": 1.8138119423173256
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.0,
+    "hit_rate": 0.0,
+    "time_to_state_s": null,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.8947368421052632,
+     "stress": 0.10526315789473684
+    },
+    "mind_mean": 0.29621987502321095,
+    "body_mean": 0.897738274943756,
+    "hr_mean": 96.0546308074507,
+    "scl_mean": 1.372256179879626
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "drift_suspected"
+  }
+ },
+ {
+  "seed": 214,
+  "eeg_subject": 8,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.37703438326181465,
+    "body_mean": 0.11690897036891446,
+    "hr_mean": 77.24482540077027,
+    "scl_mean": 3.171180761789528
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 60.00000000001364,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 1.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.7106132202573936,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 78.3174054994541,
+    "scl_mean": 3.0081046725203033
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.5789473684210527,
+    "time_to_state_s": 64.99999999994088,
+    "state_share": {
+     "relaxed": 0.5789473684210527,
+     "mental": 0.21052631578947367,
+     "arousal": 0.21052631578947367,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3877457749354455,
+    "body_mean": 0.22859723848605545,
+    "hr_mean": 83.50639518954438,
+    "scl_mean": 2.773674725550994
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 0.75,
+    "time_to_state_s": 14.999999999986358,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.75,
+     "stress": 0.25
+    },
+    "mind_mean": 0.4703030302485561,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 103.42247274346249,
+    "scl_mean": 3.8564123064770306
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.125,
+    "hit_rate": 0.21052631578947367,
+    "time_to_state_s": 269.99999999975444,
+    "state_share": {
+     "relaxed": 0.21052631578947367,
+     "mental": 0.0,
+     "arousal": 0.6842105263157895,
+     "stress": 0.10526315789473684
+    },
+    "mind_mean": 0.38101468609319045,
+    "body_mean": 0.7199022157165417,
+    "hr_mean": 86.90725398443946,
+    "scl_mean": 3.3288088799711772
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 69.99999999993634,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.7613565433861527,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 103.40002742409075,
+    "scl_mean": 3.9055708028396086
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.0,
+    "hit_rate": 0.0,
+    "time_to_state_s": null,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.10526315789473684,
+     "arousal": 0.7368421052631579,
+     "stress": 0.15789473684210525
+    },
+    "mind_mean": 0.39969496471175825,
+    "body_mean": 0.7936749282205194,
+    "hr_mean": 86.57739259699753,
+    "scl_mean": 3.146201334466369
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 215,
+  "eeg_subject": 38,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 0.42857142857142855,
+    "hit_rate": 0.42857142857142855,
+    "time_to_state_s": 224.99999999979536,
+    "state_share": {
+     "relaxed": 0.42857142857142855,
+     "mental": 0.14285714285714285,
+     "arousal": 0.42857142857142855,
+     "stress": 0.0
+    },
+    "mind_mean": 0.4590462090122386,
+    "body_mean": 0.30603965993324295,
+    "hr_mean": 78.66389882081367,
+    "scl_mean": 2.346020223747704
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 0.9166666666666666,
+    "time_to_state_s": 24.999999999977263,
+    "state_share": {
+     "relaxed": 0.08333333333333333,
+     "mental": 0.9166666666666666,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.6784559597860226,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 78.78789287828404,
+    "scl_mean": 2.100258512685429
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.5714285714285714,
+    "hit_rate": 0.2631578947368421,
+    "time_to_state_s": 479.99999999956344,
+    "state_share": {
+     "relaxed": 0.2631578947368421,
+     "mental": 0.5263157894736842,
+     "arousal": 0.15789473684210525,
+     "stress": 0.05263157894736842
+    },
+    "mind_mean": 0.47279509726659963,
+    "body_mean": 0.28652647021427824,
+    "hr_mean": 81.57705300698514,
+    "scl_mean": 2.293327155479127
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.4166666666666667,
+    "time_to_state_s": 79.99999999992724,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.4166666666666667,
+     "stress": 0.5833333333333334
+    },
+    "mind_mean": 0.5401649336248042,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 103.13563149353263,
+    "scl_mean": 2.9440611123703255
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.14285714285714285,
+    "hit_rate": 0.05263157894736842,
+    "time_to_state_s": null,
+    "state_share": {
+     "relaxed": 0.05263157894736842,
+     "mental": 0.3157894736842105,
+     "arousal": 0.3157894736842105,
+     "stress": 0.3157894736842105
+    },
+    "mind_mean": 0.518735043784104,
+    "body_mean": 0.565865315215545,
+    "hr_mean": 83.80915723795219,
+    "scl_mean": 2.386626296956948
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 59.99999999994543,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.7410062989984914,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 103.48851971225837,
+    "scl_mean": 2.959262371728458
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.5714285714285714,
+    "hit_rate": 0.21052631578947367,
+    "time_to_state_s": 439.9999999995998,
+    "state_share": {
+     "relaxed": 0.21052631578947367,
+     "mental": 0.2631578947368421,
+     "arousal": 0.10526315789473684,
+     "stress": 0.42105263157894735
+    },
+    "mind_mean": 0.5327965703936905,
+    "body_mean": 0.460917574342461,
+    "hr_mean": 82.50921054317244,
+    "scl_mean": 2.2510540252640294
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 216,
+  "eeg_subject": 38,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 0.2857142857142857,
+    "hit_rate": 0.2857142857142857,
+    "time_to_state_s": 224.9999999998497,
+    "state_share": {
+     "relaxed": 0.2857142857142857,
+     "mental": 0.14285714285714285,
+     "arousal": 0.2857142857142857,
+     "stress": 0.2857142857142857
+    },
+    "mind_mean": 0.45553970234464847,
+    "body_mean": 0.5940514594073185,
+    "hr_mean": 92.23137334334422,
+    "scl_mean": 2.093594082632909
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 0.5714285714285714,
+    "hit_rate": 0.6666666666666666,
+    "time_to_state_s": 149.99999999986358,
+    "state_share": {
+     "relaxed": 0.25,
+     "mental": 0.6666666666666666,
+     "arousal": 0.0,
+     "stress": 0.08333333333333333
+    },
+    "mind_mean": 0.6645441276160658,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 86.10160173720026,
+    "scl_mean": 1.8227286606280761
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.8947368421052632,
+    "time_to_state_s": 29.999999999972715,
+    "state_share": {
+     "relaxed": 0.8947368421052632,
+     "mental": 0.10526315789473684,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.33125934022038245,
+    "body_mean": 0.14875519568488468,
+    "hr_mean": 89.36864417737844,
+    "scl_mean": 1.9095247616726136
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 79.99999999992724,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 1.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.2305824182405646,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 107.63138598432965,
+    "scl_mean": 2.5047886531355483
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.42105263157894735,
+    "time_to_state_s": 359.9999999996728,
+    "state_share": {
+     "relaxed": 0.42105263157894735,
+     "mental": 0.10526315789473684,
+     "arousal": 0.47368421052631576,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3605434240070835,
+    "body_mean": 0.48642415283717905,
+    "hr_mean": 90.8298482879494,
+    "scl_mean": 2.1166230701943856
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 12,
+    "end_share": 0.14285714285714285,
+    "hit_rate": 0.5,
+    "time_to_state_s": 109.99999999989996,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.5,
+     "stress": 0.5
+    },
+    "mind_mean": 0.5727912490285401,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 110.56281600059894,
+    "scl_mean": 2.5884686146332743
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.631578947368421,
+    "time_to_state_s": 239.99999999978172,
+    "state_share": {
+     "relaxed": 0.631578947368421,
+     "mental": 0.0,
+     "arousal": 0.3684210526315789,
+     "stress": 0.0
+    },
+    "mind_mean": 0.2222617158060079,
+    "body_mean": 0.3118030797219874,
+    "hr_mean": 88.69861134617268,
+    "scl_mean": 2.008508378169015
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 217,
+  "eeg_subject": 32,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.35070512467090875,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 94.99519847427975,
+    "scl_mean": 1.0903451972138167
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 35.00000000000796,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 1.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.7430941659794894,
+    "body_mean": 0.04857783715631785,
+    "hr_mean": 94.55786369832316,
+    "scl_mean": 1.0594431586731836
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.7368421052631579,
+    "time_to_state_s": 64.99999999994088,
+    "state_share": {
+     "relaxed": 0.7368421052631579,
+     "mental": 0.15789473684210525,
+     "arousal": 0.10526315789473684,
+     "stress": 0.0
+    },
+    "mind_mean": 0.4193112790260008,
+    "body_mean": 0.11444074273756484,
+    "hr_mean": 94.87214937528428,
+    "scl_mean": 1.0811416603600392
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 0.875,
+    "hit_rate": 0.6666666666666666,
+    "time_to_state_s": 289.99999999973625,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.6666666666666666,
+     "stress": 0.3333333333333333
+    },
+    "mind_mean": 0.39158092659447874,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 114.91608712723564,
+    "scl_mean": 1.7359340745667946
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.75,
+    "hit_rate": 0.47368421052631576,
+    "time_to_state_s": 344.9999999996862,
+    "state_share": {
+     "relaxed": 0.47368421052631576,
+     "mental": 0.10526315789473684,
+     "arousal": 0.21052631578947367,
+     "stress": 0.21052631578947367
+    },
+    "mind_mean": 0.41760923320309007,
+    "body_mean": 0.37174917241268013,
+    "hr_mean": 94.55529930587721,
+    "scl_mean": 1.2386103762130551
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 69.99999999993634,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.700857367416008,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 115.0561607459132,
+    "scl_mean": 1.7483906116304448
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.42857142857142855,
+    "hit_rate": 0.47368421052631576,
+    "time_to_state_s": 224.99999999979536,
+    "state_share": {
+     "relaxed": 0.47368421052631576,
+     "mental": 0.21052631578947367,
+     "arousal": 0.3157894736842105,
+     "stress": 0.0
+    },
+    "mind_mean": 0.4212301339177512,
+    "body_mean": 0.2709603789887815,
+    "hr_mean": 96.0893459697716,
+    "scl_mean": 1.4014065230212591
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 218,
+  "eeg_subject": 32,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.30427001047953467,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 87.77979277652676,
+    "scl_mean": 1.936304995516735
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 0.8571428571428571,
+    "hit_rate": 0.8333333333333334,
+    "time_to_state_s": 35.00000000000796,
+    "state_share": {
+     "relaxed": 0.16666666666666666,
+     "mental": 0.8333333333333334,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.606411779952935,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 91.01091046675624,
+    "scl_mean": 1.8850818264253464
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.8947368421052632,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 0.8947368421052632,
+     "mental": 0.10526315789473684,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3139510152163249,
+    "body_mean": 0.048006008262946306,
+    "hr_mean": 89.68449436155626,
+    "scl_mean": 1.9146768118465218
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 1.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.23770299487770752,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 108.73442147955468,
+    "scl_mean": 2.533387792524024
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.631578947368421,
+    "time_to_state_s": 244.99999999977717,
+    "state_share": {
+     "relaxed": 0.631578947368421,
+     "mental": 0.15789473684210525,
+     "arousal": 0.21052631578947367,
+     "stress": 0.0
+    },
+    "mind_mean": 0.33172170524918665,
+    "body_mean": 0.19034401848991417,
+    "hr_mean": 86.03993049017413,
+    "scl_mean": 1.9945603472495173
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 94.9999999999136,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.6903472707205756,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 108.35826317630939,
+    "scl_mean": 2.4672868526168017
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.5263157894736842,
+    "time_to_state_s": 274.9999999997499,
+    "state_share": {
+     "relaxed": 0.5263157894736842,
+     "mental": 0.15789473684210525,
+     "arousal": 0.0,
+     "stress": 0.3157894736842105
+    },
+    "mind_mean": 0.453473763168489,
+    "body_mean": 0.29989486252581415,
+    "hr_mean": 93.1584588040695,
+    "scl_mean": 1.9736155492194627
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 219,
+  "eeg_subject": 8,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.24661903322652715,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 74.30336298289683,
+    "scl_mean": 1.3355822657016767
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 110.00000000002501,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 1.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.6764732352725099,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 77.00969353722536,
+    "scl_mean": 1.3311207326053613
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.2817444531973014,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 76.44037916883974,
+    "scl_mean": 1.3460175921417774
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 1.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3353058982866055,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 98.1255837506144,
+    "scl_mean": 2.110842550091531
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.75,
+    "hit_rate": 0.6842105263157895,
+    "time_to_state_s": 244.99999999977717,
+    "state_share": {
+     "relaxed": 0.6842105263157895,
+     "mental": 0.10526315789473684,
+     "arousal": 0.21052631578947367,
+     "stress": 0.0
+    },
+    "mind_mean": 0.27327458648490616,
+    "body_mean": 0.18851572347338386,
+    "hr_mean": 73.25916458049217,
+    "scl_mean": 1.4337259959231112
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 119.99999999989086,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.7817413158102533,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 100.54064001748225,
+    "scl_mean": 2.009475898149319
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.7894736842105263,
+    "time_to_state_s": 249.99999999977263,
+    "state_share": {
+     "relaxed": 0.7894736842105263,
+     "mental": 0.15789473684210525,
+     "arousal": 0.05263157894736842,
+     "stress": 0.0
+    },
+    "mind_mean": 0.31470612806221243,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 78.9084367212385,
+    "scl_mean": 1.4212267555309943
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 220,
+  "eeg_subject": 38,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.7142857142857143,
+    "time_to_state_s": 25.000000000005684,
+    "state_share": {
+     "relaxed": 0.7142857142857143,
+     "mental": 0.2857142857142857,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3326863162005124,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 82.5111563245736,
+    "scl_mean": 3.646565196115541
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 0.8571428571428571,
+    "hit_rate": 0.5833333333333334,
+    "time_to_state_s": 0.0,
+    "state_share": {
+     "relaxed": 0.08333333333333333,
+     "mental": 0.5833333333333334,
+     "arousal": 0.0,
+     "stress": 0.3333333333333333
+    },
+    "mind_mean": 0.7269713066723674,
+    "body_mean": 0.3486238286616121,
+    "hr_mean": 88.67186165806135,
+    "scl_mean": 3.320477746551703
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.5714285714285714,
+    "hit_rate": 0.8421052631578947,
+    "time_to_state_s": 129.99999999988177,
+    "state_share": {
+     "relaxed": 0.8421052631578947,
+     "mental": 0.15789473684210525,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.4195067423223741,
+    "body_mean": 0.08201329541953906,
+    "hr_mean": 85.31953617981469,
+    "scl_mean": 3.4519030039146417
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 104.9999999999045,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 1.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.37160957930664384,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 109.30883922659966,
+    "scl_mean": 3.9776178493455063
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.5714285714285714,
+    "hit_rate": 0.5263157894736842,
+    "time_to_state_s": 159.99999999985448,
+    "state_share": {
+     "relaxed": 0.5263157894736842,
+     "mental": 0.42105263157894735,
+     "arousal": 0.05263157894736842,
+     "stress": 0.0
+    },
+    "mind_mean": 0.42994391490540057,
+    "body_mean": 0.0640949041800837,
+    "hr_mean": 85.24719800163942,
+    "scl_mean": 3.5423973268470648
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 109.99999999989996,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.7465859233388742,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 103.20274652983612,
+    "scl_mean": 4.169734133005373
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.42857142857142855,
+    "hit_rate": 0.3157894736842105,
+    "time_to_state_s": 264.999999999759,
+    "state_share": {
+     "relaxed": 0.3157894736842105,
+     "mental": 0.47368421052631576,
+     "arousal": 0.05263157894736842,
+     "stress": 0.15789473684210525
+    },
+    "mind_mean": 0.5496793134708153,
+    "body_mean": 0.19193712454068718,
+    "hr_mean": 86.61619593754668,
+    "scl_mean": 3.495275123041941
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 221,
+  "eeg_subject": 10,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3806612644131619,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 99.49034395930957,
+    "scl_mean": 2.0053377067635556
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 35.00000000000796,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 1.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.6294621825117487,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 98.32000270936508,
+    "scl_mean": 2.2136826003650136
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.9473684210526315,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 0.9473684210526315,
+     "mental": 0.05263157894736842,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.40681354035465095,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 102.06625195067222,
+    "scl_mean": 2.1067798958882484
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 0.75,
+    "hit_rate": 0.8333333333333334,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.8333333333333334,
+     "stress": 0.16666666666666666
+    },
+    "mind_mean": 0.36762391002289446,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 116.63695233473675,
+    "scl_mean": 2.8475759481725205
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.75,
+    "hit_rate": 0.7894736842105263,
+    "time_to_state_s": 194.99999999982265,
+    "state_share": {
+     "relaxed": 0.7894736842105263,
+     "mental": 0.10526315789473684,
+     "arousal": 0.10526315789473684,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3759633919202615,
+    "body_mean": 0.1326387746994369,
+    "hr_mean": 101.67980448404445,
+    "scl_mean": 2.3978173908518947
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 69.99999999993634,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.6593895436008627,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 119.60842007538609,
+    "scl_mean": 2.8335208555318148
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.5714285714285714,
+    "hit_rate": 0.5789473684210527,
+    "time_to_state_s": 249.99999999977263,
+    "state_share": {
+     "relaxed": 0.5789473684210527,
+     "mental": 0.15789473684210525,
+     "arousal": 0.21052631578947367,
+     "stress": 0.05263157894736842
+    },
+    "mind_mean": 0.4324960613915552,
+    "body_mean": 0.253340565281522,
+    "hr_mean": 101.93845225512582,
+    "scl_mean": 2.354510982421778
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 222,
+  "eeg_subject": 10,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 25.000000000005684,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.22031498964901292,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 79.66881767441886,
+    "scl_mean": 1.1556186368448258
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 0.5714285714285714,
+    "hit_rate": 0.5833333333333334,
+    "time_to_state_s": 49.999999999954525,
+    "state_share": {
+     "relaxed": 0.4166666666666667,
+     "mental": 0.5833333333333334,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.554700829728153,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 77.4858076562967,
+    "scl_mean": 1.0408911695807477
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 54.99999999994998,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.2785850785663305,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 76.76267276384263,
+    "scl_mean": 0.9719708825662444
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 104.9999999999045,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 1.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.2267038803367797,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 100.35883547375026,
+    "scl_mean": 1.6861024318203022
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.42105263157894735,
+    "time_to_state_s": 309.9999999997183,
+    "state_share": {
+     "relaxed": 0.42105263157894735,
+     "mental": 0.10526315789473684,
+     "arousal": 0.47368421052631576,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3704036935514187,
+    "body_mean": 0.4262229338997711,
+    "hr_mean": 81.59097586579016,
+    "scl_mean": 1.2256163699673666
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 12,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.8333333333333334,
+    "time_to_state_s": 109.99999999989996,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.16666666666666666,
+     "stress": 0.8333333333333334
+    },
+    "mind_mean": 0.6219635412541944,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 107.15944526625292,
+    "scl_mean": 1.784967255011975
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.631578947368421,
+    "time_to_state_s": 314.9999999997135,
+    "state_share": {
+     "relaxed": 0.631578947368421,
+     "mental": 0.0,
+     "arousal": 0.3684210526315789,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3109672323245559,
+    "body_mean": 0.33315190085210605,
+    "hr_mean": 82.42984746462963,
+    "scl_mean": 1.2126557806271612
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 223,
+  "eeg_subject": 10,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3505778788888417,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 99.40035092432878,
+    "scl_mean": 1.1632156645118328
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 0.8571428571428571,
+    "hit_rate": 0.9166666666666666,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 0.08333333333333333,
+     "mental": 0.9166666666666666,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.6286950314417862,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 103.34715184726666,
+    "scl_mean": 1.2830069810048106
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 139.99999999987267,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3600288312506402,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 102.13232867059489,
+    "scl_mean": 1.1868762211523805
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 0.75,
+    "hit_rate": 0.8333333333333334,
+    "time_to_state_s": 114.99999999989541,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.8333333333333334,
+     "stress": 0.16666666666666666
+    },
+    "mind_mean": 0.36707582961121443,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 123.96105596273729,
+    "scl_mean": 1.9129082585662545
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.625,
+    "hit_rate": 0.42105263157894735,
+    "time_to_state_s": 344.9999999996862,
+    "state_share": {
+     "relaxed": 0.42105263157894735,
+     "mental": 0.05263157894736842,
+     "arousal": 0.3157894736842105,
+     "stress": 0.21052631578947367
+    },
+    "mind_mean": 0.341121361827655,
+    "body_mean": 0.46336141635309447,
+    "hr_mean": 104.04246280860173,
+    "scl_mean": 1.385079217331582
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 0.42857142857142855,
+    "hit_rate": 0.45454545454545453,
+    "time_to_state_s": 69.99999999993634,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.5454545454545454,
+     "stress": 0.45454545454545453
+    },
+    "mind_mean": 0.5131588108054017,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 122.12985283916724,
+    "scl_mean": 1.9894824711260155
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.5789473684210527,
+    "time_to_state_s": 324.9999999997044,
+    "state_share": {
+     "relaxed": 0.5789473684210527,
+     "mental": 0.0,
+     "arousal": 0.3157894736842105,
+     "stress": 0.10526315789473684
+    },
+    "mind_mean": 0.330141803109363,
+    "body_mean": 0.38093926912103554,
+    "hr_mean": 103.09002248210511,
+    "scl_mean": 1.3680352638794975
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 224,
+  "eeg_subject": 38,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 0.2857142857142857,
+    "hit_rate": 0.2857142857142857,
+    "time_to_state_s": 25.000000000005684,
+    "state_share": {
+     "relaxed": 0.2857142857142857,
+     "mental": 0.2857142857142857,
+     "arousal": 0.14285714285714285,
+     "stress": 0.2857142857142857
+    },
+    "mind_mean": 0.4942620428484605,
+    "body_mean": 0.3824714062428813,
+    "hr_mean": 106.99642484835734,
+    "scl_mean": 2.6301542406282317
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 0.5714285714285714,
+    "hit_rate": 0.75,
+    "time_to_state_s": 0.0,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.75,
+     "arousal": 0.0,
+     "stress": 0.25
+    },
+    "mind_mean": 0.7007196038097855,
+    "body_mean": 0.2764724917419828,
+    "hr_mean": 105.09187729107337,
+    "scl_mean": 2.4753492387473783
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.14285714285714285,
+    "hit_rate": 0.2631578947368421,
+    "time_to_state_s": 4.9999999999954525,
+    "state_share": {
+     "relaxed": 0.2631578947368421,
+     "mental": 0.7368421052631579,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.5922818040574555,
+    "body_mean": 0.11107381906985196,
+    "hr_mean": 102.87466295233301,
+    "scl_mean": 2.287102807916832
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 0.5714285714285714,
+    "hit_rate": 0.4166666666666667,
+    "time_to_state_s": 329.99999999969987,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.4166666666666667,
+     "stress": 0.5833333333333334
+    },
+    "mind_mean": 0.49808007442162694,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 126.03675621867244,
+    "scl_mean": 3.2245271578867616
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.5714285714285714,
+    "hit_rate": 0.47368421052631576,
+    "time_to_state_s": 234.99999999978627,
+    "state_share": {
+     "relaxed": 0.47368421052631576,
+     "mental": 0.42105263157894735,
+     "arousal": 0.0,
+     "stress": 0.10526315789473684
+    },
+    "mind_mean": 0.5084939043710752,
+    "body_mean": 0.13547279916833493,
+    "hr_mean": 101.59160659417874,
+    "scl_mean": 2.7072081258133216
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 84.9999999999227,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.6729941526414512,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 125.45113243095342,
+    "scl_mean": 3.480219528585516
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.0,
+    "hit_rate": 0.21052631578947367,
+    "time_to_state_s": 339.9999999996908,
+    "state_share": {
+     "relaxed": 0.21052631578947367,
+     "mental": 0.631578947368421,
+     "arousal": 0.0,
+     "stress": 0.15789473684210525
+    },
+    "mind_mean": 0.5910652583391132,
+    "body_mean": 0.18466517009349326,
+    "hr_mean": 104.50528569736501,
+    "scl_mean": 2.4502433708940106
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 225,
+  "eeg_subject": 38,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 0.8571428571428571,
+    "hit_rate": 0.8571428571428571,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 0.8571428571428571,
+     "mental": 0.14285714285714285,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.4061583707132517,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 78.1749195351404,
+    "scl_mean": 1.3309760649069216
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 0.8333333333333334,
+    "time_to_state_s": 60.00000000001364,
+    "state_share": {
+     "relaxed": 0.16666666666666666,
+     "mental": 0.8333333333333334,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.6698825422488955,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 78.65962282555876,
+    "scl_mean": 1.4169326408501004
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.631578947368421,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 0.631578947368421,
+     "mental": 0.3684210526315789,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.4144943318640409,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 77.35647457719341,
+    "scl_mean": 1.375677073234676
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 0.125,
+    "hit_rate": 0.25,
+    "time_to_state_s": null,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.25,
+     "stress": 0.75
+    },
+    "mind_mean": 0.5047519499023834,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 98.57768258004008,
+    "scl_mean": 2.1265540476415077
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.75,
+    "hit_rate": 0.42105263157894735,
+    "time_to_state_s": 369.9999999996635,
+    "state_share": {
+     "relaxed": 0.42105263157894735,
+     "mental": 0.0,
+     "arousal": 0.3157894736842105,
+     "stress": 0.2631578947368421
+    },
+    "mind_mean": 0.4521155139738006,
+    "body_mean": 0.5140130154975885,
+    "hr_mean": 81.9462591825516,
+    "scl_mean": 1.6718103208174329
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.8181818181818182,
+    "time_to_state_s": 69.99999999993634,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.18181818181818182,
+     "stress": 0.8181818181818182
+    },
+    "mind_mean": 0.6358489663732677,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 99.75317952116447,
+    "scl_mean": 2.1036132393526237
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.5714285714285714,
+    "hit_rate": 0.21052631578947367,
+    "time_to_state_s": null,
+    "state_share": {
+     "relaxed": 0.21052631578947367,
+     "mental": 0.3157894736842105,
+     "arousal": 0.42105263157894735,
+     "stress": 0.05263157894736842
+    },
+    "mind_mean": 0.417445058235437,
+    "body_mean": 0.3896201100931551,
+    "hr_mean": 82.37363715613064,
+    "scl_mean": 1.491810889581204
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 226,
+  "eeg_subject": 38,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 0.2857142857142857,
+    "hit_rate": 0.2857142857142857,
+    "time_to_state_s": 124.99999999988631,
+    "state_share": {
+     "relaxed": 0.2857142857142857,
+     "mental": 0.2857142857142857,
+     "arousal": 0.42857142857142855,
+     "stress": 0.0
+    },
+    "mind_mean": 0.39862657196316187,
+    "body_mean": 0.4351279791754309,
+    "hr_mean": 93.0348284781911,
+    "scl_mean": 1.76535169858868
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 0.2857142857142857,
+    "hit_rate": 0.16666666666666666,
+    "time_to_state_s": 374.99999999965894,
+    "state_share": {
+     "relaxed": 0.8333333333333334,
+     "mental": 0.16666666666666666,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.45294631627993276,
+    "body_mean": 0.17776252784460703,
+    "hr_mean": 91.80549395132213,
+    "scl_mean": 1.861372989013305
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.42857142857142855,
+    "hit_rate": 0.7894736842105263,
+    "time_to_state_s": 4.9999999999954525,
+    "state_share": {
+     "relaxed": 0.7894736842105263,
+     "mental": 0.05263157894736842,
+     "arousal": 0.15789473684210525,
+     "stress": 0.0
+    },
+    "mind_mean": 0.2787659564429848,
+    "body_mean": 0.23956487785816014,
+    "hr_mean": 90.31704204153891,
+    "scl_mean": 1.8268104714687445
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 0.75,
+    "time_to_state_s": 79.99999999992724,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.75,
+     "stress": 0.25
+    },
+    "mind_mean": 0.31443091904675197,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 112.21324680510925,
+    "scl_mean": 2.5866311524516936
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.3157894736842105,
+    "time_to_state_s": 409.9999999996271,
+    "state_share": {
+     "relaxed": 0.3157894736842105,
+     "mental": 0.10526315789473684,
+     "arousal": 0.5789473684210527,
+     "stress": 0.0
+    },
+    "mind_mean": 0.32017921558344714,
+    "body_mean": 0.5640924086061959,
+    "hr_mean": 90.52636199528371,
+    "scl_mean": 2.0007536076779227
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 0.8333333333333334,
+    "time_to_state_s": 9.999999999990905,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.16666666666666666,
+     "stress": 0.8333333333333334
+    },
+    "mind_mean": 0.5944697493855317,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 116.46831166925553,
+    "scl_mean": 2.504307845685338
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.8571428571428571,
+    "hit_rate": 0.3157894736842105,
+    "time_to_state_s": 464.9999999995771,
+    "state_share": {
+     "relaxed": 0.3157894736842105,
+     "mental": 0.0,
+     "arousal": 0.5789473684210527,
+     "stress": 0.10526315789473684
+    },
+    "mind_mean": 0.4063257313067906,
+    "body_mean": 0.6392049108647588,
+    "hr_mean": 92.06547161847509,
+    "scl_mean": 2.0575093911653237
+   }
+  },
+  "calibration": {
+   "eeg_status": "not_separated",
+   "ring_status": "drift_suspected"
+  }
+ },
+ {
+  "seed": 227,
+  "eeg_subject": 10,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.33109652007317536,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 98.61284277602222,
+    "scl_mean": 1.137376558286972
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 35.00000000000796,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 1.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.7104863375890562,
+    "body_mean": 0.09008371106929343,
+    "hr_mean": 97.15536943463918,
+    "scl_mean": 1.2501223349752857
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 39.99999999996362,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.31504262612653,
+    "body_mean": 0.10332674851101666,
+    "hr_mean": 99.45957386250154,
+    "scl_mean": 1.240762974823657
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 1.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.30196104246391564,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 123.29231112161858,
+    "scl_mean": 2.0259263854261684
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.631578947368421,
+    "time_to_state_s": 319.99999999970896,
+    "state_share": {
+     "relaxed": 0.631578947368421,
+     "mental": 0.0,
+     "arousal": 0.3684210526315789,
+     "stress": 0.0
+    },
+    "mind_mean": 0.36220880469158073,
+    "body_mean": 0.4078427703471123,
+    "hr_mean": 105.76417043426314,
+    "scl_mean": 1.3269754676240024
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.8181818181818182,
+    "time_to_state_s": 69.99999999993634,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.18181818181818182,
+     "stress": 0.8181818181818182
+    },
+    "mind_mean": 0.622298880942536,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 119.53032874334741,
+    "scl_mean": 1.8793392020750572
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.5263157894736842,
+    "time_to_state_s": 349.9999999996817,
+    "state_share": {
+     "relaxed": 0.5263157894736842,
+     "mental": 0.0,
+     "arousal": 0.3684210526315789,
+     "stress": 0.10526315789473684
+    },
+    "mind_mean": 0.3634799545935886,
+    "body_mean": 0.42249616195812895,
+    "hr_mean": 100.30959475770334,
+    "scl_mean": 1.3639387784373682
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 228,
+  "eeg_subject": 32,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 0.5714285714285714,
+    "hit_rate": 0.5714285714285714,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 0.5714285714285714,
+     "mental": 0.14285714285714285,
+     "arousal": 0.14285714285714285,
+     "stress": 0.14285714285714285
+    },
+    "mind_mean": 0.40796221738907096,
+    "body_mean": 0.2456254571000692,
+    "hr_mean": 88.36397185653064,
+    "scl_mean": 3.327597667501899
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 0.2857142857142857,
+    "hit_rate": 0.5,
+    "time_to_state_s": 85.00000000001933,
+    "state_share": {
+     "relaxed": 0.25,
+     "mental": 0.5,
+     "arousal": 0.0,
+     "stress": 0.25
+    },
+    "mind_mean": 0.6855017205789885,
+    "body_mean": 0.28764197123483387,
+    "hr_mean": 90.11427814897029,
+    "scl_mean": 3.217103893921791
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.42857142857142855,
+    "hit_rate": 0.5789473684210527,
+    "time_to_state_s": 164.99999999984993,
+    "state_share": {
+     "relaxed": 0.5789473684210527,
+     "mental": 0.21052631578947367,
+     "arousal": 0.21052631578947367,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3775275903939437,
+    "body_mean": 0.2654976033445608,
+    "hr_mean": 85.56836464731192,
+    "scl_mean": 3.3855391499116836
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 0.625,
+    "hit_rate": 0.75,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.75,
+     "stress": 0.25
+    },
+    "mind_mean": 0.3778553603201214,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 114.74747939528133,
+    "scl_mean": 4.069123847957259
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.75,
+    "hit_rate": 0.47368421052631576,
+    "time_to_state_s": 319.99999999970896,
+    "state_share": {
+     "relaxed": 0.47368421052631576,
+     "mental": 0.0,
+     "arousal": 0.42105263157894735,
+     "stress": 0.10526315789473684
+    },
+    "mind_mean": 0.3735597142023747,
+    "body_mean": 0.5064237958162741,
+    "hr_mean": 93.25174259270675,
+    "scl_mean": 3.1990773254684703
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 94.9999999999136,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.731683717768211,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 109.66956028397743,
+    "scl_mean": 3.921105129709374
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.42105263157894735,
+    "time_to_state_s": 349.9999999996817,
+    "state_share": {
+     "relaxed": 0.42105263157894735,
+     "mental": 0.10526315789473684,
+     "arousal": 0.42105263157894735,
+     "stress": 0.05263157894736842
+    },
+    "mind_mean": 0.38467596786581726,
+    "body_mean": 0.4011245386786061,
+    "hr_mean": 90.18023928250223,
+    "scl_mean": 3.2392384488422996
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 229,
+  "eeg_subject": 32,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.2413996425089558,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 79.75023375151049,
+    "scl_mean": 1.8987381362718128
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 35.00000000000796,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 1.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.6088641585039888,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 73.15510612207628,
+    "scl_mean": 1.7985909459976865
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.8421052631578947,
+    "time_to_state_s": 64.99999999994088,
+    "state_share": {
+     "relaxed": 0.8421052631578947,
+     "mental": 0.15789473684210525,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3924062261476782,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 78.01781541883568,
+    "scl_mean": 1.7247796024921893
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 1.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.2885837247985254,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 97.43456497842858,
+    "scl_mean": 2.681372935977535
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.47368421052631576,
+    "time_to_state_s": 394.99999999964075,
+    "state_share": {
+     "relaxed": 0.47368421052631576,
+     "mental": 0.0,
+     "arousal": 0.42105263157894735,
+     "stress": 0.10526315789473684
+    },
+    "mind_mean": 0.3129074096294328,
+    "body_mean": 0.46753850532361996,
+    "hr_mean": 79.92688572161127,
+    "scl_mean": 2.041175375298041
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 94.9999999999136,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.6645024505805703,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 97.46713155224353,
+    "scl_mean": 2.5539517657896
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.5263157894736842,
+    "time_to_state_s": 349.9999999996817,
+    "state_share": {
+     "relaxed": 0.5263157894736842,
+     "mental": 0.0,
+     "arousal": 0.3684210526315789,
+     "stress": 0.10526315789473684
+    },
+    "mind_mean": 0.3083041455815188,
+    "body_mean": 0.4235278227245028,
+    "hr_mean": 75.60276457695385,
+    "scl_mean": 2.1238075073701372
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "drift_suspected"
+  }
+ },
+ {
+  "seed": 230,
+  "eeg_subject": 32,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 85.00000000001933,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.2635479661429333,
+    "body_mean": 0.11833995593722164,
+    "hr_mean": 76.82888070271913,
+    "scl_mean": 1.0267999737895936
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 0.42857142857142855,
+    "hit_rate": 0.6666666666666666,
+    "time_to_state_s": 110.00000000002501,
+    "state_share": {
+     "relaxed": 0.08333333333333333,
+     "mental": 0.6666666666666666,
+     "arousal": 0.0,
+     "stress": 0.25
+    },
+    "mind_mean": 0.6311886007379418,
+    "body_mean": 0.3265981113363812,
+    "hr_mean": 80.59533687475567,
+    "scl_mean": 1.0012024944896298
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.0,
+    "hit_rate": 0.47368421052631576,
+    "time_to_state_s": 189.9999999998272,
+    "state_share": {
+     "relaxed": 0.47368421052631576,
+     "mental": 0.05263157894736842,
+     "arousal": 0.47368421052631576,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3407831363992135,
+    "body_mean": 0.4161633193271523,
+    "hr_mean": 79.39294514847985,
+    "scl_mean": 0.9491998405425602
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 39.99999999996362,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 1.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.34494365886762046,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 103.55651733660665,
+    "scl_mean": 1.5976325585052098
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.25,
+    "hit_rate": 0.15789473684210525,
+    "time_to_state_s": 494.9999999995498,
+    "state_share": {
+     "relaxed": 0.15789473684210525,
+     "mental": 0.15789473684210525,
+     "arousal": 0.5263157894736842,
+     "stress": 0.15789473684210525
+    },
+    "mind_mean": 0.4145297814024768,
+    "body_mean": 0.6415799467969966,
+    "hr_mean": 80.71540039357326,
+    "scl_mean": 1.1845327205821314
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 19.99999999998181,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.6785687982814486,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 103.32825485137673,
+    "scl_mean": 1.6969815365380883
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.5714285714285714,
+    "hit_rate": 0.2631578947368421,
+    "time_to_state_s": 399.9999999996362,
+    "state_share": {
+     "relaxed": 0.2631578947368421,
+     "mental": 0.0,
+     "arousal": 0.6842105263157895,
+     "stress": 0.05263157894736842
+    },
+    "mind_mean": 0.31463855928354983,
+    "body_mean": 0.6315371462090987,
+    "hr_mean": 80.29986681994428,
+    "scl_mean": 1.2531463096686297
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "drift_suspected"
+  }
+ },
+ {
+  "seed": 231,
+  "eeg_subject": 8,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.18999519385109195,
+    "body_mean": 0.17833075536467594,
+    "hr_mean": 106.55866383683785,
+    "scl_mean": 2.4904273906497933
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 0.8333333333333334,
+    "time_to_state_s": 60.00000000001364,
+    "state_share": {
+     "relaxed": 0.16666666666666666,
+     "mental": 0.8333333333333334,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.6302771644815005,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 102.89328962496596,
+    "scl_mean": 2.422338066709352
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.8571428571428571,
+    "hit_rate": 0.8947368421052632,
+    "time_to_state_s": 39.99999999996362,
+    "state_share": {
+     "relaxed": 0.8947368421052632,
+     "mental": 0.0,
+     "arousal": 0.10526315789473684,
+     "stress": 0.0
+    },
+    "mind_mean": 0.2405309236571596,
+    "body_mean": 0.14574646372906774,
+    "hr_mean": 97.26408567872123,
+    "scl_mean": 2.5307567338495573
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 1.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.2712599609266974,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 119.84677429479707,
+    "scl_mean": 3.055373476446714
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.47368421052631576,
+    "time_to_state_s": 394.99999999964075,
+    "state_share": {
+     "relaxed": 0.47368421052631576,
+     "mental": 0.0,
+     "arousal": 0.5263157894736842,
+     "stress": 0.0
+    },
+    "mind_mean": 0.20374590524561617,
+    "body_mean": 0.47618030911460874,
+    "hr_mean": 98.63454603850516,
+    "scl_mean": 2.7566350979792396
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 94.9999999999136,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.7752180088947526,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 122.1693901282687,
+    "scl_mean": 3.2148759009993744
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.5263157894736842,
+    "time_to_state_s": 349.9999999996817,
+    "state_share": {
+     "relaxed": 0.5263157894736842,
+     "mental": 0.0,
+     "arousal": 0.47368421052631576,
+     "stress": 0.0
+    },
+    "mind_mean": 0.2592035532942734,
+    "body_mean": 0.4664960268453382,
+    "hr_mean": 99.80265146560326,
+    "scl_mean": 2.698460716085226
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 232,
+  "eeg_subject": 32,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.27191215053199413,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 94.06469926125862,
+    "scl_mean": 4.2910698468901245
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 0.8333333333333334,
+    "time_to_state_s": 185.00000000004206,
+    "state_share": {
+     "relaxed": 0.16666666666666666,
+     "mental": 0.8333333333333334,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.6611308319842629,
+    "body_mean": 0.09286845225756522,
+    "hr_mean": 95.97514503133861,
+    "scl_mean": 4.227926669928662
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.7368421052631579,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 0.7368421052631579,
+     "mental": 0.2631578947368421,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.4227566019039372,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 93.01942763236559,
+    "scl_mean": 4.4436366008199135
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 0.75,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.75,
+     "stress": 0.25
+    },
+    "mind_mean": 0.3713238168185004,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 121.71355093004154,
+    "scl_mean": 5.251097452915588
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.75,
+    "hit_rate": 0.3157894736842105,
+    "time_to_state_s": 419.999999999618,
+    "state_share": {
+     "relaxed": 0.3157894736842105,
+     "mental": 0.10526315789473684,
+     "arousal": 0.5263157894736842,
+     "stress": 0.05263157894736842
+    },
+    "mind_mean": 0.39542119453344093,
+    "body_mean": 0.4759500445183644,
+    "hr_mean": 97.86524727661129,
+    "scl_mean": 4.568764239741585
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 69.99999999993634,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.7530753212836939,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 117.17931783261379,
+    "scl_mean": 5.087378436121674
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.42857142857142855,
+    "hit_rate": 0.2631578947368421,
+    "time_to_state_s": 399.9999999996362,
+    "state_share": {
+     "relaxed": 0.2631578947368421,
+     "mental": 0.2631578947368421,
+     "arousal": 0.21052631578947367,
+     "stress": 0.2631578947368421
+    },
+    "mind_mean": 0.4519069312051038,
+    "body_mean": 0.3931774424741737,
+    "hr_mean": 95.3328521033569,
+    "scl_mean": 4.698670556065333
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 233,
+  "eeg_subject": 8,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.30571000020383166,
+    "body_mean": 0.05017186739204728,
+    "hr_mean": 99.59646576200792,
+    "scl_mean": 2.148674688206929
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 60.00000000001364,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 1.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.7292619929562698,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 92.6925241571834,
+    "scl_mean": 2.2229018723454588
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 114.99999999989541,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3541410251088345,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 92.89493830691352,
+    "scl_mean": 2.1402047533151007
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 1.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.36061322142511226,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 120.14923577305079,
+    "scl_mean": 2.912338511886244
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.875,
+    "hit_rate": 0.5789473684210527,
+    "time_to_state_s": 219.9999999997999,
+    "state_share": {
+     "relaxed": 0.5789473684210527,
+     "mental": 0.05263157894736842,
+     "arousal": 0.3684210526315789,
+     "stress": 0.0
+    },
+    "mind_mean": 0.36413879032250945,
+    "body_mean": 0.37033955421527515,
+    "hr_mean": 101.09477007794185,
+    "scl_mean": 2.230729317235635
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 94.9999999999136,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.7853876446065694,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 120.80229425071384,
+    "scl_mean": 2.823214467349349
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.7368421052631579,
+    "time_to_state_s": 199.9999999998181,
+    "state_share": {
+     "relaxed": 0.7368421052631579,
+     "mental": 0.10526315789473684,
+     "arousal": 0.15789473684210525,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3867358453193075,
+    "body_mean": 0.12514304909575258,
+    "hr_mean": 94.80683435988358,
+    "scl_mean": 2.354540269132713
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 234,
+  "eeg_subject": 10,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.2778432345447939,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 93.29908843616303,
+    "scl_mean": 2.166052354093782
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.8333333333333334,
+    "time_to_state_s": 110.00000000002501,
+    "state_share": {
+     "relaxed": 0.16666666666666666,
+     "mental": 0.8333333333333334,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.584146377667652,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 95.47897690453637,
+    "scl_mean": 2.036038278440573
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.8421052631578947,
+    "time_to_state_s": 39.99999999996362,
+    "state_share": {
+     "relaxed": 0.8421052631578947,
+     "mental": 0.15789473684210525,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3795018952862554,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 97.55640716808325,
+    "scl_mean": 2.0270616054237305
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 114.99999999989541,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 1.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.2131666739268132,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 120.56156563155434,
+    "scl_mean": 2.7826581860162634
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.9473684210526315,
+    "time_to_state_s": 169.9999999998454,
+    "state_share": {
+     "relaxed": 0.9473684210526315,
+     "mental": 0.0,
+     "arousal": 0.05263157894736842,
+     "stress": 0.0
+    },
+    "mind_mean": 0.27772705226894806,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 97.74001235938904,
+    "scl_mean": 2.247834243169471
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 94.9999999999136,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.711613979184544,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 121.12738281501743,
+    "scl_mean": 2.7733134473258176
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.8947368421052632,
+    "time_to_state_s": 124.99999999988631,
+    "state_share": {
+     "relaxed": 0.8947368421052632,
+     "mental": 0.10526315789473684,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.287611756611531,
+    "body_mean": 0.04770973149849002,
+    "hr_mean": 96.00396511204141,
+    "scl_mean": 2.434998080044965
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 235,
+  "eeg_subject": 32,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 0.42857142857142855,
+    "hit_rate": 0.42857142857142855,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 0.42857142857142855,
+     "mental": 0.5714285714285714,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.5179667574657233,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 100.00029869607333,
+    "scl_mean": 2.085551534765455
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 0.5714285714285714,
+    "hit_rate": 0.75,
+    "time_to_state_s": 60.00000000001364,
+    "state_share": {
+     "relaxed": 0.25,
+     "mental": 0.75,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.5718349307868413,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 100.63558751241725,
+    "scl_mean": 2.104853730762418
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 39.99999999996362,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.28002069846638,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 102.38330140872174,
+    "scl_mean": 2.1789312317620952
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 1.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3042409614331692,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 123.09369180597712,
+    "scl_mean": 2.7840816295081883
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.5263157894736842,
+    "time_to_state_s": 369.9999999996635,
+    "state_share": {
+     "relaxed": 0.5263157894736842,
+     "mental": 0.0,
+     "arousal": 0.47368421052631576,
+     "stress": 0.0
+    },
+    "mind_mean": 0.27303543983255824,
+    "body_mean": 0.428682900386226,
+    "hr_mean": 106.40991151323249,
+    "scl_mean": 2.388482576813273
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 0.8181818181818182,
+    "time_to_state_s": 94.9999999999136,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.18181818181818182,
+     "stress": 0.8181818181818182
+    },
+    "mind_mean": 0.6656794841872891,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 123.31288483578493,
+    "scl_mean": 2.6818286706859022
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 1.0,
+    "hit_rate": 0.7894736842105263,
+    "time_to_state_s": 224.99999999979536,
+    "state_share": {
+     "relaxed": 0.7894736842105263,
+     "mental": 0.0,
+     "arousal": 0.21052631578947367,
+     "stress": 0.0
+    },
+    "mind_mean": 0.321391502803465,
+    "body_mean": 0.19309595210422312,
+    "hr_mean": 105.12420914859783,
+    "scl_mean": 2.3468531436892874
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 236,
+  "eeg_subject": 32,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 0.14285714285714285,
+    "hit_rate": 0.14285714285714285,
+    "time_to_state_s": 25.000000000005684,
+    "state_share": {
+     "relaxed": 0.14285714285714285,
+     "mental": 0.14285714285714285,
+     "arousal": 0.7142857142857143,
+     "stress": 0.0
+    },
+    "mind_mean": 0.43195041922590655,
+    "body_mean": 0.6939603400667573,
+    "hr_mean": 88.6482254523705,
+    "scl_mean": 1.2828351097827722
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 0.8333333333333334,
+    "time_to_state_s": 174.99999999984084,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.8333333333333334,
+     "arousal": 0.0,
+     "stress": 0.16666666666666666
+    },
+    "mind_mean": 0.7685539936024824,
+    "body_mean": 0.24487314763936743,
+    "hr_mean": 85.40775841949345,
+    "scl_mean": 1.2642739856159502
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.0,
+    "hit_rate": 0.0,
+    "time_to_state_s": null,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.6842105263157895,
+     "stress": 0.3157894736842105
+    },
+    "mind_mean": 0.4541782514795499,
+    "body_mean": 0.7884489619760123,
+    "hr_mean": 87.04183504209281,
+    "scl_mean": 1.465711217337213
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.75,
+    "time_to_state_s": 4.9999999999954525,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.75,
+     "stress": 0.25
+    },
+    "mind_mean": 0.4105019841116064,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 104.77771313704368,
+    "scl_mean": 2.0901663756573092
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.0,
+    "hit_rate": 0.0,
+    "time_to_state_s": null,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.6842105263157895,
+     "stress": 0.3157894736842105
+    },
+    "mind_mean": 0.39123698324143724,
+    "body_mean": 0.8318195121921337,
+    "hr_mean": 87.54941110125041,
+    "scl_mean": 1.6080719895756064
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 12,
+    "end_share": 0.8571428571428571,
+    "hit_rate": 0.8333333333333334,
+    "time_to_state_s": 59.99999999994543,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.16666666666666666,
+     "stress": 0.8333333333333334
+    },
+    "mind_mean": 0.6418693911370517,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 102.0169778013684,
+    "scl_mean": 2.010334377102739
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.5714285714285714,
+    "hit_rate": 0.5263157894736842,
+    "time_to_state_s": 239.99999999978172,
+    "state_share": {
+     "relaxed": 0.5263157894736842,
+     "mental": 0.05263157894736842,
+     "arousal": 0.3157894736842105,
+     "stress": 0.10526315789473684
+    },
+    "mind_mean": 0.3490818052384526,
+    "body_mean": 0.39528599769550493,
+    "hr_mean": 86.82956523966406,
+    "scl_mean": 1.4698906075272022
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 237,
+  "eeg_subject": 38,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.7142857142857143,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 0.7142857142857143,
+     "mental": 0.2857142857142857,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.43054728055397906,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 71.68169344001555,
+    "scl_mean": 1.8831018406096678
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 0.75,
+    "time_to_state_s": 60.00000000001364,
+    "state_share": {
+     "relaxed": 0.25,
+     "mental": 0.75,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.6485748033006372,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 75.1569191878081,
+    "scl_mean": 1.8905575615926897
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.8571428571428571,
+    "hit_rate": 0.9473684210526315,
+    "time_to_state_s": 64.99999999994088,
+    "state_share": {
+     "relaxed": 0.9473684210526315,
+     "mental": 0.05263157894736842,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.35091923681113163,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 76.51408187098814,
+    "scl_mean": 2.055430691294219
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 0.875,
+    "hit_rate": 0.9166666666666666,
+    "time_to_state_s": 64.99999999994088,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.9166666666666666,
+     "stress": 0.08333333333333333
+    },
+    "mind_mean": 0.3996666065601861,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 96.76995822794639,
+    "scl_mean": 2.8180823153808348
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.75,
+    "hit_rate": 0.6842105263157895,
+    "time_to_state_s": 244.99999999977717,
+    "state_share": {
+     "relaxed": 0.6842105263157895,
+     "mental": 0.10526315789473684,
+     "arousal": 0.15789473684210525,
+     "stress": 0.05263157894736842
+    },
+    "mind_mean": 0.3559624939047064,
+    "body_mean": 0.17259471067142798,
+    "hr_mean": 78.17521447096564,
+    "scl_mean": 2.0720218249914137
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.8181818181818182,
+    "time_to_state_s": 94.9999999999136,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.18181818181818182,
+     "stress": 0.8181818181818182
+    },
+    "mind_mean": 0.6228378362077945,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 95.65112557426701,
+    "scl_mean": 2.524393883887956
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.5789473684210527,
+    "time_to_state_s": 324.9999999997044,
+    "state_share": {
+     "relaxed": 0.5789473684210527,
+     "mental": 0.21052631578947367,
+     "arousal": 0.10526315789473684,
+     "stress": 0.10526315789473684
+    },
+    "mind_mean": 0.4774092273092582,
+    "body_mean": 0.18678733794758906,
+    "hr_mean": 76.89818129090308,
+    "scl_mean": 1.964947979349876
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "ok"
+  }
+ },
+ {
+  "seed": 238,
+  "eeg_subject": 32,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 10.000000000002274,
+    "state_share": {
+     "relaxed": 1.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3237239773778235,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 83.59091050918796,
+    "scl_mean": 1.8159869820353036
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.8333333333333334,
+    "time_to_state_s": 60.00000000001364,
+    "state_share": {
+     "relaxed": 0.16666666666666666,
+     "mental": 0.8333333333333334,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.5599599355181129,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 85.56719074089294,
+    "scl_mean": 1.8386259510039722
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.8571428571428571,
+    "hit_rate": 0.7368421052631579,
+    "time_to_state_s": 89.99999999991815,
+    "state_share": {
+     "relaxed": 0.7368421052631579,
+     "mental": 0.05263157894736842,
+     "arousal": 0.21052631578947367,
+     "stress": 0.0
+    },
+    "mind_mean": 0.31719170408104624,
+    "body_mean": 0.2755446024738371,
+    "hr_mean": 85.54901718634251,
+    "scl_mean": 1.9746471897188076
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 114.99999999989541,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 1.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.3785282588801713,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 103.24917945928382,
+    "scl_mean": 2.5047953993375596
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.5,
+    "hit_rate": 0.21052631578947367,
+    "time_to_state_s": 494.9999999995498,
+    "state_share": {
+     "relaxed": 0.21052631578947367,
+     "mental": 0.15789473684210525,
+     "arousal": 0.47368421052631576,
+     "stress": 0.15789473684210525
+    },
+    "mind_mean": 0.4388721672628983,
+    "body_mean": 0.6052478096079699,
+    "hr_mean": 86.55051387423407,
+    "scl_mean": 2.0834083787899704
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 11,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 94.9999999999136,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.0,
+     "stress": 1.0
+    },
+    "mind_mean": 0.7745681273989455,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 100.75026920539402,
+    "scl_mean": 2.5406685694599362
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.42857142857142855,
+    "hit_rate": 0.15789473684210525,
+    "time_to_state_s": 449.9999999995907,
+    "state_share": {
+     "relaxed": 0.15789473684210525,
+     "mental": 0.10526315789473684,
+     "arousal": 0.2631578947368421,
+     "stress": 0.47368421052631576
+    },
+    "mind_mean": 0.49720615035051163,
+    "body_mean": 0.6630192881909543,
+    "hr_mean": 86.01254320549909,
+    "scl_mean": 2.090192656040807
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "drift_suspected"
+  }
+ },
+ {
+  "seed": 239,
+  "eeg_subject": 38,
+  "metrics": {
+   "relaxed": {
+    "expected": "relaxed",
+    "n_judged": 7,
+    "end_share": 0.42857142857142855,
+    "hit_rate": 0.42857142857142855,
+    "time_to_state_s": 25.000000000005684,
+    "state_share": {
+     "relaxed": 0.42857142857142855,
+     "mental": 0.5714285714285714,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.4470305219350111,
+    "body_mean": 0.047425873177566795,
+    "hr_mean": 74.47548650966223,
+    "scl_mean": 1.429089655231507
+   },
+   "mental": {
+    "expected": "mental",
+    "n_judged": 12,
+    "end_share": 1.0,
+    "hit_rate": 1.0,
+    "time_to_state_s": 124.99999999988631,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 1.0,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.6442645130477781,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 79.2725083911125,
+    "scl_mean": 1.511598020450064
+   },
+   "recovery_1": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.7368421052631579,
+    "time_to_state_s": 204.99999999981355,
+    "state_share": {
+     "relaxed": 0.7368421052631579,
+     "mental": 0.2631578947368421,
+     "arousal": 0.0,
+     "stress": 0.0
+    },
+    "mind_mean": 0.45012329823654834,
+    "body_mean": 0.04742587317756678,
+    "hr_mean": 75.25400338173259,
+    "scl_mean": 1.5248780396895365
+   },
+   "arousal": {
+    "expected": "arousal",
+    "n_judged": 12,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.6666666666666666,
+    "time_to_state_s": 179.9999999998363,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.6666666666666666,
+     "stress": 0.3333333333333333
+    },
+    "mind_mean": 0.41398214834298147,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 94.56802527351577,
+    "scl_mean": 2.1472231384799003
+   },
+   "recovery_2": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.42857142857142855,
+    "hit_rate": 0.3157894736842105,
+    "time_to_state_s": 209.999999999809,
+    "state_share": {
+     "relaxed": 0.3157894736842105,
+     "mental": 0.5263157894736842,
+     "arousal": 0.05263157894736842,
+     "stress": 0.10526315789473684
+    },
+    "mind_mean": 0.5223995333549216,
+    "body_mean": 0.1594107157737386,
+    "hr_mean": 76.70602863332182,
+    "scl_mean": 1.5481362122351139
+   },
+   "stress": {
+    "expected": "stress",
+    "n_judged": 12,
+    "end_share": 0.8571428571428571,
+    "hit_rate": 0.9166666666666666,
+    "time_to_state_s": 84.9999999999227,
+    "state_share": {
+     "relaxed": 0.0,
+     "mental": 0.0,
+     "arousal": 0.08333333333333333,
+     "stress": 0.9166666666666666
+    },
+    "mind_mean": 0.5984266635892648,
+    "body_mean": 0.9525741268224334,
+    "hr_mean": 102.5514803969927,
+    "scl_mean": 2.1444397641060196
+   },
+   "recovery_3": {
+    "expected": "relaxed",
+    "n_judged": 19,
+    "end_share": 0.7142857142857143,
+    "hit_rate": 0.5789473684210527,
+    "time_to_state_s": 289.99999999973625,
+    "state_share": {
+     "relaxed": 0.5789473684210527,
+     "mental": 0.21052631578947367,
+     "arousal": 0.0,
+     "stress": 0.21052631578947367
+    },
+    "mind_mean": 0.48589227616625247,
+    "body_mean": 0.18903444249020288,
+    "hr_mean": 79.30083196011256,
+    "scl_mean": 1.5362089626276738
+   }
+  },
+  "calibration": {
+   "eeg_status": "ok",
+   "ring_status": "drift_suspected"
+  }
+ }
+]

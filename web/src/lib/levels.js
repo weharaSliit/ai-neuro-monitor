@@ -55,3 +55,25 @@ export function sortedWindowKeys(obj) {
   if (!obj) return [];
   return Object.keys(obj).filter((k) => /^\d+$/.test(k)).sort((a, b) => Number(a) - Number(b));
 }
+
+// fusion_en/{user}/{session}/{key}: key = floor(epoch_sec / bucket)
+// (backend/common/fusion.py::fusion_window_key). The bucket was 60s and is
+// now 25s (FUSION_WINDOW_BUCKET_SEC), and older sessions still hold 60s
+// keys -- the two eras can't overlap: a 60s key passes 5e7 only in ~2065,
+// a 25s key is above it for any date after 2009.
+const FUSION_KEY_25S_FROM = 5e7;
+export function fusionKeyToMs(key) {
+  const k = Number(key);
+  if (!Number.isFinite(k)) return null;
+  return k * (k >= FUSION_KEY_25S_FROM ? 25000 : 60000);
+}
+
+// How an EEG reading entered fusion (fusion_en eeg_basis, set by
+// backend/psychological/realtime/firebase_sync.py::eeg_fusion_input()).
+// Anything but 'calibrated' is down-weighted and must be shown as such.
+export const EEG_BASIS = {
+  calibrated: { word: 'Calibrated', note: null },
+  uncalibrated: { word: 'Uncalibrated', note: 'no personal baseline yet: standard limit, half weight' },
+  not_responsive: { word: 'Low reliability', note: 'calibration task showed little response: quarter weight' },
+  provisional: { word: 'Weak signal', note: 'provisional reading from a weak-signal block: reduced weight' },
+};

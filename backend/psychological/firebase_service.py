@@ -11,7 +11,14 @@ from backend.psychological.realtime.firebase_sync import (
     FirebaseSync,
     make_eeg_fusion_record,
 )
+from backend.psychological.realtime.adc import BIPOLAR_UV_PER_COUNT
 from backend.psychological.sam40.decision import DecisionThresholds
+
+# Every stored EEG calibration result is tagged with the uV-per-count scale
+# it was computed under. Model scores depend on that scale (features are in
+# uV), so a result from a different scale -- e.g. before the gain-8 fix --
+# must not be reused. Rounded so float noise can't cause false mismatches.
+ADC_SCALE_TAG = round(BIPOLAR_UV_PER_COUNT, 7)
 
 # The real population default, read once from its single source of truth
 # (DecisionThresholds) -- exposed via get_calibration_status() below so
@@ -145,6 +152,15 @@ class EegFirebaseSession:
         # docstring.
         self._fusion_en_rtdb.merge(make_eeg_fusion_record(record))
 
+    def next_block_number(self) -> int:
+        """First free block key for this session in Firebase (0 for a new
+        session) -- so an engine created after an API restart doesn't
+        overwrite the session's earlier blocks."""
+        if not self.enabled:
+            return 0
+        top = self._rtdb.max_window_key()
+        return 0 if top is None else top + 1
+
     def push_threshold_result(self, record: dict) -> None:
         """One-shot snapshot of finalize_personal_threshold()'s outcome
         (status, personal_high_load_p, resting_mean, task_mean,
@@ -200,20 +216,43 @@ def _calibration_profile_ref(user_id: str) -> FirebaseSync | None:
                          extra_path="eeg")
 
 
-def save_user_calibration_profile(user_id: str, baseline_shift: float, thresholds_personalized: bool) -> None:
-    """Persists a successful, FRESH calibration's outcome for future-session
-    reuse (see load_user_calibration_profile()). Only meant to be called
-    when thresholds_personalized is True -- an unpersonalized (0.0 shift)
-    result shouldn't overwrite a real prior profile, or start a 7-day
-    'confirmed no correction needed' clock off of what's often just one
-    noisy 3-block session (see compute_baseline_shift()'s SEM check)."""
+def save_user_calibration_profile(user_id: str, baseline_shift: float, thresholds_personalized: bool,
+                                  mu_rest: float | None = None,
+                                  personal_high_load_p: float | None = None) -> None:
+    """Records this session's fresh rest calibration (Personal Scale:
+    mu_rest is re-measured every session, so calibrated_at is "last rest
+    calibration", and personal_high_load_p the latest personal threshold
+    for apps that show it outside a live session). .update(), not .set(),
+    so the onboarding responsiveness saved by save_user_responsiveness()
+    survives -- that is the one part carried across sessions."""
     ref = _calibration_profile_ref(user_id)
     if ref is None:
         return
-    ref.set({
+    ref.update({
         'baseline_shift': baseline_shift,
         'thresholds_personalized': thresholds_personalized,
+        'mu_rest': mu_rest,
+        'personal_high_load_p': personal_high_load_p,
         'calibrated_at': time.time(),
+    })
+
+
+def save_user_responsiveness(user_id: str, task_response_z: float | None, responsive: bool | None,
+                              direction: int | None = None, z_alert: float | None = None) -> None:
+    """Onboarding task outcome on the Personal Scale -- the only per-user
+    calibration fact reused across sessions (a non-responsive user keeps EEG
+    out of fusion until they redo the task with re-seated electrodes)."""
+    ref = _calibration_profile_ref(user_id)
+    if ref is None:
+        return
+    ref.update({
+        'task_response_z': task_response_z,
+        'eeg_responsive': responsive,
+        # +1 score rises under load, -1 it falls (sam40/decision.py midpoint_threshold_logit()).
+        'eeg_direction': direction if responsive else None,
+        'eeg_z_alert': z_alert if responsive else None,
+        'personal_threshold_calibrated_at': time.time(),
+        'adc_uv_per_count': ADC_SCALE_TAG,
     })
 
 
@@ -304,6 +343,13 @@ def get_calibration_status(user_id: str) -> dict:
         'is_stale_hard': age_days > CALIBRATION_HARD_AGE_DAYS,
         'personal_high_load_p': profile.get('personal_high_load_p'),
         'population_high_load_p': POPULATION_HIGH_LOAD_P,
+        # Personal Scale onboarding result (None = task not done yet).
+        # Hidden when computed under a different uV scale (ADC_SCALE_TAG) --
+        # the same rule finish_personal_calibration() applies.
+        'eeg_responsive': (profile.get('eeg_responsive')
+                           if profile.get('adc_uv_per_count') == ADC_SCALE_TAG else None),
+        'task_response_z': (profile.get('task_response_z')
+                            if profile.get('adc_uv_per_count') == ADC_SCALE_TAG else None),
         # Piggybacks on this same call (not a separate endpoint/round-trip)
         # since CalibrationGate.js's useCalibrationSummary already fetches
         # this response on every poll -- see compute_eeg_baseline_drift()'s
@@ -363,6 +409,46 @@ def _eeg_db_ref(path: str):
     except ValueError:
         app = firebase_admin.initialize_app(credentials.Certificate(cred), {'databaseURL': FIREBASE_DB_URL})
     return db.reference(path, app=app)
+
+
+def save_eeg_device_heartbeat(device_id='wearable02'):
+    """Marks the headband as online right now: one small node, overwritten in
+    place, so every client can show 'Headband on' the same way the ring
+    does -- from the device itself, not from whether a block happened to
+    pass the quality check. Lives in its own root (eeg_devices/) so it never
+    appears as a user under psychological/. Best-effort: a Firebase hiccup
+    must never interrupt EEG capture."""
+    try:
+        ref = _eeg_db_ref(f'eeg_devices/{device_id}')
+        if ref is None:
+            return
+        ref.update({'status': 'online', 'last_seen': time.time()})
+    except Exception:
+        pass
+
+
+def get_recalibration_request(session_id: str) -> dict | None:
+    """A recalibration request for this session, written by psy_web's
+    Recalibrate button to eeg_recalibration/{session_id} (its own root, like
+    eeg_devices/, so it never shows up as a user under psychological/).
+    Best-effort: None on any Firebase problem."""
+    try:
+        ref = _eeg_db_ref(f'eeg_recalibration/{session_id}')
+        value = ref.get() if ref is not None else None
+        return value if isinstance(value, dict) else None
+    except Exception:
+        return None
+
+
+def update_recalibration_request(session_id: str, fields: dict) -> None:
+    """Reports the bridge's progress on a recalibration request back to the
+    same node (status capturing -> done/failed). Best-effort."""
+    try:
+        ref = _eeg_db_ref(f'eeg_recalibration/{session_id}')
+        if ref is not None:
+            ref.update({**fields, 'updated_at': time.time()})
+    except Exception:
+        pass
 
 
 def _eeg_recent_sessions(user_id, limit=30):

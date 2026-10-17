@@ -46,6 +46,16 @@ except FileNotFoundError as e:
 # units), which cancels the scale.
 PNN20_TRAIN_SCALE = 100.0
 
+# A feature only votes "rising/falling" when it moved by more than ordinary
+# calm variability over the whole window, not merely in the right direction
+# in 3 of 4 steps. Without this, a slow steady drift (skin conductance
+# creeping up while sitting still, five skin features voting together) kept
+# the flag on in ~half of calm live windows. The net change must exceed
+# TREND_MIN_RISE_SD of this user's baseline standard deviation, and at least
+# TREND_MIN_RISE_REL of the baseline value.
+TREND_MIN_RISE_REL = 0.05
+TREND_MIN_RISE_SD = 0.5
+
 # ── Feature type definitions ──────────────────────────────────
 EDA_FEATURES = [
     'SCL_mean', 'SCL_std', 'SCL_slope',
@@ -131,7 +141,65 @@ def update_baseline_ema(old_mean, old_std,
 PERSONAL_THRESHOLD_MIN_SEPARATION = 0.10
 
 
-def compute_personal_stress_threshold(resting_scores, task_scores):
+# Midpoint threshold calibration -- same method as EEG
+# (backend/psychological/sam40/decision.py midpoint_threshold_logit()), on
+# prob_stress directly (ring scores sit mid-range, so no log-odds needed):
+#   baseline   = median(resting scores)
+#   task_level = mean(task scores after the ramp-up: first 2 x 60 s windows)
+#   limit      = (baseline + task_level) / 2
+#   personal   = task_level - baseline >= 1 x SD(rest), with the SD floored
+#                at PERSONAL_THRESHOLD_MIN_SEPARATION (4 rest windows give a
+#                noisy, sometimes ~0 SD).
+TASK_RAMP_SKIP_WINDOWS = 2
+
+
+# ABA drift check, same rule as EEG (sam40/decision.py
+# MIN_RECOVERY_REVERSAL_SD): recovery must come back down from the task
+# level by at least half the separation needed, or the rise is treated as
+# slow drift (sweat build-up on the GSR electrodes, fatigue), not the task.
+# Upward only here: prob_stress is autonomic arousal, which rises under load.
+MIN_RECOVERY_REVERSAL = 0.5
+
+
+def midpoint_stress_threshold(resting_scores, task_scores, skip=TASK_RAMP_SKIP_WINDOWS, recovery_scores=None):
+    """Baseline, sustained task level, midpoint limit and whether it is
+    personal (separated enough, and confirmed by recovery when recovery
+    windows exist). None without rest or task scores.
+    status: 'ok' | 'not_separated' | 'drift_suspected'."""
+    if len(resting_scores) < 1 or len(task_scores) < 1:
+        return None
+    k = min(skip, len(task_scores) // 2)
+    baseline = float(np.median(resting_scores))
+    task_level = float(np.mean(task_scores[k:]))
+    rest_sd = float(np.std(resting_scores, ddof=1)) if len(resting_scores) > 1 else 0.0
+    needed = max(rest_sd, PERSONAL_THRESHOLD_MIN_SEPARATION)
+    separated = bool(task_level - baseline >= needed)
+    rec = [float(r) for r in (recovery_scores or []) if r is not None]
+    recovery_level = float(np.median(rec)) if rec else None
+    reversal = None if recovery_level is None else task_level - recovery_level
+    aba = None if reversal is None else bool(reversal >= MIN_RECOVERY_REVERSAL * needed)
+    personal = separated and aba is not False
+    return {
+        'baseline': baseline, 'task_level': task_level,
+        'limit': max(0.0, min(1.0, (baseline + task_level) / 2.0)),
+        'rest_sd': rest_sd, 'needed_separation': needed,
+        'separated': personal,
+        'recovery_level': recovery_level, 'reversal': reversal, 'aba_confirmed': aba,
+        'status': 'ok' if personal else ('drift_suspected' if separated else 'not_separated'),
+        'n_task_used': len(task_scores) - k, 'n_task_skipped': k,
+    }
+
+
+def compute_personal_stress_threshold(resting_scores, task_scores, recovery_scores=None):
+    """Personal threshold by the midpoint method (midpoint_stress_threshold()
+    above), or None when rest and the sustained task aren't separated enough
+    or recovery shows drift (the caller then keeps the population
+    STRESS_DECISION_THRESHOLD)."""
+    m = midpoint_stress_threshold(resting_scores, task_scores, recovery_scores=recovery_scores)
+    return m['limit'] if m and m['separated'] else None
+
+
+def _old_compute_personal_stress_threshold(resting_scores, task_scores):
     """Personal STRESS_DECISION_THRESHOLD from a deliberate onboarding task
     (a short, known high-load period run right after baseline calibration):
     threshold = midpoint between this user's own resting and task
@@ -202,6 +270,7 @@ def predict_window(features_array, baseline_mean, baseline_std,
 
     trending_toward_stress = False
     if state_machine is not None and feat_dict is not None:
+        state_machine.baseline_std = baseline_std
         state_machine.history.append(feat_dict)
         if len(state_machine.history) > state_machine.window_size + 3:
             state_machine.history.pop(0)
@@ -276,17 +345,31 @@ class StressStateMachine:
     def __init__(self, feature_cols_list,
                  baseline_mean=None,
                  window_size=5,
-                 trend_threshold=0.35):
+                 trend_threshold=0.35,
+                 baseline_std=None):
 
         self.feature_cols    = feature_cols_list
         self.baseline_mean   = baseline_mean
+        self.baseline_std    = baseline_std
         self.window_size     = window_size
         self.trend_threshold = trend_threshold
 
         self.history          = []
 
-    def update_baseline(self, baseline_mean):
+    def update_baseline(self, baseline_mean, baseline_std=None):
         self.baseline_mean = baseline_mean
+        if baseline_std is not None:
+            self.baseline_std = baseline_std
+
+    def _min_change(self, feature, vals):
+        """Smallest net change over the window that counts as a real move."""
+        if self.baseline_mean is not None and feature in self.feature_cols:
+            i = self.feature_cols.index(feature)
+            scale = TREND_MIN_RISE_REL * abs(float(self.baseline_mean[i]))
+            if self.baseline_std is not None:
+                scale = max(scale, TREND_MIN_RISE_SD * float(self.baseline_std[i]))
+            return scale
+        return TREND_MIN_RISE_REL * abs(sum(vals) / len(vals))
 
     # ── Direction helpers ─────────────────────────────────────
 
@@ -298,7 +381,8 @@ class StressStateMachine:
                  for w in self.history[-self.window_size:]]
         diffs = [vals[i]-vals[i-1]
                  for i in range(1, len(vals))]
-        return sum(1 for d in diffs if d > 0) >= min_count
+        return (sum(1 for d in diffs if d > 0) >= min_count
+                and vals[-1] - vals[0] > self._min_change(feature, vals))
 
     def _falling(self, feature, min_count=3):
         """3 of last 4 windows show negative change."""
@@ -308,7 +392,8 @@ class StressStateMachine:
                  for w in self.history[-self.window_size:]]
         diffs = [vals[i]-vals[i-1]
                  for i in range(1, len(vals))]
-        return sum(1 for d in diffs if d < 0) >= min_count
+        return (sum(1 for d in diffs if d < 0) >= min_count
+                and vals[0] - vals[-1] > self._min_change(feature, vals))
 
     def _above_baseline(self, feat_dict, feature,
                         threshold=0.10):

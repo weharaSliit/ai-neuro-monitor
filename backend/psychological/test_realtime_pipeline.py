@@ -26,7 +26,9 @@ from backend.psychological.realtime.adc import (
     raw_magnitude_ok,
 )
 from backend.psychological.realtime.mqtt_client import BipolarRawSample
-from backend.psychological.realtime.pipeline import BLOCK_SEC, RealtimeInference, preprocess_bipolar_block
+from backend.psychological.realtime.pipeline import (
+    BLOCK_SEC, RealtimeInference, preprocess_bipolar_block, preprocess_bipolar_block_unclamped,
+)
 from backend.psychological.realtime.quality_gate import SignalQualityGate
 from backend.psychological.realtime.raw_cleaning import interpolate_to_uniform_grid, remove_spikes, timing_ok
 from backend.psychological.realtime.resample import SOURCE_FS, TARGET_FS, resample_to_target
@@ -194,6 +196,334 @@ def main() -> bool:
                   f"outcome={threshold_outcome})")
     except Exception as e:
         check("Onboarding task-calibration flow raised no exception", False, repr(e))
+
+    # 8. Personal Scale decision rule + fusion gating -----------------------
+    # Scores are injected directly (synthetic blocks can't be steered to a
+    # chosen model output), so this checks the rule itself.
+    print("\n[8] Personal Scale: mu_rest, z, responsiveness, fusion exclusion")
+    try:
+        from backend.psychological.realtime.firebase_sync import make_eeg_fusion_record, make_eeg_output_record
+        from backend.psychological.sam40.decision import (
+            MIN_TASK_RESPONSE_Z, PERSONAL_K_ALERT, PERSONAL_SIGMA_PRIOR, personal_z,
+        )
+
+        def engine_with(rest, task=None):
+            e = RealtimeInference(MODEL_DIR)
+            e.baseline.add({"x": 0.0})  # finalize's "ok" path only needs a non-empty baseline
+            e._calibration_scores = list(rest)
+            e.finalize_calibration_bipolar()
+            if task is not None:
+                e._task_scores = list(task)
+                return e, e.finalize_personal_threshold()
+            return e, None
+
+        e, _ = engine_with([0.30, 0.34])
+        check("mu_rest is the mean of this session's rest scores", abs(e.mu_rest - 0.32) < 1e-9, f"mu_rest={e.mu_rest}")
+        from backend.psychological.sam40.decision import (
+            PERSONAL_SCALE, PERSONAL_SIGMA_LOGIT, inv_logit, logit as _lg,
+        )
+        if PERSONAL_SCALE == 'logit':
+            want_limit = inv_logit((_lg(0.30) + _lg(0.34)) / 2 + PERSONAL_K_ALERT * PERSONAL_SIGMA_LOGIT)
+        else:
+            want_limit = 0.32 + PERSONAL_K_ALERT * PERSONAL_SIGMA_PRIOR
+        check(f"alert threshold sits K spreads above own rest ({PERSONAL_SCALE} scale)",
+              abs(e.thresholds.high_load_p - want_limit) < 1e-9,
+              f"high_load_p={e.thresholds.high_load_p} want {want_limit}")
+        # wearable02 case: every score near 0. The log-odds scale still finds the
+        # task 1 log-odds unit above rest (z ~1.8, responsive) and a reachable limit.
+        e_low, out_low = engine_with([1.0e-4, 1.4e-4], task=[3e-4, 4e-4, 2.5e-4])
+        if PERSONAL_SCALE == 'logit':
+            check("near-zero scores: task above rest is still detected as responsive (log-odds)",
+                  out_low["responsive"] is True and out_low["task_response_z"] > 1,
+                  f"z={out_low['task_response_z']}, limit={e_low.thresholds.high_load_p:.2e}")
+            e_vlow, out_vlow = engine_with([1.44e-11, 2.02e-12, 4.1e-10, 8.03e-11], task=[3e-9, 8e-9, 1.2e-8])
+            check("scores ~1e-11 (live wearable02 rest) still give a resting level and a task z (log-odds bound)",
+                  e_vlow.mu_rest is not None and out_vlow["task_response_z"] is not None,
+                  f"mu_rest={e_vlow.mu_rest}, z={out_vlow['task_response_z']}")
+            live_rest = [3.7e-13, 9.6e-16, 1.6e-17, 5.5e-16, 1.2e-13, 7.4e-14, 4.3e-14, 3.9e-12, 5.7e-13]
+            e_live, _ = engine_with(live_rest)
+            zs = [e_live.personal_z(p) for p in live_rest]
+            check("10-block calibration uses the person's own rest spread (live wearable02: ~4 log-odds, not 0.55)",
+                  e_live.sigma_source == 'personal' and 3.5 < e_live.sigma < 4.5 and max(abs(z) for z in zs) < 2.5,
+                  f"sigma={e_live.sigma:.2f} ({e_live.sigma_source}), rest z range {min(zs):.2f}..{max(zs):.2f}")
+            check("3-block calibration keeps the SAM40 prior spread", e_vlow.sigma_source == 'prior', f"{e_vlow.sigma_source}")
+            check("near-zero scores: the high-load limit is reachable (not ~0.135)",
+                  e_low.thresholds.high_load_p < 1e-3, f"limit={e_low.thresholds.high_load_p:.2e}")
+        check("no probability shift is applied", e.baseline_shift == 0.0, f"baseline_shift={e.baseline_shift}")
+        check("z = (s - mu_rest)/sigma", abs(personal_z(0.32 + PERSONAL_SIGMA_PRIOR, e.mu_rest) - 1.0) < 1e-9)
+
+        e, _ = engine_with([1e-63, 2e-40])
+        check("saturated rest scores (< 1e-6) give no personal baseline",
+              e.mu_rest is None and not e.thresholds_personalized and e.n_implausible_rest_blocks == 2,
+              f"mu_rest={e.mu_rest}")
+
+        from backend.psychological.sam40.decision import PERSONAL_SCALE as _PS, inv_logit as _il, logit as _lg2
+        if _PS == 'logit':
+            # Midpoint method: responsive when the sustained task sits >= 1 spread above the median rest.
+            up = lambda dz: _il(_lg2(0.30) + dz * 0.55)
+            e_mid, out = engine_with([0.30, 0.30], task=[up(0.2)] * 2 + [up(1.4)] * 6)
+            check("midpoint: sustained task >= 1 spread above rest -> responsive, ramp-up blocks skipped",
+                  out["status"] == "ok" and out["responsive"] is True and out["n_task_skipped"] == 4
+                  and abs(out["task_level_logit"] - (_lg2(0.30) + 1.4 * 0.55)) < 1e-9, f"outcome={out}")
+            check("midpoint: limit = (median rest + sustained task) / 2, applied to the engine",
+                  abs(out["limit_logit"] - (_lg2(0.30) + 0.7 * 0.55)) < 1e-9
+                  and abs(e_mid.thresholds.high_load_p - up(0.7)) < 1e-9 and abs(e_mid.z_alert - 0.7) < 1e-9,
+                  f"limit={e_mid.thresholds.high_load_p} z_alert={e_mid.z_alert}")
+            _, out = engine_with([0.30, 0.30], task=[up(0.6)] * 6)
+            check("midpoint: task < 1 spread above rest -> not responsive, provisional limit kept",
+                  out["status"] == "not_separated" and out["responsive"] is False
+                  and out["threshold_method"].startswith('provisional'), f"outcome={out}")
+        else:
+            _, out = engine_with([0.30, 0.30], task=[0.30 + 0.6 * PERSONAL_SIGMA_PRIOR] * 3)
+            check("task >= 0.5 sigma above rest -> responsive ('ok')",
+                  out["status"] == "ok" and out["responsive"] is True, f"outcome={out}")
+
+        from backend.psychological.sam40.decision import compute_states as _cs, DecisionThresholds as _DT
+        import pandas as _pd
+        st = _cs(_pd.DataFrame({"calibrated_p": [0.9, 0.1, 0.9, 0.1, 0.1, 0.1], "spectral_slope": [0.0] * 6,
+                                "theta_ratio": [0.0] * 6}), _DT(high_load_p=0.5))
+        check("high-load alert = 2 of the last 3 blocks above the limit (one noisy block tolerated)",
+              list(st.high_load_alert) == [False, False, True, False, False, False], f"{list(st.high_load_alert)}")
+
+        base = {"window": 0, "skipped": False, "calibrated_p": 0.35, "task_state_z": 0.19,
+                "mu_rest": 0.32, "personal_sigma": PERSONAL_SIGMA_PRIOR, "quality_quality_score": 99.0,
+                "quality_is_trusted": True}
+
+        def fusion_for(**over):
+            rec = make_eeg_output_record({**base, **over}, 25.0, "bipolar_only_v1", "bipolar_only_v1",
+                                         [0.35], high_load_p=0.455, capture_end_ts=1.8e9)
+            return make_eeg_fusion_record(rec)
+
+        f = fusion_for(eeg_responsive=None)
+        check("responsiveness unknown -> EEG enters fusion with personal threshold and sigma scale",
+              f["prob_eeg"] == 0.35 and f["threshold_eeg"] == 0.455
+              and f["threshold_scale_eeg"] == PERSONAL_SIGMA_PRIOR and f["eeg_excluded_reason"] is None, f"{f}")
+        from backend.psychological.realtime.firebase_sync import eeg_fusion_input, LENIENT_WEIGHT
+
+        def record_for(**over):
+            return make_eeg_output_record({**base, **over}, 25.0, "bipolar_only_v1", "bipolar_only_v1",
+                                          [0.35], high_load_p=0.455, capture_end_ts=1.8e9)
+
+        for over, reason, basis in [({"eeg_responsive": False}, "not_responsive", "not_responsive"),
+                                    ({"baseline_degraded": True}, "degraded_baseline", "uncalibrated"),
+                                    ({"mu_rest": None}, "no_personal_baseline", "uncalibrated")]:
+            strict = eeg_fusion_input(record_for(**over), policy="strict")
+            check(f"strict policy: {reason} -> no EEG prob in fusion",
+                  strict["prob"] is None and strict["reason"] == reason, f"{strict}")
+            lenient = eeg_fusion_input(record_for(**over), policy="lenient")
+            check(f"lenient policy: {reason} -> fused at weight factor {LENIENT_WEIGHT[basis]}",
+                  lenient["prob"] == 0.35 and lenient["basis"] == basis
+                  and abs(lenient["quality"] - 99.0 * LENIENT_WEIGHT[basis]) < 1e-9, f"{lenient}")
+
+        skipped = {"skipped": True, "quality_is_trusted": False, "quality_quality_score": 0.0,
+                   "provisional_score": 0.41, "provisional_z": 0.56, "provisional_quality": 37.5}
+        lenient = eeg_fusion_input(record_for(**skipped), policy="lenient")
+        check("lenient policy: soft-rejected block fuses its provisional score at its provisional quality",
+              lenient["prob"] == 0.41 and lenient["basis"] == "provisional" and lenient["quality"] == 37.5, f"{lenient}")
+        check("strict policy: soft-rejected block is not fused",
+              eeg_fusion_input(record_for(**skipped), policy="strict")["prob"] is None)
+        hard = {**skipped, "provisional_score": None, "provisional_quality": None}
+        check("a hard-rejected block (no provisional score) is never fused",
+              eeg_fusion_input(record_for(**hard), policy="lenient")["prob"] is None)
+    except Exception as e:
+        check("Personal Scale checks raised no exception", False, repr(e))
+
+    # 9. Quality gate judges the UNCLAMPED filtered signal --------------------
+    print("\n[9] quality gate on the unclamped filtered signal")
+    try:
+        gate = SignalQualityGate(fs_raw=SOURCE_FS, fs_filtered=TARGET_FS)
+        rng9 = np.random.default_rng(9)
+        n9 = int(BLOCK_SEC * SOURCE_FS)
+        t9 = np.arange(n9) / SOURCE_FS
+
+        def block_from_uv(uv):
+            return [BipolarRawSample(millis=i * 4, code=int(c)) for i, c in enumerate(microvolts_to_bipolar_code(uv))]
+
+        eeg_uv = 4 * np.sin(2 * np.pi * 10 * t9) + rng9.normal(0, 4, n9) + 300.0      # ~SAM40 range
+        big_uv = 400 * np.sin(2 * np.pi * 7 * t9) + rng9.normal(0, 300, n9)           # ~your interference
+        for name, uv in (("in-range EEG", eeg_uv), ("out-of-range", big_uv)):
+            unc = preprocess_bipolar_block_unclamped(block_from_uv(uv))
+            clamped = preprocess_bipolar_block(block_from_uv(uv))
+            score, rating, det = gate.assess_epoch_single(np.zeros(n9) + 1.0, unc)
+            if name == "in-range EEG":
+                check("in-range EEG is not POOR on the unclamped signal", rating != "POOR",
+                      f"score={score} det={det}")
+                check("in-range EEG: clamping changes nothing (gate and model see the same signal)",
+                      np.allclose(unc, clamped))
+            else:
+                check("out-of-range signal is POOR with an explicit out-of-range reason",
+                      rating == "POOR" and "beyond" in (det.get("reason") or ""), f"det={det}")
+                check("reported ptp is the real unclamped size, not the 200 uV clamp",
+                      det["ptp_uV_unclamped"] > 1000, f"ptp={det['ptp_uV_unclamped']}")
+    except Exception as e:
+        check("Unclamped quality-gate checks raised no exception", False, repr(e))
+
+    # 10. Electrode drift across a block doesn't ring at the block edges ------
+    print("\n[10] linear detrend + edge padding on a drifting block")
+    try:
+        rng10 = np.random.default_rng(10)
+        n10 = int(BLOCK_SEC * SOURCE_FS)
+        t10 = np.arange(n10) / SOURCE_FS
+        eeg10 = 6 * np.sin(2 * np.pi * 10 * t10) + rng10.normal(0, 8, n10)
+        codes10 = microvolts_to_bipolar_code(eeg10 + 3000 * t10 / BLOCK_SEC)   # 3 mV drift over the block
+        u10 = preprocess_bipolar_block_unclamped([BipolarRawSample(i * 4, int(c)) for i, c in enumerate(codes10)])
+        flat10 = preprocess_bipolar_block_unclamped(
+            [BipolarRawSample(i * 4, int(c)) for i, c in enumerate(microvolts_to_bipolar_code(eeg10))])
+        check("a 3 mV drift leaves no samples beyond +-100 uV", np.mean(np.abs(u10) > 100) == 0.0,
+              f"{np.mean(np.abs(u10) > 100) * 100:.2f}% beyond")
+        check("drift barely changes RMS (within 25% of the drift-free block)",
+              abs(u10.std() - flat10.std()) / flat10.std() < 0.25, f"rms {u10.std():.1f} vs {flat10.std():.1f} uV")
+    except Exception as e:
+        check("Drift/edge checks raised no exception", False, repr(e))
+
+    # 11. Sparse glitch samples don't reject a block; whole-block faults do --
+    print("\n[11] raw magnitude check: sparse glitches vs whole-block faults")
+    try:
+        rng11 = np.random.default_rng(11)
+        n11 = int(BLOCK_SEC * SOURCE_FS)
+        clean11 = 6 * np.sin(2 * np.pi * 10 * np.arange(n11) / SOURCE_FS) + rng11.normal(0, 8, n11) + 2000
+        codes11 = microvolts_to_bipolar_code(clean11)
+        glitchy = codes11.copy(); glitchy[[500, 2600, 4100]] = 0x67BFF3      # 3 isolated ~245 mV samples
+        railed = codes11.copy(); railed[: n11 // 2] = 8388607                # half the block pinned at full scale
+        check("3 isolated glitch samples pass the raw magnitude check",
+              raw_magnitude_ok(bipolar_code_to_microvolts(glitchy)))
+        check("a half-railed block is still rejected", not raw_magnitude_ok(bipolar_code_to_microvolts(railed)))
+        ug = preprocess_bipolar_block_unclamped([BipolarRawSample(i * 4, int(c)) for i, c in enumerate(glitchy)])
+        uc = preprocess_bipolar_block_unclamped([BipolarRawSample(i * 4, int(c)) for i, c in enumerate(codes11)])
+        check("glitches are removed: filtered signal matches the glitch-free block (RMS within 10%)",
+              abs(ug.std() - uc.std()) / uc.std() < 0.10 and np.mean(np.abs(ug) > 100) == 0.0,
+              f"rms {ug.std():.1f} vs {uc.std():.1f} uV")
+    except Exception as e:
+        check("Raw magnitude checks raised no exception", False, repr(e))
+
+    # 12. Provisional scores for soft-rejected blocks ---------------------------
+    print("\n[12] provisional scores (soft rejections only)")
+    try:
+        from backend.psychological.realtime.pipeline import (
+            PROVISIONAL_MAX_OUT_OF_RANGE, SETTLING_TIME_SEC, provisional_quality,
+        )
+        from backend.psychological.sam40.features import channel_features
+        check("provisional quality is half a clean block's at best and 0 at the limit",
+              provisional_quality(0.0) == 50.0 and provisional_quality(PROVISIONAL_MAX_OUT_OF_RANGE) == 0.0
+              and provisional_quality(0.05) == 37.5)
+        eng12 = RealtimeInference(MODEL_DIR)
+        rng12 = np.random.default_rng(12)
+        feats12 = {f"bipolar_{k}": v for k, v in channel_features(
+            6 * np.sin(2 * np.pi * 10 * np.arange(3200) / TARGET_FS) + rng12.normal(0, 5, 3200), fs=TARGET_FS).items()}
+        after = SETTLING_TIME_SEC + 1
+        check("no provisional score beyond the out-of-range limit",
+              eng12._provisional_score(feats12, {"out_of_range_fraction": 0.25}, after) == {})
+        check("no provisional score inside the settling window",
+              eng12._provisional_score(feats12, {"out_of_range_fraction": 0.0}, 0.0) == {})
+        prov = eng12._provisional_score(feats12, {"out_of_range_fraction": 0.05}, after)
+        check("a soft rejection gets a plausible provisional score (or none if the model saturates)",
+              prov == {} or (1e-6 <= prov["provisional_score"] <= 1 - 1e-6 and prov["provisional_quality"] == 37.5),
+              f"{prov}")
+    except Exception as e:
+        check("Provisional-score checks raised no exception", False, repr(e))
+
+    # 13. One blink/pop doesn't reject a block; sustained spikes still do -----
+    print("\n[13] sub-window kurtosis: a single spike vs sustained artefact")
+    try:
+        from backend.psychological.realtime.quality_gate import TrustedIoTEEGValidator
+        v13 = TrustedIoTEEGValidator(fs_raw=SOURCE_FS, fs_filtered=TARGET_FS)
+        rng13 = np.random.default_rng(13)
+        n13 = int(BLOCK_SEC * TARGET_FS)
+        clean13 = 6 * np.sin(2 * np.pi * 10 * np.arange(n13) / TARGET_FS) + rng13.normal(0, 12, n13)
+        one_pop = clean13.copy(); one_pop[1500:1503] += [180, 360, 150]          # one ~0.03 s pop (like block 1)
+        sustained = clean13.copy()
+        for c in range(100, n13, 220): sustained[c:c + 2] += 300                 # spikes all through the block
+        raw13 = np.ones(int(BLOCK_SEC * SOURCE_FS))
+        q1 = v13.validate_epoch_single(raw13, one_pop, clean13)
+        check("a single pop no longer rejects an otherwise clean block",
+              q1["is_trusted"] and q1["kurtosis"] >= 12, f"kurtosis {q1['kurtosis']}, {q1.get('reason')}")
+        q2 = v13.validate_epoch_single(raw13, sustained, clean13)
+        check("spikes throughout the block are still rejected, with a named reason and rating POOR",
+              not q2["is_trusted"] and "spiky artefacts" in (q2.get("reason") or "") and q2["gate_rating"] == "POOR",
+              f"{q2.get('reason')} rating={q2['gate_rating']}")
+    except Exception as e:
+        check("Sub-window kurtosis checks raised no exception", False, repr(e))
+
+    print("\n[14] two-way, range-gated amplitude gain")
+    try:
+        def block14(scale, seed, start, clench=False):
+            b = make_synthetic_block(seed=seed, start_millis=start)
+            uv = bipolar_code_to_microvolts(np.array([s.code for s in b])) * scale
+            if clench:                                 # jaw clench: dense large bursts in part of the block
+                rng = np.random.default_rng(seed)
+                uv[2000:3200] += rng.normal(0, 400, 1200)
+            return [BipolarRawSample(s.millis, int(c)) for s, c in zip(b, microvolts_to_bipolar_code(uv))]
+
+        def session14(scale, clench_block=None):
+            e = RealtimeInference(MODEL_DIR)
+            for i in range(4):                         # first block = settling window
+                e.calibrate_bipolar_block(block14(scale, i, i * 25_000, clench=(i == clench_block)))
+            out = e.finalize_calibration_bipolar(allow_degraded=True)
+            r = e.infer_bipolar_block(block14(scale, 9, 200_000))
+            return e, out, r
+
+        # The synthetic block is ~25 uV SD; rescale it to SAM40's typical rest SD.
+        e_ref, _, _ = session14(1.0)
+        normal = e_ref._train_std_mean / e_ref.rest_std_uv
+        e_n, out_n, r_n = session14(normal)
+        check("SAM40-like session (rest SD in the training range) keeps gain 1.0",
+              out_n["amplitude_gain"] == 1.0 and not out_n["amplitude_capped"],
+              f"gain {out_n['amplitude_gain']}, rest SD {e_n.rest_std_uv:.2f} uV")
+        e_l, out_l, r_l = session14(5 * normal)
+        check("5x louder session is scaled DOWN (gain ~0.2, not capped)",
+              0.15 < out_l["amplitude_gain"] < 0.25 and not out_l["amplitude_capped"],
+              f"gain {out_l['amplitude_gain']:.3f}")
+        check("with the gain, the loud session scores close to the normal one",
+              not r_l.get("skipped") and abs(r_l["calibrated_p"] - r_n["calibrated_p"]) < 0.15,
+              f"loud {r_l.get('calibrated_p')} vs normal {r_n.get('calibrated_p')}")
+        e_q, out_q, r_q = session14(normal / 30)
+        check("1/30 quiet session: gain capped at 10x and the baseline marked degraded",
+              out_q["amplitude_gain"] == 10.0 and out_q["amplitude_capped"] and e_q.baseline_degraded,
+              f"gain {out_q['amplitude_gain']}, capped {out_q['amplitude_capped']}, degraded {e_q.baseline_degraded}")
+        e_a, out_a, _ = session14(normal, clench_block=2)
+        check("artefact-heavy rest: the clench block is excluded and the gain stays 1.0",
+              out_a["amplitude_gain"] == 1.0 and out_a["n_clean_rest_for_gain"] < 3,
+              f"gain {out_a['amplitude_gain']}, clean blocks {out_a['n_clean_rest_for_gain']}, rest SD {e_a.rest_std_uv:.2f}")
+        check("the stored waveform stays in real (unscaled) uV",
+              max(abs(v) for v in r_l["wave_uv"]) > 5 * max(abs(v) for v in r_n["wave_uv"]) * 0.8,
+              "loud session waveform shown at its real amplitude")
+    except Exception as e:
+        check("Amplitude gain checks raised no exception", False, repr(e))
+
+    # 15. Direction-aware ABA calibration (sam40/decision.py
+    # midpoint_threshold_logit()) and score orientation (pipeline.py).
+    print("\n[15] Direction-aware ABA calibration")
+    try:
+        from backend.psychological.sam40.decision import inv_logit, logit, midpoint_threshold_logit
+        P = lambda xs: [inv_logit(x) for x in xs]
+        rest = P([-4.0, -4.5, -3.5, -4.2, -3.8, -4.1, -3.9, -4.3])          # sd ~0.33 -> floored 0.55
+        fall = P([-4.0] * 5 + [-6.0] * 10)                                   # falls 2 log-odds (~3.6 spreads)
+        rise = P([-4.0] * 5 + [-2.0] * 10)
+        m = midpoint_threshold_logit(rest, fall, recovery_scores=P([-4.1, -3.9, -4.0]))
+        check("a reversible FALL is responsive with direction -1",
+              m["responsive"] and m["direction"] == -1 and m["status"] == "ok", str({k: m[k] for k in ("status", "direction")}))
+        m = midpoint_threshold_logit(rest, rise, recovery_scores=P([-2.1, -1.9, -2.0]))
+        check("a rise that never comes back is 'drift_suspected', not responsive",
+              not m["responsive"] and m["status"] == "drift_suspected", m["status"])
+        m = midpoint_threshold_logit(rest, rise, recovery_scores=P([-3.9, -4.0, -4.1]))
+        check("a reversible RISE is responsive with direction +1", m["responsive"] and m["direction"] == 1, m["status"])
+        m = midpoint_threshold_logit(rest, P([-4.0] * 15), recovery_scores=P([-4.0] * 3))
+        check("no change is 'not_separated'", m["status"] == "not_separated", m["status"])
+
+        e = RealtimeInference(MODEL_DIR)
+        e.personal_scale, e.mu_rest_logit, e.sigma = "logit", -4.0, 0.55
+        e.direction = -1
+        low, high = inv_logit(-6.0), inv_logit(-2.0)
+        check("direction -1: a score BELOW rest is oriented above it (more load)",
+              e.oriented_score(low) > inv_logit(-4.0) > e.oriented_score(high)
+              and abs(logit(e.oriented_score(low)) - (-2.0)) < 1e-6,
+              f"{e.oriented_score(low):.3g} / {e.oriented_score(high):.3g}")
+        check("direction -1: personal z is positive when the score falls", e.personal_z(low) > 0 > e.personal_z(high),
+              f"{e.personal_z(low):.2f} / {e.personal_z(high):.2f}")
+        e.direction = 1
+        check("direction +1: scores are left as they are", e.oriented_score(low) == low)
+    except Exception as e:
+        check("Direction-aware checks raised no exception", False, repr(e))
 
     print("\n" + "=" * 60)
     print("ALL CHECKS PASSED" if all_passed else "SOME CHECKS FAILED")

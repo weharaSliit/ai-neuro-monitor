@@ -5,14 +5,18 @@ import { COLORS } from '../lib/levels';
 // Web port of StressApp/modules/shared/CalibrateBreathingCard.js -- same
 // endpoints, same rules (one Start runs Ring + Headband, whichever are
 // online; completion waits for every online device), same presentation:
-// a breathing circle inside a progress ring, plus one plain-language
-// progress bar per device.
+// a calm circle inside a progress ring, plus one plain-language progress
+// bar per device.
+//
+// Calibration protocol (backend/common/config.py, psychological/mqtt_bridge.py):
+// 2 min settle (discarded), then a 4 min resting baseline with NATURAL
+// breathing and eyes open -- no paced-breathing guide: slow paced breathing
+// raises HRV well above a normal resting level, so the baseline wouldn't
+// describe ordinary rest. Ring 120 s + 4 x 60 s; headband 120 s + 10 x 25 s.
 const IN_PROGRESS = ['settling', 'capturing', 'saving'];
 const POLL_MS = 2000;
-const BREATH = { inhale: 4000, hold: 4000, exhale: 4000, rest: 2000 };
-const NEXT = { inhale: 'hold', hold: 'exhale', exhale: 'rest', rest: 'inhale' };
-const WORD = { inhale: 'Breathe in', hold: 'Hold', exhale: 'Breathe out', rest: 'Rest' };
-const EXPECTED_SEC = { ring: 210, eeg: 85 };
+const SETTLE_SEC = 120;
+const EXPECTED_SEC = { ring: 120 + 4 * 60, eeg: 120 + 10 * 25 };
 const ORB = 210;
 const STROKE = 9;
 
@@ -41,14 +45,29 @@ function useCaptureRunner(onUpdate) {
   return run;
 }
 
+// Ring reports capture progress as window_idx/n_windows, the EEG service as
+// block_idx/n_blocks (eeg_calibration_capture.py) -- accept either.
+function captureStep(state) {
+  const idx = state.window_idx ?? state.block_idx;
+  const total = state.n_windows ?? state.n_blocks;
+  return idx != null && total ? { idx, total } : null;
+}
+
+// EEG's 'done' nests the real calibration outcome; 'degraded' means no
+// block cleared the quality bar and the best weak one was used instead.
+function isDegraded(state) {
+  return state.status === 'done' && state.outcome?.status === 'degraded';
+}
+
 function deviceProgress(state, expected, elapsedSec, totalSec) {
   if (!expected) return null;
   if (!state.triggered || state.status === 'error') return 0;
   if (!IN_PROGRESS.includes(state.status)) return 1;
   const timeFrac = Math.min(0.95, elapsedSec / totalSec);
   if (state.status === 'saving') return 0.97;
-  if (state.status === 'capturing' && state.window_idx != null && state.n_windows) {
-    return Math.min(0.96, Math.max(timeFrac, 0.15 + 0.8 * (state.window_idx / state.n_windows)));
+  const step = captureStep(state);
+  if (state.status === 'capturing' && step) {
+    return Math.min(0.96, Math.max(timeFrac, 0.15 + 0.8 * (step.idx / step.total)));
   }
   return timeFrac;
 }
@@ -57,18 +76,19 @@ function deviceWords(state, expected) {
   if (!expected) return 'Not connected — skipped';
   if (!state.triggered) return 'Getting ready…';
   if (state.status === 'error') return state.message || 'Something went wrong';
-  if (state.status === 'settling') return 'Letting the sensor settle…';
+  if (state.status === 'settling') return 'Settling — the first 2 minutes are not used…';
   if (state.status === 'capturing') {
-    return state.window_idx != null && state.n_windows != null
-      ? `Learning your calm (${state.window_idx} of ${state.n_windows})` : 'Learning your calm…';
+    const step = captureStep(state);
+    return step ? `Learning your calm (${step.idx} of ${step.total})` : 'Learning your calm…';
   }
   if (state.status === 'saving') return 'Saving…';
+  if (isDegraded(state)) return 'Done, but the signal was weak — recalibrate later for better accuracy';
   return 'Done ✓';
 }
 
 function freshnessLine(ring, eeg) {
   const sides = [ring, eeg].filter((s) => s?.exists && s.age_days != null);
-  if (!sides.length) return { text: 'Not calibrated yet — this takes about 3½ minutes.', warn: true };
+  if (!sides.length) return { text: 'Not calibrated yet — this takes about 6 minutes.', warn: true };
   const days = Math.floor(Math.min(...sides.map((s) => s.age_days)));
   const when = days < 1 ? 'today' : days === 1 ? 'yesterday' : `${days} days ago`;
   const stale = sides.some((s) => s.is_stale_soft);
@@ -100,7 +120,6 @@ export default function BreathingCalibration({ ringOnline, eegOnline, eegSession
   const [ringState, setRingState] = useState({ triggered: false, status: 'idle' });
   const [eegState, setEegState] = useState({ triggered: false, status: 'idle' });
   const [errorMsg, setErrorMsg] = useState(null);
-  const [phase, setPhase] = useState('inhale');
   const [finger, setFinger] = useState(null);
   const [startedAt, setStartedAt] = useState(null);
   const [now, setNow] = useState(Date.now());
@@ -153,12 +172,6 @@ export default function BreathingCalibration({ ringOnline, eegOnline, eegSession
   }, [stage, ringState, eegState, ringExpected, eegExpected, onComplete]);
 
   useEffect(() => {
-    if (stage !== 'running') { setPhase('inhale'); return undefined; }
-    const id = setTimeout(() => setPhase((p) => NEXT[p]), BREATH[phase]);
-    return () => clearTimeout(id);
-  }, [stage, phase]);
-
-  useEffect(() => {
     if (stage !== 'running') return undefined;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
@@ -190,7 +203,8 @@ export default function BreathingCalibration({ ringOnline, eegOnline, eegSession
   const longest = Math.max(ringExpected ? EXPECTED_SEC.ring : 0, eegExpected ? EXPECTED_SEC.eeg : 0);
   const leftSec = Math.max(0, Math.round(longest - elapsedSec));
   const leftText = leftSec > 60 ? `about ${Math.ceil(leftSec / 60)} min left` : leftSec > 0 ? `about ${leftSec}s left` : 'finishing up…';
-  const big = running && (phase === 'inhale' || phase === 'hold');
+  const settling = running && elapsedSec < SETTLE_SEC;
+  const settleLeft = Math.max(0, Math.round(SETTLE_SEC - elapsedSec));
   const R = (ORB - STROKE) / 2;
   const C = 2 * Math.PI * R;
   const fresh = freshnessLine(ringCal, eegCal);
@@ -218,19 +232,21 @@ export default function BreathingCalibration({ ringOnline, eegOnline, eegSession
           position: 'absolute', inset: 22, borderRadius: '50%', display: 'grid', placeContent: 'center',
           background: `radial-gradient(circle at 35% 30%, ${orbColor}CC, ${orbColor})`, color: '#fff',
           boxShadow: '0 10px 24px rgba(79,73,148,0.28)',
-          transform: `scale(${running ? (big ? 1 : 0.82) : 0.88})`,
-          transition: `transform ${running ? BREATH[phase] : 600}ms ease-in-out`,
-          animation: stage === 'idle' ? 'pulse 2.4s ease-in-out infinite' : 'none',
+          transform: `scale(${running ? 0.92 : 0.88})`,
+          transition: 'transform 600ms ease-in-out',
+          animation: stage === 'idle' || running ? 'pulse 6s ease-in-out infinite' : 'none',
         }}>
-          <div style={{ fontSize: 20, fontWeight: 900 }}>{running ? WORD[phase] : stage === 'complete' ? '✓' : stage === 'error' ? '!' : '🌬️'}</div>
+          <div style={{ fontSize: 20, fontWeight: 900 }}>{running ? (settling ? 'Settling' : 'Resting') : stage === 'complete' ? '✓' : stage === 'error' ? '!' : '🧘'}</div>
           {running && <div style={{ fontSize: 13, fontWeight: 800, opacity: 0.85, marginTop: 2 }}>{Math.round(overall * 100)}%</div>}
         </div>
       </div>
 
       {stage === 'idle' && (
         <>
-          <p style={{ fontWeight: 800, margin: 0 }}>Sit comfortably, keep still, and breathe slowly with the circle.</p>
-          <p className="body" style={{ marginTop: 4 }}>We learn what “calm” looks like for you. It takes about 3½ minutes.</p>
+          <p style={{ fontWeight: 800, margin: 0 }}>Sit comfortably, keep still, eyes open, and breathe normally.</p>
+          <p className="body" style={{ marginTop: 4 }}>
+            We learn what “calm” looks like for you: 2 minutes to settle, then 4 minutes of quiet rest. About 6 minutes in all.
+          </p>
           <div className="row" style={{ justifyContent: 'center', margin: '14px 0', flexWrap: 'wrap' }}>
             <span className="badge" style={{ background: ringOnline ? COLORS.normalSoft : COLORS.pill, color: ringOnline ? COLORS.normalDark : COLORS.textMuted }}>💍 Ring {ringOnline ? 'ready' : 'off'}</span>
             <span className="badge" style={{ background: eegOnline ? COLORS.normalSoft : COLORS.pill, color: eegOnline ? COLORS.normalDark : COLORS.textMuted }}>🧠 Headband {eegOnline ? 'ready' : 'off'}</span>
@@ -242,11 +258,13 @@ export default function BreathingCalibration({ ringOnline, eegOnline, eegSession
 
       {running && (
         <>
-          <p style={{ fontWeight: 800, margin: 0 }}>{phase === 'rest' ? 'Relax…' : `${WORD[phase]}…`}</p>
-          <p className="caption" style={{ marginTop: 4 }}>{leftText} · keep still</p>
+          <p style={{ fontWeight: 800, margin: 0 }}>
+            {settling ? `Settling in — ${settleLeft}s (not recorded)` : 'Resting baseline — eyes open, breathe normally'}
+          </p>
+          <p className="caption" style={{ marginTop: 4 }}>{leftText} · keep still, look at one spot, don&apos;t talk</p>
           <div style={{ display: 'grid', gap: 14, marginTop: 18, textAlign: 'left' }}>
             <DeviceRow icon="💍" tint={COLORS.hrv} label="Ring" progress={ringP} words={deviceWords(ringState, ringExpected)} failed={ringState.status === 'error'} />
-            <DeviceRow icon="🧠" tint={COLORS.eeg} label="Headband" progress={eegP} words={deviceWords(eegState, eegExpected)} failed={eegState.status === 'error'} />
+            <DeviceRow icon="🧠" tint={isDegraded(eegState) ? COLORS.warning : COLORS.eeg} label="Headband" progress={eegP} words={deviceWords(eegState, eegExpected)} failed={eegState.status === 'error'} />
           </div>
           {ringState.triggered && finger === false && (
             <div className="banner warning" style={{ marginTop: 14, textAlign: 'left' }}>⚠ No finger on the ring — adjust it for a clean reading.</div>

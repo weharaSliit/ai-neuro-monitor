@@ -51,11 +51,18 @@ from backend.physiological.predictor import (
     feature_cols, StressStateMachine, STRESS_DECISION_THRESHOLD
 )
 from backend.common.config import (
-    RAW_DECISION_THRESHOLD
+    RAW_DECISION_THRESHOLD, TREND_RISING_THRESHOLD
 )
+
+# A skin-conductance level this many times above (or below) the saved baseline
+# is far outside anything the model was trained on (WESAD stress windows reach
+# roughly 2-3x). Past it the label is not trustworthy: tell the user to
+# recalibrate instead of showing a confident "Stressed".
+BASELINE_STALE_RATIO = 6.0
 from backend.physiological.extract_features import (
     extract_features, compute_signal_quality
 )
+from backend.physiological.ring_recalibration import start_poller as start_ring_recalibration_poller
 from backend.physiological.calibration_capture import (
     save_calibration_windows, run_calibration_capture, run_task_calibration_capture
 )
@@ -85,6 +92,28 @@ _threshold_sessions = {}
 # thread competing with the first for the same status dict. Observed live
 # as calibration progress reading "1/2" then suddenly "0/2".
 _session_start_lock = threading.Lock()
+
+# Recalibration requested from psy_web (ring_recalibration/{uid}, see
+# ring_recalibration.py): users whose dashboard-started run is in progress.
+# The app's own Calibrate / limit-test buttons and a dashboard run would
+# open two captures on the same ring stream, so each refuses while the
+# other runs.
+_dashboard_recal_users = set()
+_ACTIVE = ('settling', 'capturing', 'saving', 'recovery')
+
+
+def _calibration_busy(user_id):
+    return (user_id in _dashboard_recal_users
+            or (_calibration_sessions.get(user_id) or {}).get('status') in _ACTIVE
+            or (_threshold_sessions.get(user_id) or {}).get('status') in _ACTIVE)
+
+
+def _set_dashboard_recal(user_id, on):
+    with _session_start_lock:
+        (_dashboard_recal_users.add if on else _dashboard_recal_users.discard)(user_id)
+
+
+start_ring_recalibration_poller(_calibration_busy, _set_dashboard_recal)
 
 USER_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{3,30}$')
 
@@ -184,6 +213,8 @@ def calibrate_start():
         current = _calibration_sessions.get(user_id)
         if current and current.get('status') in ('settling', 'capturing', 'saving'):
             return jsonify({'error': 'Calibration already in progress'}), 409
+        if user_id in _dashboard_recal_users:
+            return jsonify({'error': 'A recalibration started from the dashboard is in progress'}), 409
 
         _calibration_sessions[user_id] = {
             'status': 'settling', 'window_idx': 0, 'n_windows': N_BASELINE_WIN
@@ -191,6 +222,13 @@ def calibrate_start():
 
     def on_progress(status, extra):
         entry = {'status': status, 'n_windows': N_BASELINE_WIN}
+        # Live per-window values for the calibration graphs: keep the last
+        # list across every later status update (saving/done/skipped).
+        prev_blocks = _calibration_sessions.get(user_id, {}).get('blocks')
+        if extra.get('blocks') is not None:
+            entry['blocks'] = extra['blocks']
+        elif prev_blocks:
+            entry['blocks'] = prev_blocks
         if status == 'window_captured':
             entry['status'] = 'capturing'
             entry['window_idx'] = extra['window_idx']
@@ -212,8 +250,13 @@ def calibrate_start():
             entry['status'] = status
         _calibration_sessions[user_id] = entry
 
+    def on_live(tail):
+        cur = _calibration_sessions.get(user_id)
+        if cur is not None and cur.get('status') in ('settling', 'capturing', 'saving'):
+            _calibration_sessions[user_id] = {**cur, 'live': tail}
+
     def worker():
-        run_calibration_capture(user_id, on_progress=on_progress)
+        run_calibration_capture(user_id, on_progress=on_progress, on_live=on_live)
 
     threading.Thread(target=worker, daemon=True).start()
     return jsonify({'status': 'started'})
@@ -240,8 +283,10 @@ def calibrate_threshold_start():
     user_id = g.user_id
     with _session_start_lock:
         current = _threshold_sessions.get(user_id)
-        if current and current.get('status') in ('capturing', 'saving'):
+        if current and current.get('status') in ('capturing', 'saving', 'recovery'):
             return jsonify({'error': 'Threshold calibration already in progress'}), 409
+        if user_id in _dashboard_recal_users:
+            return jsonify({'error': 'A recalibration started from the dashboard is in progress'}), 409
 
         _threshold_sessions[user_id] = {'status': 'capturing'}
 
@@ -257,12 +302,22 @@ def calibrate_threshold_start():
             # 'ok'/'not_separated' back to 'done' every time, so the frontend
             # could never actually see a successful personalization).
             entry = {'status': status, **extra}
-        else:  # 'capturing' / 'window_skipped' / 'saving'
+        else:  # 'capturing' / 'window_skipped' / 'saving' / 'recovery' (rest after the task)
             entry = {'status': status, **extra}
+        # Keep the live per-window values across every later status update.
+        prev = _threshold_sessions.get(user_id, {})
+        for k in ('blocks', 'resting_scores'):
+            if k not in entry and prev.get(k):
+                entry[k] = prev[k]
         _threshold_sessions[user_id] = entry
 
+    def on_live(tail):
+        cur = _threshold_sessions.get(user_id)
+        if cur is not None and cur.get('status') in ('capturing', 'saving'):
+            _threshold_sessions[user_id] = {**cur, 'live': tail}
+
     def worker():
-        run_task_calibration_capture(user_id, on_progress=on_progress)
+        run_task_calibration_capture(user_id, on_progress=on_progress, on_live=on_live)
 
     threading.Thread(target=worker, daemon=True).start()
     return jsonify({'status': 'started'})
@@ -362,7 +417,8 @@ def predict():
             feature_cols_list = feature_cols,
             baseline_mean     = b_mean,
             window_size       = 5,
-            trend_threshold   = 0.35
+            trend_threshold   = TREND_RISING_THRESHOLD,
+            baseline_std      = b_std
         )
     sm = ring_sessions[user_id]
 
@@ -397,13 +453,27 @@ def predict():
     effective_threshold = personal_threshold if personal_threshold is not None else (
         RAW_DECISION_THRESHOLD if b_mean is None else STRESS_DECISION_THRESHOLD)
 
+    # ── Is this reading far outside the user's saved baseline? ────
+    # Skin features are scored as a ratio to the baseline mean. A ratio far
+    # beyond anything seen in training (the model then saturates at ~0.99
+    # stress) almost always means the baseline is out of date (electrode
+    # contact, hardware calibration or day-to-day shift), not real stress.
+    baseline_stale, baseline_ratio = False, None
+    if b_mean is not None and 'SCL_mean' in feature_cols:
+        base_scl = float(b_mean[feature_cols.index('SCL_mean')])
+        if base_scl > 0.05:
+            baseline_ratio = float(feat_dict.get('SCL_mean', 0.0)) / base_scl
+            baseline_stale = (baseline_ratio >= BASELINE_STALE_RATIO
+                              or baseline_ratio <= 1.0 / BASELINE_STALE_RATIO)
+
     # ── Save structured data only ──────────────────────────────
     save_prediction(
         user_id, session_id, window_idx,
         result['prediction'], result['label'],
         result['prob_normal'], result['prob_stress'],
         result['trending_toward_stress'], feat_dict,
-        wave_dict
+        wave_dict,
+        baseline_stale=baseline_stale, baseline_ratio=baseline_ratio
     )
     save_prediction_quality(
         user_id, session_id, window_idx,
@@ -417,7 +487,8 @@ def predict():
         result['confidence'], signal_quality,
         result['prob_normal'], result['prob_stress'],
         result['label'], result['trending_toward_stress'],
-        feat_dict, effective_threshold
+        feat_dict, effective_threshold,
+        baseline_stale=baseline_stale, baseline_ratio=baseline_ratio
     )
 
     return jsonify({
@@ -433,6 +504,8 @@ def predict():
         },
         'window_idx':      window_idx,
         'motion_rejected': False,
+        'baseline_stale':  baseline_stale,
+        'baseline_ratio':  None if baseline_ratio is None else round(baseline_ratio, 2),
         'features': {
             'AVNN':        float(feat_dict.get('AVNN', 0)),
             'MeanHR':      float(feat_dict.get('MeanHR', 0)),

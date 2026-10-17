@@ -186,7 +186,11 @@ class StressPredictor:
         # windows; the predictor must apply the same logic here.
         #
         # Tilt is always present (substituted with baseline mean when null, z ~ 0).
-        z_scores = {'tilt': abs(calculate_z_score(tilt_angle, mean_tilt, std_tilt))}
+        z_tilt_raw = abs(calculate_z_score(tilt_angle, mean_tilt, std_tilt))
+        # If no typing occurred this window (scroll-only), tilt alone must not
+        # escalate to extreme stress (>2.0) simply because the phone was held upright.
+        z_tilt = min(z_tilt_raw, 2.0) if (dwell_time <= 0 and flight_time <= 0 and cpm <= 0) else z_tilt_raw
+        z_scores = {'tilt': z_tilt}
 
         if dwell_time > 0:
             z_scores['dwell'] = abs(calculate_z_score(dwell_time, mean_dwell, std_dwell))

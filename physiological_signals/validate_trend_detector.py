@@ -49,11 +49,12 @@ SWEEP = [0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.60]
 RNG = np.random.default_rng(42)
 
 
-def run_stream(rows, feature_cols, baseline_mean, threshold):
+def run_stream(rows, feature_cols, baseline_mean, threshold, baseline_std=None):
     """Replays predict_window()'s trend logic over a window sequence.
     Returns a list of flags (None while < window_size windows of history)."""
     sm = StressStateMachine(feature_cols, baseline_mean=baseline_mean,
-                            window_size=WINDOW_SIZE, trend_threshold=threshold)
+                            window_size=WINDOW_SIZE, trend_threshold=threshold,
+                            baseline_std=baseline_std)
     flags = []
     for feat_dict in rows:
         sm.history.append(feat_dict)
@@ -74,9 +75,9 @@ def real_transition(df, feature_cols, threshold):
         X = g[feature_cols].to_numpy(dtype=float)
         y = g['label'].to_numpy()
         onset = int(np.argmax(y == 1))
-        b_mean, _ = compute_baseline(X, n_windows=N_BASELINE_WIN)  # first 3 windows, as deployed
+        b_mean, b_std = compute_baseline(X, n_windows=N_BASELINE_WIN)  # first 3 windows, as deployed
         rows = [dict(zip(feature_cols, r)) for r in X]
-        flags = run_stream(rows, feature_cols, b_mean, threshold)
+        flags = run_stream(rows, feature_cols, b_mean, threshold, b_std)
 
         calm = [f for f in flags[:onset] if f is not None]
         fa = float(np.mean(calm)) if calm else np.nan
@@ -103,7 +104,7 @@ def synthetic(df, feature_cols, threshold, n_windows=30, ramp_start=12, ramp_len
     for _, g in df.groupby('subject_id', sort=False):
         calm = g[g['label'] == 0][feature_cols].to_numpy(dtype=float)
         mu, sd = calm.mean(axis=0), calm.std(axis=0) + 1e-9
-        b_mean = calm[:N_BASELINE_WIN].mean(axis=0)
+        b_mean, b_std = compute_baseline(calm, n_windows=N_BASELINE_WIN)
 
         def stream(noise_mult, ramp):
             rows = []
@@ -117,7 +118,7 @@ def synthetic(df, feature_cols, threshold, n_windows=30, ramp_start=12, ramp_len
                         elif f in down:
                             v[i] -= 2.0 * sd[i] * step
                 rows.append(dict(zip(feature_cols, v)))
-            return run_stream(rows, feature_cols, b_mean, threshold)
+            return run_stream(rows, feature_cols, b_mean, threshold, b_std)
 
         s = [f for f in stream(1.0, False) if f is not None]
         n = [f for f in stream(3.0, False) if f is not None]

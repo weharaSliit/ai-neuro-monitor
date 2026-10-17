@@ -1,0 +1,50 @@
+[
+  {
+    "user": "sim_typical",
+    "eeg_status": "ok",
+    "eeg_direction": 1,
+    "eeg_separation_sd": 4.742435430688303,
+    "eeg_reversal_sd": 4.963230499171046,
+    "eeg_method": "midpoint (median rest, sustained task)",
+    "ring_status": "ok",
+    "ring_limit": 0.5005022036881808,
+    "mind_high_in_stress": 0.8571428571428571,
+    "body_high_in_stress": 0.9285714285714286,
+    "fused_high_in_stress": 0.9285714285714286,
+    "mind_high_in_calm": 0.045454545454545456,
+    "body_high_in_calm": 0.045454545454545456,
+    "fused_high_in_calm": 0.045454545454545456
+  },
+  {
+    "user": "sim_inverted",
+    "eeg_status": "ok",
+    "eeg_direction": -1,
+    "eeg_separation_sd": -3.706373768987122,
+    "eeg_reversal_sd": 4.775800764842788,
+    "eeg_method": "midpoint (median rest, sustained task, score falls under load)",
+    "ring_status": "ok",
+    "ring_limit": 0.5000695183989592,
+    "mind_high_in_stress": 0.8571428571428571,
+    "body_high_in_stress": 0.9285714285714286,
+    "fused_high_in_stress": 0.9285714285714286,
+    "mind_high_in_calm": 0.09090909090909091,
+    "body_high_in_calm": 0.045454545454545456,
+    "fused_high_in_calm": 0.045454545454545456
+  },
+  {
+    "user": "sim_drift",
+    "eeg_status": "drift_suspected",
+    "eeg_direction": 1,
+    "eeg_separation_sd": 2.777926640025617,
+    "eeg_reversal_sd": -2.5604427046169365,
+    "eeg_method": "provisional (rest + 0.84 sigma)",
+    "ring_status": "not_separated",
+    "ring_limit": 0.6447,
+    "mind_high_in_stress": 1.0,
+    "body_high_in_stress": 0.21428571428571427,
+    "fused_high_in_stress": 0.21428571428571427,
+    "mind_high_in_calm": 0.9545454545454546,
+    "body_high_in_calm": 0.0,
+    "fused_high_in_calm": 0.0
+  }
+]

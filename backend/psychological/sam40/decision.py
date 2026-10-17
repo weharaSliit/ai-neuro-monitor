@@ -1,6 +1,8 @@
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+
+import os
 
 import numpy as np
 import pandas as pd
@@ -38,7 +40,12 @@ class DecisionThresholds:
     in a high-load state" = the same bar as the high-load alert itself).
     """
     high_load_p: float = 0.7933008189294708
-    high_load_persistence_blocks: int = 3          # spec: ">=3 consecutive blocks"
+    high_load_persistence_blocks: int = 3          # kept for reference; the alert now uses high_load_k of high_load_n
+    # Persistence: high load when at least high_load_k of the last
+    # high_load_n blocks are at/above the limit (2 of 3) -- tolerates one
+    # noisy block in either direction, unlike "3 consecutive".
+    high_load_k: int = 2
+    high_load_n: int = 3
     break_p: float = 0.8104568085102677
     break_persistence_blocks: int = 20              # spec: "sustained over 10 min"; blocks, not minutes -- see module docstring
     fatigue_theta_ratio_p75: float = None            # filled in per-series (75th percentile) if None
@@ -132,6 +139,251 @@ def compute_personal_threshold(resting_scores: list[float], task_scores: list[fl
     return max(POPULATION_P5, min(POPULATION_P95, midpoint))
 
 
+# ═══════════════════════════════════════════════════════════════════
+#  PERSONAL SCALE -- the deployed decision rule (paper Sect. "Personal EEG
+#  Threshold"; same constants as fushion engin/personal_scale.py).
+#
+#  Every raw model output s is judged against the person's OWN rest, in
+#  units of normal resting noise:  z = (s - mu_rest) / sigma.  mu_rest is
+#  re-measured from this session's own rest blocks (electrode contact
+#  changes every time the device is worn), and the alert is z >= K, i.e. a
+#  personal threshold mu_rest + K*sigma. No population threshold and no
+#  probability shift (compute_baseline_shift()/compute_personal_threshold()
+#  above are no longer called by the live pipeline).
+#
+#  Why this rule: on SAM40 (LOSO, deployed T7-T8 bipolar model, 2 rest + 2
+#  task onboarding) it gave balanced accuracy 0.619 vs 0.550 for the fixed
+#  population threshold (+0.069, CI lower bound 0.018 --
+#  paper/analysis/results/Z1_personal_scale_sam40.csv), while the old
+#  fixed 0.111 separation margin accepted only 2 of 40 people (and 0 of 5
+#  live onboarding runs).
+#
+#  SIGMA_PRIOR: RMS deviation of later rest scores from the person's own
+#  onboarding-rest mean, from inner out-of-fold scores of the SAM40
+#  training people (paper/analysis/personalization.py::inner_stats(),
+#  design 2+2, mean over the three onboarding-trial pairs: 0.160/0.150/
+#  0.172). Recompute if the model is retrained.
+# ═══════════════════════════════════════════════════════════════════
+PERSONAL_SIGMA_PRIOR = 0.161
+PERSONAL_K_ALERT = 0.84        # ~20% of rest blocks flagged (paper k)
+PERSONAL_K_BREAK = 1.28        # ~10% of rest blocks -- stricter, for the sustained micro-break flag
+MIN_TASK_RESPONSE_Z = 0.5      # onboarding task must sit >= 0.5 sigma above own rest
+
+# Personal scale in LOG-ODDS, used to align EEG with HRV/GSR in fusion.
+# The probability-space sigma above stops working when a device's scores sit
+# near 0 (wearable02: 0.0005-0.0014, all at the same distance below a 0.136
+# limit), because probabilities compress there; log-odds don't, and they are
+# the logistic model's own linear output. Within-person SD of SAM40 rest-block
+# log-odds (out-of-fold, final_analysis/bipolar_block_level_scores.csv) is
+# 0.547; at z_logit >= PERSONAL_K_ALERT that flags 15.8% of rest blocks and
+# 46.9% of task blocks (vs 16.7% / 40.6% for the probability-space rule).
+PERSONAL_SIGMA_LOGIT = 0.55
+_LOGIT_EPS = 1e-300   # only guards log(0); was 1e-9, which flattened every score below it
+
+
+def _logit(p: float) -> float:
+    p = min(max(float(p), _LOGIT_EPS), 1.0 - 1e-16)
+    return float(np.log(p) - np.log1p(-p))
+
+
+# Plausibility on the log-odds scale. The probability-scale gate (scores
+# outside 1e-6..1-1e-6 rejected) assumed a 0.161 probability spread, under
+# which such scores carry no usable distance. In log-odds the logistic
+# model's output stays linear in its features far below that (wearable02
+# rest blocks: 1e-12..1e-9 = log-odds -28..-21), so only outputs beyond
+# +-LOGIT_PLAUSIBLE_BOUND (p < 4e-18, e.g. the 1e-63 artefacts seen before)
+# are treated as broken.
+LOGIT_PLAUSIBLE_BOUND = 40.0
+
+
+def plausible_logit_score(p: float | None) -> bool:
+    if p is None or not np.isfinite(p) or p <= 0.0 or p >= 1.0:
+        return False
+    return abs(_logit(p)) <= LOGIT_PLAUSIBLE_BOUND
+
+
+# Which scale the Personal Scale runs on. 'logit' (default): resting level,
+# z, responsiveness and alert limits all in log-odds (sigma 0.55). On SAM40
+# it matches the probability scale (responsiveness: same 8/8 below-chance
+# people caught, Spearman 0.84 with held-out AUC both ways; alerts: 15.8%
+# rest / 46.9% task blocks flagged vs 16.7% / 40.6%), and unlike it, it
+# survives a device whose scores all sit near 0 (wearable02: 1e-9..1e-3):
+# shifting every SAM40 score to ~1e-3 leaves 24/40 people responsive in
+# log-odds but 0/40 in probability -- there, mu_rest + 0.84 x 0.161 can
+# never be reached. 'probability' restores the original rule.
+PERSONAL_SCALE = os.environ.get('EEG_PERSONAL_SCALE', 'logit').strip().lower()
+
+
+def logit(p: float) -> float:
+    return _logit(p)
+
+
+def inv_logit(x: float) -> float:
+    return float(1.0 / (1.0 + np.exp(-x)))
+
+
+# Personal spread: with enough rest blocks (the protocol now records 10),
+# sigma is this person's own rest SD in log-odds, never below the SAM40
+# prior. SAM40 had only 3 rest blocks per person, so its analyses (and any
+# calibration with fewer than MIN_BLOCKS_PERSONAL_SIGMA usable blocks) keep
+# the prior. On wearable02 the rest SD was 3.97 log-odds -- 7x the prior --
+# so with the prior every ordinary rest-to-rest change read as a huge z.
+MIN_BLOCKS_PERSONAL_SIGMA = 5
+
+
+def personal_sigma_logit(rest_scores: list[float]) -> tuple[float, str]:
+    """(sigma, source): own rest SD in log-odds (>= the prior) when there
+    are enough blocks, else the SAM40 prior."""
+    if len(rest_scores) < MIN_BLOCKS_PERSONAL_SIGMA:
+        return PERSONAL_SIGMA_LOGIT, 'prior'
+    sd = float(np.std([_logit(s) for s in rest_scores], ddof=1))
+    return (sd, 'personal') if sd > PERSONAL_SIGMA_LOGIT else (PERSONAL_SIGMA_LOGIT, 'prior (own spread smaller)')
+
+
+# ── Midpoint threshold calibration (current method) ────────────────
+# baseline   = median(rest)                       (robust to one odd block)
+# task_level = mean(task after the ramp-up)       (skip ~2 min = 5 x 25 s blocks)
+# limit      = (baseline + task_level) / 2
+# responsive = task_level - baseline >= 1 x SD(rest), where SD(rest) is the
+#              Personal Scale spread (own rest SD, never below the SAM40
+#              prior, prior with < 5 rest blocks) -- a raw SD of 2-3 blocks
+#              can be ~0 and would pass any task.
+# All on the log-odds scale (scale-free: wearable02 scores sit at 1e-12..1e-3).
+# Until the task has run, the limit is provisional: baseline + 0.84 sigma.
+TASK_RAMP_SKIP_BLOCKS = 5
+MIN_TASK_RESPONSE_SD = 1.0
+# ABA check (rest -> task -> recovery): the recovery level must come back
+# from the task level towards rest by at least this many spreads, or the
+# "response" is treated as slow drift (electrode settling, sweat, fatigue),
+# not the task. Live wearable02 runs showed both: a step that never came
+# back (mindpulse_user7: +3.3 spreads vs rest, recovery as high as the task)
+# and a clean reversible change (mindpulse_user8: -1.4 vs rest, recovery
+# back up by 1.2).
+MIN_RECOVERY_REVERSAL_SD = 0.5
+
+
+def ramp_skip(n_task: int, skip: int = TASK_RAMP_SKIP_BLOCKS) -> int:
+    """Blocks to drop from the start of the task: `skip`, but always
+    keeping at least half of a short task."""
+    return min(skip, n_task // 2)
+
+
+def midpoint_threshold_logit(rest_scores: list[float], task_scores: list[float],
+                             skip: int = TASK_RAMP_SKIP_BLOCKS, sigma: float | None = None,
+                             recovery_scores: list[float] | None = None) -> dict | None:
+    """Baseline, sustained task level, midpoint limit and responsiveness,
+    all in log-odds. None if there are no rest or task scores.
+
+    Direction-aware: the population model's "load" class is not the
+    direction every person's T7-T8 signal moves under load on this
+    headband (live runs moved both ways), so the task may sit above OR
+    below rest. `direction` (+1 / -1) is the side it moved to; the limit is
+    still the midpoint, and "high load" means being on the task's side of
+    it. Responsive = |task - rest| >= MIN_TASK_RESPONSE_SD spreads AND, when
+    recovery blocks exist, recovery reverses towards rest by
+    MIN_RECOVERY_REVERSAL_SD spreads (ABA design: rules out drift).
+    status: 'ok' | 'not_separated' | 'drift_suspected'."""
+    if not rest_scores or not task_scores:
+        return None
+    rest_L = [_logit(s) for s in rest_scores]
+    k = ramp_skip(len(task_scores), skip)
+    task_L = [_logit(s) for s in task_scores[k:]]
+    baseline = float(np.median(rest_L))
+    task_level = float(np.mean(task_L))
+    rest_sd = sigma if sigma else personal_sigma_logit(rest_scores)[0]
+    direction = 1 if task_level >= baseline else -1
+    separation = None if rest_sd <= 0 else (task_level - baseline) / rest_sd
+    separated = separation is not None and abs(separation) >= MIN_TASK_RESPONSE_SD
+    rec_L = [_logit(s) for s in (recovery_scores or [])]
+    recovery_level = float(np.median(rec_L)) if rec_L else None
+    reversal = (None if recovery_level is None or rest_sd <= 0
+                else direction * (task_level - recovery_level) / rest_sd)
+    reversed_ok = None if reversal is None else reversal >= MIN_RECOVERY_REVERSAL_SD
+    responsive = bool(separated and reversed_ok is not False)
+    return {
+        'baseline_logit': baseline, 'task_level_logit': task_level,
+        'limit_logit': (baseline + task_level) / 2.0, 'rest_sd_logit': rest_sd,
+        'separation_sd': separation, 'direction': direction,
+        'recovery_level_logit': recovery_level, 'reversal_sd': reversal, 'aba_confirmed': reversed_ok,
+        'responsive': responsive,
+        'status': 'ok' if responsive else ('drift_suspected' if separated else 'not_separated'),
+        'n_task_used': len(task_L), 'n_task_skipped': k,
+    }
+
+
+def rest_level_logit(rest_scores: list[float]) -> float | None:
+    """Resting level (baseline) on the log-odds scale: MEDIAN log-odds of the
+    rest blocks, so one odd block doesn't move it."""
+    return float(np.median([_logit(s) for s in rest_scores])) if rest_scores else None
+
+
+def personal_z_level(score: float | None, level_logit: float | None,
+                     sigma: float = None) -> float | None:
+    """z of a score against a log-odds resting level, in log-odds sigmas."""
+    if score is None or level_logit is None:
+        return None
+    return float((_logit(score) - level_logit) / (sigma or PERSONAL_SIGMA_LOGIT))
+
+
+def personal_decision_thresholds_logit(base: DecisionThresholds, level_logit: float,
+                                       sigma: float = None) -> DecisionThresholds:
+    """personal_decision_thresholds() on the log-odds scale: every limit is
+    sigmoid(level + k x sigma_logit), so it sits the same number of spreads
+    above rest whatever the device's absolute score range."""
+    s = sigma or PERSONAL_SIGMA_LOGIT
+    alert = inv_logit(level_logit + PERSONAL_K_ALERT * s)
+    brk = inv_logit(level_logit + PERSONAL_K_BREAK * s)
+    return replace(base, high_load_p=alert, cooldown_high_p=alert, break_p=brk,
+                   cooldown_low_p=min(alert, inv_logit(level_logit)))
+
+
+def task_response_z_logit(level_logit: float | None, task_scores: list[float],
+                          sigma: float = None) -> float | None:
+    """Onboarding responsiveness on the log-odds scale: mean task log-odds
+    above the resting level, in log-odds sigmas."""
+    if level_logit is None or not task_scores:
+        return None
+    return float((np.mean([_logit(s) for s in task_scores]) - level_logit) / (sigma or PERSONAL_SIGMA_LOGIT))
+
+
+def personal_z_logit(score: float | None, mu_rest: float | None,
+                     sigma: float = PERSONAL_SIGMA_LOGIT) -> float | None:
+    """Distance of `score` above this person's own rest, in log-odds sigmas."""
+    if score is None or mu_rest is None:
+        return None
+    return float((_logit(score) - _logit(mu_rest)) / sigma)
+
+
+def personal_decision_thresholds(base: DecisionThresholds, mu_rest: float,
+                                 sigma: float = PERSONAL_SIGMA_PRIOR) -> DecisionThresholds:
+    """All decision-state thresholds on the personal scale: high-load alert
+    (and "was high" for cooldown) at z >= PERSONAL_K_ALERT, micro-break at
+    z >= PERSONAL_K_BREAK, cooldown complete back at z <= 0 (own rest).
+    Persistence settings are unchanged from `base`."""
+    alert = min(1.0, mu_rest + PERSONAL_K_ALERT * sigma)
+    brk = min(1.0, mu_rest + PERSONAL_K_BREAK * sigma)
+    return replace(base, high_load_p=alert, cooldown_high_p=alert, break_p=brk,
+                   cooldown_low_p=min(alert, mu_rest))
+
+
+def personal_z(score: float | None, mu_rest: float | None, sigma: float = PERSONAL_SIGMA_PRIOR) -> float | None:
+    if score is None or mu_rest is None:
+        return None
+    return float((score - mu_rest) / sigma)
+
+
+def task_response_z(resting_scores: list[float], task_scores: list[float],
+                    sigma: float = PERSONAL_SIGMA_PRIOR) -> float | None:
+    """Onboarding responsiveness: how far the task blocks sit above own
+    rest, in sigma units. Below MIN_TASK_RESPONSE_Z the model is not
+    tracking load for this person/wearing -- on SAM40 such people had
+    chance-level EEG (eval AUC 0.53 vs 0.81; 9 of 10 below-chance people
+    caught -- paper/analysis/results/Z2_responsiveness_check.csv)."""
+    if not resting_scores or not task_scores:
+        return None
+    return float((np.mean(task_scores) - np.mean(resting_scores)) / sigma)
+
+
 def compute_states(series: pd.DataFrame, thresholds: DecisionThresholds = DecisionThresholds()) -> pd.DataFrame:
     """series: rows ordered by time, columns calibrated_p, spectral_slope, theta_ratio.
     Returns series with added boolean/flag columns for each trigger condition.
@@ -139,12 +391,11 @@ def compute_states(series: pd.DataFrame, thresholds: DecisionThresholds = Decisi
     df = series.reset_index(drop=True).copy()
     p = df.calibrated_p.to_numpy()
 
-    # 1. High Load Alert: P >= high_load_p for >= N consecutive blocks
-    above = p >= thresholds.high_load_p
-    run = np.zeros(len(p), dtype=int)
-    for i in range(len(p)):
-        run[i] = (run[i - 1] + 1) if (i > 0 and above[i]) else int(above[i])
-    df['high_load_alert'] = run >= thresholds.high_load_persistence_blocks
+    # 1. High Load Alert: at least k of the last n blocks at/above the limit (2 of 3)
+    above = (p >= thresholds.high_load_p).astype(int)
+    k, n = thresholds.high_load_k, thresholds.high_load_n
+    recent = np.array([above[max(0, i - n + 1): i + 1].sum() for i in range(len(p))], dtype=int)
+    df['high_load_alert'] = recent >= k
 
     # 2. Micro-Break Recommendation: P >= break_p sustained for >= N blocks
     above_break = p >= thresholds.break_p

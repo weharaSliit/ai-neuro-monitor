@@ -69,7 +69,8 @@ def _acquire_single_instance_lock(client_id: str):
 
 
 def connect_mqtt(broker: str, port: int, topic: str, on_message, client_id: str,
-                  username: str = None, password: str = None, ca_cert: str = None) -> mqtt.Client:
+                  username: str = None, password: str = None, ca_cert: str = None,
+                  session_expiry_sec: int = 0, resume: bool = False) -> mqtt.Client:
     """Connects, subscribes, and starts the network loop in a background
     thread. Caller owns calling .loop_stop()/.disconnect() on shutdown.
     Always CallbackAPIVersion.VERSION2 -- VERSION1 (paho-mqtt's implicit
@@ -78,31 +79,66 @@ def connect_mqtt(broker: str, port: int, topic: str, on_message, client_id: str,
     username/password/ca_cert are for EMQX Cloud Serverless, which
     requires TLS + auth on port 8883 (unlike the old local Mosquitto's
     plain-TCP/allow_anonymous setup) -- pass all three together, or omit
-    all three for a plain/anonymous connection (e.g. still-local testing)."""
+    all three for a plain/anonymous connection (e.g. still-local testing).
+
+    session_expiry_sec > 0 makes the broker keep this client's session for
+    that long after a disconnect (MQTT 5), queueing messages published
+    meanwhile and delivering them on reconnect -- so a brief bridge
+    reconnect delays data instead of losing it. Clean start on the FIRST
+    connect only, so a fresh process never replays a stale backlog. EMQX
+    queues QoS 0 messages for such sessions by default (mqueue_store_qos0).
+    0 (default) = the old behaviour: no session, anything published while
+    disconnected is lost. resume=True skips that first clean start too --
+    for a client recreated inside an already-running process, whose queued
+    messages are still wanted."""
     # Held for the client's lifetime via the attribute below -- garbage
     # collecting the fd would release the flock.
     lock_fh = _acquire_single_instance_lock(client_id)
+    persistent = session_expiry_sec > 0
 
     def on_connect(client, userdata, flags, reason_code, properties=None):
         status = "connected" if reason_code == 0 else f"connect failed (reason_code={reason_code})"
+        if persistent and reason_code == 0:
+            status += " (resumed session, queued messages follow)" if flags.session_present else " (new session)"
         print(f"[mqtt] {status}, subscribing to {topic}")
-        client.subscribe(topic)
+        client.subscribe(topic, qos=1 if persistent else 0)
 
-    client = mqtt.Client(client_id=client_id, callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
+    def on_disconnect(client, userdata, flags, reason_code, properties=None):
+        # "Session taken over" = another process connected with this same
+        # client_id (e.g. a second copy of this bridge, local or deployed).
+        print(f"[mqtt] disconnected (reason: {reason_code}) -- reconnecting")
+
+    if persistent:
+        from paho.mqtt.packettypes import PacketTypes
+        from paho.mqtt.properties import Properties
+        client = mqtt.Client(client_id=client_id, callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+                             protocol=mqtt.MQTTv5)
+        props = Properties(PacketTypes.CONNECT)
+        props.SessionExpiryInterval = int(session_expiry_sec)
+        client.reconnect_delay_set(min_delay=1, max_delay=5)
+    else:
+        client = mqtt.Client(client_id=client_id, callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
+        props = None
     client._instance_lock_fh = lock_fh
     client.on_connect = on_connect
+    client.on_disconnect = on_disconnect
     client.on_message = on_message
     if ca_cert:
         client.tls_set(ca_certs=ca_cert)
     if username:
         client.username_pw_set(username, password)
-    client.connect(broker, port, 60)
+    if persistent:
+        client.connect(broker, port, 60, properties=props,
+                       clean_start=False if resume else mqtt.MQTT_CLEAN_START_FIRST_ONLY)
+    else:
+        client.connect(broker, port, 60)
     client.loop_start()
     return client
 
 
-def post_json(url: str, payload: dict, headers: dict, timeout: float, label: str):
-    """POSTs payload, prints one status line, and returns the parsed JSON
+def post_json(url: str, payload: dict, headers: dict, timeout: float, label: str, verbose: bool = True):
+    """POSTs payload, prints one status line (the full response body only if
+    verbose, or on an error status), and returns the parsed JSON
     body on a 2xx response or None on any failure (network error or
     non-2xx) -- callers branch on None instead of each catching requests
     exceptions themselves."""
@@ -110,7 +146,8 @@ def post_json(url: str, payload: dict, headers: dict, timeout: float, label: str
     try:
         resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
         data = resp.json()
-        print(f"[{label}] {resp.status_code} {data}")
+        if verbose or not resp.ok:
+            print(f"[{label}] {resp.status_code} {data}")
         return data if resp.ok else None
     except Exception as e:
         # resp.json() failing (e.g. an empty/non-JSON body) previously only

@@ -7,14 +7,17 @@ from .channels import SFREQ
 
 
 def bandpass(data: np.ndarray, low: float = 0.5, high: float = 45.0,
-             fs: int = SFREQ, order: int = 4) -> np.ndarray:
-    """Zero-phase Butterworth band-pass, applied per channel. data: (n_channels, n_samples)."""
+             fs: int = SFREQ, order: int = 4, padlen: int | None = None) -> np.ndarray:
+    """Zero-phase Butterworth band-pass, applied per channel. data: (n_channels, n_samples).
+    padlen=None keeps scipy's default (~0.2 s) -- what training used on long
+    recordings; short live blocks pass a longer one (realtime/pipeline.py EDGE_PAD_SEC)."""
     nyq = fs / 2
     sos = butter(order, [low / nyq, high / nyq], btype='band', output='sos')
-    return sosfiltfilt(sos, data, axis=-1)
+    return sosfiltfilt(sos, data, axis=-1, padlen=padlen)
 
 
-def notch_filter(data: np.ndarray, freq: float = 50.0, fs: int = SFREQ, q: float = 30.0) -> np.ndarray:
+def notch_filter(data: np.ndarray, freq: float = 50.0, fs: int = SFREQ, q: float = 30.0,
+                 padlen: int | None = None) -> np.ndarray:
     """Remove powerline interference at `freq` Hz (50 or 60).
 
     NOTE: with this project's 0.5-45 Hz bandpass, 50/60 Hz is already
@@ -28,13 +31,14 @@ def notch_filter(data: np.ndarray, freq: float = 50.0, fs: int = SFREQ, q: float
         return data  # can't notch above Nyquist
     b, a = iirnotch(freq, q, fs)
     from scipy.signal import filtfilt
-    return filtfilt(b, a, data, axis=-1)
+    return filtfilt(b, a, data, axis=-1, padlen=padlen)
 
 
 def notch_then_bandpass(data: np.ndarray, notch_freq: float = 50.0, low: float = 0.5, high: float = 45.0,
-                         fs: int = SFREQ, order: int = 4) -> np.ndarray:
+                         fs: int = SFREQ, order: int = 4, padlen: int | None = None) -> np.ndarray:
     """Realistic acquisition order: notch powerline noise first, then bandpass."""
-    return bandpass(notch_filter(data, freq=notch_freq, fs=fs), low=low, high=high, fs=fs, order=order)
+    return bandpass(notch_filter(data, freq=notch_freq, fs=fs, padlen=padlen),
+                    low=low, high=high, fs=fs, order=order, padlen=padlen)
 
 
 def common_average_reference(data: np.ndarray) -> np.ndarray:
