@@ -42,20 +42,14 @@ export const SideDrawer = () => {
     closeDrawer();
   };
 
-  const u = (userId || '').toLowerCase();
-  const isAdmin = u === 'ojani' || u.includes('ojani') || u === 'admin' || u.includes('admin');
-
-  // Navigation Items (History & Baseline Calibration excluded)
+  // Navigation Items
   const navItems = [
     { id: 'Dashboard', label: 'Guide Home', icon: '🏠', tag: 'Main Hub' },
     { id: 'Methods', label: 'Relaxation Arcade', icon: '🌸', tag: 'Games & Drills' },
     { id: 'PerformanceOverview', label: 'Analytics & Overview', icon: '📈', tag: 'Live Stats' },
     { id: 'UserProfile', label: 'Relaxation Settings', icon: '⚙️', tag: 'Guide Preferences' },
+    { id: 'FusionPipeline', label: 'Fusion Pipeline', icon: '📡', tag: 'Live Telemetry' },
   ];
-
-  if (isAdmin) {
-    navItems.push({ id: 'FusionPipeline', label: 'Fusion Pipeline', icon: '📡', tag: 'Admin Live' });
-  }
 
   const isStress = stressState === 'stress';
   const statusColor = isStress ? '#EF4444' : '#10B981';
@@ -97,7 +91,7 @@ export const SideDrawer = () => {
               </View>
               <View style={styles.profileMeta}>
                 <Text style={[styles.userName, { color: isDark ? '#F8FAFC' : '#0F172A' }]} numberOfLines={1}>
-                  {isAdmin ? 'Ojani (Admin)' : username}
+                  {username}
                 </Text>
                 <View style={styles.statusRow}>
                   <View style={[styles.statusDot, { backgroundColor: statusColor }]} />

@@ -369,6 +369,63 @@ def get_latest_prediction(user_id: str, session_id: Optional[str] = None) -> Dic
     return {'has_live_packet': False}
 
 
+def get_latest_phenotyping_prediction(user_id: str) -> Dict[str, Any]:
+    """Read the latest prediction from phenotyping/predictions/{user_id}."""
+    target_uid = str(user_id).strip()
+    if not target_uid:
+        return {'has_live_packet': False}
+
+    try:
+        user_predictions = db.reference(f'phenotyping/predictions/{target_uid}').get()
+    except Exception as e:
+        print(f"[Firebase Warning] get_latest_phenotyping_prediction failed ({e}).")
+        return {'has_live_packet': False}
+
+    if not isinstance(user_predictions, dict):
+        return {'has_live_packet': False}
+
+    prediction_keys = {
+        'label',
+        'stress_score',
+        ' stress_score',
+        'stress_probability',
+        'probability'
+    }
+
+    def find_latest(node: Any, path: Tuple[str, ...] = ()) -> Optional[Tuple[Dict[str, Any], Tuple[str, ...]]]:
+        if not isinstance(node, dict):
+            return None
+        if prediction_keys.intersection(node):
+            return node, path
+
+        latest = None
+        latest_order = None
+        for key, value in node.items():
+            if key in {'current_session_id', 'current_user_id', 'session_started', 'session_ended'}:
+                continue
+            candidate = find_latest(value, path + (str(key),))
+            if candidate is None:
+                continue
+            packet, candidate_path = candidate
+            timestamp = _packet_timestamp(packet)
+            order = (timestamp, tuple(_sort_key(part) for part in candidate_path))
+            if latest_order is None or order > latest_order:
+                latest = candidate
+                latest_order = order
+        return latest
+
+    latest = find_latest(user_predictions)
+    if latest is None:
+        return {'has_live_packet': False}
+
+    packet, path = latest
+    result = dict(packet)
+    result['has_live_packet'] = True
+    if path:
+        result['active_session_id'] = path[0]
+    return result
+
+
 def save_intervention_session(user_id: str, session_id: str, session_data: Dict[str, Any]):
     try:
         ref = _intervention_sessions_ref(f'{user_id}/{session_id}')
@@ -510,3 +567,19 @@ def get_bandit_distributions(user_id: str) -> Dict[int, Dict[str, Dict[str, floa
     except Exception as e:
         print(f"[Firebase Warning] get_bandit_distributions failed ({e}).")
         return {}
+
+
+def save_closed_loop_state(user_id: str, loop_state: Dict[str, Any]):
+    try:
+        _intervention_ref(f'closed_loop_state/{user_id}').set(loop_state)
+    except Exception as e:
+        print(f"[Firebase Warning] save_closed_loop_state failed ({e}).")
+
+
+def get_closed_loop_state(user_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        data = _intervention_ref(f'closed_loop_state/{user_id}').get()
+        return data if isinstance(data, dict) else None
+    except Exception as e:
+        print(f"[Firebase Warning] get_closed_loop_state failed ({e}).")
+        return None

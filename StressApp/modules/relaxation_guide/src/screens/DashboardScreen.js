@@ -251,6 +251,9 @@ export const DashboardScreen = () => {
     simMode, updateSimMode,
     isSafetyOverride, isAlertTriggered, telemetryMessage,
     isCalibrated, hasLivePacket,
+    // Phenotyping State
+    phenoSensorEnabled, phenoCalibStatus, phenoStressLabel,
+    phenoStressProbability, hasLivePhenoPacket, openPhenoSensorSettings,
     currentRecommendation, setCurrentRecommendation, setPreInterventionLabel, setSelectedSubOption
   } = useContext(AppContext);
 
@@ -259,8 +262,6 @@ export const DashboardScreen = () => {
   const [currentTime, setCurrentTime] = useState(new Date());
 
   const isDark = isDarkMode ?? theme?.isDark ?? true;
-  const u = (userId || '').toLowerCase();
-  const isAdmin = u === 'ojani' || u.includes('ojani') || u === 'admin' || u.includes('admin');
 
   // Entrance animations
   const fadeIn = useRef(new Animated.Value(0)).current;
@@ -292,14 +293,16 @@ export const DashboardScreen = () => {
   const triggerIntervention = async () => {
     setLoading(true);
     try {
-      setPreInterventionLabel(stressState);
       const recommendation = await apiService.getIntervention(userId, {
         user_id: userId,
         timestamp: Date.now() / 1000,
         fused_stress_label: stressState,
         stress_probability: stressProbability,
+        pheno_stress_label: hasLivePhenoPacket ? phenoStressLabel : null,
+        pheno_stress_probability: hasLivePhenoPacket ? phenoStressProbability : null,
         seconds_since_last_packet: 0.0
       });
+      setPreInterventionLabel(recommendation?.context_stress_label || stressState);
       setCurrentRecommendation(recommendation);
       if (recommendation?.selected_sub_option) {
         setSelectedSubOption(recommendation.selected_sub_option);
@@ -315,12 +318,50 @@ export const DashboardScreen = () => {
 
   const handleLaunchFromModal = () => {
     setShowInterventionModal(false);
+    if (currentRecommendation?.selected_sub_option) {
+      setSelectedSubOption(currentRecommendation.selected_sub_option);
+    }
     setCurrentScreen('GamePlayer');
   };
 
   const sc = getStateConfig(stressState, stressProbability, rawLabel, theme, isCalibrated, hasLivePacket);
   const greeting = currentTime.getHours() < 12 ? 'Good Morning' : currentTime.getHours() < 18 ? 'Good Afternoon' : 'Good Evening';
   const timeStr = currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  // Phenotyping UI badge logic
+  const isPhenoCalibDone = !!phenoCalibStatus?.isCalibrated;
+  let phenoBadgeColor = '#EF4444';
+  let phenoBadgeBg = 'rgba(239,68,68,0.14)';
+  let phenoBadgeText = 'Sensor Off';
+  let phenoProbText = '--';
+  let phenoSubText = 'Tap to turn on in settings';
+
+  if (!phenoSensorEnabled) {
+    phenoBadgeColor = '#EF4444';
+    phenoBadgeBg = 'rgba(239,68,68,0.14)';
+    phenoBadgeText = 'Sensor Off';
+    phenoProbText = '--';
+    phenoSubText = 'Tap to turn on in settings';
+  } else if (!isPhenoCalibDone) {
+    phenoBadgeColor = '#0EA5E9';
+    phenoBadgeBg = 'rgba(14,165,233,0.14)';
+    phenoBadgeText = 'Calibrating';
+    phenoProbText = `${phenoCalibStatus?.displayDays || 'Day 6 of 7'}`;
+    phenoSubText = `${username || userId}'s Baseline · ${phenoCalibStatus?.title || 'Calibrating'} (${phenoCalibStatus?.progressPct || 86}%)`;
+  } else if (hasLivePhenoPacket) {
+    const isPhenoStressed = (phenoStressLabel || '').toLowerCase().includes('stress');
+    phenoBadgeColor = isPhenoStressed ? '#EF4444' : '#10B981';
+    phenoBadgeBg = isPhenoStressed ? 'rgba(239,68,68,0.14)' : 'rgba(16,185,129,0.14)';
+    phenoBadgeText = (phenoStressLabel || 'Normal').toUpperCase();
+    phenoProbText = Number(phenoStressProbability).toFixed(2);
+    phenoSubText = 'Stress score';
+  } else {
+    phenoBadgeColor = '#F59E0B';
+    phenoBadgeBg = 'rgba(245,158,11,0.14)';
+    phenoBadgeText = 'Awaiting';
+    phenoProbText = '--';
+    phenoSubText = `${username || userId}'s model active · awaiting typing`;
+  }
 
   return (
     <View style={[s.container, { backgroundColor: theme.bgPrimary }]}>
@@ -345,75 +386,104 @@ export const DashboardScreen = () => {
           <View style={[s.welcomeRow, { backgroundColor: isDark ? 'rgba(30, 41, 59, 0.75)' : 'rgba(255, 255, 255, 0.85)', borderColor: theme.border }]}>
             <View style={s.welcomeLeft}>
               <Text style={[s.greetingTxt, { color: theme.textMuted }]}>{greeting}</Text>
-              <Text style={[s.nameTxt, { color: theme.textPrimary }]}>{isAdmin ? 'Ojani (Admin)' : username}</Text>
+              <Text style={[s.nameTxt, { color: theme.textPrimary }]}>{username}</Text>
               <View style={s.liveChip}>
                 <PulseDot color={sc.color} />
-                <Text style={[s.liveChipTxt, { color: sc.color }]}>{isCalibrated ? (hasLivePacket ? 'System Active' : 'Awaiting Live Stream') : 'Waiting for Calibration'}</Text>
+                <Text style={[s.liveChipTxt, { color: sc.color }]}>
+                  {hasLivePacket ? 'System Active' : 'Awaiting Live Stream'}
+                </Text>
               </View>
             </View>
             <View style={s.welcomeRight}>
               <Text style={[s.clockTxt, { color: isDark ? '#A5B4FC' : '#4F46E5' }]}>{timeStr}</Text>
               <View style={[s.idPill, { backgroundColor: isDark ? 'rgba(15, 23, 42, 0.6)' : 'rgba(241, 245, 249, 0.8)', borderColor: theme.border }]}>
-                <Text style={[s.idPillTxt, { color: theme.textMuted }]}>{isAdmin ? '🛡️ Admin (Ojani)' : `🆔 ${userId}`}</Text>
+                <Text style={[s.idPillTxt, { color: theme.textMuted }]}>{`🆔 ${userId}`}</Text>
               </View>
             </View>
           </View>
 
-          {/* ═══════════ LIVE TELEMETRY STREAMS ═══════════ */}
+          {/* ═══════════ SENSOR ENABLE PROMPT (IF DISABLED) ═══════════ */}
+          {!phenoSensorEnabled && (
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={openPhenoSensorSettings}
+              style={{
+                backgroundColor: isDark ? 'rgba(239, 68, 68, 0.15)' : '#FEF2F2',
+                borderWidth: 1,
+                borderColor: isDark ? 'rgba(239, 68, 68, 0.4)' : '#FECACA',
+                borderRadius: 14,
+                padding: 12,
+                marginBottom: 12,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 12,
+              }}
+            >
+              <Text style={{ fontSize: 24 }}>⚙️</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 13, fontWeight: '800', color: isDark ? '#FCA5A5' : '#DC2626' }}>
+                  PhenoCare Sensor is Off
+                </Text>
+                <Text style={{ fontSize: 11, color: isDark ? '#E2E8F0' : '#475569', marginTop: 2 }}>
+                  Tap here to turn on the accessibility sensor and begin your 7-day calibration.
+                </Text>
+              </View>
+              <View style={{ backgroundColor: '#DC2626', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8 }}>
+                <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '800' }}>Enable</Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
           <View style={s.sectionHeaderRow}>
             <Text style={[s.sectionTitle, { color: theme.textPrimary }]}>Live Telemetry Streams</Text>
             <View style={s.liveBadgePill}>
-              <View style={[s.liveBadgeDot, { backgroundColor: sc.color }]} />
-              <Text style={[s.liveBadgeTxt, { color: sc.color }]}>LIVE</Text>
+              <View style={[s.liveBadgeDot, { backgroundColor: hasLivePacket || hasLivePhenoPacket ? (theme.success || '#10B981') : '#F59E0B' }]} />
+              <Text style={[s.liveBadgeTxt, { color: hasLivePacket || hasLivePhenoPacket ? (theme.success || '#10B981') : '#F59E0B' }]}>
+                {hasLivePacket || hasLivePhenoPacket ? 'LIVE' : 'AWAITING'}
+              </Text>
             </View>
           </View>
 
-          <View style={{ gap: 8, marginBottom: 12 }}>
-            {/* 🫀 Physiological Stream */}
-            <View style={[s.streamCard, { backgroundColor: isDark ? 'rgba(30, 41, 59, 0.7)' : 'rgba(255, 255, 255, 0.85)', borderColor: theme.border }]}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
+            {/* 🫀 Physiological Stream — Left Card */}
+            <View style={[s.streamCard, { flex: 1, backgroundColor: isDark ? 'rgba(30, 41, 59, 0.7)' : 'rgba(255, 255, 255, 0.85)', borderColor: theme.border }]}>
+              <View style={{ alignItems: 'center', gap: 6 }}>
                 <View style={[s.streamIconBadge, { backgroundColor: 'rgba(239, 68, 68, 0.15)' }]}>
-                  <Text style={{ fontSize: 20 }}>🫀</Text>
+                  <Text style={{ fontSize: 22 }}>🫀</Text>
                 </View>
-                <View>
-                  <Text style={{ fontSize: 13, fontWeight: '800', color: theme.textPrimary }}>Physiological Stream</Text>
-                  <Text style={{ fontSize: 11, color: theme.textMuted, marginTop: 1 }}>Smart Ring + Earbud</Text>
-                </View>
-              </View>
-              <View style={{ alignItems: 'flex-end', gap: 2 }}>
-                <View style={[s.labelPill, { backgroundColor: sc.bgTint }]}>
-                  <Text style={{ fontSize: 11, fontWeight: '800', color: sc.color }}>
+                <Text style={{ fontSize: 12, fontWeight: '800', color: theme.textPrimary, textAlign: 'center' }} numberOfLines={1}>Physiological</Text>
+                <View style={[s.labelPill, { backgroundColor: hasLivePacket ? sc.bgTint : 'rgba(245,158,11,0.14)' }]}>
+                  <Text style={{ fontSize: 10, fontWeight: '800', color: hasLivePacket ? sc.color : '#F59E0B' }}>
                     {hasLivePacket ? sc.displayLabel : 'Awaiting'}
                   </Text>
                 </View>
-                <Text style={{ fontSize: 11, fontWeight: '700', color: isDark ? '#94A3B8' : '#64748B', marginTop: 2 }}>
-                  Probability: <Text style={{ color: isDark ? '#F8FAFC' : '#0F172A', fontWeight: '900' }}>{hasLivePacket ? (typeof sc.pct === 'number' ? `${sc.pct}%` : sc.pct) : '--'}</Text>
-                </Text>
+                <Text style={{ fontSize: 10, color: theme.textMuted, textAlign: 'center' }} numberOfLines={1}>Smart Ring + Earbud</Text>
               </View>
             </View>
 
-            {/* 📱 Phenotyping Stream */}
-            <View style={[s.streamCard, { backgroundColor: isDark ? 'rgba(30, 41, 59, 0.7)' : 'rgba(255, 255, 255, 0.85)', borderColor: theme.border }]}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            {/* 📱 Phenotyping Stream — Right Card */}
+            <TouchableOpacity
+              activeOpacity={!phenoSensorEnabled ? 0.7 : 1}
+              onPress={() => {
+                if (!phenoSensorEnabled && openPhenoSensorSettings) {
+                  openPhenoSensorSettings();
+                }
+              }}
+              style={[s.streamCard, { flex: 1, backgroundColor: isDark ? 'rgba(30, 41, 59, 0.7)' : 'rgba(255, 255, 255, 0.85)', borderColor: theme.border }]}
+            >
+              <View style={{ alignItems: 'center', gap: 6 }}>
                 <View style={[s.streamIconBadge, { backgroundColor: 'rgba(56, 189, 248, 0.15)' }]}>
-                  <Text style={{ fontSize: 20 }}>📱</Text>
+                  <Text style={{ fontSize: 22 }}>📱</Text>
                 </View>
-                <View>
-                  <Text style={{ fontSize: 13, fontWeight: '800', color: theme.textPrimary }}>Phenotyping Stream</Text>
-                  <Text style={{ fontSize: 11, color: theme.textMuted, marginTop: 1 }}>Behavioral & Smartphone</Text>
-                </View>
-              </View>
-              <View style={{ alignItems: 'flex-end', gap: 2 }}>
-                <View style={[s.labelPill, { backgroundColor: sc.bgTint }]}>
-                  <Text style={{ fontSize: 11, fontWeight: '800', color: sc.color }}>
-                    {hasLivePacket ? sc.displayLabel : 'Awaiting'}
+                <Text style={{ fontSize: 12, fontWeight: '800', color: theme.textPrimary, textAlign: 'center' }} numberOfLines={1}>Phenotyping</Text>
+                <View style={[s.labelPill, { backgroundColor: phenoBadgeBg }]}>
+                  <Text style={{ fontSize: 10, fontWeight: '800', color: phenoBadgeColor }}>
+                    {phenoBadgeText}
                   </Text>
                 </View>
-                <Text style={{ fontSize: 11, fontWeight: '700', color: isDark ? '#94A3B8' : '#64748B', marginTop: 2 }}>
-                  Probability: <Text style={{ color: isDark ? '#F8FAFC' : '#0F172A', fontWeight: '900' }}>{hasLivePacket ? (typeof sc.pct === 'number' ? `${sc.pct}%` : sc.pct) : '--'}</Text>
-                </Text>
+                <Text style={{ fontSize: 10, color: theme.textMuted, textAlign: 'center' }} numberOfLines={1}>Behavioral Data</Text>
               </View>
-            </View>
+            </TouchableOpacity>
           </View>
 
           {/* ═══════════ QUICK ACTION GRID ═══════════ */}
@@ -425,10 +495,8 @@ export const DashboardScreen = () => {
               { id: 'PerformanceOverview', icon: '📊', label: 'Analytics', sub: 'Analytics & Trends', tint: 'rgba(16,185,129,0.14)', accent: '#10B981' },
               { id: 'UserProfile', icon: '👤', label: 'User Profile', sub: 'Account & XP', tint: 'rgba(236,72,153,0.14)', accent: '#EC4899' },
               { id: 'CommonHome', icon: '🏠', label: 'Main Home', sub: 'Return to App', tint: 'rgba(59,130,246,0.14)', accent: '#3B82F6' },
-              ...(isAdmin ? [
-                { id: 'History', icon: '📈', label: 'History', sub: 'Recovery', tint: 'rgba(16,185,129,0.14)', accent: '#10B981' },
-                { id: 'FusionPipeline', icon: '📡', label: 'Pipeline', sub: 'Telemetry', tint: 'rgba(139,92,246,0.14)', accent: '#8B5CF6' }
-              ] : [])
+              { id: 'History', icon: '📈', label: 'History', sub: 'Recovery', tint: 'rgba(16,185,129,0.14)', accent: '#10B981' },
+              { id: 'FusionPipeline', icon: '📡', label: 'Pipeline', sub: 'Telemetry', tint: 'rgba(139,92,246,0.14)', accent: '#8B5CF6' }
             ].map(item => (
               <ActionCard
                 key={item.id}
@@ -620,11 +688,11 @@ const s = StyleSheet.create({
 
   /* ── Stream Cards ── */
   streamCard: {
-    flexDirection: 'row',
+    flexDirection: 'column',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 14,
     borderRadius: 16,
     borderWidth: 1,
     elevation: 3,

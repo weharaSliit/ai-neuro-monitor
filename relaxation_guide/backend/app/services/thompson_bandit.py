@@ -8,7 +8,7 @@ Blends sampled values with user preference scores using 70/30 weight in under 20
 import time
 import numpy as np
 from typing import Dict, Tuple, List, Optional
-from app.config import TECHNIQUES, WEIGHT_PHYSIO, WEIGHT_PREF, HABITUATING_PENALTY_FACTOR
+from app.config import TECHNIQUES, WEIGHT_PHYSIO, WEIGHT_PREF, HABITUATING_PENALTY_FACTOR, HABITUATING_USAGE_THRESHOLD
 from app.services.preference_learner import preference_learner
 from app.database.db_manager import db_manager
 from app.services import firebase_service
@@ -84,9 +84,9 @@ class ThompsonBandit:
             # 70/30 Blending Formula
             blended = (WEIGHT_PHYSIO * s_physio) + (WEIGHT_PREF * s_pref)
 
-            # Habituation Penalty Check (> 5 uses in 7 days)
+            # Habituation Penalty Check (> threshold uses in 7 days)
             uses_count = usage_history.get(tech_id, 0)
-            if uses_count > 5:
+            if uses_count > HABITUATING_USAGE_THRESHOLD:
                 blended *= HABITUATING_PENALTY_FACTOR # 10% penalty
 
             all_blended_scores[tech_id] = blended
