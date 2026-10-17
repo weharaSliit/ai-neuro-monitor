@@ -4,6 +4,7 @@ import { MultiLineChart } from './charts';
 import { useFirebaseValue } from '../hooks/useData';
 import { STIM_PROFILES, mmss, useStimulator } from '../hooks/useStimulator';
 import { sendStimulatorCommand } from '../lib/firebase';
+import { isTestAccount } from '../lib/testAccounts';
 
 // Live stimulator (backend/simulation/live_stimulator.py, run on a laptop):
 // simulated headband + ring data for the user who is ALREADY logged in with
@@ -55,7 +56,8 @@ export default function StimulatorPanel({ now }) {
   const hbAgo = seenAgo(headband?.last_seen); const ringAgo = seenAgo(ringDev?.last_seen);
   const hbOn = hbAgo != null && hbAgo < FRESH_SEC; const ringOn = ringAgo != null && ringAgo < FRESH_SEC;
   const realOn = !stim.running && (hbOn || ringOn);
-  const canStart = stim.online && !stim.running && Boolean(loggedIn);
+  const testUser = isTestAccount(loggedIn);
+  const canStart = stim.online && !stim.running && Boolean(loggedIn) && testUser;
 
   const send = async (cmd) => {
     setBusy(true); setError(null);
@@ -85,8 +87,9 @@ export default function StimulatorPanel({ now }) {
               <button type="button" className="link" onClick={copy}>{copied ? 'copied' : 'copy'}</button>
               {stim.online ? ' · connected.' : ' · waiting for it (turns green a few seconds after it starts).'}
             </Check>
-            <Check ok={Boolean(loggedIn)} title="2. Log in on StressApp with the devices">
-              {loggedIn ? <>Logged in: <b>{loggedIn}</b>{loggedSession ? ` · ${loggedSession.replace('session_', '')}` : ''}. The simulated data go to this user; the user isn&apos;t changed.</>
+            <Check ok={Boolean(loggedIn) && testUser} warn={Boolean(loggedIn) && !testUser} title="2. Log in with a TEST account (sim_… or mp_…)">
+              {loggedIn && !testUser ? <><b>{loggedIn}</b> is a real account. The simulation won&apos;t run for it: it would replace that person&apos;s calibration and add simulated readings to their history. Log in on the website or the app with a test account instead.</>
+                : loggedIn ? <>Logged in: <b>{loggedIn}</b>{loggedSession ? ` · ${loggedSession.replace('session_', '')}` : ''}. The simulated data go to this user; the user isn&apos;t changed.</>
                 : 'Nobody is logged in with the devices yet. The stimulator only streams for the logged-in user.'}
             </Check>
             <Check ok={!realOn} warn={realOn} title="3. Switch the real headband and ring off">
@@ -107,7 +110,7 @@ export default function StimulatorPanel({ now }) {
                 </label>
                 <label className="muted"><input type="checkbox" checked={recalibrate} onChange={(e) => setRecalibrate(e.target.checked)} /> recalibrate this user first</label>
                 <button type="button" className="btn" onClick={() => send('start')} disabled={busy || !canStart}
-                  title={canStart ? undefined : 'Complete steps 1 and 2 first'}>{busy ? 'Sending…' : 'Start'}</button>
+                  title={canStart ? undefined : 'Complete steps 1 and 2 first (the user must be a test account)'}>{busy ? 'Sending…' : 'Start'}</button>
               </div>
               {recalibrate ? 'Their baseline and high-load thresholds are recalibrated with the simulated data (about 17 min), then the live scenario starts.'
                 : 'Their current thresholds are kept; the live scenario starts at once.'}
