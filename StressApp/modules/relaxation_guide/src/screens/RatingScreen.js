@@ -20,23 +20,12 @@ import { checkNewlyUnlockedBadges } from '../utils/badgeUtils';
 
 const { width } = Dimensions.get('window');
 
-const SAM_AROUSAL_LEVELS = [
-  { val: 1, emoji: '🧘', label: 'Deeply Calm', color: '#10B981' },
-  { val: 2, emoji: '😌', label: 'Very Relaxed', color: '#10B981' },
-  { val: 3, emoji: '🙂', label: 'Peaceful', color: '#34D399' },
-  { val: 4, emoji: '😐', label: 'Mildly Calm', color: '#38BDF8' },
-  { val: 5, emoji: '😐', label: 'Neutral', color: '#60A5FA' },
-  { val: 6, emoji: '😕', label: 'Slightly Tense', color: '#FBBF24' },
-  { val: 7, emoji: '😟', label: 'Moderate Stress', color: '#F59E0B' },
-  { val: 8, emoji: '😫', label: 'High Stress', color: '#F87171' },
-  { val: 9, emoji: '😱', label: 'Extreme Anxiety', color: '#EF4444' },
-];
-
-const SUS_QUESTIONS = [
-  { id: 'q1', icon: '🎮', text: '1. The relaxation game was easy and engaging to follow.' },
-  { id: 'q2', icon: '🌊', text: '2. The visual biofeedback helped me calm down.' },
-  { id: 'q3', icon: '📱', text: '3. The app interface felt fast, smooth, and responsive.' },
-  { id: 'q4', icon: '✨', text: '4. I felt zero mental frustration during the session.' },
+const FEEDBACK_LEVELS = [
+  { val: 1, emoji: '😫', label: 'Still very stressed', color: '#EF4444' },
+  { val: 2, emoji: '😕', label: 'Slightly better', color: '#F59E0B' },
+  { val: 3, emoji: '😐', label: 'Neutral', color: '#60A5FA' },
+  { val: 4, emoji: '🙂', label: 'Calm', color: '#34D399' },
+  { val: 5, emoji: '😌', label: 'Deeply relaxed', color: '#10B981' },
 ];
 
 export const RatingScreen = () => {
@@ -49,9 +38,7 @@ export const RatingScreen = () => {
   const { theme } = useContext(ThemeContext);
 
   // States
-  const [postArousal, setPostArousal] = useState(2); // Post-SAM Arousal (1-9)
-  const [postValence, setPostValence] = useState(8);
-  const [susAnswers, setSusAnswers] = useState({ q1: 5, q2: 5, q3: 5, q4: 4 });
+  const [feedback, setFeedback] = useState(null); // 1-5 emoji rating, chosen by the user
   const [submitting, setSubmitting] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false); // Controls Thank You screen
 
@@ -69,27 +56,20 @@ export const RatingScreen = () => {
     ).start();
   }, []);
 
-  // Pre-session arousal estimate (from Stroop test or baseline)
-  const preArousalEstimate = preInterventionLabel === 'high_stress' ? 8.5 : preInterventionLabel === 'stress' ? 7.5 : 4.0;
-  const arousalDelta = (postArousal - preArousalEstimate).toFixed(1);
-
-  // System Usability Scale (SUS) Score out of 100
-  const totalSusRaw = Object.values(susAnswers).reduce((a, b) => a + b, 0);
-  const susScorePct = Math.round((totalSusRaw / 20) * 100);
-
-  const selectedSam = SAM_AROUSAL_LEVELS.find((l) => l.val === postArousal) || SAM_AROUSAL_LEVELS[1];
+  const selectedLevel = FEEDBACK_LEVELS.find((l) => l.val === feedback) || null;
 
   const handleSubmit = async () => {
+    if (!feedback) return;
     setSubmitting(true);
     try {
       const techId = currentRecommendation?.technique_id || selectedSubOption?.id || 'water_lily_pond';
       const subId = selectedSubOption?.id || techId;
 
-      const mappedRating = postArousal <= 2 ? 5 : postArousal <= 4 ? 4 : postArousal <= 6 ? 3 : postArousal <= 7 ? 2 : 1;
+      const mappedRating = feedback;
 
       await apiService.submitRating(userId, techId, subId, mappedRating);
 
-      let postState = postArousal <= 4 ? 'normal' : 'stress';
+      let postState = feedback >= 4 ? 'normal' : 'stress';
       setPostInterventionLabel(postState);
 
       const clusterId = currentRecommendation?.context_cluster_id ?? 0;
@@ -104,11 +84,6 @@ export const RatingScreen = () => {
         sub_option_id: subId,
         pre_label: preInterventionLabel || 'stress',
         post_label: postState,
-        pre_arousal: preArousalEstimate,
-        post_arousal: postArousal,
-        arousal_delta: arousalDelta,
-        post_valence: postValence,
-        sus_score: susScorePct,
         star_rating: mappedRating
       };
       
@@ -144,7 +119,7 @@ export const RatingScreen = () => {
   return (
     <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
       <AmbientBackground />
-      <Header title="Research Evaluation" showBack onBack={() => setCurrentScreen('Dashboard')} />
+      <Header title="Feedback" showBack onBack={() => setCurrentScreen('Dashboard')} />
 
       {/* ─── THANK YOU COMPLETION SCREEN ─── */}
       {isSubmitted ? (
@@ -153,7 +128,7 @@ export const RatingScreen = () => {
             <Text style={styles.thankYouEmoji}>🎉</Text>
             <Text style={styles.thankYouTitle}>THANK YOU!</Text>
             <Text style={styles.thankYouSub}>
-              Your feedback has been recorded successfully for the research study database.
+              Your feedback has been recorded.
             </Text>
 
             <View style={styles.xpPill}>
@@ -175,113 +150,52 @@ export const RatingScreen = () => {
       ) : (
         /* ─── SURVEY FORM ─── */
         <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
-          {/* Header Hero Banner */}
-          <Animated.View style={[styles.heroCard, { opacity: fadeAnim }]}>
-            <LinearGradient
-              colors={['#1E1B4B', '#312E81', '#4338CA']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.heroGradient}
-            >
-              <Text style={styles.heroBadge}>🏆 RESEARCH USER STUDY (N=20)</Text>
-              <Text style={styles.heroTitle}>Post-Session Evaluation</Text>
-              <Text style={styles.heroSub}>
-                Rate your immediate affect shift and app usability to submit your feedback.
-              </Text>
-            </LinearGradient>
-          </Animated.View>
-
-          {/* ─── SECTION 1: SAM STRESS AROUSAL SCALE ─── */}
+          {/* ─── FEEDBACK: 5 EMOJI RATING ─── */}
           <View style={[styles.card, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
             <View style={styles.cardHeaderRow}>
-              <Text style={styles.cardHeaderIcon}>🧘</Text>
+              <Text style={styles.cardHeaderIcon}>⭐</Text>
               <View>
-                <Text style={[styles.cardTitle, { color: theme.textPrimary }]}>1. Self-Assessment Manikin (SAM)</Text>
-                <Text style={[styles.cardSub, { color: theme.textMuted }]}>How stressed or calm do you feel RIGHT NOW?</Text>
+                <Text style={[styles.cardTitle, { color: theme.textPrimary }]}>How do you feel now?</Text>
+                <Text style={[styles.cardSub, { color: theme.textMuted }]}>Tap one emoji (1 to 5 stars)</Text>
               </View>
             </View>
 
-            {/* Avatar Feedback Display */}
-            <View style={[styles.samAvatarBox, { borderColor: selectedSam.color }]}>
-              <Text style={styles.samEmoji}>{selectedSam.emoji}</Text>
-              <Text style={[styles.samLabelTxt, { color: selectedSam.color }]}>
-                Level {selectedSam.val}: {selectedSam.label}
-              </Text>
-            </View>
-
-            {/* 1-9 Arousal Grid Selector */}
-            <View style={styles.arousalGrid}>
-              {SAM_AROUSAL_LEVELS.map((item) => {
-                const isSelected = postArousal === item.val;
+            <View style={styles.emojiRow}>
+              {FEEDBACK_LEVELS.map((item) => {
+                const isSelected = feedback === item.val;
                 return (
                   <TouchableOpacity
                     key={item.val}
                     style={[
-                      styles.arousalPill,
+                      styles.emojiBtn,
                       { borderColor: isSelected ? item.color : '#334155' },
-                      isSelected && { backgroundColor: item.color }
+                      isSelected && { backgroundColor: `${item.color}33` }
                     ]}
-                    onPress={() => setPostArousal(item.val)}
+                    onPress={() => setFeedback(item.val)}
                     activeOpacity={0.8}
                   >
-                    <Text style={[styles.arousalPillTxt, isSelected && { color: '#FFFFFF', fontWeight: '900' }]}>
-                      {item.val}
+                    <Text style={[styles.emojiTxt, !isSelected && feedback !== null && { opacity: 0.45 }]}>
+                      {item.emoji}
+                    </Text>
+                    <Text style={[styles.emojiStars, { color: isSelected ? item.color : theme.textMuted }]}>
+                      {item.val}★
                     </Text>
                   </TouchableOpacity>
                 );
               })}
             </View>
-            <View style={styles.scaleLegendRow}>
-              <Text style={{ fontSize: 11, color: '#10B981', fontWeight: '700' }}>1 = Extremely Calm</Text>
-              <Text style={{ fontSize: 11, color: '#EF4444', fontWeight: '700' }}>9 = Extreme Stress</Text>
-            </View>
-          </View>
 
-          {/* ─── SECTION 2: SYSTEM USABILITY SCALE (SUS) ─── */}
-          <View style={[styles.card, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
-            <View style={styles.cardHeaderRow}>
-              <Text style={styles.cardHeaderIcon}>⭐</Text>
-              <View>
-                <Text style={[styles.cardTitle, { color: theme.textPrimary }]}>2. System Usability Scale (SUS)</Text>
-                <Text style={[styles.cardSub, { color: theme.textMuted }]}>Rate app quality & ease of use (1 = Poor, 5 = Excellent):</Text>
-              </View>
-            </View>
-
-            {SUS_QUESTIONS.map((q) => (
-              <View key={q.id} style={styles.susQuestionCard}>
-                <Text style={[styles.susQuestionTxt, { color: theme.textPrimary }]}>
-                  {q.icon} {q.text}
-                </Text>
-                <View style={styles.starPillRow}>
-                  {[1, 2, 3, 4, 5].map((starVal) => {
-                    const isStarSelected = susAnswers[q.id] === starVal;
-                    return (
-                      <TouchableOpacity
-                        key={starVal}
-                        style={[
-                          styles.starPill,
-                          isStarSelected && styles.starPillSelected
-                        ]}
-                        onPress={() => setSusAnswers((prev) => ({ ...prev, [q.id]: starVal }))}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={[styles.starPillTxt, isStarSelected && styles.starPillTxtSelected]}>
-                          {starVal}★
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              </View>
-            ))}
+            <Text style={[styles.emojiLabel, { color: selectedLevel ? selectedLevel.color : theme.textMuted }]}>
+              {selectedLevel ? selectedLevel.label : 'Select your feedback'}
+            </Text>
           </View>
 
           {/* SUBMIT BUTTON */}
           <Animated.View style={{ transform: [{ scale: pulseAnim }], width: '100%' }}>
             <TouchableOpacity
-              style={styles.submitBtnWrapper}
+              style={[styles.submitBtnWrapper, !feedback && { opacity: 0.5 }]}
               onPress={handleSubmit}
-              disabled={submitting}
+              disabled={submitting || !feedback}
               activeOpacity={0.85}
             >
               <LinearGradient
@@ -293,7 +207,7 @@ export const RatingScreen = () => {
                 {submitting ? (
                   <ActivityIndicator color="#FFFFFF" size="small" />
                 ) : (
-                  <Text style={styles.submitBtnTxt}>SUBMIT VALIDATION FEEDBACK ▶</Text>
+                  <Text style={styles.submitBtnTxt}>SUBMIT FEEDBACK ▶</Text>
                 )}
               </LinearGradient>
             </TouchableOpacity>
@@ -377,35 +291,6 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0.5,
   },
-  heroCard: {
-    width: '100%',
-    borderRadius: 16,
-    overflow: 'hidden',
-    marginBottom: 10,
-    elevation: 4,
-  },
-  heroGradient: {
-    padding: 14,
-    borderRadius: 16,
-  },
-  heroBadge: {
-    color: '#FDE68A',
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 1,
-    marginBottom: 4,
-  },
-  heroTitle: {
-    color: '#FFFFFF',
-    fontSize: 20,
-    fontWeight: '900',
-    marginBottom: 2,
-  },
-  heroSub: {
-    color: '#CBD5E1',
-    fontSize: 12,
-    lineHeight: 16,
-  },
   card: {
     borderRadius: 16,
     padding: 14,
@@ -485,6 +370,33 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     marginBottom: 6,
+  },
+  emojiRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 6,
+    marginTop: 4,
+  },
+  emojiBtn: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderRadius: 14,
+    borderWidth: 2,
+  },
+  emojiTxt: {
+    fontSize: 32,
+  },
+  emojiStars: {
+    fontSize: 11,
+    fontWeight: '800',
+    marginTop: 4,
+  },
+  emojiLabel: {
+    textAlign: 'center',
+    fontSize: 14,
+    fontWeight: '800',
+    marginTop: 12,
   },
   starPillRow: {
     flexDirection: 'row',

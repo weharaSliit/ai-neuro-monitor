@@ -13,7 +13,7 @@ _REPO_ROOT = _THIS_DIR.parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from backend.relaxation_guide.config import TECHNIQUES, WEIGHT_PHYSIO, WEIGHT_PREF, HABITUATING_PENALTY_FACTOR
+from backend.relaxation_guide.config import TECHNIQUES, WEIGHT_PHYSIO, WEIGHT_PREF, HABITUATING_PENALTY_FACTOR, HABITUATING_USAGE_THRESHOLD
 from backend.relaxation_guide.services.preference_learner import preference_learner
 from backend.relaxation_guide.database.db_manager import db_manager
 from backend.relaxation_guide.services import firebase_service
@@ -71,7 +71,7 @@ class ThompsonBandit:
             blended = (WEIGHT_PHYSIO * s_physio) + (WEIGHT_PREF * s_pref)
 
             uses_count = usage_history.get(tech_id, 0)
-            if uses_count > 5:
+            if uses_count > HABITUATING_USAGE_THRESHOLD:
                 blended *= HABITUATING_PENALTY_FACTOR
 
             all_blended_scores[tech_id] = blended

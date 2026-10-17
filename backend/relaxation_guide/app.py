@@ -9,8 +9,10 @@ and backend/phenotyping_behavior/app.py shape using Flask & CORS.
 import sys
 import os
 import time
+import math
 from pathlib import Path
-from flask import jsonify, request, g
+# pyrefly: ignore [missing-import]
+from flask import jsonify, request
 from flask_cors import CORS
 
 # --- MODULE PATH FIX ---
@@ -33,11 +35,31 @@ from backend.relaxation_guide.services.fallback_handler import fallback_handler
 from backend.relaxation_guide.services.validator import validator
 from backend.relaxation_guide.services.gamification_service import gamification_service
 from backend.relaxation_guide.services.closed_loop_tracker import closed_loop_tracker
+from backend.relaxation_guide.services.intervention_context import combine_intervention_context
 from backend.relaxation_guide.services.simulator_service import simulator_service
 from backend.relaxation_guide.database.db_manager import db_manager
 
 app = create_app(__name__)
 firebase_service.init_firebase()
+
+
+def _normalized_stress_score(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    score = float(value)
+    if not math.isfinite(score):
+        return None
+    if score > 1.0:
+        score /= 100.0
+    return min(1.0, max(0.0, score))
+
+
+def _phenotyping_stress_score(prediction):
+    for key in ("stress_score", " stress_score", "stress_probability", "probability"):
+        score = _normalized_stress_score(prediction.get(key))
+        if score is not None:
+            return score
+    return None
 
 
 @app.route('/health', methods=['GET'])
@@ -149,6 +171,10 @@ def get_fusion_pipeline():
     fusion_data = telemetry_aggregator.read_fusion_engine_output(user_id, session_id)
     fused_lbl = fusion_data.get("fused_stress_label", "normal")
     stress_prob = float(fusion_data.get("stress_probability", 0.50))
+    pheno_prediction = firebase_service.get_latest_phenotyping_prediction(user_id)
+    pheno_label = pheno_prediction.get("label")
+    pheno_score = _phenotyping_stress_score(pheno_prediction)
+    physio_score = _normalized_stress_score(stress_prob)
 
     telemetry_payload = telemetry_aggregator.parse_fusion_payload(
         user_id=user_id,
@@ -163,6 +189,16 @@ def get_fusion_pipeline():
         "is_live": bool(probability_vector),
         "is_calibrated": firebase_service.baseline_exists(user_id) or ("baseline" in raw_prediction),
         "raw_stress_label": raw_stress_label,
+        "physio_stress_label": fused_lbl,
+        "physio_stress_score": physio_score,
+        "physio_recovery_percentage": round((1.0 - physio_score) * 100.0, 1) if physio_score is not None else None,
+        "has_live_physio_packet": bool(fusion_data.get("has_live_packet", False)),
+        "pheno_stress_label": pheno_label,
+        "pheno_stress_score": pheno_score,
+        "pheno_stress_probability": pheno_score,
+        "pheno_recovery_percentage": round((1.0 - pheno_score) * 100.0, 1) if pheno_score is not None else None,
+        "has_live_pheno_packet": bool(pheno_prediction.get("has_live_packet", False)) and pheno_score is not None,
+        "active_pheno_session_id": pheno_prediction.get("active_session_id"),
         "user_baseline": fusion_data.get("user_baseline", raw_prediction.get("baseline", 0.35)),
         "probability_vector": {
             "eeg": probability_vector.get("eeg"),
@@ -183,10 +219,37 @@ def get_personalized_intervention():
     if not telemetry_data:
         telemetry_data = data
 
-    fused_label = telemetry_data.get('fused_stress_label', 'normal')
-    stress_prob = float(telemetry_data.get('stress_probability', 0.50))
+    fusion_data = telemetry_aggregator.read_fusion_engine_output(user_id)
+    has_live_physio = bool(fusion_data.get("has_live_packet", False))
+    physio_label = (
+        fusion_data.get("fused_stress_label", "normal")
+        if has_live_physio
+        else telemetry_data.get('fused_stress_label', 'normal')
+    )
+    fused_label = physio_label
+    stress_prob = float(
+        fusion_data.get("stress_probability", 0.50)
+        if has_live_physio
+        else telemetry_data.get('stress_probability', 0.50)
+    )
+    physio_score = _normalized_stress_score(stress_prob)
+    recommendation_physio_score = physio_score if physio_score is not None else 0.50
     dt_sec = float(telemetry_data.get('seconds_since_last_packet', 0.0))
     ts = float(telemetry_data.get('timestamp', time.time()))
+
+    pheno_prediction = firebase_service.get_latest_phenotyping_prediction(user_id)
+    pheno_label = pheno_prediction.get('label')
+    pheno_prob = _phenotyping_stress_score(pheno_prediction)
+    has_live_pheno = bool(pheno_prediction.get('has_live_packet', False)) and pheno_prob is not None
+
+    # Same blend and thresholds as the FastAPI backend (see intervention_context.py).
+    # Physiological and phenotyping readings stay separate for live recovery.
+    fused_label, stress_prob = combine_intervention_context(
+        physio_label,
+        recommendation_physio_score,
+        pheno_label if has_live_pheno else None,
+        pheno_prob if has_live_pheno else None,
+    )
 
     telemetry_payload = telemetry_aggregator.parse_fusion_payload(
         user_id=user_id,
@@ -221,6 +284,10 @@ def get_personalized_intervention():
         "timestamp": ts,
         "fused_stress_label": fused_label,
         "stress_probability": stress_prob,
+        "physio_stress_label": physio_label,
+        "physio_stress_score": physio_score,
+        "pheno_stress_label": pheno_label,
+        "pheno_stress_score": pheno_prob,
         "recommended_technique_id": tech_id,
         "selected_sub_option_id": selected_sub["id"],
         "context_cluster_id": cluster_id,
@@ -239,8 +306,19 @@ def get_personalized_intervention():
         "technique_id": tech_id,
         "title": tech_catalog["title"],
         "description": tech_catalog["description"],
+        "fused_stress_label": fused_label,
+        "stress_probability": stress_prob,
         "selected_sub_option": selected_sub,
         "available_sub_options": sub_options,
+        "physio_stress_label": fusion_data.get("fused_stress_label", fused_label),
+        "physio_stress_score": physio_score,
+        "physio_recovery_percentage": round((1.0 - physio_score) * 100.0, 1) if physio_score is not None else None,
+        "has_live_physio_packet": has_live_physio,
+        "pheno_stress_label": pheno_label,
+        "pheno_stress_score": pheno_prob,
+        "pheno_recovery_percentage": round((1.0 - pheno_prob) * 100.0, 1) if pheno_prob is not None else None,
+        "has_live_pheno_packet": has_live_pheno,
+        "active_pheno_session_id": pheno_prediction.get("active_session_id"),
         "context_cluster_id": cluster_id,
         "blended_score": round(blended_score, 4),
         "physiological_sample": round(s_physio, 4),

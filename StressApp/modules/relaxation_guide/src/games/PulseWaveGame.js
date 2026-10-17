@@ -10,7 +10,6 @@ import {
   Vibration,
   Platform,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { ThemeContext } from '../context/ThemeContext';
 
 const { width, height } = Dimensions.get('window');
