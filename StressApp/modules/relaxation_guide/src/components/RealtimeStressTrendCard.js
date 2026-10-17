@@ -4,19 +4,31 @@ import { View, Text, StyleSheet, Animated, Easing, TouchableOpacity, Platform } 
 import Svg, { Path, Circle, Line, Defs, LinearGradient, Stop } from 'react-native-svg';
 import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
+import { scaleSeries } from '../utils/trend';
 
 export const RealtimeStressTrendCard = () => {
   const {
+    userId,
+    username,
     stressProbability = 0.15,
     stressTrendHistory = [],
     stressState = 'normal',
     hasLivePacket = false,
-    isCalibrated = true,
+    // Phenotyping state from AppContext
+    phenoSensorEnabled = false,
+    phenoCalibStatus = { dayNumber: 6, displayDays: 'Day 6 of 7', progressPct: 86, title: 'Calibrating baseline', isCalibrated: false },
+    phenoStressLabel = 'normal',
+    phenoStressProbability = 0.15,
+    hasLivePhenoPacket = false,
+    phenoTrendHistory = [],
+    openPhenoSensorSettings,
+    markPhenoCalibrated,
+    resetPhenoCalibration,
   } = useContext(AppContext);
   const { theme } = useContext(ThemeContext);
 
-  const [activeTab, setActiveTab] = useState('physio'); // 'physio' | 'pheno'
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [activeTab, setActiveTab] = useState('pheno'); // Default to pheno or active
+  const displayName = username ? (username.charAt(0).toUpperCase() + username.slice(1)) : (phenoCalibStatus?.userName || userId || 'You');
 
   // Pulse animation for live status dot
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -30,33 +42,42 @@ export const RealtimeStressTrendCard = () => {
     ).start();
   }, []);
 
-  let statusBadgeText = 'OFFLINE';
-  let statusColor = theme.danger || '#EF4444';
+  // Physio metrics (Smart Ring + Earbud)
+  const isPhysioLive = !!hasLivePacket;
+  const physioBadgeText = isPhysioLive ? 'LIVE 2s' : 'AWAITING';
+  const physioStatusColor = isPhysioLive ? (theme.success || '#10B981') : (theme.warning || '#F59E0B');
+  const physioHistory = stressTrendHistory && stressTrendHistory.length > 0 ? stressTrendHistory : [stressProbability];
 
-  if (!hasLivePacket) {
-    statusBadgeText = 'OFFLINE';
-    statusColor = theme.danger || '#EF4444';
+  // Pheno metrics (Smartphone Behavioral Data)
+  const isPhenoCalibrated = !!phenoCalibStatus?.isCalibrated;
+  let phenoBadgeText = 'SENSOR OFF';
+  let phenoStatusColor = theme.danger || '#EF4444';
+
+  if (!phenoSensorEnabled) {
+    phenoBadgeText = 'SENSOR OFF';
+    phenoStatusColor = theme.danger || '#EF4444';
+  } else if (!isPhenoCalibrated) {
+    phenoBadgeText = 'CALIBRATING';
+    phenoStatusColor = '#0EA5E9'; // Sky blue for 7-day calibration
+  } else if (hasLivePhenoPacket) {
+    phenoBadgeText = 'LIVE';
+    phenoStatusColor = theme.success || '#10B981';
   } else {
-    statusBadgeText = 'LIVE 2s';
-    statusColor = theme.success || '#10B981';
+    phenoBadgeText = 'AWAITING LOGS';
+    phenoStatusColor = theme.warning || '#F59E0B';
   }
 
-  // Calculate 2-second trend metrics for Physio
-  const currentPct = (stressProbability * 100).toFixed(0);
-  const history = stressTrendHistory && stressTrendHistory.length > 0 ? stressTrendHistory : [stressProbability];
-  const initialPct = (history[0] * 100).toFixed(0);
-  const diffPct = (currentPct - initialPct).toFixed(0);
-  const isReducing = diffPct <= 0;
+  // The line shows stress itself: falling = stress reducing, rising = stress increasing.
+  const phenoHistory = phenoTrendHistory && phenoTrendHistory.length > 0 ? phenoTrendHistory : [phenoStressProbability];
 
   // SVG Line Chart Dimensions
-  // Scales with the screen instead of a fixed 110px.
   const chartWidth = CHART_W;
   const chartHeight = 32;
 
-  const buildChart = () => {
-    if (!history || history.length === 0 || !hasLivePacket) return null;
-    const points = history.map((val, idx) => {
-      const x = (idx / Math.max(1, history.length - 1)) * chartWidth;
+  const buildChart = (dataArr, isLive) => {
+    if (!dataArr || dataArr.length === 0 || !isLive) return null;
+    const points = dataArr.map((val, idx) => {
+      const x = (idx / Math.max(1, dataArr.length - 1)) * chartWidth;
       const normalizedVal = Math.max(0.05, Math.min(1.0, val));
       const y = chartHeight - (normalizedVal * (chartHeight - 10) + 5);
       return { x, y, val };
@@ -72,7 +93,8 @@ export const RealtimeStressTrendCard = () => {
     return { pathD, areaD, lastPt };
   };
 
-  const chartData = buildChart();
+  const physioChartData = buildChart(scaleSeries(physioHistory), isPhysioLive);
+  const phenoChartData = buildChart(scaleSeries(phenoHistory), isPhenoCalibrated && hasLivePhenoPacket);
 
   return (
     <View style={{ marginHorizontal: 12, marginTop: Platform.OS === 'ios' ? 42 : 32, marginBottom: 8 }}>
@@ -95,7 +117,7 @@ export const RealtimeStressTrendCard = () => {
           activeOpacity={0.8}
         >
           <Text style={{ fontSize: 11 }}>🫀</Text>
-          <Text style={{ fontSize: 11, fontWeight: '700', color: activeTab === 'physio' ? '#FFFFFF' : theme.textPrimary }}>Physio Recovery</Text>
+          <Text style={{ fontSize: 11, fontWeight: '700', color: activeTab === 'physio' ? '#FFFFFF' : theme.textPrimary }}>Physio Trend</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -115,91 +137,162 @@ export const RealtimeStressTrendCard = () => {
           activeOpacity={0.8}
         >
           <Text style={{ fontSize: 11 }}>⌨️</Text>
-          <Text style={{ fontSize: 11, fontWeight: '700', color: activeTab === 'pheno' ? '#FFFFFF' : theme.textPrimary }}>Pheno Recovery</Text>
+          <Text style={{ fontSize: 11, fontWeight: '700', color: activeTab === 'pheno' ? '#FFFFFF' : theme.textPrimary }}>Pheno Trend</Text>
         </TouchableOpacity>
       </View>
 
       {/* ACTIVE TAB CARD CONTENT */}
       {activeTab === 'physio' ? (
-        /* 🫀 PHYSIOLOGICAL RECOVERY CARD */
+        /* 🫀 PHYSIOLOGICAL RECOVERY CARD (Fusion Engine: Ring + Earbud) */
         <View style={[styles.card, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
           <View style={styles.mainRow}>
             <View style={styles.leftInfo}>
               <View style={styles.titleRow}>
-                <Animated.View style={[styles.liveDot, { backgroundColor: statusColor, opacity: pulseAnim }]} />
-                <Text style={[styles.cardTitle, { color: theme.textPrimary }]}>Physiological Recovery</Text>
-                <Text style={[styles.stateBadge, { color: statusColor, backgroundColor: `${statusColor}1A`, borderColor: statusColor }]}>
-                  {statusBadgeText}
+                <Animated.View style={[styles.liveDot, { backgroundColor: physioStatusColor, opacity: pulseAnim }]} />
+                <Text style={[styles.cardTitle, { color: theme.textPrimary }]}>Physiological Stress Trend</Text>
+                <Text style={[styles.stateBadge, { color: physioStatusColor, backgroundColor: `${physioStatusColor}1A`, borderColor: physioStatusColor }]}>
+                  {physioBadgeText}
                 </Text>
               </View>
 
               <View style={styles.metricRow}>
-                <Text style={[styles.probVal, { color: statusColor }]}>
-                  {hasLivePacket ? `${currentPct}%` : '--'}
+                <Text style={[styles.probVal, { color: physioStatusColor }]}>
+                  {isPhysioLive ? stressProbability.toFixed(2) : '--'}
                 </Text>
                 <Text style={[styles.baseVal, { color: theme.textMuted }]}>
-                  {hasLivePacket ? ` State: ${(stressState || 'normal').toUpperCase()}` : ' Awaiting Stream'}
+                  {isPhysioLive ? ' Stress score' : ' Awaiting Fusion Stream'}
                 </Text>
               </View>
             </View>
 
             <View style={styles.chartWrap}>
-              {chartData && (
+              {physioChartData ? (
                 <Svg width={chartWidth} height={chartHeight}>
                   <Defs>
                     <LinearGradient id="lineGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-                      <Stop offset="0%" stopColor={statusColor} stopOpacity="0.45" />
-                      <Stop offset="100%" stopColor={statusColor} stopOpacity="0.0" />
+                      <Stop offset="0%" stopColor={physioStatusColor} stopOpacity="0.45" />
+                      <Stop offset="100%" stopColor={physioStatusColor} stopOpacity="0.0" />
                     </LinearGradient>
                   </Defs>
-                  <Path d={chartData.areaD} fill="url(#lineGrad)" />
-                  <Path d={chartData.pathD} fill="none" stroke={statusColor} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-                  {chartData.lastPt && (
-                    <Circle cx={chartData.lastPt.x} cy={chartData.lastPt.y} r="3.5" fill={statusColor} stroke="#FFFFFF" strokeWidth="1.5" />
+                  <Path d={physioChartData.areaD} fill="url(#lineGrad)" />
+                  <Path d={physioChartData.pathD} fill="none" stroke={physioStatusColor} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                  {physioChartData.lastPt && (
+                    <Circle cx={physioChartData.lastPt.x} cy={physioChartData.lastPt.y} r="3.5" fill={physioStatusColor} stroke="#FFFFFF" strokeWidth="1.5" />
                   )}
                 </Svg>
+              ) : (
+                <Text style={{ fontSize: 9.5, color: theme.textMuted, fontStyle: 'italic' }}>
+                  Smart ring/earbud idle
+                </Text>
               )}
             </View>
           </View>
         </View>
       ) : (
-        /* ⌨️ PHENOTYPING RECOVERY CARD */
+        /* ⌨️ PHENOTYPING RECOVERY CARD (Smartphone Behavioral Data) */
         <View style={[styles.card, { backgroundColor: theme.bgSecondary, borderColor: theme.border }]}>
           <View style={styles.mainRow}>
             <View style={styles.leftInfo}>
               <View style={styles.titleRow}>
-                <Animated.View style={[styles.liveDot, { backgroundColor: statusColor, opacity: pulseAnim }]} />
-                <Text style={[styles.cardTitle, { color: theme.textPrimary }]}>Phenotyping Recovery</Text>
-                <Text style={[styles.stateBadge, { color: statusColor, backgroundColor: `${statusColor}1A`, borderColor: statusColor }]}>
-                  {statusBadgeText}
+                <Animated.View style={[styles.liveDot, { backgroundColor: phenoStatusColor, opacity: pulseAnim }]} />
+                <Text style={[styles.cardTitle, { color: theme.textPrimary }]}>Phenotyping Stress Trend</Text>
+                <Text style={[styles.userBadge, { color: theme.accent || '#38BDF8', borderColor: `${theme.accent || '#38BDF8'}40`, backgroundColor: `${theme.accent || '#38BDF8'}14` }]}>
+                  {displayName}
+                </Text>
+                <Text style={[styles.stateBadge, { color: phenoStatusColor, backgroundColor: `${phenoStatusColor}1A`, borderColor: phenoStatusColor }]}>
+                  {phenoBadgeText}
                 </Text>
               </View>
 
-              <View style={styles.metricRow}>
-                <Text style={[styles.probVal, { color: statusColor }]}>
-                  {hasLivePacket ? `${currentPct}%` : '--'}
-                </Text>
-                <Text style={[styles.baseVal, { color: theme.textMuted }]}>
-                  {hasLivePacket ? ` State: ${(stressState || 'normal').toUpperCase()}` : ' Awaiting Stream'}
-                </Text>
-              </View>
+              {!phenoSensorEnabled ? (
+                /* Sensor disabled: prompt user to turn on sensor */
+                <TouchableOpacity activeOpacity={0.8} onPress={openPhenoSensorSettings} style={styles.metricRow}>
+                  <Text style={[styles.probVal, { color: phenoStatusColor }]}>--</Text>
+                  <Text style={[styles.baseVal, { color: phenoStatusColor, fontWeight: '700' }]}>
+                    {' Tap to Turn On Sensor ➔'}
+                  </Text>
+                </TouchableOpacity>
+              ) : !isPhenoCalibrated ? (
+                /* 7-Day Calibration in progress with user personalization */
+                <View style={{ marginTop: 2 }}>
+                  <View style={styles.metricRow}>
+                    <Text style={[styles.probVal, { color: phenoStatusColor }]}>
+                      {phenoCalibStatus?.displayDays || 'Day 6 of 7'}
+                    </Text>
+                    <Text style={[styles.baseVal, { color: theme.textMuted }]}>
+                      {` ${phenoCalibStatus?.title || 'Calibrating baseline'} (${phenoCalibStatus?.daysRemaining || 1}d remaining)`}
+                    </Text>
+                  </View>
+                  {/* Visual 7-day progress bar */}
+                  <View style={{ width: 150, height: 4, backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 2, marginTop: 4, overflow: 'hidden' }}>
+                    <View style={{ width: `${phenoCalibStatus?.progressPct || 86}%`, height: '100%', backgroundColor: phenoStatusColor, borderRadius: 2 }} />
+                  </View>
+
+                  {/* Calibration Action */}
+                  {markPhenoCalibrated && (
+                    <TouchableOpacity
+                      onPress={markPhenoCalibrated}
+                      activeOpacity={0.85}
+                      style={[styles.activateCalibBtn, { borderColor: `${phenoStatusColor}60`, backgroundColor: `${phenoStatusColor}14` }]}
+                    >
+                      <Text style={[styles.activateCalibBtnText, { color: phenoStatusColor }]}>
+                        ⚡ Complete Calibration & Activate Live AI ➔
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              ) : (
+                /* Calibrated: Live stress recovery rate from personalized AI */
+                <View style={{ marginTop: 2 }}>
+                  <View style={styles.metricRow}>
+                    <Text style={[styles.probVal, { color: phenoStatusColor }]}>
+                      {hasLivePhenoPacket ? phenoStressProbability.toFixed(2) : '--'}
+                    </Text>
+                    <Text style={[styles.baseVal, { color: theme.textMuted }]}>
+                      {hasLivePhenoPacket ? ' Stress score' : ' Awaiting Behavioral Data'}
+                    </Text>
+                  </View>
+
+                  {/* Option to toggle/reset back to calibration for review */}
+                  {resetPhenoCalibration && (
+                    <TouchableOpacity onPress={resetPhenoCalibration} activeOpacity={0.7} style={{ marginTop: 3 }}>
+                      <Text style={{ fontSize: 9, color: theme.textMuted, textDecorationLine: 'underline' }}>
+                        ↺ Revisit 7-Day Calibration Roadmap
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
             </View>
 
             <View style={styles.chartWrap}>
-              {chartData && (
+              {isPhenoCalibrated && phenoChartData ? (
                 <Svg width={chartWidth} height={chartHeight}>
                   <Defs>
                     <LinearGradient id="phenoGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-                      <Stop offset="0%" stopColor={statusColor} stopOpacity="0.45" />
-                      <Stop offset="100%" stopColor={statusColor} stopOpacity="0.0" />
+                      <Stop offset="0%" stopColor={phenoStatusColor} stopOpacity="0.45" />
+                      <Stop offset="100%" stopColor={phenoStatusColor} stopOpacity="0.0" />
                     </LinearGradient>
                   </Defs>
-                  <Path d={chartData.areaD} fill="url(#phenoGrad)" />
-                  <Path d={chartData.pathD} fill="none" stroke={statusColor} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-                  {chartData.lastPt && (
-                    <Circle cx={chartData.lastPt.x} cy={chartData.lastPt.y} r="3.5" fill={statusColor} stroke="#FFFFFF" strokeWidth="1.5" />
+                  <Path d={phenoChartData.areaD} fill="url(#phenoGrad)" />
+                  <Path d={phenoChartData.pathD} fill="none" stroke={phenoStatusColor} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                  {phenoChartData.lastPt && (
+                    <Circle cx={phenoChartData.lastPt.x} cy={phenoChartData.lastPt.y} r="3.5" fill={phenoStatusColor} stroke="#FFFFFF" strokeWidth="1.5" />
                   )}
                 </Svg>
+              ) : !isPhenoCalibrated ? (
+                <View style={{ alignItems: 'flex-end', justifyContent: 'center' }}>
+                  <Text style={{ fontSize: 10, color: phenoStatusColor, fontWeight: '800' }}>
+                    {`${phenoCalibStatus?.progressPct || 86}% Calibrated`}
+                  </Text>
+                  <Text style={{ fontSize: 9, color: theme.textMuted }}>7-day baseline</Text>
+                  <Text style={{ fontSize: 8.5, color: '#38BDF8', fontWeight: '700', marginTop: 2 }}>Personalized Model</Text>
+                </View>
+              ) : (
+                <View style={{ alignItems: 'flex-end', justifyContent: 'center' }}>
+                  <Text style={{ fontSize: 10, color: phenoStatusColor, fontWeight: '800' }}>Personalized Model</Text>
+                  <Text style={{ fontSize: 9, color: theme.textMuted }}>Streaming cadence</Text>
+                </View>
               )}
             </View>
           </View>
@@ -226,11 +319,14 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   leftInfo: {
+    flex: 1,
+    flexShrink: 1,
     justifyContent: 'center',
   },
   titleRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexWrap: 'wrap',
     gap: 4,
   },
   liveDot: {
@@ -250,9 +346,30 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     borderWidth: 1,
   },
+  userBadge: {
+    fontSize: 8,
+    fontWeight: '800',
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  activateCalibBtn: {
+    marginTop: 5,
+    paddingVertical: 3,
+    paddingHorizontal: 7,
+    borderRadius: 6,
+    borderWidth: 1,
+    alignSelf: 'flex-start',
+  },
+  activateCalibBtnText: {
+    fontSize: 9,
+    fontWeight: '800',
+  },
   metricRow: {
     flexDirection: 'row',
     alignItems: 'baseline',
+    flexWrap: 'wrap',
     marginTop: 2,
   },
   probVal: {
@@ -263,6 +380,7 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '600',
     marginLeft: 3,
+    flexShrink: 1,
   },
   chartWrap: {
     height: 34,

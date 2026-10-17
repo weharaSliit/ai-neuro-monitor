@@ -6,6 +6,8 @@ Provides dynamic encouragement and guided follow-up recommendations when normal 
 
 from typing import Dict, Any, List
 
+MAX_HISTORY = 50
+
 class ClosedLoopTracker:
     def __init__(self):
         # User ID -> {'initial_state': str, 'current_state': str, 'cycles_completed': int, 'history': List[str]}
@@ -27,7 +29,7 @@ class ClosedLoopTracker:
 
         loop = self._user_loops[user_id]
         loop["current_state"] = current_state
-        loop["history"].append(current_state)
+        loop["history"] = (loop["history"] + [current_state])[-MAX_HISTORY:]
         loop["cycles_completed"] += 1
 
         is_normal = (current_state.lower() == "normal")

@@ -227,30 +227,39 @@ export const apiService = {
       console.log('[apiService] Backend offline or fallback, generating performance-matched recommendation');
     }
 
-    // Dynamic technique selection based on performance scores & stress vector
-    const prob = telemetryPayload?.stress_probability || 0.5;
-    const label = (telemetryPayload?.fused_stress_label || 'normal').toLowerCase();
+    // Dynamic technique selection based on stress probability and label
+    const prob = telemetryPayload?.stress_probability ?? 0.5;
+    const label = (telemetryPayload?.fused_stress_label || '').toLowerCase().trim();
 
-    let selectedTech = 'water_lily_pond';
-    let titleStr = 'Zen Lily Pond';
-    let descStr = 'Slow rhythmic breathing synced with blooming water lilies for PNS activation.';
+    let selectedTech = 'flower_meadow';
+    let titleStr = 'Calm Meadow Garden';
+    let descStr = 'Visual nature breathing pacing (4-7-8 rhythm) to restore vagal tone.';
 
-    if (label === 'high_stress' || prob >= 0.85) {
+    if (label === 'high_stress' || label === 'extreme_stress' || prob >= 0.80) {
+      // Very high stress → structured box breathing for rapid suppression
       selectedTech = 'box_meditation';
       titleStr = 'Focus Box Breathing';
       descStr = 'Structured 4-4-4-4 breathing rhythm to rapidly suppress acute sympathetic surge.';
-    } else if (label === 'stress' || prob >= 0.70) {
-      selectedTech = 'progressive_muscle';
+    } else if (label === 'stress' || label === 'high_confidence_stress' || (prob >= 0.60 && prob < 0.80)) {
+      // Elevated stress → somatic muscle release
+      selectedTech = 'pmr_crystal_squeeze';
       titleStr = 'Somatic Muscle Release (PMR)';
       descStr = 'Targeted muscle tension release to clear cognitive overload and sudomotor arousal.';
-    } else if (prob >= 0.50) {
+    } else if (label === 'moderate_stress' || (prob >= 0.45 && prob < 0.60)) {
+      // Moderate stress → flower meadow breathing
       selectedTech = 'flower_meadow';
       titleStr = 'Calm Meadow Garden';
       descStr = 'Visual nature breathing pacing (4-7-8 rhythm) to restore vagal tone.';
-    } else {
+    } else if (prob >= 0.30 && prob < 0.45) {
+      // Mild stress → zen lily pond gentle breathing
       selectedTech = 'water_lily_pond';
       titleStr = 'Zen Lily Pond';
       descStr = 'Soft fascination visual breathing for gentle autonomic maintenance.';
+    } else {
+      // Low stress / normal → diaphragmatic pacing or EMDR trace
+      selectedTech = 'diaphragmatic_pace';
+      titleStr = 'Deep Belly Calm';
+      descStr = 'Deep diaphragmatic breathing for parasympathetic activation and sustained calm.';
     }
 
     return {
@@ -265,8 +274,10 @@ export const apiService = {
       available_sub_options: [
         { id: selectedTech, title: titleStr, description: descStr },
         { id: 'box_meditation', title: 'Focus Box', description: '4-4-4-4 square breathing' },
-        { id: 'progressive_muscle', title: 'Somatic PMR', description: 'Muscle release for cognitive load' },
-        { id: 'flower_meadow', title: 'Calm Meadow', description: 'Nature visual pacing 4-7-8' }
+        { id: 'flower_meadow', title: 'Calm Meadow', description: 'Nature visual pacing 4-7-8' },
+        { id: 'water_lily_pond', title: 'Zen Lily Pond', description: 'Gentle water lily breathing' },
+        { id: 'pmr_crystal_squeeze', title: 'Somatic PMR', description: 'Muscle release for cognitive load' },
+        { id: 'diaphragmatic_pace', title: 'Deep Belly Calm', description: 'Deep belly breathing' },
       ],
       context_cluster_id: 1,
       blended_score: 0.91,

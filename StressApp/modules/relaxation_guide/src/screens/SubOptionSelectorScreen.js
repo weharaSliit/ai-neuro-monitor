@@ -35,12 +35,6 @@ export const SubOptionSelectorScreen = () => {
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
-  useEffect(() => {
-    if (currentRecommendation?.selected_sub_option) {
-      setSelectedSubOption(currentRecommendation.selected_sub_option);
-      setCurrentScreen('GamePlayer');
-    }
-  }, []);
 
   useEffect(() => {
     Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }).start();
