@@ -2,19 +2,26 @@ import { useEffect, useMemo, useState } from 'react';
 import Face from './Face';
 import { FaceLine, LiveWave, LoadBars, MoodLegend, bucketize } from './MoodCharts';
 import { BLOCK_SEC, CALIBRATION_SETTLE_SEC, N_CALIBRATION_BLOCKS, POPULATION_HIGH_LOAD_P } from '../../lib/config';
+import { mindOrientedP } from '../../lib/limits';
 import {
   MOODS, MOOD_ORDER, RHYTHMS, clockShort, friendlyAgo, greeting, headbandOf, load, moodOf, sessionLabel, signalOf,
 } from '../../lib/friendly';
 
 // ── shared helpers ─────────────────────────────────────────────────
-function useReading(sessionData, profile) {
+// limits: the calibrated baseline / threshold every dashboard uses (lib/limits
+// calibratedLimits). With a calibration, mind load and alert level are on the
+// model's scale oriented so higher = more load (mindOrientedP); without one, the
+// stored score vs the backend / population threshold.
+function useReading(sessionData, profile, limits) {
   const { blocks } = sessionData;
   const latest = blocks[blocks.length - 1] || null;
   const lastScored = [...blocks].reverse().find((b) => b.task_state_score != null) || null;
-  const threshold = lastScored?.effective_high_load_p ?? latest?.effective_high_load_p
+  const m = limits?.mind;
+  const p = m ? (b) => (b?.task_state_score == null ? null : mindOrientedP(b, limits.eegInfo)) : (b) => b?.task_state_score ?? null;
+  const threshold = m ? m.thresholdOriented : lastScored?.effective_high_load_p ?? latest?.effective_high_load_p
     ?? profile?.personal_high_load_p ?? POPULATION_HIGH_LOAD_P;
-  const mood = moodOf(lastScored?.task_state_score, threshold);
-  return { blocks, latest, lastScored, threshold, mood };
+  const mood = moodOf(p(lastScored), threshold);
+  return { blocks, latest, lastScored, threshold, mood, p, baseline: m?.baseline ?? null, personal: m ? m.personal : null };
 }
 
 function Dot({ kind }) {
@@ -58,8 +65,8 @@ function stageOf({ raw, now, sessionData, reading }) {
 }
 
 // ── Home ───────────────────────────────────────────────────────────
-export function HomeScreen({ raw, now, sessionData, profile, picker, go, openBreathing }) {
-  const reading = useReading(sessionData, profile);
+export function HomeScreen({ raw, now, sessionData, profile, picker, limits, go, openBreathing }) {
+  const reading = useReading(sessionData, profile, limits);
   const { latest, lastScored, mood, threshold } = reading;
   const head = headbandOf(raw, now);
   const signal = signalOf(latest);
@@ -98,13 +105,13 @@ export function HomeScreen({ raw, now, sessionData, profile, picker, go, openBre
                 <p>{mood.desc}</p>
               </div>
             </div>
-            <div className="meter" aria-label={`Mind load ${load(lastScored.task_state_score)} out of 100`}>
+            <div className="meter" aria-label={`Mind load ${load(reading.p(lastScored))} out of 100`}>
               <div className="meter-track">
-                <span className="meter-fill" style={{ width: `${load(lastScored.task_state_score)}%`, background: mood.color }} />
+                <span className="meter-fill" style={{ width: `${load(reading.p(lastScored))}%`, background: mood.color }} />
                 <span className="meter-limit" style={{ left: `${threshold * 100}%` }} title="Your break-alert level" />
               </div>
               <div className="meter-labels">
-                <span>Mind load <b>{load(lastScored.task_state_score)}</b> / 100</span>
+                <span>Mind load <b>{load(reading.p(lastScored))}</b> / 100</span>
                 <span>Alert level {Math.round(threshold * 100)}</span>
               </div>
             </div>
@@ -144,28 +151,29 @@ const RANGES = [
   { key: 'all', label: 'Whole session', sec: null },
 ];
 
-export function ProgressScreen({ sessionData, profile, now }) {
-  const reading = useReading(sessionData, profile);
+export function ProgressScreen({ sessionData, profile, limits, now }) {
+  const reading = useReading(sessionData, profile, limits);
   const [range, setRange] = useState('all');
   const sel = RANGES.find((r) => r.key === range);
   const lastEnd = reading.blocks.length ? reading.blocks[reading.blocks.length - 1].timestamp_end : null;
   const blocks = sel.sec && lastEnd ? reading.blocks.filter((b) => b.timestamp_end >= lastEnd - sel.sec) : reading.blocks;
-  const scored = blocks.filter((b) => b.task_state_score != null);
-  const loads = scored.map((b) => b.task_state_score * 100);
+  const sc = reading.p;
+  const scored = blocks.filter((b) => sc(b) != null);
+  const loads = scored.map((b) => sc(b) * 100);
   const avg = loads.length ? loads.reduce((a, b) => a + b, 0) / loads.length : null;
   const t = reading.threshold;
 
-  const bars = useMemo(() => bucketize(blocks, 12, t, moodOf), [blocks, t]);
-  const line = useMemo(() => bucketize(blocks, 8, t, moodOf), [blocks, t]);
+  const bars = useMemo(() => bucketize(blocks, 12, t, moodOf, sc), [blocks, t, limits]);
+  const line = useMemo(() => bucketize(blocks, 8, t, moodOf, sc), [blocks, t, limits]);
 
   const counts = Object.fromEntries(MOOD_ORDER.map((k) => [k, 0]));
-  scored.forEach((b) => { counts[moodOf(b.task_state_score, t).key] += 1; });
+  scored.forEach((b) => { counts[moodOf(sc(b), t).key] += 1; });
   const calmPct = scored.length ? Math.round(((counts.very_relaxed + counts.relaxed) / scored.length) * 100) : null;
-  const peak = scored.reduce((m, b) => (!m || b.task_state_score > m.task_state_score ? b : m), null);
+  const peak = scored.reduce((m, b) => (!m || sc(b) > sc(m) ? b : m), null);
   const skipped = blocks.length - scored.length;
   const breaks = blocks.filter((b) => b.micro_break_recommended || b.high_load_alert).length;
   let streak = 0; let best = 0;
-  scored.forEach((b) => { const k = moodOf(b.task_state_score, t).key; streak = k === 'relaxed' || k === 'very_relaxed' ? streak + 1 : 0; best = Math.max(best, streak); });
+  scored.forEach((b) => { const k = moodOf(sc(b), t).key; streak = k === 'relaxed' || k === 'very_relaxed' ? streak + 1 : 0; best = Math.max(best, streak); });
   const minutes = Math.round((blocks.length * BLOCK_SEC) / 60);
 
   return (
@@ -204,7 +212,7 @@ export function ProgressScreen({ sessionData, profile, now }) {
             <h2 className="serif"><span aria-hidden="true">🔍</span> Pattern insights</h2>
             <ul className="insights">
               <li><Face mood="relaxed" size={28} /><span>You were <b>relaxed for {calmPct}%</b> of this time.</span></li>
-              {peak && <li><Face mood={moodOf(peak.task_state_score, t).key} size={28} /><span>Your mind worked hardest at <b>{clockShort(peak.timestamp_end)}</b> ({Math.round(peak.task_state_score * 100)} / 100).</span></li>}
+              {peak && <li><Face mood={moodOf(sc(peak), t).key} size={28} /><span>Your mind worked hardest at <b>{clockShort(peak.timestamp_end)}</b> ({Math.round(sc(peak) * 100)} / 100).</span></li>}
               <li><span className="ins-icon">☕</span><span>{breaks ? <>The system suggested <b>{breaks} break{breaks === 1 ? '' : 's'}</b>.</> : 'No breaks were needed. Nice and steady.'}</span></li>
               {skipped > 0 && <li><span className="ins-icon">📶</span><span>{skipped} reading{skipped === 1 ? ' was' : 's were'} skipped because the signal was unclear.</span></li>}
             </ul>
@@ -281,7 +289,7 @@ export function WavesScreen({ raw, now, sessionData }) {
 }
 
 // ── Calibrate ──────────────────────────────────────────────────────
-export function CalibrateScreen({ sessionData, profile, raw, now }) {
+export function CalibrateScreen({ sessionData, profile, limits, raw, now }) {
   const c = sessionData.calibration;
   const tr = sessionData.threshold;
   const head = headbandOf(raw, now);
@@ -291,7 +299,12 @@ export function CalibrateScreen({ sessionData, profile, raw, now }) {
   // so put resting on that same scale.
   const restRaw = tr?.resting_mean ?? c?.resting_calibrated_p;
   const shift = c?.baseline_shift ?? profile?.baseline_shift ?? 0;
-  const restingLoad = restRaw == null ? null : Math.round(Math.min(1, Math.max(0, restRaw - shift)) * 100);
+  // With a calibration: the calibrated baseline and threshold every dashboard uses (lib/limits calibratedLimits).
+  const m = limits?.mind;
+  const restingLoad = m ? Math.round(m.baseline * 100)
+    : restRaw == null ? null : Math.round(Math.min(1, Math.max(0, restRaw - shift)) * 100);
+  const alertLevel = m ? m.thresholdOriented : personal ?? POPULATION_HIGH_LOAD_P;
+  const alertPersonal = m ? m.personal : personal != null;
   const done = !c ? (head.kind === 'good' ? 1 : 0) : c.status === 'capturing' ? 2 : c.status === 'failed' ? 1 : 3 + (personal != null ? 1 : 0);
   const steps = [
     { icon: '🎧', title: 'Put on the headband', text: 'Sensors on both temples, then switch it on.' },
@@ -328,8 +341,8 @@ export function CalibrateScreen({ sessionData, profile, raw, now }) {
         <div className="settings">
           <div className="setting tone-peach">
             <small>Break alert level</small>
-            <b>{Math.round((personal ?? POPULATION_HIGH_LOAD_P) * 100)} / 100</b>
-            <span>{personal != null ? 'Set from your own puzzle session' : 'Standard level (puzzle step not done yet)'}</span>
+            <b>{Math.round(alertLevel * 100)} / 100</b>
+            <span>{alertPersonal ? 'Set from your own puzzle session' : m ? 'From your calm baseline (puzzle step not separated yet)' : 'Standard level (puzzle step not done yet)'}</span>
           </div>
           <div className="setting tone-blue">
             <small>Your resting mind load</small>
@@ -352,10 +365,10 @@ export function CalibrateScreen({ sessionData, profile, raw, now }) {
 }
 
 // ── Profile ────────────────────────────────────────────────────────
-export function ProfileScreen({ picker, sessionData, profile, now, openTech, openWelcome, openBreathing }) {
-  const reading = useReading(sessionData, profile);
-  const scored = reading.blocks.filter((b) => b.task_state_score != null);
-  const calm = scored.filter((b) => ['relaxed', 'very_relaxed'].includes(moodOf(b.task_state_score, reading.threshold).key)).length;
+export function ProfileScreen({ picker, sessionData, profile, limits, now, openTech, openWelcome, openBreathing }) {
+  const reading = useReading(sessionData, profile, limits);
+  const scored = reading.blocks.filter((b) => reading.p(b) != null);
+  const calm = scored.filter((b) => ['relaxed', 'very_relaxed'].includes(moodOf(reading.p(b), reading.threshold).key)).length;
   const initial = (picker.userId || '?').slice(0, 1).toUpperCase();
 
   return (

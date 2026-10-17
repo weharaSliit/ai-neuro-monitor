@@ -19,33 +19,40 @@ export function useStimulator(now, sessionId) {
     return {
       status: status || null, online, running,
       forSession: running && (!sessionId || status.sid === sessionId),
-      demandOn: running && status.demand >= 0.5,
+      demandOn: running && (status.demand >= 0.5 || status.body_demand >= 0.5),
       timeline,
       bands: demandBands(timeline, running ? now : null),
     };
   }, [status, timelineRaw, now, sessionId]);
 }
 
-// Periods with simulated demand on -> chart bands (x in ms). An open period
-// runs to `openEnd` (now, while the stimulator is running).
+// Periods with simulated mental demand or physical arousal on -> chart bands
+// (x in ms), labelled by kind. An open period runs to `openEnd` (now, while running).
+const bandKind = (p) => {
+  const m = p.demand >= 0.5; const b = (p.body_demand ?? p.demand) >= 0.5;
+  if (!m && !b) return null;
+  if (p.calibration) return 'Simulated task';
+  if (p.body_demand == null) return 'Simulated demand';
+  return m && b ? 'Simulated stress' : m ? 'Simulated mental load' : 'Simulated physical arousal';
+};
 export function demandBands(timeline, openEnd) {
   const out = [];
-  let start = null; let calib = false;
+  let start = null; let label = null;
   for (const p of timeline) {
-    if (p.demand >= 0.5 && start == null) { start = p.t; calib = Boolean(p.calibration); }
-    if (p.demand < 0.5 && start != null) {
-      out.push({ x0: start, x1: p.t, label: calib ? 'Simulated task' : 'Simulated demand', kind: 'stim' });
-      start = null;
-    }
+    const k = bandKind(p);
+    if (k !== label && start != null) { out.push({ x0: start, x1: p.t, label, kind: 'stim' }); start = null; }
+    if (k && start == null) { start = p.t; }
+    label = k;
   }
   if (start != null) {
     const end = openEnd ?? timeline[timeline.length - 1].t;
-    out.push({ x0: start, x1: end, label: calib ? 'Simulated task' : 'Simulated demand', kind: 'stim' });
+    out.push({ x0: start, x1: end, label, kind: 'stim' });
   }
   return out;
 }
 
 export const STIM_PROFILES = {
+  responsive: 'Responsive (demo): EEG calibration passes, WESAD-sized body response',
   typical: 'Typical: realistic EEG and ring responses',
   eeg_strong_ring_weak: 'EEG strong, ring weak',
   eeg_weak_ring_strong: 'EEG weak, ring strong',

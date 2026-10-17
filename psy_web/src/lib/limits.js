@@ -159,3 +159,105 @@ export function pickEeg(eeg, history, sid) {
   return { cal, thr, fromSid: item?.sid || null };
 }
 
+// Every calibration phase for mind, body and fused. EEG and body are put on
+// the fusion scale (own limit = 0.50); fused = their equal-weight average,
+// windows matched by position within each phase (the two calibrations don't
+// share timestamps). With one input the fused value is that input, as in the
+// fusion engine when the other has weight 0.
+export function calibrationPhases(cal, thr, eegInfo, ring, ringInfo) {
+  const P = (a) => (a || []).map(num);
+  const out = {};
+  if (eegInfo) {
+    const d = (arr) => P(arr).map((p) => eegD(p, eegInfo)).filter((v) => v != null);
+    const at = (L) => (L == null ? null : dShow((L - eegInfo.limitL) / eegInfo.sd));
+    const recP = P(thr?.recovery_scores).filter(plausible);
+    const rest = d(thr?.rest_scores || cal?.rest_scores); const task = d(thr?.task_scores); const recovery = d(thr?.recovery_scores);
+    out.mind = { rest, task, recovery, skip: eegInfo.skipped || 0, show: dShow, limit: 0.5,
+      // recovery level = mean score, as the backend judges recovery
+      levels: { rest: at(eegInfo.level), task: at(eegInfo.taskL), recovery: recP.length ? dShow(eegD(mean(recP), eegInfo)) : null } };
+  }
+  const t = ring.thresholds;
+  const rr = P(t?.resting_scores).filter((v) => v != null); const rt = P(t?.task_scores).filter((v) => v != null);
+  const rc = P(t?.task_result?.recovery_scores).filter((v) => v != null);
+  if (rr.length) {
+    const skip = rt.length ? Math.min(TASK_SKIP_RING, Math.floor(rt.length / 2)) : 0;
+    out.bodyRaw = { rest: rr, task: rt, recovery: rc, skip, limit: ringInfo.limit,
+      levels: { rest: ringInfo.base, task: ringInfo.taskLevel, recovery: rc.length ? mean(rc) : null } };
+    const al = (v) => ringAligned(v, ringInfo.limit);
+    out.body = { rest: rr.map(al), task: rt.map(al), recovery: rc.map(al), skip, limit: 0.5,
+      levels: { rest: al(ringInfo.base), task: ringInfo.taskLevel == null ? null : al(ringInfo.taskLevel), recovery: rc.length ? al(mean(rc)) : null } };
+  }
+  const m = out.mind && { rest: out.mind.rest.map(dShow), task: out.mind.task.map(dShow), recovery: out.mind.recovery.map(dShow) };
+  const b = out.body;
+  if (m || b) {
+    const pair = (x = [], y = []) => {
+      const n = Math.max(x.length, y.length);
+      return Array.from({ length: n }, (_, i) => mean([x.length ? x[Math.floor((i * x.length) / n)] : null,
+        y.length ? y[Math.floor((i * y.length) / n)] : null].filter((v) => v != null)));
+    };
+    const rest = pair(m?.rest, b?.rest); const task = pair(m?.task, b?.task); const recovery = pair(m?.recovery, b?.recovery);
+    const frac = Math.max(m?.task.length ? out.mind.skip / m.task.length : 0, b?.task.length ? b.skip / b.task.length : 0);
+    const skip = Math.min(Math.round(task.length * frac), Math.floor(task.length / 2));
+    out.fused = { rest, task, recovery, skip, limit: 0.5, inputs: m && b ? 'mind + body' : m ? 'mind only' : 'body only',
+      levels: { rest: rest.length ? median(rest) : null, task: task.length > skip ? mean(task.slice(skip)) : null,
+        recovery: recovery.length ? mean(recovery) : null } };
+  }
+  return out;
+}
+
+// Fused calm level and spread from the calibration rest blocks (calibrationPhases).
+export function fusedCalibration(phases) {
+  const r = phases?.fused?.rest?.filter((v) => v != null) || [];
+  if (!r.length) return null;
+  return { baseline: phases.fused.levels.rest ?? mean(r), spread: r.length > 1 ? sdOf(r) : 0.05 };
+}
+
+// Seconds, ms or an ISO string (naive = UTC) -> ms.
+const toMs = (v) => (v == null ? null : typeof v === 'number' ? (v < 1e12 ? v * 1000 : v)
+  : Date.parse(/Z|[+-]\d\d:?\d\d$/.test(v) ? v : `${v}Z`) || null);
+
+// ── The calibrated baseline and high-load threshold every dashboard uses ──
+// (the Concept dashboard's Mind / Body / Fused cards). Each component on its
+// model's own scale (baseline, threshold) and on the 0-1 fusion scale, where
+// its own threshold is 0.50 by construction (baseFused). eeg: { calibration,
+// threshold } of the session; history: useEegCalibrations(); ring: { thresholds, baseline }.
+export function calibratedLimits({ eeg, history, sid, ring }) {
+  const { cal, thr, fromSid } = pickEeg(eeg || {}, history || { items: [] }, sid);
+  const eegInfo = eegLimitInfo(cal, thr);
+  const r = { thresholds: ring?.thresholds || null, baseline: ring?.baseline || null };
+  const ringInfo = ringLimitInfo(r);
+  const phases = calibrationPhases(cal, thr, eegInfo, r, ringInfo);
+  const fc = fusedCalibration(phases);
+  const mind = eegInfo ? {
+    baseline: sig(eegInfo.level), threshold: sig(eegInfo.rawLimitL),
+    baseFused: dShow((eegInfo.level - eegInfo.limitL) / eegInfo.sd),
+    // on the oriented scale (higher = more load, also for a score that falls under load)
+    thresholdOriented: sig(eegInfo.limitL),
+    personal: Boolean(eegInfo.responsive), status: eegInfo.status, statusText: eegStatusText(eegInfo),
+    source: eegInfo.method, at: toMs(thr?.updated_at) ?? toMs(cal?.updated_at),
+    fromSid: fromSid && fromSid !== sid ? fromSid : null,
+  } : null;
+  const body = ringInfo.base != null || ringInfo.limit != null ? {
+    baseline: ringInfo.base, threshold: ringInfo.limit,
+    baseFused: ringInfo.base == null ? null : ringAligned(ringInfo.base, ringInfo.limit),
+    personal: Boolean(ringInfo.personal), status: ringInfo.status ?? null,
+    source: ringInfo.personal ? 'personal midpoint limit' : 'population limit (no personal one)',
+    at: toMs(r.baseline?.updated_at),
+  } : null;
+  const fused = {
+    baseline: fc?.baseline ?? null, threshold: 0.5, baseFused: fc?.baseline ?? null, spread: fc?.spread ?? null,
+    inputs: phases.fused?.inputs ?? null,
+    source: 'calm level from the calibration rest blocks; limit = both inputs at their own limit',
+  };
+  return { cal, thr, fromSid, eegInfo, ringInfo, phases, fusedCal: fc, mind, body, fused };
+}
+
+// A live EEG block on the oriented model scale (compare with mind.thresholdOriented /
+// mind.baseline): the raw score for a score that rises under load, mirrored around
+// the resting level for one that falls -- the same orientation the decisions use.
+export function mindOrientedP(b, info) {
+  if (!b || !info) return null;
+  const raw = b.raw_task_state_score;
+  const L = raw != null ? eegL(raw, info) : eegL(b.task_state_score, info, b.personal_direction != null);
+  return L == null ? null : sig(L);
+}

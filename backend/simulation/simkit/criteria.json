@@ -1,0 +1,181 @@
+{
+  "_note": "Fixed BEFORE the multi-seed evaluation was run (2026-10-16). Do not tune the simulator or these numbers to make tests pass; report failures as found.",
+  "metric_definitions": {
+    "alert": "a component is in alert when 2 of its last 3 readings are at/above its own limit (0.50 on the fusion scale) -- the deployed persistence rule",
+    "alert_rate_demand": "share of live blocks during demand periods (excluding the first 2 min of each demand period: physiological onset) in alert",
+    "false_alarm_rate_calm": "share of live blocks during calm periods in alert, EXCLUDING the first 2 min after each demand period ends (grace period: realistic physiological recovery)",
+    "time_to_first_alert_s": "seconds from demand start to the first block in alert, per demand period (none = no alert in that period)",
+    "time_to_clear_s": "seconds from demand end until the component is out of alert, per demand period",
+    "gate_rejection_rate": "share of live EEG blocks not scored (quality gate or dropout)",
+    "calibration_status": "EEG: ok / drift_suspected / not_separated (direction-aware ABA rule); ring: ok / drift_suspected / not_separated",
+    "fusion_weights": "mean EEG and ring weight given by the fusion engine over live blocks with both inputs"
+  },
+  "repetitions": {
+    "seeds_per_profile": 20,
+    "ci": "95% t-interval of the per-seed means"
+  },
+  "pass_criteria": {
+    "typical": {
+      "fused_alert_rate_demand": [
+        ">=",
+        0.6
+      ],
+      "fused_false_alarm_rate_calm": [
+        "<=",
+        0.15
+      ],
+      "eeg_status_ok_share": [
+        ">=",
+        0.5
+      ]
+    },
+    "eeg_strong_ring_weak": {
+      "mind_alert_rate_demand": [
+        ">=",
+        0.5
+      ],
+      "fused_alert_rate_demand": [
+        ">=",
+        0.4
+      ],
+      "fused_false_alarm_rate_calm": [
+        "<=",
+        0.15
+      ]
+    },
+    "eeg_weak_ring_strong": {
+      "body_alert_rate_demand": [
+        ">=",
+        0.6
+      ],
+      "fused_alert_rate_demand": [
+        ">=",
+        0.6
+      ],
+      "fused_false_alarm_rate_calm": [
+        "<=",
+        0.15
+      ]
+    },
+    "ring_missing": {
+      "fused_equals_mind_share": [
+        ">=",
+        0.95
+      ],
+      "fused_false_alarm_rate_calm": [
+        "<=",
+        0.2
+      ]
+    },
+    "inverted": {
+      "eeg_direction_minus_share_of_ok": [
+        ">=",
+        0.7
+      ],
+      "mind_alert_rate_demand": [
+        ">=",
+        0.4
+      ],
+      "fused_false_alarm_rate_calm": [
+        "<=",
+        0.15
+      ]
+    },
+    "noisy": {
+      "fused_false_alarm_rate_calm": [
+        "<=",
+        0.2
+      ],
+      "gate_rejection_rate": [
+        ">",
+        0.0
+      ],
+      "fused_alert_rate_demand": [
+        ">=",
+        0.4
+      ]
+    },
+    "drowsy": {
+      "mind_false_alarm_rate_calm": [
+        "<=",
+        0.3
+      ],
+      "fused_false_alarm_rate_calm": [
+        "<=",
+        0.2
+      ]
+    },
+    "drift": {
+      "eeg_status_not_ok_share": [
+        ">=",
+        0.4
+      ],
+      "fused_false_alarm_rate_calm": [
+        "<=",
+        0.25
+      ]
+    }
+  },
+  "early_warning": {
+    "_note": "Fixed BEFORE the first early-warning evaluation run (2026-10-16), with the default parameters of backend/common/early_warning.py (N=6, k=4, buffer 0.5 spread, rise 0.5 spread, EWMA 0.3, persistence 2, cooldown 7). No tuning on these seeds.",
+    "scenario": "ramp (session.SCENARIOS['ramp']): calm 4 min, demand ramps 0->1 over 5 min, demand 2 min, calm 4 min, plateau of moderate load (0.4) 4 min, calm 4 min",
+    "metric_definitions": {
+      "ew_sensitivity": "share of HIGH episodes (2-of-3 rule) starting in a ramp/demand period (+2 min) that were preceded by an early warning within the 5 min before",
+      "ew_lead_time_s": "median seconds from the warning's start to that HIGH episode's start",
+      "ew_precision": "share of early warnings followed by HIGH within 5 min",
+      "ew_false_per_hour_calm": "warnings starting in calm periods (excluding the first 2 min after a non-calm period) per hour of calm",
+      "mind_led_share_of_fused_high": "share of fused HIGH episodes where, within the 5 min before, the mind was in early warning / high while the body was still below its limit (pre-stress signature) -- REPORTED, no pass line",
+      "aggregation": "per component, mean over the runs where the component was not 'limited' and the metric is defined; 95% t-interval over seeds"
+    },
+    "pass_criteria": {
+      "typical": {
+        "fused_ew_sensitivity": [
+          ">=",
+          0.6
+        ],
+        "fused_ew_lead_time_s": [
+          ">=",
+          60
+        ],
+        "fused_ew_precision": [
+          ">=",
+          0.5
+        ],
+        "fused_ew_false_per_hour_calm": [
+          "<=",
+          2.0
+        ]
+      },
+      "eeg_strong_ring_weak": {
+        "mind_ew_sensitivity": [
+          ">=",
+          0.6
+        ],
+        "mind_ew_lead_time_s": [
+          ">=",
+          60
+        ],
+        "mind_ew_precision": [
+          ">=",
+          0.5
+        ],
+        "mind_ew_false_per_hour_calm": [
+          "<=",
+          2.0
+        ]
+      },
+      "noisy": {
+        "fused_ew_false_per_hour_calm": [
+          "<=",
+          2.0
+        ]
+      },
+      "drift": {
+        "mind_ew_limited_share": [
+          ">=",
+          0.5
+        ]
+      }
+    }
+  }
+}

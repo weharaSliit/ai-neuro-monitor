@@ -3,9 +3,10 @@ import {
   SourcesBar, TaskStatePanel,
 } from './panels';
 import ValidationPanel from './ValidationPanel';
+import LimitsStrip from './LimitsStrip';
 
 // The researcher view: raw signal, every feature, model internals.
-export default function TechView({ raw, health, picker, sessionData, profile, now, onBack, openFusion, openPhysio, openCalibration, openStimulator }) {
+export default function TechView({ raw, health, picker, sessionData, profile, limits, now, onBack, openFusion, openPhysio, openCalibration, openStimulator, openSimDemo, openConcept }) {
   return (
     <div className="page">
       <header className="top">
@@ -16,6 +17,8 @@ export default function TechView({ raw, health, picker, sessionData, profile, no
             <button type="button" className="back-link" onClick={openFusion}>Fusion engine monitor →</button>
             <button type="button" className="back-link" onClick={openCalibration}>Calibration, scores &amp; alerts →</button>
             {openStimulator && <button type="button" className="back-link" onClick={openStimulator}>Live stimulator →</button>}
+            {openConcept && <button type="button" className="back-link" onClick={openConcept}><b>Concept dashboard →</b></button>}
+            {openSimDemo && <button type="button" className="back-link" onClick={openSimDemo}>Full simulation demo →</button>}
           </div>
           <p className="eyebrow">MindPulse · psychological component · technical view</p>
           <h1>Wearable 02 EEG monitor</h1>
@@ -28,14 +31,15 @@ export default function TechView({ raw, health, picker, sessionData, profile, no
       </header>
 
       <SourcesBar raw={raw} health={health} picker={picker} sessionData={sessionData} now={now} />
-      <PipelineStrip raw={raw} health={health} sessionData={sessionData} picker={picker} now={now} />
+      <LimitsStrip limits={limits} />
+      <PipelineStrip raw={raw} health={health} sessionData={sessionData} picker={picker} now={now} limits={limits} />
 
       <div className="grid-2">
         <RawPanel raw={raw} now={now} />
-        <TaskStatePanel sessionData={sessionData} profile={profile} now={now} />
+        <TaskStatePanel sessionData={sessionData} profile={profile} now={now} limits={limits} />
       </div>
       <ValidationPanel raw={raw} sessionData={sessionData} now={now} />
-      <CalibrationPanel sessionData={sessionData} profile={profile} raw={raw} now={now} picker={picker} />
+      <CalibrationPanel sessionData={sessionData} profile={profile} raw={raw} now={now} picker={picker} limits={limits} />
       <p className="caption">
         EEG, HRV/GSR and fused calibration graphs, each component&apos;s scores and labels, rising alerts and feature graphs are on the{' '}
         <button type="button" className="link" onClick={openCalibration}>Calibration, scores &amp; alerts dashboard</button>.

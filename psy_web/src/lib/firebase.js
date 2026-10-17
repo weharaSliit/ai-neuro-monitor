@@ -29,6 +29,7 @@ export async function shallowKeys(path) {
 export function sendStimulatorCommand(command, opts = {}) {
   return set(ref(db, 'stimulator/control'), {
     command, nonce: Date.now(), profile: opts.profile || 'typical', recalibrate: opts.recalibrate !== false,
+    scenario: opts.scenario || 'ramp', kind: opts.kind || null,
   });
 }
 

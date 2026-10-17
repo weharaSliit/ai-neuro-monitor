@@ -15,7 +15,7 @@ const PHASE_TEXT = {
 };
 const LIVE_SEC = { calm: null, demand: 240 };   // live_stimulator.py LIVE_SCENARIO demand length
 
-export default function StimulatorBanner({ now, openControls }) {
+export default function StimulatorBanner({ now, openControls, openDemo }) {
   const stim = useStimulator(now);
   const st = stim.status;
   const recal = useFirebaseValue(stim.running && st?.sid ? `eeg_recalibration/${st.sid}` : null);
@@ -33,6 +33,7 @@ export default function StimulatorBanner({ now, openControls }) {
         <span>Virtual person streaming for <b>{st.uid}</b> · {STIM_PROFILES[st.profile] || st.profile}</span>
         <span className="stim-banner-phase">{PHASE_TEXT[phase] || phase}{blocks}</span>
         {openControls && <button type="button" className="link" onClick={openControls}>Stimulator controls</button>}
+        {openDemo && <button type="button" className="link" onClick={openDemo}>Concept dashboard</button>}
       </div>
       {task && (
         <div className="stim-task">

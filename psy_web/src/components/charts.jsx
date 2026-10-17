@@ -195,14 +195,18 @@ export function ScoreGauge({ value, threshold, level, label = 'task_state_score'
 // Several series on one shared y-axis (never two scales). Each series:
 // {key, label, color, dash?, width?}; points: [{x, [key]: value|null}].
 // `bands` shade x-ranges (e.g. experiment conditions) with a label on top;
-// `hidden` toggles series from the legend.
+// `hidden` toggles series from the legend. `hbands` shade y-ranges
+// ({y0, y1, label, color}); `markers` draw glyphs at points
+// ({x, y, glyph, color, title}) -- e.g. warnings, alerts, rejected blocks.
 export function MultiLineChart({
   points, series, height = 220, yDomain, xDomain, bands = [], refLines = [],
   xFormat = (v) => v, yFormat = (v) => v, ariaLabel, emptyText = 'No data yet', legend = true,
-  xTicks: xTicksProp,
+  xTicks: xTicksProp, hbands = [], markers = [], onZoom,
 }) {
   const [wrapRef, width] = useWidth();
   const [hover, setHover] = useState(null);
+  // onZoom(x0, x1): drag across the plot to zoom into those x values; double-click resets (onZoom(null)).
+  const [drag, setDrag] = useState(null);
   const [hidden, setHidden] = useState(() => new Set());
   const innerW = width - PAD.left - PAD.right;
   const innerH = height - PAD.top - PAD.bottom;
@@ -255,13 +259,23 @@ export function MultiLineChart({
     return <div ref={wrapRef}>{legendEl}<div className="chart-empty" style={{ height }}>{emptyText}</div></div>;
   }
 
-  const onMove = (e) => {
+  const xAt = (e) => {
     const r = e.currentTarget.getBoundingClientRect();
-    const xv = geo.x0 + ((e.clientX - r.left - PAD.left) / innerW) * (geo.x1 - geo.x0);
+    const f = Math.max(0, Math.min(1, (e.clientX - r.left - PAD.left) / innerW));
+    return geo.x0 + f * (geo.x1 - geo.x0);
+  };
+  const onMove = (e) => {
+    const xv = xAt(e);
     let best = null; let bd = Infinity;
     for (const p of points) { const d = Math.abs(p.x - xv); if (d < bd) { bd = d; best = p; } }
     setHover(best);
+    if (drag) setDrag({ ...drag, b: xv });
   };
+  const onDown = onZoom ? (e) => { const xv = xAt(e); setDrag({ a: xv, b: xv }); } : undefined;
+  const onUp = onZoom ? () => {
+    if (drag && Math.abs(drag.b - drag.a) > (geo.x1 - geo.x0) * 0.01) onZoom(Math.min(drag.a, drag.b), Math.max(drag.a, drag.b));
+    setDrag(null);
+  } : undefined;
   const xTicks = xTicksProp || niceTicks(geo.x0, geo.x1, Math.max(2, Math.floor(innerW / 110)));
   const yTicks = niceTicks(geo.lo, geo.hi, 4);
   const hx = hover ? geo.sx(hover.x) : null;
@@ -272,7 +286,13 @@ export function MultiLineChart({
       {legendEl}
       <div style={{ position: 'relative' }}>
         <svg width={width} height={height} role="img" aria-label={ariaLabel}
-          onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+          onMouseMove={onMove} onMouseLeave={() => { setHover(null); setDrag(null); }}
+          onMouseDown={onDown} onMouseUp={onUp} onDoubleClick={onZoom ? () => onZoom(null) : undefined}
+          style={onZoom ? { cursor: 'crosshair', userSelect: 'none' } : undefined}>
+          {drag && (
+            <rect x={geo.sx(Math.min(drag.a, drag.b))} y={PAD.top} width={Math.abs(geo.sx(drag.b) - geo.sx(drag.a))} height={innerH}
+              fill="var(--series)" fillOpacity={0.15} stroke="var(--series)" strokeOpacity={0.5} />
+          )}
           {bands.map((b, i) => {
             const a = geo.sx(Math.max(b.x0, geo.x0)); const z = geo.sx(Math.min(b.x1, geo.x1));
             if (z <= a) return null;
@@ -280,6 +300,16 @@ export function MultiLineChart({
               <g key={`b${i}`}>
                 <rect x={a} y={PAD.top} width={z - a} height={innerH} className={`cband cband-${b.kind || 'n'}`} />
                 {z - a > 40 && <text x={a + 4} y={PAD.top + 11} className="cband-label">{b.label}</text>}
+              </g>
+            );
+          })}
+          {hbands.map((h, i) => {
+            const top = geo.sy(Math.max(h.y0, h.y1)); const bot = geo.sy(Math.min(h.y0, h.y1));
+            if (bot - top <= 0) return null;
+            return (
+              <g key={`h${i}`}>
+                <rect x={PAD.left} y={top} width={innerW} height={bot - top} fill={h.color || 'var(--warning)'} fillOpacity={h.opacity ?? 0.12} />
+                {h.label && <text x={PAD.left + 4} y={bot - 4} className="cband-label">{h.label}</text>}
               </g>
             );
           })}
@@ -309,6 +339,10 @@ export function MultiLineChart({
               <circle key={`${s.key}-${p.x}`} cx={geo.sx(p.x)} cy={geo.sy(p[s.key])} r={4} fill={s.color}
                 stroke="var(--surface)" strokeWidth={1.5} />
             ) : null)))}
+          {markers.filter((m) => m.x >= geo.x0 && m.x <= geo.x1 && m.y != null).map((m, i) => (
+            <text key={`m${i}`} x={geo.sx(m.x)} y={geo.sy(m.y)} dy="0.35em" textAnchor="middle" className="chart-marker"
+              fill={m.color || 'var(--ink)'}><title>{m.title}</title>{m.glyph}</text>
+          ))}
           {hover && (
             <g pointerEvents="none">
               <line className="crosshair" x1={hx} x2={hx} y1={PAD.top} y2={PAD.top + innerH} />

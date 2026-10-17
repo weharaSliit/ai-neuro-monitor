@@ -41,7 +41,7 @@ export default function StimulatorPanel({ now }) {
   const ringBase = useFirebaseValue(loggedIn ? `physiological/baselines/${loggedIn}/updated_at` : null);
   const ringReq = useFirebaseValue(loggedIn ? `ring_recalibration/${loggedIn}` : null);
   const ringReqStuck = ringReq?.status === 'requested' && ringReq.requested_at && now / 1000 - ringReq.requested_at > 60;
-  const [profile, setProfile] = useState('typical');
+  const [profile, setProfile] = useState('responsive');
   const [recalibrate, setRecalibrate] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);

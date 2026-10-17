@@ -22,7 +22,14 @@ What it does when started (from psy_web's Stimulator panel or --autostart):
      user (eeg_recalibration/{sid}, ring_recalibration/{uid}) -- psy_web's Recalibrate
   2. follows the protocol the bridges report: rests through settle/rest, does the task
      (cognitive demand rises), relaxes in recovery (demand drops)
-  3. then live monitoring on a loop: calm 4 -> demand 4 -> calm 4 -> demand 4 -> calm 5 min
+     If the EEG calibration doesn't end 'ok' (the mind would show 'Limited'), it is
+     requested again, up to MAX_EEG_RETRIES times, as the app would ask a real user.
+  3. then live monitoring on a loop: 'four_state' (default; mind and body driven
+     separately: relaxed 5 -> high mental load 7 (body calm) -> recovery 10 ->
+     physical arousal 7 (mind calm) -> recovery 10 -> stress 7 (both) -> recovery 10 min),
+     'ramp' (calm 4 -> demand rising over 5 -> demand 2 -> calm 4 -> moderate-load
+     plateau 4 -> calm 4 min) or 'steps' (calm 4 -> demand 4 -> calm 4 -> demand 4 -> calm 5 min)
+  Demo events on request (psy_web): dropout, jaw clench, drowsiness.
 
 The body is simulated, not scripted: demand drives physiological states with
 their own time constants (EEG ~20 s, heart ~15 s, skin conductance rises over
@@ -31,6 +38,8 @@ heart-rate oscillation (RSA, 0.25 Hz), slower 0.1 Hz waves, alpha waxing and
 waning, slowly wandering rhythms, eye blinks, jaw/temporal muscle bursts while
 tapping during the task, spontaneous skin-conductance responses, tiny movements.
 
+Default profile 'responsive' (simkit/profiles.py DEMO_PROFILES): a SAM40 subject whose
+EEG calibration passes reliably (simkit/responders.py) and a WESAD-sized body response.
 Profiles (simkit/profiles.py -- the same virtual users as the offline study):
   typical, eeg_strong_ring_weak, eeg_weak_ring_strong, ring_missing, inverted,
   noisy (artifacts, dropouts), drowsy, drift. Signals: real SAM40 T7-T8 EEG +
@@ -39,7 +48,7 @@ Profiles (simkit/profiles.py -- the same virtual users as the offline study):
 
 Run on a laptop (keep it running; it idles until psy_web starts it):
   venv/bin/python backend/simulation/live_stimulator.py
-  venv/bin/python backend/simulation/live_stimulator.py --autostart --profile typical
+  venv/bin/python backend/simulation/live_stimulator.py --autostart                 # responsive, four_state
 Switch the real headband and ring OFF while it runs -- both publish on the same topics.
 """
 import argparse
@@ -79,8 +88,16 @@ FS = 250                     # headband sampling rate (realtime/resample.py SOUR
 EEG_BATCH = 50               # samples per MQTT message (~5 messages/s, like the firmware)
 RING_PERIOD = 0.2            # ring packet every 200 ms
 DB = FIREBASE_DB_URL.rstrip("/")
+RING_RECOVERY_WINDOWS = 8       # 8 min: skin conductance needs minutes to come back down (5 left ~half drift_suspected)
 PICKUP_TIMEOUT_SEC = 120         # a recalibration request nobody acts on is withdrawn after this
-LIVE_SCENARIO = [("calm", 240), ("demand", 240), ("calm", 240), ("demand", 240), ("calm", 300)]
+# An EEG calibration that ends not 'ok' (not separated / drift suspected) leaves the
+# mind 'Limited'. The app would ask a real user to recalibrate; the stimulator does
+# the same itself, up to this many times, then continues and reports it.
+MAX_EEG_RETRIES = 2
+DEFAULT_PROFILE = "responsive"   # simkit.profiles DEMO_PROFILES: EEG calibration passes reliably, WESAD-sized body
+DEFAULT_SCENARIO = "four_state"  # simkit.session FOUR_STATE: relaxed, mental load, physical arousal, stress
+# Live scenarios: simkit/session.py SCENARIOS ('steps' = calm/demand blocks; 'ramp' =
+# gradual rise, demand, calm, moderate-load plateau, calm -- for the early warning).
 RNG = np.random.default_rng()
 
 
@@ -91,6 +108,13 @@ def fb_get(path):
         return r.json() if r.ok else None
     except requests.RequestException:
         return None
+
+
+def fb_put(path, value):
+    try:
+        requests.put(f"{DB}/{path}.json", data=json.dumps(value), timeout=10)
+    except requests.RequestException as e:
+        print(f"[firebase] write failed: {e}")
 
 
 def fb_patch(path, value):
@@ -291,28 +315,39 @@ class Stimulator:
     def _pointer():
         return fb_get("fusion_en_sessions/current_user_id"), fb_get("fusion_en_sessions/current_session_id")
 
-    def start(self, profile, recalibrate=True):
+    def start(self, profile, recalibrate=True, scenario=DEFAULT_SCENARIO):
         if self.running:
             return "already running"
         uid, sid = self._pointer()
         if not uid or not sid:
             return "no user is logged in with the devices -- log in on StressApp first"
+        from simkit.profiles import ALL_PROFILES as PROFILES
+        if profile not in PROFILES:
+            return f"unknown profile '{profile}'"
         self.profile, self.uid, self.sid = profile, uid, sid
-        from simkit.profiles import PROFILES
+        self.recalibrate, self.eeg_retries = recalibrate, 0
         if recalibrate:
-            # Same request psy_web's Recalibrate button writes, for this user's session.
             now = time.time()
-            fb_patch(f"eeg_recalibration/{sid}", {"status": "requested", "source": "stimulator", "user_id": uid,
-                                                  "requested_at": now, "include_threshold": True, "task_blocks": 19})
+            self._request_eeg_calibration()
             if PROFILES[profile].ring_present:
-                fb_patch(f"ring_recalibration/{uid}", {"status": "requested", "source": "stimulator", "requested_at": now,
-                                                       "include_threshold": True, "task_windows": 8, "live": None,
-                                                       "result": None, "error": None})
+                # Ring: calibrated HERE with the ring backend's own functions, following the
+                # EEG protocol phases (simkit/ring_calibration.py). Status 'capturing' (not
+                # 'requested'), so the ring API's own poller -- once deployed -- never runs a
+                # second capture on top. Progress goes to the same node psy_web shows.
+                fb_put(f"ring_recalibration/{uid}", {"status": "capturing", "phase": "settle", "source": "stimulator",
+                                                     "mode": "local", "requested_at": now, "blocks_captured": 0,
+                                                     "blocks_needed": 4, "task_windows": 7})
         # The realistic virtual user (simkit): SAM40-based EEG + headband layer, IPFM ring,
         # latent load with per-user time constants -- the same generator as the offline study.
         from simkit.session import VirtualUser
-        self.vu = VirtualUser(profile, seed=int(time.time()) % 100000)
-        self.demand, self.phase = 0.0, "settle" if recalibrate else "calm"
+        from simkit.session import SCENARIOS
+        self.scenario = scenario if scenario in SCENARIOS else DEFAULT_SCENARIO
+        self.seed = int(time.time()) % 100000
+        self.vu = VirtualUser(profile, seed=self.seed)
+        from simkit.ring_calibration import RingCalibration
+        self.ring_cal = RingCalibration() if (recalibrate and PROFILES[profile].ring_present) else None
+        self.ring_cal_phase = "settle"
+        self.demand, self.body, self.phase = 0.0, 0.0, "settle" if recalibrate else "calm"
         self.started_at, self.stage_since = time.time(), time.time()
         self.warnings = {}
         self.running = True
@@ -323,6 +358,32 @@ class Stimulator:
             t.start()
         print(f"[stimulator] started for logged-in {uid} / {sid}, profile {profile}, recalibrate {recalibrate}")
         return "started"
+
+    def _request_eeg_calibration(self):
+        """Same request psy_web's Recalibrate button writes, for this user's session."""
+        fb_patch(f"eeg_recalibration/{self.sid}", {"status": "requested", "source": "stimulator", "user_id": self.uid,
+                                                   "requested_at": time.time(), "include_threshold": True, "task_blocks": 19})
+
+    def _eeg_retry(self, eeg):
+        """After the stimulator's own EEG calibration finished: if it didn't pass
+        (mind would be 'Limited'), request it again, as the app would ask a real
+        user. True when a new calibration was requested."""
+        if eeg.get("source") != "stimulator" or eeg.get("status") != "done":
+            return False
+        thr = fb_get(f"psychological/{self.uid}/{self.sid}/threshold_result") or {}
+        status = thr.get("calibration_status")
+        if status in (None, "ok"):
+            self.warnings.pop("EEG", None)
+            return False
+        if self.eeg_retries >= MAX_EEG_RETRIES:
+            self.warnings["EEG"] = (f"EEG calibration {status} after {self.eeg_retries + 1} attempts "
+                                    f"(SAM40 subject {self.vu.params.eeg['subject']}): the mind stays 'Limited'")
+            return False
+        self.eeg_retries += 1
+        self.warnings["EEG"] = f"EEG calibration {status}: recalibrating (attempt {self.eeg_retries + 1} of {MAX_EEG_RETRIES + 1})"
+        print(f"[stimulator] {self.warnings['EEG']}")
+        self._request_eeg_calibration()
+        return True
 
     def stop(self, reason="stopped"):
         if not self.running:
@@ -351,7 +412,7 @@ class Stimulator:
             # recalibration poller) must not hold the whole run in "settle": after
             # PICKUP_TIMEOUT_SEC it is withdrawn (it's the stimulator's own request) and
             # reported, and the run continues with the device that did calibrate.
-            for name, r, path in (("EEG", eeg, f"eeg_recalibration/{self.sid}"), ("ring", ring, f"ring_recalibration/{self.uid}")):
+            for name, r, path in (("EEG", eeg, f"eeg_recalibration/{self.sid}"),):
                 if (r.get("status") == "requested" and r.get("source") == "stimulator"
                         and time.time() - (r.get("requested_at") or time.time()) > PICKUP_TIMEOUT_SEC):
                     why = (f"the {name} service didn't pick up the recalibration request within "
@@ -360,23 +421,27 @@ class Stimulator:
                     r["status"] = "failed"
                     self.warnings[name] = why
                     print(f"[stimulator] {why}")
-            active = [r for r in (eeg, ring) if r.get("status") in ("requested", "capturing", "saving")]
+            if self.live_started is None and self.recalibrate and self._eeg_retry(eeg):
+                eeg = {"status": "requested"}            # calm until the bridge picks the new request up
+            # The protocol follows the EEG bridge's phases; the ring calibration runs alongside.
+            active = [r for r in (eeg,) if r.get("status") in ("requested", "capturing", "saving")]
             phases = {r.get("phase") for r in active}
             if active:
                 phase = "task" if "task" in phases else "recovery" if "recovery" in phases else (
                     "rest" if "rest" in phases else "settle")
                 stage, demand = phase, 1.0 if phase == "task" else 0.0
+                body = demand                             # the calibration task loads mind and body together
             else:
                 if self.live_started is None:
                     self.live_started = time.time()
                     print("[stimulator] calibration finished -- live monitoring scenario")
-                t = (time.time() - self.live_started) % sum(d for _, d in LIVE_SCENARIO)
-                for name, dur in LIVE_SCENARIO:
-                    if t < dur:
-                        break
-                    t -= dur
-                phase, stage, demand = name, f"live: {name}", 1.0 if name == "demand" else 0.0
-            self.phase, self.demand = phase, demand
+                from simkit.session import scenario_targets
+                name, demand, body, self.phase_left = scenario_targets(self.scenario, time.time() - self.live_started)
+                phase, stage = name, f"live: {name}"
+            if active:
+                self.phase_left = None
+            self.phase, self.demand, self.body = phase, demand, body
+            self._ring_calibration_step(phase if active else "done")
             now = time.time()
             if stage != self.stage:
                 print(f"[stimulator] {self.stage} -> {stage}")
@@ -390,11 +455,13 @@ class Stimulator:
             if now - getattr(self, "last_tl", 0) >= 10 or stage != getattr(self, "last_tl_stage", None):
                 self.last_tl, self.last_tl_stage = now, stage
                 fb_patch(f"stimulator/timeline/{self.sid}/{int(now)}", {
-                    "phase": phase, "demand": demand, "brain": round(lo["brain"], 3), "heart": round(lo["heart"], 3),
+                    "phase": phase, "demand": round(demand, 3), "body_demand": round(body, 3),
+                    "brain": round(lo["brain"], 3), "heart": round(lo["heart"], 3),
                     "skin": round(lo["skin"], 3), "hr": hr, "scl": scl, "calibration": bool(active)})
             fb_patch("stimulator/status", {
                 "online": True, "running": True, "ts": time.time(), "uid": self.uid, "sid": self.sid,
-                "profile": self.profile, "stage": stage, "phase": phase, "demand": demand,
+                "profile": self.profile, "stage": stage, "phase": phase, "demand": round(demand, 3), "body_demand": round(body, 3),
+                "seed": self.seed, "scenario": self.scenario, "phase_left": getattr(self, "phase_left", None),
                 "stage_since": getattr(self, "stage_since", now), "calibrating": bool(active),
                 "hr_bpm": hr, "scl_us": scl, "started_at": self.started_at, "warnings": dict(self.warnings) or None,
                 "eeg_load": round(lo["brain"], 3), "hr_load": round(lo["heart"], 3), "eda_load": round(lo["skin"], 3),
@@ -402,12 +469,59 @@ class Stimulator:
                 "mqtt": {"eeg": self.eeg_client.is_connected(), "ring": self.ring_client.is_connected()}})
             time.sleep(3)
 
+    def _ring_calibration_step(self, phase):
+        """Advance the local ring calibration with the protocol phase (see start())."""
+        rc = self.ring_cal
+        if rc is None:
+            return
+        path = f"ring_recalibration/{self.uid}"
+        prev = self.ring_cal_phase
+        # Skin conductance recovers over 2-5 min: the ring keeps recording recovery into the
+        # first calm minutes of the live scenario (demand off) until it has RING_RECOVERY_WINDOWS.
+        # (Also while an EEG retry settles / rests: demand is off then too.)
+        if (prev == "recovery" and phase in ("done", "settle", "rest") and self.demand < 0.05 and self.body < 0.05
+                and rc.n_windows("recovery") < RING_RECOVERY_WINDOWS):
+            phase = "recovery"
+        if phase != prev:
+            self.ring_cal_phase = phase
+            if prev == "rest":
+                recs, why = rc.finish_rest()
+                if recs:
+                    fb_put(f"physiological/baselines/{self.uid}", recs["baseline"])
+                    fb_put(f"physiological/personal_thresholds/{self.uid}", recs["thresholds"])
+                    fb_patch(path, {"live/rest": rc.rest_scores})
+                    print(f"[stimulator] ring baseline saved for {self.uid} ({len(rc.rest_scores)} rest windows)")
+                else:
+                    fb_patch(path, {"status": "failed", "error": f"ring baseline: {why}"})
+                    self.warnings["ring"] = f"ring calibration failed: {why}"
+                    self.ring_cal = None
+                    return
+            if prev in ("task", "recovery") and phase not in ("task", "recovery"):
+                recs, why = rc.finish_task()
+                if recs:
+                    fb_patch(f"physiological/personal_thresholds/{self.uid}", recs["thresholds"])
+                    r = rc.result
+                    fb_patch(path, {"status": "done", "phase": "done", "live/task": recs["task"], "live/recovery": recs["recovery"],
+                                    "result": {k: r.get(k) for k in ("status", "personal_stress_threshold", "baseline", "task_level",
+                                                                     "needed_separation", "recovery_mean", "recovered",
+                                                                     "n_task_windows", "aba_confirmed")}})
+                    print(f"[stimulator] ring threshold: {r['status']} limit {r['personal_stress_threshold']}")
+                else:
+                    fb_patch(path, {"status": "failed", "error": f"ring threshold: {why}"})
+                    self.warnings["ring"] = f"ring threshold failed: {why}"
+                self.ring_cal = None
+                return
+        if phase in ("settle", "rest", "task", "recovery"):
+            need = {"rest": 4, "task": 7, "recovery": RING_RECOVERY_WINDOWS}.get(phase)
+            fb_patch(path, {"status": "capturing", "phase": phase, "blocks_captured": rc.n_windows(phase) if need else 0,
+                            "blocks_needed": need})
+
     # One 0.2 s step of the virtual user per tick: 50 EEG samples + one ring packet.
     def _stream_loop(self):
         base_ms = int(time.time() * 1000) % 1_000_000_000
         nxt = time.time()
         while self.running:
-            st = self.vu.step(self.demand, self.phase)
+            st = self.vu.step(self.demand, self.phase, body=self.body)
             keep = st["keep"]
             if keep.any():          # a dropout leaves a real gap in the device clock, as the firmware would
                 codes = microvolts_to_bipolar_code(st["uv"][keep])
@@ -415,6 +529,8 @@ class Stimulator:
                 self.eeg_client.publish(EEG_TOPIC, ";".join(f"{int(m)},{int(c)}" for m, c in zip(ms, codes)), qos=0)
                 self.sent["eeg"] += int(keep.sum())
             if st["packet"] is not None:
+                if self.ring_cal is not None:
+                    self.ring_cal.add(self.ring_cal_phase, st["packet"])
                 self.ring_client.publish(RING_TOPIC, json.dumps(st["packet"]), qos=0)
                 self.sent["ring"] += 1
             nxt += RING_PERIOD
@@ -423,14 +539,16 @@ class Stimulator:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    from simkit.profiles import PROFILES
-    ap.add_argument("--profile", default="typical", choices=list(PROFILES))
+    from simkit.profiles import ALL_PROFILES as PROFILES
+    from simkit.session import SCENARIOS
+    ap.add_argument("--profile", default=DEFAULT_PROFILE, choices=list(PROFILES))
     ap.add_argument("--autostart", action="store_true", help="start now instead of waiting for psy_web")
     ap.add_argument("--no-recalibrate", action="store_true", help="stream only; keep the user's current thresholds")
+    ap.add_argument("--scenario", default=DEFAULT_SCENARIO, choices=list(SCENARIOS))
     args = ap.parse_args()
     stim = Stimulator(args.profile)
     if args.autostart:
-        print(stim.start(args.profile, recalibrate=not args.no_recalibrate))
+        print(stim.start(args.profile, recalibrate=not args.no_recalibrate, scenario=args.scenario))
     print("[stimulator] ready -- start/stop it from psy_web (Calibration, scores & alerts -> Stimulator), Ctrl+C to quit")
     last_nonce = (fb_get("stimulator/control") or {}).get("nonce")
     try:
@@ -439,8 +557,14 @@ def main():
             if ctl.get("nonce") and ctl.get("nonce") != last_nonce:
                 last_nonce = ctl["nonce"]
                 if ctl.get("command") == "start":
-                    msg = stim.start(ctl.get("profile") or "typical", recalibrate=ctl.get("recalibrate", True) is not False)
+                    msg = stim.start(ctl.get("profile") or DEFAULT_PROFILE, recalibrate=ctl.get("recalibrate", True) is not False,
+                                     scenario=ctl.get("scenario") or DEFAULT_SCENARIO)
                     fb_patch("stimulator/status", {"last_message": msg, "ts": time.time()})
+                elif ctl.get("command") == "inject" and stim.running and ctl.get("kind") in ("dropout", "clench", "drowsy"):
+                    # Demo events on request, logged so the dashboard can mark them.
+                    stim.vu.inject(ctl["kind"])
+                    fb_patch(f"stimulator/events/{stim.sid}/{int(time.time() * 1000)}", {"kind": ctl["kind"]})
+                    print(f"[stimulator] injected: {ctl['kind']}")
                 elif ctl.get("command") == "stop":
                     stim.stop()
                     fb_patch("stimulator/status", {"last_message": "stopped", "running": False, "stage": "idle", "ts": time.time()})

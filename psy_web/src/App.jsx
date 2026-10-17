@@ -6,13 +6,16 @@ import FusionView from './components/FusionView';
 import PhysioView from './components/PhysioView';
 import CalibrationDashboard from './components/CalibrationDashboard';
 import StimulatorBanner from './components/StimulatorBanner';
+import SimDemoDashboard from './components/SimDemoDashboard';
+import ConceptDashboard from './components/ConceptDashboard';
 import { useFusionData, useFusionPicker } from './hooks/useFusion';
+import useCalibratedLimits from './hooks/useCalibratedLimits';
 import {
   Breathing, CalibrateScreen, HomeScreen, NavBar, ProfileScreen, ProgressScreen, TABS, WavesScreen, Welcome,
 } from './components/friendly/Screens';
 import './friendly.css';
 
-const VIEWS = new Set([...TABS.map((t) => t.key), 'tech', 'fusion', 'physio', 'calibration']);
+const VIEWS = new Set([...TABS.map((t) => t.key), 'tech', 'fusion', 'physio', 'calibration', 'simdemo', 'concept']);
 const WELCOME_KEY = 'psy_web_welcomed';
 
 function readHash() {
@@ -31,6 +34,8 @@ export default function App() {
   const picker = useSessionPicker();
   const sessionData = useSessionData(picker.userId, picker.sessionId);
   const profile = useFirebaseValue(picker.userId ? `user_profiles/${picker.userId}/eeg` : null) || null;
+  // Calibrated baseline / threshold for mind, body and fused: the same values on every dashboard.
+  const limits = useCalibratedLimits(picker.userId, picker.sessionId);
 
   const [view, setView] = useState(readHash);
   // Fusion windows are only subscribed to while that page is open.
@@ -62,11 +67,11 @@ export default function App() {
     go('calibration');
     setTimeout(() => document.getElementById('stimulator')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
   };
-  const banner = <StimulatorBanner now={now} openControls={openStimulator} />;
+  const banner = <StimulatorBanner now={now} openControls={openStimulator} openDemo={() => go('concept')} />;
   if (view === 'tech') {
-    return <>{banner}<TechView raw={raw} health={health} picker={picker} sessionData={sessionData} profile={profile} now={now}
+    return <>{banner}<TechView raw={raw} health={health} picker={picker} sessionData={sessionData} profile={profile} limits={limits} now={now}
       onBack={() => go('profile')} openFusion={() => go('fusion')} openPhysio={() => go('physio')} openCalibration={() => go('calibration')}
-      openStimulator={openStimulator} /></>;
+      openStimulator={openStimulator} openSimDemo={() => go('simdemo')} openConcept={() => go('concept')} /></>;
   }
   if (view === 'fusion') {
     return <>{banner}<FusionView picker={fusionPicker} data={fusionData} now={now} onBack={() => go('tech')} /></>;
@@ -74,14 +79,21 @@ export default function App() {
   if (view === 'calibration') {
     return <>{banner}<CalibrationDashboard now={now} onBack={() => go('tech')} /></>;
   }
+  if (view === 'concept') {
+    return <>{banner}<ConceptDashboard now={now} onBack={() => go('tech')} openFull={() => go('simdemo')} /></>;
+  }
+  if (view === 'simdemo') {
+    return <>{banner}<SimDemoDashboard now={now} onBack={() => go('tech')} /></>;
+  }
   if (view === 'physio') {
     // Mounted only here, so the ring's MQTT/Firebase subscriptions run only while it's open.
     return <>{banner}<PhysioView now={now} onBack={() => go('tech')} openFusion={() => go('fusion')} /></>;
   }
 
-  const shared = { raw, now, sessionData, profile, picker };
+  const shared = { raw, now, sessionData, profile, picker, limits };
   return (
     <div className="friendly">
+      {banner}
       <main className="fpage">
         {view === 'home' && <HomeScreen {...shared} go={go} openBreathing={() => setBreathing(true)} />}
         {view === 'progress' && <ProgressScreen {...shared} />}
