@@ -98,7 +98,8 @@ export default function CalibrationScreen({ navigation }) {
             (FusionSessionScreen.js). Not rebuilt here. */}
         <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
           <Text style={[styles.cardTitle, { color: text, marginBottom: 4 }]}>Recalibrate Baseline</Text>
-          <CalibrateBreathingCard userId={userId} token={token} eegDb={db} onComplete={refresh} />
+          <CalibrateBreathingCard userId={userId} token={token} eegDb={db}
+            onComplete={() => { refresh(); navigation.navigate('ThresholdCalibration', { autoStart: true }); }} />
         </View>
 
         <TouchableOpacity

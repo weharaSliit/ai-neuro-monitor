@@ -20,6 +20,14 @@ const clock = (ms) => (ms == null ? '—' : new Date(ms).toLocaleTimeString([], 
 // All three trends on one chart (shared 0-1 scale: each component's own limit
 // at 0.50); x = position within each phase, so different block/window counts
 // line up phase by phase; lines are a 3-point running mean.
+function dragScroll(e) {
+  const el = e.currentTarget; const x0 = e.clientX; const s0 = el.scrollLeft;
+  const move = (m) => { el.scrollLeft = s0 - (m.clientX - x0); };
+  const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); el.style.cursor = ''; };
+  el.style.cursor = 'grabbing';
+  window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+}
+
 function TrendCard({ phases }) {
   const comps = [['mind', 'Mind (EEG)', C.eeg], ['body', 'Body (HRV + GSR)', C.hrv], ['fused', 'Fused', C.fused]]
     .filter(([k]) => phases[k]);
@@ -35,12 +43,14 @@ function TrendCard({ phases }) {
   const row = (k) => phases[k]?.levels;
   const f2 = (v) => (v == null ? '—' : v.toFixed(2));
   return (
-    <Card title="Calibration trend: rest → task → recovery" subtitle="All three on the fusion scale: baseline below, each component's own limit at 0.50">
+    <Card title="Calibration trend" className="cal-trend">
       {!comps.length ? <div className="chart-empty" style={{ height: 200 }}>No calibration yet. Recalibrate below.</div> : (
-        <MultiLineChart points={pts} height={260} yDomain={[0, 1]} xDomain={[0, 3]} xFormat={() => ''} yFormat={(v) => v.toFixed(2)}
-          bands={[{ x0: 0, x1: 1, label: 'Rest', kind: 'a' }, { x0: 1, x1: 2, label: 'Task', kind: 'b' }, { x0: 2, x1: 3, label: 'Recovery', kind: 'a' }]}
+        <div className="cal-scroll" onPointerDown={dragScroll}><div style={{ minWidth: 1100 }}>
+        <MultiLineChart points={pts} height={340} yDomain={[0, 1]} xDomain={[0, 3]} xFormat={() => ''} yFormat={(v) => v.toFixed(2)}
+          bands={[{ x0: 0, x1: 1, label: 'Rest', kind: 'a', center: true }, { x0: 1, x1: 2, label: 'Task', kind: 'b', center: true }, { x0: 2, x1: 3, label: 'Recovery', kind: 'a', center: true }]}
           refLines={[{ y: 0.5, label: 'limit' }]} ariaLabel="Calibration trend for mind, body and fused"
-          series={comps.map(([k, l, c]) => ({ key: k, label: l, color: c, width: k === 'fused' ? 3 : 2, dash: k === 'fused', connect: true }))} />
+          series={comps.map(([k, l, c]) => ({ key: k, label: l, color: c, width: k === 'fused' ? 3 : 2, dash: k === 'fused', connect: true, dots: true }))} />
+        </div></div>
       )}
       {comps.length > 0 && (
         <table className="phase-table">
@@ -81,9 +91,8 @@ export default function CalibrationDashboard({ now, go }) {
     eegRecal: recalReq, ringRecal: ringReq, nowMs: now });
 
   return (
-    <div className="page">
-      <TechNav page="calibration" go={go} picker={picker} title="Calibration"
-        subtitle="Rest, a high-load task, then recovery: each component's own baseline and limit. They are used for every decision until the user recalibrates." />
+    <div className="page cal-page">
+      <TechNav page="calibration" go={go} picker={picker} title="Calibration" />
       {gate.paused ? <p className="sd-gate">⏳ <b>Not calibrated yet.</b> Recalibrate below (with the headband and ring on).</p>
         : gate.recalibrating ? <p className="sd-gate">⏳ <b>Recalibrating</b>: follow the steps below; the limits update when it finishes.</p>
           : <p className="sd-gate ok">✓ Calibrated {clock(gate.startMs)}.{limits.mind?.keptOver ? ' A later resting baseline made by the bridge alone (service restart / new session) is not used.' : ''}</p>}

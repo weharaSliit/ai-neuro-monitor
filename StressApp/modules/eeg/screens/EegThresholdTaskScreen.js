@@ -5,7 +5,7 @@ import { db } from '../firebase';
 import ScreenBackground from '../../shared/ScreenBackground';
 import Card from '../../shared/Card';
 import Button from '../../shared/Button';
-import LiveCalibrationGraphs from '../../shared/LiveCalibrationGraphs';
+import CalibrationTrendCard from '../../shared/CalibrationTrendCard';
 import Icon, { NAMES } from '../../shared/Icon';
 import { eegClient } from '../../shared/eegApiClient';
 import physiologicalApi from '../../physiological/api/client';
@@ -224,7 +224,11 @@ const SORTER_BUZZ_PATTERN = [0, 120, 60, 120];
 // rule, fixation cross, MIST-style adaptive response window (2.0 s start,
 // 0.8-2.5 s), countdown bar, red flash + buzz on errors, running score.
 
-export default function EegThresholdTaskScreen({ navigation }) {
+// Seconds of get-ready countdown before the test starts by itself (route param autoStart,
+// set right after the calm baseline so the calibration runs on without another tap).
+const AUTO_START_SEC = 10;
+
+export default function EegThresholdTaskScreen({ navigation, route }) {
   const { theme: t, COLORS } = useTheme();
   const { user, token, completeOnboarding } = useAuth();
   const userId = user?.userId;
@@ -241,6 +245,8 @@ export default function EegThresholdTaskScreen({ navigation }) {
     && eegCalib?.personal_high_load_p != null && ringCalib?.personal_stress_threshold != null;
 
   const [sessionId, setSessionId] = useState(null);
+  const [autoOn, setAutoOn] = useState(Boolean(route?.params?.autoStart));
+  const [autoLeft, setAutoLeft] = useState(AUTO_START_SEC);
   const [phase, setPhase] = useState('intro'); // intro | serialSub | quiz | puzzle | stroop | review
   const [nowFine, setNowFine] = useState(Date.now());
 
@@ -397,6 +403,14 @@ export default function EegThresholdTaskScreen({ navigation }) {
     setSerialDeadline(Date.now() + SERIAL_SUB_DURATION_SEC * 1000);
     setPhase('serialSub');
   }, [userId, triggerEeg, triggerRing]);
+
+  // Get-ready countdown, then the first round opens by itself (autoStart route param).
+  useEffect(() => {
+    if (phase !== 'intro' || !autoOn || alreadyPersonalized || calibLoading || !userId) return undefined;
+    if (autoLeft <= 0) { startSerialSub(); return undefined; }
+    const id = setTimeout(() => setAutoLeft((n) => n - 1), 1000);
+    return () => clearTimeout(id);
+  }, [phase, autoOn, autoLeft, alreadyPersonalized, calibLoading, userId, startSerialSub]);
 
   const submitSerial = useCallback(() => {
     if (serialFeedback || serialFeedbackHandledRef.current) return;
@@ -767,7 +781,17 @@ export default function EegThresholdTaskScreen({ navigation }) {
                 {colourSafe ? '☑' : '☐'} I find red and green hard to tell apart (use purple instead of green)
               </Text>
             </TouchableOpacity>
-            <Button label="Start Task" onPress={startSerialSub} disabled={!userId || calibLoading} variant="primary" style={{ marginTop: 16 }} />
+            {autoOn && !calibLoading && (
+              <Text style={[styles.body, { color: t.text, fontWeight: '700', marginTop: 12 }]}>
+                The test starts by itself in {autoLeft}s. Put your devices on and rest the phone on a table.
+              </Text>
+            )}
+            <Button label={autoOn ? 'Start now' : 'Start Task'} onPress={startSerialSub} disabled={!userId || calibLoading} variant="primary" style={{ marginTop: 16 }} />
+            {autoOn && (
+              <TouchableOpacity onPress={() => setAutoOn(false)} activeOpacity={0.7} style={styles.skipRow}>
+                <Text style={[styles.skipText, { color: t.textMuted }]}>Not yet</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity onPress={finish} activeOpacity={0.7} style={styles.skipRow}>
               <Text style={[styles.skipText, { color: t.textMuted }]}>Skip for now →</Text>
             </TouchableOpacity>
@@ -1026,13 +1050,7 @@ export default function EegThresholdTaskScreen({ navigation }) {
         )}
 
         {phase !== 'intro' && (
-          <LiveCalibrationGraphs
-            key={phase === 'review' ? 'review' : 'task'}
-            phase="task"
-            token={token}
-            collapsible={phase !== 'review'}
-            defaultOpen={phase === 'review'}
-          />
+          <CalibrationTrendCard userId={userId} sessionId={sessionId} />
         )}
       </View>
     </ScreenBackground>

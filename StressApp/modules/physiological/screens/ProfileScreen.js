@@ -230,16 +230,7 @@ export default function ProfileScreen({ navigation }) {
 
         {/* Clinical view + sign out */}
         <Text style={[styles.sectionHeading, { color: muted }]}>Account</Text>
-        <TouchableOpacity style={styles.clinicalBtn} activeOpacity={0.88} onPress={() => navigation.navigate('Admin')}>
-          <View style={styles.clinicalIcon}>
-            <Icon name={NAMES.admin} size={20} color="#FFFFFF" />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.clinicalTitle}>Clinical view</Text>
-            <Text style={styles.clinicalSub}>Full sensor detail for researchers and clinicians</Text>
-          </View>
-          <Icon name={NAMES.chevronRight} size={22} color="#FFFFFF" />
-        </TouchableOpacity>
+        {/* Clinical view lives in the dashboard (psy_web); entry hidden here. */}
 
         <TouchableOpacity style={styles.logoutBtn} activeOpacity={0.85} onPress={logout}>
           <Icon name={NAMES.logout} size={18} color={COLORS.stressDark} />

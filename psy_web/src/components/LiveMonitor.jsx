@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { MultiLineChart } from './charts';
 import { Card, Status } from './panels';
 import TechNav from './TechNav';
@@ -10,7 +10,7 @@ import { mmss, useStimulator } from '../hooks/useStimulator';
 import { calibratedLimits } from '../lib/limits';
 import { STATE_TEXT, theilSen } from '../lib/earlyWarning';
 import {
-  EW_SETS, QUADRANTS, buildSeries, decisionGate, eventLog, fusedQuadrant, gateSeries, periodsFrom, phaseBands, phaseCheck,
+  EW_SETS, QUADRANTS, buildSeries, decisionGate, fusedQuadrant, gateSeries, periodsFrom,
 } from '../lib/simDemo';
 
 // Live monitor (#concept): the concept on one page, for the real devices and
@@ -22,6 +22,10 @@ import {
 // and mind x body gives the user's state. Simulated sessions add the ground
 // truth (what the virtual person was doing) and a scorecard against it.
 const C = { mind: 'var(--c1)', body: 'var(--c2)', fused: 'var(--c7)', truth: 'var(--c4)' };
+// Only the newest ring windows are subscribed to (a window every ~20 s: 180 = the last hour), and the
+// derived series refresh every few seconds, so the page follows the devices closely.
+const RING_LAST = { last: 180 };
+const REFRESH_MS = 5000;
 const CLS = { normal: 'ok', early_warning: 'warn', high: 'high', recovering: 'rec', limited: 'lim', calibrating: 'lim' };
 const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 const clockS = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -53,7 +57,7 @@ const EW_LABEL = {
 function StateCard({ title, color, row, rows, note }) {
   const st = row?.state || 'calibrating';
   const trend = st === 'calibrating' ? null : trendOf(rows);
-  const [cls, label, text] = EW_LABEL[st] || EW_LABEL.calibrating;
+  const [cls, label] = EW_LABEL[st] || EW_LABEL.calibrating;
   return (
     <div className={`sd-card sd-${CLS[st] || 'ok'}`} style={{ borderTopColor: color }}>
       <span className="sd-card-title">{title}</span>
@@ -61,7 +65,7 @@ function StateCard({ title, color, row, rows, note }) {
         <span className="sd-card-value">{row?.value == null ? '—' : row.value.toFixed(2)}</span>
         {trend && <span className={`lm-trend ${trend}`}>{trend === 'rising' ? '↗ rising' : trend === 'falling' ? '↘ falling' : '→ steady'}</span>}
       </div>
-      <div className={`lm-ew ${cls}`}><b>{label}</b><span>{text}</span></div>
+      <div className={`lm-ew ${cls}`}><b>{label}</b></div>
       {note && <span className="sd-card-note">{note}</span>}
     </div>
   );
@@ -75,38 +79,51 @@ function Quadrant({ q, mind, body }) {
       <div className="cq-grid">
         {['arousal', 'stress', 'relaxed', 'mental'].map((k) => (
           <div key={k} className={`cq-cell cq-${k} ${q?.key === k ? 'on' : ''}`}>
-            <b>{QUADRANTS[k].label}</b><span>{QUADRANTS[k].message || 'Mind and body below their limits.'}</span>
+            <b>{QUADRANTS[k].label}</b>
           </div>
         ))}
         {x != null && <i className="cq-dot" style={{ left: `${x * 100}%`, top: `${(1 - (y ?? 0.25)) * 100}%` }} title="mind / body now" />}
       </div>
-      <div className="cq-axes"><span>Mind → above its limit</span><span>Body ↑ above its limit</span></div>
+      <div className="cq-axes"><span>Mind →</span><span>Body ↑</span></div>
     </div>
   );
 }
 
 // One lane per component, coloured by state over time.
+// Same left gutter (52 px) and right padding (14 px) as the chart above (charts.jsx PAD), and its
+// real pixel width, so every lane lines up with the x axis instead of being scaled separately.
+const CHART_LEFT = 52; const CHART_RIGHT = 58;
 function StateLanes({ series, xDomain }) {
-  const W = 1000; const lh = 20; const left = 64;
+  const box = useRef(null);
+  const [W, setW] = useState(600);
+  useEffect(() => {
+    if (!box.current) return undefined;
+    const ro = new ResizeObserver(([e]) => setW(Math.max(240, Math.floor(e.contentRect.width))));
+    ro.observe(box.current);
+    return () => ro.disconnect();
+  }, []);
+  const lh = 26;
   const span = (xDomain[1] - xDomain[0]) || 1;
-  const sx = (t) => left + ((t - xDomain[0]) / span) * (W - left - 4);
+  const sx = (t) => CHART_LEFT + ((t - xDomain[0]) / span) * (W - CHART_LEFT - CHART_RIGHT);
   const lanes = [['mind', 'Mind'], ['body', 'Body'], ['fused', 'Fused']];
   return (
-    <svg viewBox={`0 0 ${W} ${lanes.length * lh + 4}`} width="100%" className="lm-lanes" role="img" aria-label="State over time per component">
+    <div ref={box}>
+    <svg width={W} height={lanes.length * lh + 6} className="lm-lanes" role="img" aria-label="State over time per component">
       {lanes.map(([k, label], i) => {
         const rows = series[k].filter((r) => r.t >= xDomain[0] && r.t <= xDomain[1]);
         return (
           <g key={k}>
-            <text x={0} y={i * lh + 14} className="tick">{label}</text>
+            <text x={CHART_LEFT - 8} y={i * lh + 17} textAnchor="end" className="tick">{label}</text>
             {rows.map((r, j) => {
               const t1 = Math.min(rows[j + 1]?.t ?? r.t + 25000, r.t + 60000);
-              return <rect key={r.t} x={sx(r.t)} y={i * lh + 3} width={Math.max(1, sx(t1) - sx(r.t))} height={lh - 6}
+              return <rect key={r.t} x={sx(r.t)} y={i * lh + 4} width={Math.max(2, sx(Math.min(t1, xDomain[1])) - sx(r.t))} height={lh - 8} rx="2"
                 className={`lane-${r.state}`}><title>{`${label} ${clockS(r.t)}: ${STATE_TEXT[r.state] || r.state}${r.value != null ? ` (${r.value.toFixed(2)})` : ''}`}</title></rect>;
             })}
           </g>
         );
       })}
     </svg>
+    </div>
   );
 }
 
@@ -116,14 +133,13 @@ export default function LiveMonitor({ now, go }) {
   const stim = useStimulator(now, sid);
   const st = stim.status;
   const eeg = useSessionData(uid, sid);
-  const ring = usePhysioData(uid, sid);
+  const ring = usePhysioData(uid, sid, RING_LAST);
   const fusion = useFusionData(uid, sid);
   const history = useEegCalibrations(uid, `${sid}|${eeg.calibration?.updated_at ?? ''}|${eeg.threshold?.updated_at ?? ''}`);
   const recalReq = useFirebaseValue(sid ? `eeg_recalibration/${sid}` : null);
   const ringReq = useFirebaseValue(uid ? `ring_recalibration/${uid}` : null);
   const ringBase = useFirebaseValue(uid ? `physiological/baselines/${uid}/updated_at` : null);
   const [zoom, setZoom] = useState(null);
-  const [showTruth, setShowTruth] = useState(true);
 
   const limits = calibratedLimits({ eeg, history, sid, ring });
   const { cal, thr, eegInfo, ringInfo, fusedCal, bodyCal } = limits;
@@ -133,7 +149,7 @@ export default function LiveMonitor({ now, go }) {
   const simHere = stim.running && st?.sid === sid;
   const simulated = simHere || stim.timeline.length > 0;
   const params = EW_SETS.design.params;
-  const periods = useMemo(() => periodsFrom(stim.timeline, simHere ? now : null), [stim.timeline, simHere, Math.floor(now / 10000)]);
+  const periods = useMemo(() => periodsFrom(stim.timeline, simHere ? now : null), [stim.timeline, simHere, Math.floor(now / REFRESH_MS)]);
   // readings taken during the stimulator's own calibration phases are calibration data too
   const calWin = periods.filter((p) => p.calibration).map((p) => [p.start, p.end]);
   const gate = useMemo(() => ({ ...gate0, blank: [...gate0.blank, ...calWin] }), [JSON.stringify(gate0), JSON.stringify(calWin)]);
@@ -142,9 +158,7 @@ export default function LiveMonitor({ now, go }) {
     blocks: eeg.blocks, eegInfo, ringWindows: ring.windows, ringInfo, fusionWindows: fusion.windows,
     fusedCal, bodyCal, ringBaseAt: ringBase ? Date.parse(ringBase) : null, params, nowMs: now, equalWeights: simulated,
   }), gate), [eeg.blocks, ring.windows, fusion.windows, eegInfo?.limitL, eegInfo?.status, ringInfo.limit, fusedCal?.baseline, bodyCal?.baseline,
-    ringBase, gate.startMs, gate.paused, JSON.stringify(gate.blank), simulated, Math.floor(now / 30000)]); // also every 30 s
-  const events = useMemo(() => eventLog({ series, periods, eegThrAt: gate.eegAt, ringThrAt: gate.ringAt }), [series, periods, gate.eegAt, gate.ringAt]);
-  const check = useMemo(() => (simulated ? phaseCheck(series, periods, stim.timeline) : []), [series, periods, stim.timeline, simulated]);
+    ringBase, gate.startMs, gate.paused, JSON.stringify(gate.blank), simulated, Math.floor(now / REFRESH_MS)]);
 
   const last = (rows) => [...rows].reverse().find((r) => r.value != null) || null;
   const m = last(series.mind); const b = last(series.body); const f = last(series.fused);
@@ -156,19 +170,28 @@ export default function LiveMonitor({ now, go }) {
   const full = xs.length > 1 ? [Math.min(...xs), Math.max(...xs)] : null;
   const xDomain = zoom && full ? [Math.max(zoom[0], full[0]), Math.min(zoom[1], full[1])] : full;
   const onZoom = (a, c) => setZoom(a == null ? null : [a, c]);
+  // Move through time: dt in ms (drag the chart or the arrows); null = back to everything.
+  const pan = (dt) => {
+    if (!full) return;
+    if (dt == null) { setZoom(null); return; }
+    const cur = xDomain || full; const span = cur[1] - cur[0];
+    let a = cur[0] + dt; let c = cur[1] + dt;
+    if (a < full[0]) { a = full[0]; c = a + span; }
+    if (c > full[1]) { c = full[1]; a = c - span; }
+    setZoom(a <= full[0] + 1 && c >= full[1] - 1 ? null : [a, c]);
+  };
+  const stepBy = (dir) => full && zoom && pan(dir * (zoom[1] - zoom[0]) / 2);
   const lastMin = (min) => full && setZoom([Math.max(full[0], full[1] - min * 60000), full[1]]);
   const fmtX = zoom ? clockS : clock;
 
   const bands = [
-    ...(simulated && showTruth ? phaseBands(periods) : []),
     // grey: no decisions (before the first calibration / during an asked-for recalibration); unlabelled
     // when the simulated phases already name that time
     ...(xDomain ? gate.blank.filter(([a, c]) => c > xDomain[0] && a < xDomain[1])
-      .map(([a, c]) => ({ x0: Math.max(a, xDomain[0]), x1: Math.min(c, xDomain[1]), label: simulated && showTruth ? '' : 'calibrating', kind: 'n' })) : []),
+      .map(([a, c]) => ({ x0: Math.max(a, xDomain[0]), x1: Math.min(c, xDomain[1]), label: 'calibrating', kind: 'n' })) : []),
   ];
   const pts = [...series.mind.map((r) => ({ x: r.t, mind: r.value ?? null })), ...series.body.map((r) => ({ x: r.t, body: r.value })),
     ...series.fused.map((r) => ({ x: r.t, fused: r.value }))].sort((a, c) => a.x - c.x);
-  const truthPts = stim.timeline.map((p) => ({ x: p.t, d: p.demand, bd: p.body_demand ?? null }));
   const markers = [
     ...['mind', 'body', 'fused'].flatMap((k) => series[k].filter((r, i, a) => r.state === 'early_warning' && a[i - 1]?.state !== 'early_warning')
       .map((r) => ({ x: r.t, y: Math.min(0.96, (r.value ?? 0.5) + 0.07), glyph: '▲', color: 'var(--warning)', title: `${k} early warning ${clockS(r.t)}` }))),
@@ -182,9 +205,9 @@ export default function LiveMonitor({ now, go }) {
   const fresh = (ms) => ms != null && now - ms < 90000;
 
   return (
-    <div className="page">
+    <div className="page lm-page">
       <TechNav page="concept" go={go} picker={picker} title="Live monitor"
-        subtitle="Early warning of stress from the mind (EEG) and body (HRV + GSR), each against the user's own calibrated limit, and fused." />
+        subtitle="Mind, body and overall, each against the user's own limit." />
 
       {/* source: real devices or the live stimulator */}
       <div className={`sd-head lm-source ${simulated ? 'sim' : 'real'}`}>
@@ -207,86 +230,45 @@ export default function LiveMonitor({ now, go }) {
       {/* now: three components + the user's state */}
       <div className="cd-top">
         <div className="cd-cards">
-          <StateCard title="MIND · EEG cognitive load" color={C.mind} row={m} rows={series.mind} />
-          <StateCard title="BODY · HRV + GSR arousal" color={C.body} row={b} rows={series.body}
+          <StateCard title="MIND · EEG" color={C.mind} row={m} rows={series.mind} />
+          <StateCard title="BODY · HRV + GSR" color={C.body} row={b} rows={series.body}
             note={!b && ringBase === null ? 'no ring baseline yet' : null} />
-          <StateCard title="FUSED · mind + body" color={C.fused} row={f} rows={series.fused}
-            note={f ? `weights ${Math.round((f.wEeg ?? 0) * 100)} / ${Math.round((f.wRing ?? 0) * 100)}${f.equalWeights ? ' (equal, simulation)' : ''}` : null} />
+          <StateCard title="FUSED · mind + body" color={C.fused} row={f} rows={series.fused} />
         </div>
         <Card title="User's state" subtitle={q ? `${q.label}${q.partial ? ` (${q.partial})` : ''}` : 'after calibration'}
           right={deciding && f?.mindLed ? <Status kind="warning">mind-led: body still calm</Status> : null}>
           <Quadrant q={q} mind={deciding ? m?.value : null} body={deciding ? b?.value : null} />
-          {q?.message && <p className="cq-msg">“{q.message}”</p>}
         </Card>
       </div>
 
       {/* the timeline */}
-      <Card title="Early warning timeline" subtitle="0.50 = each component's own limit · shaded band = early-warning zone above the calm level"
+      <Card title="Stress timeline"
         right={(
           <div className="cd-zoom">
+            <button type="button" className="btn ghost" onClick={() => stepBy(-1)} disabled={!zoom} aria-label="Earlier">◀</button>
+            <button type="button" className="btn ghost" onClick={() => stepBy(1)} disabled={!zoom || (full && zoom[1] >= full[1] - 1)} aria-label="Later">▶</button>
             {[10, 30, 60].map((mn) => <button key={mn} type="button" className="btn ghost" onClick={() => lastMin(mn)} disabled={!full}>{mn} min</button>)}
             <button type="button" className="btn ghost" onClick={() => setZoom(null)} disabled={!zoom}>All</button>
-            {simulated && <label className="muted"><input type="checkbox" checked={showTruth} onChange={(e) => setShowTruth(e.target.checked)} /> ground truth</label>}
           </div>
         )}>
         {!xDomain ? <div className="chart-empty" style={{ height: 260 }}>No readings for this session yet.</div> : (
           <>
-            {simulated && showTruth && (
-              <MultiLineChart points={truthPts} height={110} yDomain={[0, 1]} xDomain={xDomain} xFormat={fmtX} onZoom={onZoom} yFormat={(v) => `${Math.round(v * 100)}%`}
-                bands={bands} ariaLabel="Simulated mental demand and physical arousal"
-                series={[{ key: 'd', label: 'Simulated mental demand', color: C.mind, width: 2, dash: true, connect: true },
-                  { key: 'bd', label: 'Simulated physical arousal', color: C.body, width: 2, dash: true, connect: true }]} />
-            )}
-            <MultiLineChart points={pts} height={300} yDomain={[0, 1]} xDomain={xDomain} xFormat={fmtX} onZoom={onZoom} yFormat={(v) => v.toFixed(2)}
+            <MultiLineChart points={pts} height={300} yDomain={[0, 1]} xDomain={xDomain} xFormat={fmtX} onPan={pan} yFormat={(v) => v.toFixed(2)}
               bands={bands} markers={markers} ariaLabel="Mind, body and fused over time"
-              hbands={ewBand ? [{ y0: ewBand[0], y1: ewBand[1], label: 'early-warning zone', color: 'var(--warning)', opacity: 0.1 }] : []}
-              refLines={[{ y: 0.5, label: 'limit 0.50' }, ...(fusedCal ? [{ y: fusedCal.baseline, label: 'calm (fused)' }] : [])]}
-              series={[{ key: 'mind', label: 'Mind', color: C.mind, width: 2, connect: true },
-                { key: 'body', label: 'Body', color: C.body, width: 2, connect: true },
-                { key: 'fused', label: 'Fused', color: C.fused, width: 3, connect: true }]} />
+              hbands={ewBand ? [{ y0: ewBand[0], y1: ewBand[1], color: 'var(--warning)', opacity: 0.12 }] : []}
+              refLines={[{ y: 0.5, label: 'limit' }, ...(fusedCal ? [{ y: fusedCal.baseline, label: 'calm' }] : [])]}
+              series={[{ key: 'mind', label: 'Mind', color: C.mind, width: 2, connect: true, dots: true },
+                { key: 'body', label: 'Body', color: C.body, width: 2, connect: true, dots: true },
+                { key: 'fused', label: 'Fused', color: C.fused, width: 3, connect: true, dots: true }]} />
             <StateLanes series={series} xDomain={xDomain} />
             <p className="caption lm-legend">
-              <i className="lane-normal" /> normal <i className="lane-early_warning" /> early warning (trending up)
-              <i className="lane-high" /> high (2 of last 3 above the limit) <i className="lane-recovering" /> recovering
-              <i className="lane-calibrating" /> calibrating / limited · ▲ warning ▼ high · drag to zoom, double-click to reset
+              <i className="lane-normal" /> normal <i className="lane-early_warning" /> early warning
+              <i className="lane-high" /> high <i className="lane-recovering" /> recovering
+              <i className="lane-calibrating" /> calibrating · <span className="lm-zonekey" /> early-warning zone
             </p>
           </>
         )}
       </Card>
-
-      <div className={check.length ? 'grid-2' : ''}>
-        <Card title="Events" subtitle="Warnings, highs and recoveries (newest first)">
-          {!events.length ? <p className="muted">No events yet.</p> : (
-            <ol className="sd-log">
-              {events.filter((e) => e.kind !== 'reject').slice(-40).reverse().map((e, i) => (
-                <li key={`${e.t}-${i}`} className={`ev-${e.kind}`} title={e.title}><time>{clockS(e.t)}</time>{e.text}</li>
-              ))}
-            </ol>
-          )}
-        </Card>
-        {check.length > 0 && (
-          <Card title="Against the ground truth" subtitle="Simulation only: state the app showed vs the state the scenario implies, after the first 2 min of each phase">
-            <table className="phase-table">
-              <thead><tr><th>Phase</th><th>Time</th><th>Should show</th><th>Correct</th><th>Showed mostly</th></tr></thead>
-              <tbody>
-                {check.map((c) => (
-                  <tr key={c.start}>
-                    <th>{PHASE[c.phase] || c.phase.replace(/_/g, ' ')}</th>
-                    <td>{clock(c.start)}–{clock(c.end)}</td>
-                    <td>{c.expected ? QUADRANTS[c.expected].label : <span className="muted">in-between</span>}</td>
-                    <td className={c.correct == null ? 'muted' : c.correct >= 0.7 ? 'ok' : c.correct >= 0.4 ? '' : 'bad'}>{pct(c.correct)}</td>
-                    <td>{c.mostly ? QUADRANTS[c.mostly].label : '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {(() => {
-              const sc = check.filter((c) => c.correct != null);
-              return sc.length ? <p className="caption">Overall: {pct(sc.reduce((a, c) => a + c.correct, 0) / sc.length)} correct over {sc.length} scored phases.</p> : null;
-            })()}
-          </Card>
-        )}
-      </div>
     </div>
   );
 }

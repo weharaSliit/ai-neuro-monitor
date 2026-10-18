@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { setPicker, usePickerStore } from './pickerStore';
 import { shallowKeys } from '../lib/firebase';
 import { joinQuality, pushList } from '../lib/ring';
 import { useFirebaseValue } from './useData';
@@ -13,13 +14,14 @@ const NS = 'physiological';   // backend/common/firebase_config.py RTDB_NAMESPAC
 export function usePhysioPicker() {
   const liveUser = useFirebaseValue('fusion_en/current_user_id') || null;
   const liveSession = useFirebaseValue('fusion_en/current_session_id') || null;
-  const [follow, setFollow] = useState(true);
-  const [manual, setManual] = useState({ userId: null, sessionId: null });
+  const { follow, userId: pickedUser, sessionId: pickedSession } = usePickerStore();
   const [users, setUsers] = useState([]);
   const [sessions, setSessions] = useState([]);
 
-  const userId = follow ? liveUser : manual.userId;
-  const sessionId = follow ? liveSession : manual.sessionId;
+  const userId = follow ? liveUser : pickedUser;
+  // The picked session, unless this page has no such session for the user: then its newest.
+  const sessionId = follow ? liveSession
+    : pickedSession && (!sessions.length || sessions.includes(pickedSession)) ? pickedSession : (sessions[0] || pickedSession);
 
   useEffect(() => {
     shallowKeys(`${NS}/predictions`).then((k) => setUsers(k.sort())).catch(() => setUsers([]));
@@ -35,8 +37,9 @@ export function usePhysioPicker() {
   }, [userId, liveSession]);
 
   return {
-    follow, setFollow, liveUser, liveSession, userId, sessionId, users, sessions,
-    choose: (next) => { setFollow(false); setManual((m) => ({ ...m, ...next })); },
+    follow, liveUser, liveSession, userId, sessionId, users, sessions,
+    setFollow: (f) => setPicker({ follow: f }),
+    choose: (next) => setPicker({ follow: false, ...next }),
   };
 }
 
@@ -44,10 +47,11 @@ export function usePhysioPicker() {
 // user + session: per-window predictions (features, GSR wave, IBI
 // sequence), their quality rows, the personal baseline, the resting
 // scores / personal threshold, and the device heartbeat.
-export function usePhysioData(userId, sessionId) {
+// opts.last: only the newest N windows (the live monitor needs the last ~hour, not the whole session).
+export function usePhysioData(userId, sessionId, opts) {
   const both = userId && sessionId;
-  const preds = useFirebaseValue(both ? `${NS}/predictions/${userId}/${sessionId}` : null);
-  const quals = useFirebaseValue(both ? `${NS}/prediction_quality/${userId}/${sessionId}` : null);
+  const preds = useFirebaseValue(both ? `${NS}/predictions/${userId}/${sessionId}` : null, opts);
+  const quals = useFirebaseValue(both ? `${NS}/prediction_quality/${userId}/${sessionId}` : null, opts);
   const baseline = useFirebaseValue(userId ? `${NS}/baselines/${userId}` : null);
   const thresholds = useFirebaseValue(userId ? `${NS}/personal_thresholds/${userId}` : null);
   const session = useFirebaseValue(both ? `${NS}/sessions/${userId}/${sessionId}` : null);

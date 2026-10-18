@@ -50,7 +50,8 @@ function connect(cfg, onMessage, setConn) {
   return client;
 }
 
-export default function useLiveDevices() {
+// enabled=false: no connection (e.g. while the signed-in person is only viewing another account's devices).
+export default function useLiveDevices(enabled = true) {
   const ringMsgs = useRef([]);
   const beats = useRef([]);
   const arrivals = useRef([]);
@@ -62,6 +63,7 @@ export default function useLiveDevices() {
   const [snap, setSnap] = useState({ ring: null, eeg: null });
 
   useEffect(() => {
+    if (!enabled) return undefined;
     const ringClient = connect(RING, (text) => {
       const st = ringStats.current;
       let m;
@@ -153,7 +155,7 @@ export default function useLiveDevices() {
     }, RENDER_MS);
 
     return () => { clearInterval(timer); ringClient.end(true); eegClient.end(true); };
-  }, []);
+  }, [enabled]);
 
   return { ringConn, eegConn, ...snap };
 }
