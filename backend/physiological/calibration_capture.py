@@ -53,7 +53,7 @@ from backend.physiological.predictor import (
     update_baseline_ema,
 )
 from backend.physiological.firebase_service import (
-    baseline_exists, load_baseline, load_resting_scores, save_baseline,
+    baseline_exists, clear_personal_stress_threshold, load_baseline, load_resting_scores, save_baseline,
     save_baseline_adaptation, save_personal_stress_threshold, save_resting_scores, save_task_calibration_result,
 )
 
@@ -672,6 +672,7 @@ def run_task_calibration_capture(user_id, on_progress=None, on_live=None, n_task
             time.sleep(1)
 
         state['phase'] = 'scoring'   # stop collecting while the task is scored
+        provisional_limit = None
         _notify('saving')
         try:
             # Score every collected window individually and drop only the
@@ -708,12 +709,18 @@ def run_task_calibration_capture(user_id, on_progress=None, on_live=None, n_task
                 'n_task_windows': len(task_scores),
             }
             save_task_calibration_result(user_id, task_scores, result)
+            # Save the limit now (task separated from rest), so a restart or a
+            # lost ring during the 3-minute recovery rest below doesn't leave the
+            # person without it. The recovery check can still withdraw it (drift).
+            if mid.get('separated'):
+                provisional_limit = mid['limit']
+                save_personal_stress_threshold(user_id, provisional_limit)
         except Exception as e:
             _notify('error', message=str(e))
             return None
 
-        # Protocol phase 4: recovery rest. The threshold is already saved;
-        # recovery is only reported (does prob_stress come back down?).
+        # Protocol phase 4: recovery rest. Does prob_stress come back down? If it
+        # does not, the rise was drift and the provisional limit above is withdrawn.
         state['ibi_buf'], state['gsr_buf'], state['acc_buf'] = [], [], []
         state['window_start'] = time.time()
         state['last_sample_time'] = time.time()
@@ -752,6 +759,8 @@ def run_task_calibration_capture(user_id, on_progress=None, on_live=None, n_task
         try:
             if threshold is not None:
                 save_personal_stress_threshold(user_id, threshold)
+            elif provisional_limit is not None:
+                clear_personal_stress_threshold(user_id)
             save_task_calibration_result(user_id, task_scores, result)
         except Exception as e:
             print(f"[calibrate {user_id}] couldn't save the threshold result: {e}")

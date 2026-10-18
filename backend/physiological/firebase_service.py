@@ -196,6 +196,12 @@ def save_personal_stress_threshold(user_id, threshold: float) -> None:
     })
 
 
+def clear_personal_stress_threshold(user_id) -> None:
+    """Remove only the personal limit (used when the recovery check after the
+    task decides the rise was drift, after a provisional limit was saved)."""
+    _ref(f'personal_thresholds/{user_id}').update({'personal_stress_threshold': None})
+
+
 def save_task_calibration_result(user_id, task_scores: list, result: dict) -> None:
     """Per-window task prob_stress scores and the outcome of the onboarding
     task (ok / not_separated), next to resting_scores -- so a calibration
