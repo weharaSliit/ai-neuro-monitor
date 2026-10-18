@@ -19,8 +19,13 @@ class TelemetryPayload(BaseModel):
     timestamp: float = Field(..., description="Current UNIX timestamp in seconds")
     fused_stress_label: str = Field("normal", description="Single fused stress label from multimodal fusion engine: normal, pre-stress, or stress")
     stress_probability: float = Field(0.50, ge=0.0, le=1.0, description="Single stress probability score from multimodal fusion engine (0.0 to 1.0)")
+    pheno_stress_label: Optional[str] = Field(None, description="Latest digital phenotyping prediction label")
+    pheno_stress_probability: Optional[float] = Field(None, ge=0.0, le=1.0, description="Latest digital phenotyping stress score (0.0 to 1.0)")
     seconds_since_last_packet: float = Field(0.0, description="Seconds elapsed since previous data packet")
     is_calibrated: bool = Field(True, description="True if 2-minute baseline calibration is complete")
+    has_live_packet: bool = Field(False, description="Whether the latest physiological input came from Firebase")
+    active_session_id: Optional[str] = None
+    raw_label: Optional[str] = None
 
 class FusionEngineIngestRequest(BaseModel):
     user_id: str = Field("user_default", description="User ID")
@@ -37,6 +42,10 @@ class ProcessedSignalResult(BaseModel):
     is_alert_triggered: bool
     features_flat: List[float]
     message: str
+    has_live_packet: bool = False
+    active_session_id: Optional[str] = None
+    raw_label: Optional[str] = None
+    confidence: Optional[float] = None
 
 class InterventionRequest(BaseModel):
     user_id: str = Field("user_default", description="User ID")
@@ -58,6 +67,8 @@ class TechniqueRecommendation(BaseModel):
     physiological_sample: float
     preference_score: float
     execution_time_ms: float
+    context_stress_label: Optional[str] = None
+    context_stress_probability: Optional[float] = None
 
 class ValidationRequest(BaseModel):
     user_id: str

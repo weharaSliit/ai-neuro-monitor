@@ -126,9 +126,11 @@ export const InterventionScreen = () => {
     Vibration.vibrate(30);
 
     setTimeout(() => {
-      if (currentRecommendation?.selected_sub_option) {
-        setSelectedSubOption(currentRecommendation.selected_sub_option);
-      }
+      // Go straight to the recommended technique
+      setSelectedSubOption(
+        currentRecommendation?.selected_sub_option ||
+        { id: techId, title: gameInfo.title, description: gameInfo.tag, gradient: gameInfo.gradient }
+      );
       setCurrentScreen('GamePlayer');
       setIsAccepting(false);
     }, 300);

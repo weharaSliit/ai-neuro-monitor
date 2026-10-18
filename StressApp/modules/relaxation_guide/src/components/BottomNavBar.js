@@ -9,22 +9,16 @@ export const BottomNavBar = () => {
   const { theme, isDarkMode } = useContext(ThemeContext);
   const navigation = useNavigation();
 
-  const u = (userId || '').toLowerCase();
-  const isAdmin = u === 'ojani' || u.includes('ojani') || u === 'admin' || u.includes('admin');
-
   const baseItems = [
     { id: 'Dashboard', label: 'Guide', icon: '🏠', aliases: ['Intervention', 'Recovery', 'Rating'] },
     { id: 'Methods', label: 'Arcade', icon: '🌸', aliases: ['GamePlayer', 'SubOptionSelector'] },
     { id: 'PerformanceOverview', label: 'Analytics', icon: '📈', aliases: ['BaselineCalibration'] },
     { id: 'History', label: 'History', icon: '📊', aliases: [] },
     { id: 'UserProfile', label: 'Profile', icon: '👤', aliases: ['PrivacyPolicy'] },
-  ];
-
-  const adminItems = [
     { id: 'FusionPipeline', label: 'Pipeline', icon: '📡', aliases: [] },
   ];
 
-  const navItems = isAdmin ? [...baseItems, ...adminItems] : baseItems;
+  const navItems = baseItems;
 
   const isDark = isDarkMode ?? true;
   const navBg = isDark ? 'rgba(15, 23, 42, 0.94)' : 'rgba(255, 255, 255, 0.94)';

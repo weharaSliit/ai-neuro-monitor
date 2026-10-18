@@ -46,6 +46,12 @@ export const PerformanceOverviewScreen = () => {
     currentRecommendation,
     setCurrentRecommendation,
     lastValidationResult,
+    hasLivePacket,
+    hasLivePhenoPacket,
+    phenoStressProbability,
+    phenoStressLabel,
+    phenoSensorEnabled,
+    phenoCalibStatus,
   } = useContext(AppContext);
   const { theme, isDarkMode } = useContext(ThemeContext);
 
@@ -74,13 +80,14 @@ export const PerformanceOverviewScreen = () => {
   const initialTopObj = TECHNIQUE_LOOKUP[initialTopKey] || TECHNIQUE_LOOKUP.water_lily_pond;
 
   const [liveData, setLiveData] = useState({
-    recoveryRate: 94,
-    baselineStatus: 'HEALTHY BASELINE',
+    isLive: false,
+    recoveryRate: null,
+    baselineStatus: 'AWAITING SENSORS',
     topMethodKey: initialTopKey,
     recentTrend: [82, 86, 88, 91, 94, 97],
-    totalSessions: (historyList ? historyList.length : 0) + 1,
-    avgSpeed: initialTopObj.time || '1m 20s',
-    bpmDrop: initialTopObj.bpm || '-16 BPM',
+    totalSessions: (historyList ? historyList.length : 0),
+    avgSpeed: '--',
+    bpmDrop: '--',
   });
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -101,22 +108,57 @@ export const PerformanceOverviewScreen = () => {
         const currentTopKey = resolveTopMethodKey();
         const currentTopObj = TECHNIQUE_LOOKUP[currentTopKey] || TECHNIQUE_LOOKUP.water_lily_pond;
 
-        // Dynamic recovery rate based on history or stress probability
-        let rate = 94;
-        if (historyList && historyList.length > 0 && typeof historyList[0].recovery_pct === 'number') {
+        const isAnyLive = !!(hasLivePacket || hasLivePhenoPacket);
+        const hasHistory = historyList && historyList.length > 0;
+
+        // Genuine recovery rate: from history, or real multimodal telemetry (no random jitter)
+        let rate = null;
+        if (hasHistory && typeof historyList[0].recovery_pct === 'number') {
           rate = Math.round(historyList[0].recovery_pct);
-        } else if (typeof stressProbability === 'number') {
-          const probFactor = Math.max(0, Math.min(1, 1 - stressProbability));
-          rate = Math.round(86 + probFactor * 11);
+        } else if (isAnyLive) {
+          let effectiveProb = stressProbability;
+          if (hasLivePacket && hasLivePhenoPacket) {
+            effectiveProb = 0.65 * stressProbability + 0.35 * phenoStressProbability;
+          } else if (!hasLivePacket && hasLivePhenoPacket) {
+            effectiveProb = phenoStressProbability;
+          }
+          const probFactor = Math.max(0, Math.min(1, 1 - effectiveProb));
+          rate = Math.round(75 + probFactor * 22);
         }
 
-        // Slight live pulse fluctuation (±1%) to illustrate live updates
-        const jitter = (Math.floor(Date.now() / 3000) % 3) - 1;
-        const liveRate = Math.max(72, Math.min(99, rate + jitter));
+        // Real average recovery duration
+        let avgSpeed = '--';
+        if (hasHistory) {
+          const validTimes = historyList.filter(h => h.duration_seconds && h.duration_seconds > 0);
+          if (validTimes.length > 0) {
+            const avgSec = Math.round(validTimes.reduce((acc, h) => acc + h.duration_seconds, 0) / validTimes.length);
+            const m = Math.floor(avgSec / 60);
+            const s = avgSec % 60;
+            avgSpeed = `${m}m ${s < 10 ? '0' : ''}${s}s`;
+          } else {
+            avgSpeed = currentTopObj.time || '1m 20s';
+          }
+        } else if (isAnyLive) {
+          avgSpeed = currentTopObj.time || '1m 20s';
+        }
+
+        // Real heart rate reduction
+        let bpmDrop = '--';
+        if (hasHistory) {
+          const validBpm = historyList.filter(h => typeof h.bpm_drop === 'number');
+          if (validBpm.length > 0) {
+            const avgBpm = Math.round(validBpm.reduce((acc, h) => acc + h.bpm_drop, 0) / validBpm.length);
+            bpmDrop = `-${Math.abs(avgBpm)} BPM`;
+          } else {
+            bpmDrop = currentTopObj.bpm || '-14 BPM';
+          }
+        } else if (isAnyLive) {
+          bpmDrop = currentTopObj.bpm || '-14 BPM';
+        }
 
         // Generate dynamic 6-bar trend from historyList or stressTrendHistory
         let trend = [80, 84, 88, 91, 94, 97];
-        if (historyList && historyList.length > 0) {
+        if (hasHistory) {
           const recent = historyList.slice(0, 6).reverse();
           trend = recent.map((item) => Math.round(item.recovery_pct ?? (item.star_rating ? item.star_rating * 20 : 90)));
           while (trend.length < 6) {
@@ -127,24 +169,32 @@ export const PerformanceOverviewScreen = () => {
           trend = stressTrendHistory.slice(-6).map((val) => Math.round((1 - val) * 100));
         }
 
+        let baselineStatus = 'AWAITING SENSORS';
+        if (isAnyLive && rate != null) {
+          baselineStatus = rate >= 90 ? 'HEALTHY BASELINE' : rate >= 75 ? 'MODERATE CALM' : 'RECOVERING';
+        } else if (hasHistory && rate != null) {
+          baselineStatus = rate >= 90 ? 'HEALTHY BASELINE' : rate >= 75 ? 'MODERATE CALM' : 'SESSION RECOVERED';
+        }
+
         setLiveData({
-          recoveryRate: liveRate,
-          baselineStatus: liveRate >= 90 ? 'HEALTHY BASELINE' : liveRate >= 75 ? 'MODERATE CALM' : 'RECOVERING',
+          isLive: isAnyLive,
+          recoveryRate: rate,
+          baselineStatus,
           topMethodKey: currentTopKey,
           recentTrend: trend,
-          totalSessions: historyList ? historyList.length : 1,
-          avgSpeed: currentTopObj.time || '1m 20s',
-          bpmDrop: currentTopObj.bpm || '-16 BPM',
+          totalSessions: historyList ? historyList.length : 0,
+          avgSpeed,
+          bpmDrop,
         });
       } catch (e) {
-        // Smooth fallback
+        // Fallback
       }
     };
 
     fetchLiveMetrics();
     const interval = setInterval(fetchLiveMetrics, 3000);
     return () => clearInterval(interval);
-  }, [userId, stressProbability, stressTrendHistory, historyList, selectedSubOption, currentRecommendation, lastValidationResult]);
+  }, [userId, stressProbability, phenoStressProbability, hasLivePacket, hasLivePhenoPacket, stressTrendHistory, historyList, selectedSubOption, currentRecommendation, lastValidationResult]);
 
   const isDark = isDarkMode ?? theme?.isDark ?? true;
   const topMethod = TECHNIQUE_LOOKUP[liveData.topMethodKey] || TECHNIQUE_LOOKUP.water_lily_pond;
@@ -187,9 +237,24 @@ export const PerformanceOverviewScreen = () => {
           >
             <View style={styles.cardHeaderRow}>
               <View style={styles.liveBadgeRow}>
-                <View style={styles.liveDot} />
+                <View
+                  style={[
+                    styles.liveDot,
+                    {
+                      backgroundColor: liveData.isLive
+                        ? '#10B981'
+                        : liveData.recoveryRate != null
+                        ? '#38BDF8'
+                        : '#F59E0B'
+                    }
+                  ]}
+                />
                 <Text style={[styles.cardHeaderTxt, { color: isDark ? '#38BDF8' : '#0284C7' }]}>
-                  OVERALL RECOVERY • LIVE
+                  {liveData.isLive
+                    ? 'OVERALL RECOVERY • LIVE'
+                    : liveData.recoveryRate != null
+                    ? 'OVERALL RECOVERY • SESSION'
+                    : 'OVERALL RECOVERY • AWAITING SENSORS'}
                 </Text>
               </View>
 
@@ -197,12 +262,21 @@ export const PerformanceOverviewScreen = () => {
                 style={[
                   styles.statBadge,
                   {
-                    backgroundColor: 'rgba(16, 185, 129, 0.16)',
-                    borderColor: '#10B981',
+                    backgroundColor: liveData.recoveryRate != null ? 'rgba(16, 185, 129, 0.16)' : 'rgba(245, 158, 11, 0.16)',
+                    borderColor: liveData.recoveryRate != null ? '#10B981' : '#F59E0B',
                   }
                 ]}
               >
-                <Text style={[styles.statBadgeTxt, { color: isDark ? '#34D399' : '#059669' }]}>
+                <Text
+                  style={[
+                    styles.statBadgeTxt,
+                    {
+                      color: liveData.recoveryRate != null
+                        ? (isDark ? '#34D399' : '#059669')
+                        : (isDark ? '#FBBF24' : '#D97706')
+                    }
+                  ]}
+                >
                   {liveData.baselineStatus}
                 </Text>
               </View>
@@ -224,9 +298,9 @@ export const PerformanceOverviewScreen = () => {
                     cx="55"
                     cy="55"
                     r="44"
-                    stroke="#38BDF8"
+                    stroke={liveData.recoveryRate != null ? '#38BDF8' : 'rgba(245, 158, 11, 0.4)'}
                     strokeWidth="9"
-                    strokeDasharray={`${(liveData.recoveryRate / 100) * 276}, 276`}
+                    strokeDasharray={liveData.recoveryRate != null ? `${(liveData.recoveryRate / 100) * 276}, 276` : '0, 276'}
                     strokeLinecap="round"
                     fill="none"
                     transform="rotate(-90 55 55)"
@@ -234,7 +308,7 @@ export const PerformanceOverviewScreen = () => {
                 </Svg>
                 <View style={styles.ringCenterText}>
                   <Text style={[styles.ringBigPercent, { color: theme?.textPrimary || (isDark ? '#F8FAFC' : '#0F172A') }]}>
-                    {liveData.recoveryRate}%
+                    {liveData.recoveryRate != null ? `${liveData.recoveryRate}%` : '--'}
                   </Text>
                   <Text style={styles.ringLabelText}>Recovery</Text>
                 </View>
@@ -268,7 +342,11 @@ export const PerformanceOverviewScreen = () => {
             </View>
 
             <Text style={[styles.subText, { color: theme?.textMuted || '#94A3B8' }]}>
-              Your heart rate and stress levels return to baseline quickly after relaxation sessions.
+              {liveData.isLive
+                ? 'Live telemetry active: heart rate and stress levels return to baseline quickly after relaxation sessions.'
+                : liveData.recoveryRate != null
+                ? 'Your baseline recovery speed and heart rate response computed from your completed relaxation sessions.'
+                : 'Connect your smart ring, earbud, or phone sensor to compute real-time multimodal recovery metrics.'}
             </Text>
           </View>
 
