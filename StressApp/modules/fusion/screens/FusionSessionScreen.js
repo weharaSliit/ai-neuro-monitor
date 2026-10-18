@@ -11,7 +11,6 @@ import StatusDot from '../../shared/StatusDot';
 import Icon, { NAMES } from '../../shared/Icon';
 import Badge from '../../shared/Badge';
 import AvatarButton from '../../shared/AvatarButton';
-import BalanceRing from '../../shared/BalanceRing';
 import LevelSlider from '../../shared/LevelSlider';
 import ActionTile from '../../shared/ActionTile';
 import { useCalibrationSummary, useDeviceStatus } from '../../shared/CalibrationGate';
@@ -30,7 +29,8 @@ import { COLORS } from '../../physiological/config/theme';
 import { useAuth } from '../../../context/AuthContext';
 import api from '../../physiological/api/client';
 import { STRESS_DECISION_THRESHOLD_PERCENT } from '../../physiological/config/config';
-import { alignedOf, fusedAligned } from '../config/aligned';
+import useEarlyWarning from '../earlyWarning/useEarlyWarning';
+import EarlyWarningPanel from '../earlyWarning/EarlyWarningPanel';
 
 const CHART_WIDTH = Math.max(260, getContentWidth() - 2 * SPACE.xl - 2 * 18);
 // A window older than this is "last reading", not "live".
@@ -235,6 +235,14 @@ export default function FusionSessionScreen({ navigation, route }) {
         () => ({ ...historicalWindows, ...(windows || {}) }),
         [historicalWindows, windows]
     );
+    // Early warning (mind / body / overall each against the person's own limit); the clock ticks every
+    // 5 s so a new reading shows within seconds of arriving.
+    const [ewNow, setEwNow] = useState(Date.now());
+    useEffect(() => {
+        const id = setInterval(() => setEwNow(Date.now()), 5000);
+        return () => clearInterval(id);
+    }, []);
+    const ew = useEarlyWarning(userId, sessionId, combinedWindows, ewNow);
 
     // Fully fused window (falls back to the raw newest only if none is fused yet).
     const latest = useMemo(
@@ -268,19 +276,6 @@ export default function FusionSessionScreen({ navigation, route }) {
             };
         });
     }, [combinedWindows]);
-    // Stress rhythm: Fused / Mind / Body, each against its own limit (50%).
-    const rhythmPoints = useMemo(() => {
-        const keys = sortedWindowKeys(combinedWindows).slice(-CHART_POINTS_MAX);
-        const pct = (v) => (v == null ? null : Math.round(v * 100));
-        return keys.map((k) => {
-            const w = combinedWindows[k] || {};
-            return {
-                date: new Date(fusionKeyToMs(k)),
-                values: [pct(fusedAligned(w)), pct(alignedOf(w, 'eeg')), pct(alignedOf(w, 'hrv'))],
-            };
-        });
-    }, [combinedWindows]);
-    const hasRhythm = rhythmPoints.filter((p) => p.values.some((v) => v != null)).length > 1;
     const hasMultiSeriesData = multiSeriesPoints.filter((p) => p.values.some((v) => v != null)).length > 1;
 
     // ── Live freshness -- re-evaluated every 20s so "just now" ages
@@ -355,13 +350,23 @@ export default function FusionSessionScreen({ navigation, route }) {
                 pointerEvents="none"
             />
             <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+                {/* ── Devices: connected or not, at the very top (same strip as the website) ── */}
+                <View style={styles.devStrip}>
+                    {[['Ring', ringConnected, 'RingSummary'], ['Headband', eegConnected, 'EegSummary']].map(([name, on, screen]) => (
+                        <TouchableOpacity key={name} activeOpacity={0.85} onPress={() => navigation.navigate(screen)} style={styles.devPill}>
+                            <StatusDot color={on ? COLORS.normal : COLORS.light.textMuted} active={on} size={7} />
+                            <Text style={styles.devPillName}>{name}</Text>
+                            <Text style={[styles.devPillText, { color: on ? COLORS.normalDark : COLORS.light.textMuted }]}>{on ? 'Connected' : 'Not connected'}</Text>
+                        </TouchableOpacity>
+                    ))}
+                </View>
+
                 {/* ── Greeting ── */}
                 <View style={styles.topHeader}>
                     <View style={{ flex: 1 }}>
                         <Text style={styles.hey}>
                             Hey, <Text style={styles.heyName}>{displayName}</Text>
                         </Text>
-                        <Text style={styles.howAreYou}>How are you doing today?</Text>
                     </View>
                     <AvatarButton userId={userId} onPress={() => navigation.navigate('Profile')} />
                 </View>
@@ -406,27 +411,8 @@ export default function FusionSessionScreen({ navigation, route }) {
                     </TouchableOpacity>
                 )}
 
-                {/* ── Balance: Mind / Body rings + overall slider ── */}
-                <Card style={styles.block}>
-                    <View style={styles.blockHead}>
-                        <Text style={styles.blockTitle}>Your balance</Text>
-                        {isLive ? <Badge label="Live" color={COLORS.normal} size="sm" /> : null}
-                    </View>
-                    <View style={styles.ringRow}>
-                        <BalanceRing
-                            title="Mind"
-                            value={mindP != null ? mindP * 100 : null}
-                            word={mindLevel ? MIND_WORDS[mindLevel] : ''}
-                            color={mindLevel ? LEVEL_COLOR[mindLevel] : COLORS.eeg}
-                        />
-                        <View style={styles.ringDivider} />
-                        <BalanceRing
-                            title="Body"
-                            value={bodyP != null ? bodyP * 100 : null}
-                            word={bodyLevel ? BODY_WORDS[bodyLevel] : ''}
-                            color={bodyLevel ? LEVEL_COLOR[bodyLevel] : COLORS.hrv}
-                        />
-                    </View>
+                {/* ── Stress statistics: boxes, state, calm → limit, overall slider; then the timeline ── */}
+                <EarlyWarningPanel ew={ew} style={styles.block}>
                     <View style={styles.sliderWrap}>
                         <LevelSlider
                             title="Overall stress"
@@ -435,7 +421,7 @@ export default function FusionSessionScreen({ navigation, route }) {
                             color={fusedLevel ? LEVEL_COLOR[fusedLevel] : COLORS.brand}
                         />
                     </View>
-                </Card>
+                </EarlyWarningPanel>
 
                 {/* ── Quick actions ── */}
                 <View style={styles.actionRow}>
@@ -472,42 +458,9 @@ export default function FusionSessionScreen({ navigation, route }) {
                     />
                 </View>
 
-                {/* ── Today's rhythm ── */}
-                {hasRhythm && (
-                    <Card style={styles.block}>
-                        <Text style={styles.blockTitle}>Your stress rhythm</Text>
-                        <Text style={styles.blockSub}>Each line against its own limit · dashed line is 50%</Text>
-                        <View style={{ marginTop: SPACE.md }}>
-                            <LineChart
-                                points={rhythmPoints}
-                                multiLine
-                                seriesColors={[COLORS.light.text, COLORS.eeg, COLORS.hrv]}
-                                seriesLabels={['Overall', 'Mind', 'Body']}
-                                width={CHART_WIDTH}
-                                height={170}
-                                maxValue={100}
-                                hideValues
-                                baselineValue={50}
-                                baselineLabel="Your limit"
-                                fallback={<Text style={styles.waiting}>Loading chart…</Text>}
-                            />
-                        </View>
-                    </Card>
-                )}
-
                 {/* ── Devices ── */}
                 {/* Moved here from Profile -- same card as the website's main page. */}
                 <BaselineDriftCard userId={userId} ring={ringCalibration} style={styles.block} />
-
-                <Text style={styles.sectionLabel}>Your devices</Text>
-                <View style={styles.deviceRow}>
-                    <DeviceChip icon={NAMES.my} tint={COLORS.hrv} name="Ring"
-                        online={ringConnected} onPress={() => navigation.navigate('RingSummary')} />
-                    <DeviceChip icon={NAMES.eeg} tint={COLORS.warning} name="Headband"
-                        online={eegConnected} onPress={() => navigation.navigate('EegSummary')} />
-                    <DeviceChip icon={NAMES.phenotyping} tint={COLORS.gsr} name="Phone"
-                        online onPress={() => navigation.navigate('Phenotyping')} />
-                </View>
 
                 {/* ── Clinical extras: only in the Admin stack's view ── */}
                 {isAdminView && (personalEegPct != null || personalRingPct != null) && (
@@ -600,6 +553,10 @@ const styles = StyleSheet.create({
 
     actionRow: { flexDirection: 'row', marginHorizontal: SPACE.xl, marginBottom: SPACE.md },
 
+    devStrip: { flexDirection: 'row', gap: SPACE.sm, marginHorizontal: SPACE.xl, marginBottom: SPACE.md },
+    devPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6, paddingHorizontal: 12, borderRadius: 999, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#EAE5DA' },
+    devPillName: { fontSize: 13, fontWeight: '800', color: '#231F20' },
+    devPillText: { fontSize: 12, fontWeight: '700' },
     sectionLabel: {
         ...TYPE.micro, color: COLORS.light.textMuted,
         marginHorizontal: SPACE.xl, marginTop: SPACE.sm, marginBottom: SPACE.sm,

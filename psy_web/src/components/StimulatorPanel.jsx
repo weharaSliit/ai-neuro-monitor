@@ -24,6 +24,11 @@ export const SCENARIOS = {
   four_state: 'All four states: relaxed → mental load → physical arousal → stress (with recoveries)',
   ramp: 'Gradual ramp + moderate plateau (early warning)',
   steps: 'Calm / high-load steps',
+  exam_revision: 'Situation: exam revision (mind high, body calm)',
+  viva_presentation: 'Situation: viva / presentation (mind + body high)',
+  stairs_coffee: 'Situation: stairs, then a coffee (body only)',
+  relaxing_break: 'Situation: relaxing break (must stay relaxed)',
+  busy_workday: 'Situation: busy workday (all four states)',
 };
 const PHASE_LABEL = { calm: 'Calm', demand: 'High load', ramp: 'Load rising', plateau: 'Moderate load', relaxed: 'Relaxed',
   mental: 'High mental load (body calm)', arousal: 'Physical arousal (mind calm)', stress: 'Stress (mind + body)', recovery: 'Recovery' };

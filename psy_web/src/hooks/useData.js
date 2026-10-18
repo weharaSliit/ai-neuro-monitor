@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { onValue, ref } from 'firebase/database';
+import { setPicker, usePickerStore } from './pickerStore';
+import { limitToLast, onValue, orderByKey, query, ref } from 'firebase/database';
 import { db, shallowKeys } from '../lib/firebase';
 import { EEG_API_BASE } from '../lib/config';
 
@@ -15,13 +16,18 @@ export function useNow(ms = 1000) {
 
 // Firebase value subscription; `path` null = unsubscribed.
 // undefined = loading, null = empty/denied.
-export function useFirebaseValue(path) {
+// opts.last: only the newest N children of the node (keys are time-ordered push ids / grid
+// keys) -- a live page doesn't need to download a whole session on every update, which was
+// what made the ring panels lag behind (each window carries its GSR wave and beat series).
+export function useFirebaseValue(path, opts) {
   const [value, setValue] = useState(undefined);
+  const last = opts?.last ?? null;
   useEffect(() => {
     if (!path) { setValue(undefined); return undefined; }
     setValue(undefined);
-    return onValue(ref(db, path), (snap) => setValue(snap.val()), () => setValue(null));
-  }, [path]);
+    const target = last ? query(ref(db, path), orderByKey(), limitToLast(last)) : ref(db, path);
+    return onValue(target, (snap) => setValue(snap.val()), () => setValue(null));
+  }, [path, last]);
   return value;
 }
 
@@ -33,13 +39,14 @@ const POINTER_KEYS = new Set(['current_session_id', 'current_user_id']);
 export function useSessionPicker() {
   const liveUser = useFirebaseValue('psychological/current_user_id') || null;
   const liveSession = useFirebaseValue('psychological/current_session_id') || null;
-  const [follow, setFollow] = useState(true);
-  const [manual, setManual] = useState({ userId: null, sessionId: null });
+  const { follow, userId: pickedUser, sessionId: pickedSession } = usePickerStore();
   const [users, setUsers] = useState([]);
   const [sessions, setSessions] = useState([]);
 
-  const userId = follow ? liveUser : manual.userId;
-  const sessionId = follow ? liveSession : manual.sessionId;
+  const userId = follow ? liveUser : pickedUser;
+  // The picked session, unless this page has no such session for the user: then its newest.
+  const sessionId = follow ? liveSession
+    : pickedSession && (!sessions.length || sessions.includes(pickedSession)) ? pickedSession : (sessions[0] || pickedSession);
 
   useEffect(() => {
     shallowKeys('psychological')
@@ -57,8 +64,9 @@ export function useSessionPicker() {
   }, [userId, liveSession]);
 
   return {
-    follow, setFollow, liveUser, liveSession, userId, sessionId, users, sessions,
-    choose: (next) => { setFollow(false); setManual((m) => ({ ...m, ...next })); },
+    follow, liveUser, liveSession, userId, sessionId, users, sessions,
+    setFollow: (f) => setPicker({ follow: f }),
+    choose: (next) => setPicker({ follow: false, ...next }),
   };
 }
 
