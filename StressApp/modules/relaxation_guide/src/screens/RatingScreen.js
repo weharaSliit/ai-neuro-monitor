@@ -33,7 +33,8 @@ export const RatingScreen = () => {
   const {
     userId, currentRecommendation, selectedSubOption,
     preInterventionLabel, setPostInterventionLabel,
-    setLastValidationResult, setCurrentScreen, setHistoryList, historyList
+    setLastValidationResult, setCurrentScreen, setHistoryList, historyList,
+    getInterventionTrajectory, getInterventionElapsed, logEvidenceEvent, finishEvidenceSession
   } = useContext(AppContext);
   const { theme } = useContext(ThemeContext);
 
@@ -67,14 +68,37 @@ export const RatingScreen = () => {
 
       const mappedRating = feedback;
 
-      await apiService.submitRating(userId, techId, subId, mappedRating);
-
       let postState = feedback >= 4 ? 'normal' : 'stress';
       setPostInterventionLabel(postState);
 
       const clusterId = currentRecommendation?.context_cluster_id ?? 0;
-      const valRes = await apiService.validateIntervention(userId, techId, preInterventionLabel, postState, clusterId, mappedRating);
+      // The rating and the validation do not depend on each other, so they run together
+      // (one wait instead of two, each with a short timeout; offline results are used if it fails).
+      const [, valRes] = await Promise.all([
+        apiService.submitRating(userId, techId, subId, mappedRating),
+        apiService.validateIntervention(
+          userId, techId, preInterventionLabel, postState, clusterId, mappedRating,
+          {
+            sessionId: currentRecommendation?.session_id,
+            stressTrajectory: getInterventionTrajectory(),
+            durationSeconds: getInterventionElapsed()
+          }
+        )
+      ]);
       setLastValidationResult(valRes);
+
+      logEvidenceEvent && logEvidenceEvent('rated', { stars: mappedRating });
+      finishEvidenceSession && finishEvidenceSession({
+        technique_id: techId,
+        stars: mappedRating,
+        measured: !!valRes?.measured,
+        reward: valRes?.reward ?? null,
+        recovery_percentage: valRes?.recovery_percentage ?? null,
+        reward_components: valRes?.reward_components ?? null,
+        is_normal_reached: valRes?.is_normal_reached ?? null,
+        next_technique_id: valRes?.alternative_recommendation?.technique_id ?? null,
+        ended_at: Date.now() / 1000,
+      });
 
       // Record detailed session into history
       const newEntry = {
@@ -84,7 +108,9 @@ export const RatingScreen = () => {
         sub_option_id: subId,
         pre_label: preInterventionLabel || 'stress',
         post_label: postState,
-        star_rating: mappedRating
+        star_rating: mappedRating,
+        recovery_pct: valRes?.recovery_percentage,
+        reward: valRes?.reward
       };
       
       const prevHistory = historyList || [];

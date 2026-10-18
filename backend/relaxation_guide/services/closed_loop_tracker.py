@@ -6,7 +6,7 @@ Implements Recursive Multi-Step Adaptation Cascade until baseline condition is a
 from typing import Dict, Any, List, Optional
 from backend.relaxation_guide.services.thompson_bandit import thompson_bandit
 from backend.relaxation_guide.services.kmeans_clusterer import KMeansClusterer
-from backend.relaxation_guide.config import TECHNIQUES
+from backend.relaxation_guide.config import TECHNIQUES, BASELINE_MARGIN, LOOP_MIN_EVAL_SEC, LOOP_SLOPE_FALLING
 from backend.relaxation_guide.services import firebase_service
 
 kmeans_clusterer = KMeansClusterer()
@@ -34,7 +34,8 @@ class ClosedLoopTracker:
         current_state: str,
         prob_stress: float = 0.50,
         user_baseline: float = 0.35,
-        last_technique_id: Optional[str] = None
+        last_technique_id: Optional[str] = None,
+        context_vector: Optional[List[float]] = None
     ) -> Dict[str, Any]:
         # Strict check against individual user baseline fetched from Firebase
         is_baseline_reached = (prob_stress <= user_baseline) or (current_state.lower() == "normal" and prob_stress <= user_baseline)
@@ -66,12 +67,13 @@ class ClosedLoopTracker:
             next_tech_name = None
         else:
             cascade_step = loop["cycles_completed"] + 1
-            cluster_id = kmeans_clusterer.predict_cluster([prob_stress, max(0.0, 1.0 - prob_stress)])
+            cluster_id = kmeans_clusterer.predict_cluster(context_vector or [prob_stress, max(0.0, 1.0 - prob_stress)])
 
             next_tech_id, _, _, _, _, _ = thompson_bandit.select_technique(
                 user_id=user_id,
                 cluster_id=cluster_id,
-                exclude_technique_ids=loop["tried_techniques"]
+                exclude_technique_ids=loop["tried_techniques"],
+                context_vector=context_vector
             )
 
             tech_obj = TECHNIQUES.get(next_tech_id, {})
@@ -98,6 +100,28 @@ class ClosedLoopTracker:
             "next_recommended_technique_id": next_tech_id,
             "next_recommended_technique_name": next_tech_name
         }
+
+
+def decide_step(context: Dict[str, Any], elapsed_seconds: float) -> Dict[str, Any]:
+    """
+    One monitoring step inside a session: stop, keep going, or switch technique.
+
+    Uses the filtered stress level and its slope (person-relative context), not a single reading:
+      stop     - smoothed stress is back within the margin of the user's own baseline,
+      continue - too early to judge, or stress is clearly falling,
+      switch   - after the evaluation time stress is flat or rising.
+    """
+    baseline = float(context.get("baseline", 0.35))
+    level = float(context.get("combined", baseline))
+    slope = float(context.get("slope_per_min", 0.0))
+
+    if level <= baseline + BASELINE_MARGIN:
+        return {"action": "stop", "reason": "Stress is back at your personal baseline."}
+    if elapsed_seconds < LOOP_MIN_EVAL_SEC:
+        return {"action": "continue", "reason": "Giving this technique time to work."}
+    if slope <= LOOP_SLOPE_FALLING:
+        return {"action": "continue", "reason": "Your stress is coming down."}
+    return {"action": "switch", "reason": "Your stress is not coming down, so let's try something different."}
 
 
 closed_loop_tracker = ClosedLoopTracker()
