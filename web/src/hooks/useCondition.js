@@ -19,7 +19,7 @@ export default function useCondition(userId, sessionId, eegBlocks, ringWindows) 
   const eegRecal = useFirebaseValue(sessionId ? `eeg_recalibration/${sessionId}` : null);
   const ringRecal = useFirebaseValue(userId ? `ring_recalibration/${userId}` : null);
   const history = useEegCalibrations(userId, `${sessionId}|${calibration?.updated_at ?? ''}|${threshold?.updated_at ?? ''}`);
-  const now = useNow(30000);     // a stale recalibration record stops counting as running
+  const now = useNow(10000);     // a stale recalibration record stops counting as running
 
   return useMemo(() => {
     const { cal, thr, kept } = pickEeg({ calibration, threshold }, history, sessionId);
@@ -51,6 +51,7 @@ export default function useCondition(userId, sessionId, eegBlocks, ringWindows) 
         baseline: ringInfo.base, limit: ringInfo.limit, baselineFused: ringInfo.base == null ? null : ringAligned(ringInfo.base, ringInfo.limit),
         personal: Boolean(ringInfo.personal), hasBaseline: Boolean(ringBaseline) },
       recal: { eeg: eegRecal || null, ring: ringRecal || null },
+      ringBaselineAt: ringBaseline?.updated_at ? Date.parse(/Z|[+-]\d\d:?\d\d$/.test(ringBaseline.updated_at) ? ringBaseline.updated_at : `${ringBaseline.updated_at}Z`) : null,
       num,
     };
   }, [calibration, threshold, history, ringThresholds, ringBaseline, eegRecal, ringRecal, sessionId, eegBlocks, ringWindows, now]);
