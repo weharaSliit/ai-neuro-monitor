@@ -21,6 +21,7 @@ export const RealtimeStressTrendCard = () => {
     phenoStressProbability = 0.15,
     hasLivePhenoPacket = false,
     phenoTrendHistory = [],
+    phenoLastUpdateMs = null,
     openPhenoSensorSettings,
     markPhenoCalibrated,
     resetPhenoCalibration,
@@ -28,6 +29,20 @@ export const RealtimeStressTrendCard = () => {
   const { theme } = useContext(ThemeContext);
 
   const [activeTab, setActiveTab] = useState('pheno'); // Default to pheno or active
+
+  // Phenotyping predictions arrive when a behaviour window is processed (not every 2 s), so show their age.
+  const [nowMs, setNowMs] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 10000);
+    return () => clearInterval(t);
+  }, []);
+  const phenoAgeText = (() => {
+    if (!phenoLastUpdateMs) return null;
+    const sec = Math.max(0, Math.round((nowMs - phenoLastUpdateMs) / 1000));
+    if (sec < 90) return `updated ${sec}s ago`;
+    if (sec < 5400) return `updated ${Math.round(sec / 60)} min ago`;
+    return `updated ${Math.round(sec / 3600)} h ago`;
+  })();
   const displayName = username ? (username.charAt(0).toUpperCase() + username.slice(1)) : (phenoCalibStatus?.userName || userId || 'You');
 
   // Pulse animation for live status dot
@@ -249,7 +264,7 @@ export const RealtimeStressTrendCard = () => {
                       {hasLivePhenoPacket ? phenoStressProbability.toFixed(2) : '--'}
                     </Text>
                     <Text style={[styles.baseVal, { color: theme.textMuted }]}>
-                      {hasLivePhenoPacket ? ' Stress score' : ' Awaiting Behavioral Data'}
+                      {hasLivePhenoPacket ? ` Stress score${phenoAgeText ? ' · ' + phenoAgeText : ''}` : ' Awaiting Behavioral Data'}
                     </Text>
                   </View>
 

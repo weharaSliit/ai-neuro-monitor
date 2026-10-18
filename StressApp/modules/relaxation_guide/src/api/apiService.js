@@ -37,6 +37,9 @@ const getApiBaseUrl = () => {
 };
 
 const API_BASE_URL = getApiBaseUrl();
+
+// Saving a session should not keep the user waiting a minute: after this the offline result is shown.
+const SUBMIT_TIMEOUT_MS = 15000;
 console.log('[apiService] API Base URL:', API_BASE_URL);
 
 
@@ -287,7 +290,7 @@ export const apiService = {
     };
   },
 
-  async validateIntervention(userId, techniqueId, preLabel, postLabel, contextClusterId = 0, starRating = 5) {
+  async validateIntervention(userId, techniqueId, preLabel, postLabel, contextClusterId = 0, starRating = 5, extras = {}) {
     try {
       const res = await client.post('/validate', {
         user_id: userId,
@@ -295,8 +298,11 @@ export const apiService = {
         pre_stress_label: preLabel,
         post_stress_label: postLabel,
         context_cluster_id: contextClusterId,
-        star_rating: starRating
-      });
+        star_rating: starRating,
+        session_id: extras.sessionId,
+        stress_trajectory: extras.stressTrajectory,
+        duration_seconds: extras.durationSeconds
+      }, { timeout: SUBMIT_TIMEOUT_MS });
       return res.data;
     } catch (err) {
       const isNormal = postLabel.toLowerCase() === 'normal' && starRating >= 3;
@@ -319,6 +325,21 @@ export const apiService = {
     }
   },
 
+  // Mid-session check: the backend answers continue / switch / stop from the filtered stress level and slope.
+  async loopStep(userId, techniqueId, elapsedSeconds, triedTechniques = []) {
+    try {
+      const res = await client.post('/loop/step', {
+        user_id: userId,
+        technique_id: techniqueId,
+        elapsed_seconds: elapsedSeconds,
+        tried_techniques: triedTechniques
+      });
+      return res.data;
+    } catch (err) {
+      return { action: 'continue', reason: '' };
+    }
+  },
+
   async submitRating(userId, techniqueId, subOptionId, ratingStars) {
     try {
       const res = await client.post('/rating', {
@@ -326,7 +347,7 @@ export const apiService = {
         technique_id: techniqueId,
         sub_option_id: subOptionId,
         rating_stars: ratingStars
-      });
+      }, { timeout: SUBMIT_TIMEOUT_MS });
       return res.data;
     } catch (err) {
       return {

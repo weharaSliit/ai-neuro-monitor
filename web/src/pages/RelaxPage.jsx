@@ -1,12 +1,19 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import { useLivePointer, useNow } from '../hooks/useLive';
 import { useFusion, useRingHistory } from '../hooks/useStreams';
 import { DEFAULT_RING_THRESHOLD, timeAgo } from '../lib/levels';
 import { TECHNIQUES, findTechnique } from '../lib/techniques';
-import { getBanditState, getIntervention, submitRating, validateIntervention } from '../lib/relaxApi';
+import {
+  getBanditState, getIntervention, submitRating, validateIntervention, webTechniqueIdFromRecommendation,
+} from '../lib/relaxApi';
+import { latestPhenoScore, newWebSessionKey, relaxLog } from '../lib/relaxEvidenceLog';
+import RelaxWhy from '../components/RelaxWhy';
+import RelaxLoopBanner from '../components/RelaxLoopBanner';
 import { Card, CardHead, Badge } from '../components/ui';
 import RelaxGame from '../components/RelaxGame';
+import RelaxEvidence from '../components/RelaxEvidence';
+import { isEvidenceAdmin } from '../lib/relaxEvidence';
 import DailyQuests from '../components/DailyQuests';
 import { QUESTS, readQuests } from '../lib/quests';
 
@@ -30,6 +37,8 @@ function writeLog(uid, rows) {
 export default function RelaxPage() {
   const { user, token } = useAuth();
   const userId = user?.userId;
+  const canSeeEvidence = isEvidenceAdmin(userId);
+  const [showEvidence, setShowEvidence] = useState(false);
   const now = useNow(20000);
   const pointer = useLivePointer();
   const liveSid = pointer.userId === userId ? pointer.sessionId : null;
@@ -64,7 +73,29 @@ export default function RelaxPage() {
       .finally(() => { if (!cancelled) setRecLoading(false); });
     return () => { cancelled = true; };
   }, [userId, token, preLabel, probability == null ? 'n' : probability >= 0.7 ? 'h' : probability >= 0.5 ? 'm' : 'l']); // eslint-disable-line react-hooks/exhaustive-deps
-  const recommended = findTechnique(rec?.technique_id) || TECHNIQUES[1];
+  // Same as the app: the game comes from the recommended sub-option, not from the technique family.
+  const recommended = (rec?.source === 'service'
+    ? findTechnique(webTechniqueIdFromRecommendation(rec))
+    : findTechnique(rec?.technique_id)) || TECHNIQUES[1];
+
+  // Evidence log: what was recommended and why (read by the admin evidence view).
+  useEffect(() => {
+    if (!userId || rec?.source !== 'service' || !rec.session_id) return;
+    relaxLog.meta(userId, rec.session_id, {
+      condition: 'system',
+      recommended_technique_id: rec.technique_id,
+      technique_id: rec.technique_id,
+      title: rec.title,
+      reason: rec.reason || null,
+      reason_codes: rec.reason_codes || null,
+      context: rec.context || null,
+      streams_used: rec.streams_used || null,
+      cluster_id: rec.context_cluster_id ?? null,
+      recommended_at: Date.now() / 1000,
+      platform: 'web',
+    });
+    relaxLog.event(userId, rec.session_id, 'recommended', { technique_id: rec.technique_id, reason: rec.reason || null });
+  }, [userId, rec?.session_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Sessions: remembered on this device, plus what the service has learned ──
   const [log, setLog] = useState(() => readLog(userId));
@@ -79,6 +110,75 @@ export default function RelaxPage() {
   const [active, setActive] = useState(null);
   const [questsOpen, setQuestsOpen] = useState(false);
 
+  // ── One intervention session, recorded the same way as in the app ──
+  // { key, startSec, samples:[{t,p}], tried:[family ids], currentTechnique, condition: 'system' | 'manual' }
+  const sessionRef = useRef(null);
+  const latestRef = useRef({ prob: null, live: false });
+  latestRef.current = { prob: probability, live: isLive };
+
+  const startSession = (t, source) => {
+    if (!sessionRef.current) {
+      const fromRec = source === 'system' && rec?.source === 'service' && !!rec.session_id;
+      const key = fromRec ? rec.session_id : newWebSessionKey();
+      const technique = fromRec ? rec.technique_id : t.id;
+      sessionRef.current = {
+        key, startSec: Date.now() / 1000, samples: [], tried: [technique], currentTechnique: technique,
+        condition: fromRec ? 'system' : 'manual',
+      };
+      relaxLog.meta(userId, key, {
+        condition: sessionRef.current.condition,
+        technique_id: technique,
+        title: t.title,
+        recommended_technique_id: rec?.technique_id ?? null,
+        reason: fromRec ? rec.reason || null : null,
+        reason_codes: fromRec ? rec.reason_codes || null : null,
+        context: fromRec ? rec.context || null : null,
+        streams_used: fromRec ? rec.streams_used || null : null,
+        cluster_id: fromRec ? rec.context_cluster_id ?? null : null,
+        started_at: sessionRef.current.startSec,
+        platform: 'web',
+      });
+      relaxLog.event(userId, key, 'started', { condition: sessionRef.current.condition, technique_id: technique });
+    }
+    setActive(t);
+  };
+
+  const abandonSession = () => {
+    const s = sessionRef.current;
+    if (s) relaxLog.event(userId, s.key, 'abandoned', { elapsed: Date.now() / 1000 - s.startSec });
+    sessionRef.current = null;
+  };
+
+  // Stress curve of the session: ring/earbud when live, otherwise the phone-behaviour (phenotyping) stream.
+  const hasActive = !!active;
+  useEffect(() => {
+    if (!hasActive || !userId) return undefined;
+    const iv = setInterval(async () => {
+      const s = sessionRef.current;
+      if (!s) return;
+      let p = null; let src = null;
+      const { prob, live } = latestRef.current;
+      if (live && Number.isFinite(prob)) { p = prob; src = 'physio'; } else {
+        const ph = await latestPhenoScore(userId);
+        if (Number.isFinite(ph)) { p = ph; src = 'phenotyping'; }
+      }
+      if (p == null) return;
+      s.samples.push({ t: Date.now() / 1000, p });
+      relaxLog.sample(userId, s.key, p, src);
+    }, 5000);
+    return () => clearInterval(iv);
+  }, [hasActive, userId]);
+
+  const switchTo = (next) => {
+    const s = sessionRef.current;
+    const t = findTechnique(webTechniqueIdFromRecommendation(next));
+    if (!s || !t) return;
+    relaxLog.event(userId, s.key, 'switched', { from: s.currentTechnique, to: next.technique_id });
+    s.currentTechnique = next.technique_id;
+    s.tried.push(next.technique_id);
+    setActive(t);
+  };
+
   const finish = useCallback(async ({ stars, better, postState, postArousal, susScore }) => {
     const t = active;
     const postLabel = postState || (better ? 'normal' : preLabel);
@@ -87,9 +187,34 @@ export default function RelaxPage() {
     writeLog(userId, next);
     setLog(next);
     submitRating(userId, token, t.id, stars);
-    return validateIntervention(userId, token, {
-      techniqueId: t.id, preLabel, postLabel, contextClusterId: rec?.context_cluster_id ?? 0, stars,
+
+    const s = sessionRef.current;
+    const res = await validateIntervention(userId, token, {
+      techniqueId: s?.currentTechnique || t.id,
+      preLabel,
+      postLabel,
+      contextClusterId: rec?.context_cluster_id ?? 0,
+      stars,
+      sessionId: s?.condition === 'system' ? s.key : undefined,
+      stressTrajectory: s ? s.samples : undefined,
+      durationSeconds: s ? Date.now() / 1000 - s.startSec : undefined,
     });
+    if (s) {
+      relaxLog.event(userId, s.key, 'rated', { stars });
+      relaxLog.result(userId, s.key, {
+        technique_id: s.currentTechnique,
+        stars,
+        measured: !!res?.measured,
+        reward: res?.reward ?? null,
+        recovery_percentage: res?.recovery_percentage ?? null,
+        reward_components: res?.reward_components ?? null,
+        is_normal_reached: res?.is_normal_reached ?? null,
+        next_technique_id: res?.alternative_recommendation?.technique_id ?? null,
+        ended_at: Date.now() / 1000,
+      });
+      sessionRef.current = null;
+    }
+    return res;
   }, [active, userId, token, preLabel, rec]);
 
   const todayCount = useMemo(() => {
@@ -102,9 +227,26 @@ export default function RelaxPage() {
   const recent = log.slice(0, 6);
   const learned = bandit?.preference_history?.recent_interventions;
 
+  // Admin-only evidence view: what the intervention system did for every user.
+  if (showEvidence && canSeeEvidence) {
+    return (
+      <div className="stack">
+        <div className="greet">
+          <span className="micro">Relaxation guide · your evidence</span>
+          <h1 className="display" style={{ marginTop: 4 }}>Your intervention system evidence</h1>
+          <button className="btn" style={{ marginTop: 10 }} onClick={() => setShowEvidence(false)}>Back to relaxation</button>
+        </div>
+        <RelaxEvidence userId={userId} />
+      </div>
+    );
+  }
+
   return (
     <div className="stack">
       <div className="greet">
+        {canSeeEvidence && (
+          <button className="btn" style={{ float: 'right' }} onClick={() => setShowEvidence(true)}>My evidence</button>
+        )}
         <span className="micro">Relaxation guide</span>
         <h1 className="display" style={{ marginTop: 4 }}>Take a moment</h1>
         <p className="body" style={{ marginTop: 4 }}>Short exercises that fit how you are right now. The guide learns what works for you.</p>
@@ -139,8 +281,9 @@ export default function RelaxPage() {
               </div>
             </div>
           )}
+          <RelaxWhy rec={rec} />
           <div className="row" style={{ marginTop: 16 }}>
-            <button className="btn" onClick={() => setActive(recommended)}>Start · {recommended.minutes} min</button>
+            <button className="btn" onClick={() => startSession(recommended, 'system')}>Start · {recommended.minutes} min</button>
             <span className="caption">{todayCount} done today</span>
           </div>
         </Card>
@@ -158,7 +301,7 @@ export default function RelaxPage() {
         </button>
         <div className="tech-grid" style={{ marginTop: 'var(--sp-md)' }}>
           {TECHNIQUES.map((t) => (
-            <button key={t.id} className="tech-card" style={{ borderColor: `${t.color}50` }} onClick={() => setActive(t)}>
+            <button key={t.id} className="tech-card" style={{ borderColor: `${t.color}50` }} onClick={() => startSession(t, 'manual')}>
               <span className="tech-icon" style={{ background: `${t.color}18` }}>{t.icon}</span>
               <span className="tech-text">
                 <b>{t.listTitle || t.title}</b>
@@ -199,9 +342,32 @@ export default function RelaxPage() {
           technique={active}
           userId={userId}
           preLabel={preLabel}
-          onClose={() => setActive(null)}
-          onSwitch={(id) => { const t = findTechnique(id); if (t) setActive(t); }}
+          onClose={() => { abandonSession(); setActive(null); }}
+          onSwitch={(id) => { const t = findTechnique(id); if (t) startSession(t, 'manual'); }}
           onFinish={finish}
+        />
+      )}
+
+      {active && sessionRef.current && (
+        <RelaxLoopBanner
+          userId={userId}
+          token={token}
+          techniqueId={sessionRef.current.currentTechnique}
+          getElapsed={() => Date.now() / 1000 - (sessionRef.current?.startSec || Date.now() / 1000)}
+          getTried={() => sessionRef.current?.tried || []}
+          onCheck={(step) => {
+            const s = sessionRef.current;
+            if (!s) return;
+            relaxLog.event(userId, s.key, 'loop_check', {
+              elapsed: Date.now() / 1000 - s.startSec,
+              action: step?.action || 'continue',
+              reason: step?.reason || '',
+              level: step?.context?.combined ?? null,
+              slope: step?.context?.slope_per_min ?? null,
+              next: step?.next_recommendation?.technique_id ?? null,
+            });
+          }}
+          onSwitch={switchTo}
         />
       )}
 
