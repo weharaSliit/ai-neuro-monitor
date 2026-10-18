@@ -73,11 +73,11 @@ export const RecoveryScreen = () => {
   } = useContext(AppContext);
   const { theme, isDarkMode } = useContext(ThemeContext);
 
-  const postNorm    = (postInterventionLabel || '').toLowerCase();
-  const isNormal    = lastValidationResult?.is_normal_reached ?? lastValidationResult?.is_normal ?? (postNorm === 'normal');
+  const postNorm = (postInterventionLabel || '').toLowerCase();
+  const isNormal = lastValidationResult?.is_normal_reached ?? lastValidationResult?.is_normal ?? (postNorm === 'normal');
   const recoveryPct = isNormal ? 100.0 : (lastValidationResult?.recovery_percentage ?? 80.0);
-  const altRec     = lastValidationResult?.alternative_recommendation;
-  const isDark     = isDarkMode ?? true;
+  const altRec = lastValidationResult?.alternative_recommendation;
+  const isDark = isDarkMode ?? true;
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bgPrimary }]}>
@@ -92,23 +92,23 @@ export const RecoveryScreen = () => {
           <Text style={[styles.cardHeader, { color: '#F59E0B' }]}>⭐ Level Session Summary</Text>
 
           <View style={styles.row}>
-            <Text style={[styles.rowLabel, { color: theme.textSecondary }]}>Starting State</Text>
+            <Text style={[styles.rowLabel, { color: theme.textSecondary }]}>Start</Text>
             <View style={[styles.valPill, { backgroundColor: 'rgba(239, 68, 68, 0.15)' }]}>
               <Text style={[styles.rowVal, { color: '#EF4444' }]}>{preInterventionLabel?.toUpperCase() || 'STRESS'}</Text>
             </View>
           </View>
 
           <View style={styles.row}>
-            <Text style={[styles.rowLabel, { color: theme.textSecondary }]}>Final State</Text>
+            <Text style={[styles.rowLabel, { color: theme.textSecondary }]}>End</Text>
             <View style={[styles.valPill, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
-              <Text style={[styles.rowVal, { color: '#10B981' }]}>RELAXED & CALM</Text>
+              <Text style={[styles.rowVal, { color: '#10B981' }]}>Calm</Text>
             </View>
           </View>
 
           <View style={styles.row}>
-            <Text style={[styles.rowLabel, { color: theme.textSecondary }]}>Reward XP Earned</Text>
+            <Text style={[styles.rowLabel, { color: theme.textSecondary }]}>XP Earned</Text>
             <View style={[styles.valPill, { backgroundColor: 'rgba(245, 158, 11, 0.15)' }]}>
-              <Text style={[styles.rowVal, { color: '#F59E0B' }]}>+200 XP</Text>
+              <Text style={[styles.rowVal, { color: '#F59E0B' }]}>+200</Text>
             </View>
           </View>
         </View>
@@ -125,7 +125,7 @@ export const RecoveryScreen = () => {
             end={{ x: 1, y: 0 }}
             style={styles.btnGradient}
           >
-            <Text style={styles.doneBtnTxt}>Back to Dashboard ▶</Text>
+            <Text style={styles.doneBtnTxt}>Home ▶</Text>
           </LinearGradient>
         </TouchableOpacity>
       </ScrollView>

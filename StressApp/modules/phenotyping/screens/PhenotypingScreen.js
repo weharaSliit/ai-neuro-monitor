@@ -457,7 +457,7 @@ export default function PhenotypingScreen({ navigation }) {
         return {
             avg_dwell: windowHistory.map(w => w.avg_dwell || 0).filter(v => v > 0),
             scroll_velocity: windowHistory.map(w => w.scroll_velocity || 0).filter(v => v > 0),
-            app_switch: windowHistory.map(w => (w.app_switch_rate || 0) * 60),
+            app_switch: windowHistory.map(w => Number(w.app_switch_rate || 0)),
         };
     }, [windowHistory]);
 
@@ -465,7 +465,6 @@ export default function PhenotypingScreen({ navigation }) {
     const digitalSignals = useMemo(() => {
         if (!liveWindow) return null; // hide entirely — no dashes
         const bl = baselines || {};
-        const appSwitchPerMin = Number(liveWindow.app_switch_rate || 0) * 60;
         const isMoving = liveWindow.data_valid === false;
         const delta = (val, mean) => {
             if (!mean || !val) return null;
@@ -473,21 +472,29 @@ export default function PhenotypingScreen({ navigation }) {
             if (Math.abs(pct) < 5) return null;
             return (pct > 0 ? '▲ +' : '▼ ') + pct + '% vs calm';
         };
+
         // No personal baseline yet (days 1-7): nothing to deviate from, so
         // signals stay neutral instead of being colored against population defaults.
         const calibrating = !liveCalibStatus?.isCalibrated;
-        const dwellZ = calibrating ? 0 : getZ(liveWindow.avg_dwell, bl.avg_dwell?.mean || 135, bl.avg_dwell?.std || 15);
-        const scrollZ = calibrating ? 0 : getZ(liveWindow.scroll_velocity, bl.scroll_velocity?.mean || 450, bl.scroll_velocity?.std || 200);
-        // app_switch_rate from service is per-second; cap at 10/min for display.
-        // Values > 10/min indicate a partial or spurious window (e.g. first window
-        // after boot) and should not drive a stress zone.
-        const appSwitchPerMinCapped = Math.min(appSwitchPerMin, 10);
-        const switchZ = appSwitchPerMinCapped > 4 ? 3 : appSwitchPerMinCapped > 2.5 ? 1.5 : 0;
+        const hasTyping = liveWindow.avg_dwell != null && Number(liveWindow.avg_dwell) > 0;
+        const hasScrolling = liveWindow.scroll_velocity != null && Number(liveWindow.scroll_velocity) > 0;
+
+        // In windows where the user did not type, dwell is 0 ms (no signal).
+        // It must NOT be treated as a zero-duration keystroke (which would inflate Z-score).
+        const dwellZ = (calibrating || !hasTyping) ? 0 : getZ(liveWindow.avg_dwell, bl.avg_dwell?.mean || 135, bl.avg_dwell?.std || 25);
+        const scrollZ = (calibrating || !hasScrolling) ? 0 : getZ(liveWindow.scroll_velocity, bl.scroll_velocity?.mean || 450, bl.scroll_velocity?.std || 200);
+
+        // app_switch_rate from service is already rate per minute.
+        const appSwitchPerMin = Number(liveWindow.app_switch_rate || 0);
+        const switchZ = calibrating ? 0 : getZ(appSwitchPerMin, bl.app_switch_rate?.mean || 1.5, bl.app_switch_rate?.std || 1.5);
+
         return [
             {
                 id: 'avg_dwell', icon: '⌨️', title: 'Keyboard Patterns',
                 value: `${Math.round(liveWindow.avg_dwell || 0)} ms`,
-                subtext: delta(liveWindow.avg_dwell, bl.avg_dwell?.mean) || 'Typing rhythm & key press duration',
+                subtext: hasTyping
+                    ? (delta(liveWindow.avg_dwell, bl.avg_dwell?.mean) || 'Typing rhythm & key press duration')
+                    : 'No typing this window',
                 color: colorZ(dwellZ), z: dwellZ,
                 sparkValues: sparkHistories.avg_dwell,
                 baselineMean: bl.avg_dwell?.mean || 135,
@@ -495,18 +502,22 @@ export default function PhenotypingScreen({ navigation }) {
             {
                 id: 'scroll_velocity', icon: '📜', title: 'Screen Scrolling',
                 value: `${Math.round(liveWindow.scroll_velocity || 0)} px/s`,
-                subtext: delta(liveWindow.scroll_velocity, bl.scroll_velocity?.mean) || 'Scroll speed & frequency patterns',
+                subtext: hasScrolling
+                    ? (delta(liveWindow.scroll_velocity, bl.scroll_velocity?.mean) || 'Scroll speed & frequency patterns')
+                    : 'No scrolling this window',
                 color: colorZ(scrollZ), z: scrollZ,
                 sparkValues: sparkHistories.scroll_velocity,
                 baselineMean: bl.scroll_velocity?.mean || 450,
             },
             {
                 id: 'app_switch', icon: '📱', title: 'Screen Activity',
-                value: `${Math.min(appSwitchPerMin, 10).toFixed(1)} /min`,
-                subtext: appSwitchPerMin > 0.001 ? 'App switching rate active' : 'No app switches this window',
+                value: `${Math.min(appSwitchPerMin, 30).toFixed(1)} /min`,
+                subtext: appSwitchPerMin > 0.001
+                    ? (delta(appSwitchPerMin, bl.app_switch_rate?.mean) || 'App switching rate active')
+                    : 'No app switches this window',
                 color: colorZ(switchZ), z: switchZ,
                 sparkValues: sparkHistories.app_switch,
-                baselineMean: 1.5,
+                baselineMean: bl.app_switch_rate?.mean || 1.5,
             },
             {
                 id: 'activity', icon: '🚶', title: 'Activity Context',
@@ -519,20 +530,29 @@ export default function PhenotypingScreen({ navigation }) {
         ];
     }, [liveWindow, baselines, COLORS, sparkHistories, liveCalibStatus]);
 
-    // ── Gauge status: CALIBRATING (days 1-7) → CALM/PRE-STRESS/HIGH STRESS (day 7+)
+    // ── Gauge status: CALIBRATING (days 1-7) → CALM/RISING/STRESSED (day 7+)
     const { statusMainColor, statusLabel, statusEmoji } = useMemo(() => {
         if (!liveCalibStatus?.isCalibrated) {
             return { statusMainColor: COLORS.brand, statusLabel: 'Learning you', statusEmoji: '⚖️' };
         }
         if (latestPrediction) {
-            const label = (latestPrediction.label || '').toLowerCase();
+            const rawLabel = (latestPrediction.label || '').toLowerCase();
             const score = Number(latestPrediction.stress_score || 0);
-            if (latestPrediction.is_anomaly || score > 0.85 || label.includes('high'))
+            const z = typeof latestPrediction.composite_z === 'number' ? latestPrediction.composite_z : 0;
+
+            // 1. High Confidence Stress (Model labeled "High Confidence Stress", or extreme score/z)
+            if (rawLabel.includes('high') || score >= 0.70 || z > 2.0) {
                 return { statusMainColor: COLORS.stress, statusLabel: 'Stressed', statusEmoji: '😰' };
-            if (score > 0.6 || label.includes('pre'))
+            }
+            // 2. Pre-Stress / Rising Drift (Model labeled "Pre-Stress", or elevated drift)
+            if (rawLabel.includes('pre') || score >= 0.45 || z > 1.0) {
                 return { statusMainColor: COLORS.warning, statusLabel: 'Rising', statusEmoji: '😐' };
-            if (score > 0.4)
+            }
+            // 3. Mild tension
+            if (score >= 0.35) {
                 return { statusMainColor: COLORS.warning, statusLabel: 'A bit tense', statusEmoji: '😕' };
+            }
+            // 4. Calm (Normal typing/scrolling consistent with calm baseline)
             return { statusMainColor: COLORS.normal, statusLabel: 'Calm', statusEmoji: '😊' };
         }
         return { statusMainColor: COLORS.normal, statusLabel: 'Calm', statusEmoji: '😊' };
@@ -540,7 +560,7 @@ export default function PhenotypingScreen({ navigation }) {
 
     // ── Ring arc
     const ringProgress = liveCalibStatus?.isCalibrated
-        ? (latestPrediction?.stress_score != null ? Math.min(1, Number(latestPrediction.stress_score)) : 0.3)
+        ? (latestPrediction?.stress_score != null ? Math.min(1, Math.max(0.12, Number(latestPrediction.stress_score))) : 0.25)
         : dayProgress;
 
 

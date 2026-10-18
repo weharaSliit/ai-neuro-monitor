@@ -63,14 +63,19 @@ class TelemetryAggregator:
             return {
                 "fused_stress_label": label,
                 "stress_probability": prob_stress,
-                "is_calibrated": is_calibrated
+                "is_calibrated": is_calibrated,
+                "has_live_packet": True,
+                "active_session_id": fb_prediction.get("session_id"),
+                "raw_label": str(raw_label_val),
             }
 
         # 2. Fallback: Read local JSON file if present
         if os.path.exists(self.fusion_output_path):
             try:
                 with open(self.fusion_output_path, "r") as f:
-                    return json.load(f)
+                    local_data = json.load(f)
+                    local_data.setdefault("has_live_packet", False)
+                    return local_data
             except Exception:
                 pass
         
@@ -78,14 +83,17 @@ class TelemetryAggregator:
         if fallback_files:
             try:
                 with open(fallback_files[0], "r") as f:
-                    return json.load(f)
+                    local_data = json.load(f)
+                    local_data.setdefault("has_live_packet", False)
+                    return local_data
             except Exception:
                 pass
 
         return {
             "fused_stress_label": "normal",
             "stress_probability": 0.50,
-            "is_calibrated": firebase_service.baseline_exists(user_id)
+            "is_calibrated": firebase_service.baseline_exists(user_id),
+            "has_live_packet": False,
         }
 
     def parse_fusion_payload(
@@ -94,7 +102,10 @@ class TelemetryAggregator:
         fused_stress_label: str = "normal",
         stress_probability: float = 0.50,
         seconds_since_last_packet: float = 0.0,
-        is_calibrated: Optional[bool] = None
+        is_calibrated: Optional[bool] = None,
+        has_live_packet: bool = False,
+        active_session_id: Optional[str] = None,
+        raw_label: Optional[str] = None
     ) -> TelemetryPayload:
         """
         Parses single fused_stress_label and stress_probability inputs from teammate fusion engine output.
@@ -119,9 +130,11 @@ class TelemetryAggregator:
             fused_stress_label=clean_label,
             stress_probability=clean_prob,
             seconds_since_last_packet=seconds_since_last_packet,
-            is_calibrated=is_calibrated
+            is_calibrated=is_calibrated,
+            has_live_packet=has_live_packet,
+            active_session_id=active_session_id,
+            raw_label=raw_label or fused_stress_label
         )
 
 # Global instance
 telemetry_aggregator = TelemetryAggregator()
-

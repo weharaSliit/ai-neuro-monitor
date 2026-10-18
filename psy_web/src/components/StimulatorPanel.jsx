@@ -4,6 +4,7 @@ import { MultiLineChart } from './charts';
 import { useFirebaseValue } from '../hooks/useData';
 import { STIM_PROFILES, mmss, useStimulator } from '../hooks/useStimulator';
 import { sendStimulatorCommand, shallowKeys } from '../lib/firebase';
+import { isTestAccount } from '../lib/testAccounts';
 
 // Live stimulator (backend/simulation/live_stimulator.py, run on a laptop):
 // simulated headband + ring data for the user who is ALREADY logged in with
@@ -82,7 +83,8 @@ export default function StimulatorPanel({ now }) {
   const hbAgo = seenAgo(headband?.last_seen); const ringAgo = seenAgo(ringDev?.last_seen);
   const hbOn = hbAgo != null && hbAgo < FRESH_SEC; const ringOn = ringAgo != null && ringAgo < FRESH_SEC;
   const realOn = !stim.running && (hbOn || ringOn);
-  const canStart = stim.online && !stim.running && Boolean(target) && /^[A-Za-z0-9_.-]{2,40}$/.test(target);
+  const testUser = isTestAccount(target);
+  const canStart = stim.online && !stim.running && Boolean(target) && /^[A-Za-z0-9_.-]{2,40}$/.test(target) && testUser;
 
   const send = async (cmd, extra = {}) => {
     setBusy(true); setError(null);
@@ -114,19 +116,20 @@ export default function StimulatorPanel({ now }) {
               <button type="button" className="link" onClick={copy}>{copied ? 'copied' : 'copy'}</button>
               {stim.online ? ' · connected.' : ' · waiting for it (turns green a few seconds after it starts).'}
             </Check>
-            <Check ok={Boolean(target)} title="2. Choose the user to simulate">
+            <Check ok={Boolean(target) && testUser} warn={Boolean(target) && !testUser} title="2. Choose a TEST account to simulate (sim_… or mp_…)">
               <div className="recal-bar" style={{ marginTop: 6 }}>
                 <label className="muted">User{' '}
                   <select value={userPick} onChange={(e) => setUserPick(e.target.value)}>
                     <option value="">{loggedIn ? `Logged-in user (${loggedIn})` : 'Logged-in user (nobody logged in)'}</option>
-                    {knownUsers.filter((u) => u !== loggedIn).map((u) => <option key={u} value={u}>{u}</option>)}
+                    {knownUsers.filter((u) => u !== loggedIn).map((u) => <option key={u} value={u}>{u}{isTestAccount(u) ? '' : ' (real account)'}</option>)}
                     <option value="__new__">New user…</option>
                   </select>
                 </label>
                 {userPick === '__new__' && <input type="text" value={newUser} placeholder="user id, e.g. sim_demo1" aria-label="New user id"
                   onChange={(e) => setNewUser(e.target.value)} />}
               </div>
-              {!target ? 'Nobody is logged in: choose a user (or log in on StressApp).'
+              {!target ? 'Nobody is logged in: choose a test user (or log in on StressApp with one).'
+                : !testUser ? <><b>{target}</b> is a real account. The simulation won&apos;t run for it: it would replace that person&apos;s calibration and add simulated readings to their history. Choose a test account (sim_… or mp_…).</>
                 : takeover ? <><b>{target}</b>: the stimulator logs in as this user with a new session while it runs
                   {loggedIn ? <>, and gives the devices back to <b>{loggedIn}</b> when you press Stop</> : ''}. Any real headband/ring data go to {target} meanwhile.</>
                   : <>Logged in: <b>{loggedIn}</b>{loggedSession ? ` · ${loggedSession.replace('session_', '')}` : ''}. The simulated data go to this user; the login isn&apos;t changed.</>}
@@ -154,7 +157,7 @@ export default function StimulatorPanel({ now }) {
                 </label>
                 <label className="muted"><input type="checkbox" checked={recalibrate} onChange={(e) => setRecalibrate(e.target.checked)} /> recalibrate this user first</label>
                 <button type="button" className="btn" onClick={() => send('start')} disabled={busy || !canStart}
-                  title={canStart ? undefined : 'Complete steps 1 and 2 first (user id: letters, digits, _ . -)'}>{busy ? 'Sending…' : 'Start'}</button>
+                  title={canStart ? undefined : 'Complete steps 1 and 2 first (a test account: sim_… or mp_…; letters, digits, _ . -)'}>{busy ? 'Sending…' : 'Start'}</button>
               </div>
               {recalibrate ? 'Their baseline and high-load thresholds are recalibrated with the simulated data (about 17 min), then the live scenario starts.'
                 : 'Their current thresholds are kept; the live scenario starts at once.'}

@@ -17,6 +17,7 @@ from app.services.kmeans_clusterer import kmeans_clusterer
 from app.services.thompson_bandit import thompson_bandit
 from app.services.preference_learner import preference_learner
 from app.services.fallback_handler import fallback_handler
+from app.services.intervention_context import combine_intervention_context
 from app.services import firebase_service
 
 router = APIRouter(tags=["Intervention"])
@@ -34,8 +35,19 @@ def get_personalized_intervention(req: InterventionRequest):
     # Step 1: Missing Value Handler & Safety Override
     processed_signal = missing_value_handler.process_telemetry(req.telemetry)
     
-    # Step 2: Context Cluster Prediction
-    cluster_id = kmeans_clusterer.predict_cluster(processed_signal.features_flat)
+    # Combine the safety-processed physiological signal with the latest live
+    # digital phenotyping prediction when one is available.
+    physiological_score = processed_signal.features_flat[0]
+    context_label, context_score = combine_intervention_context(
+        processed_signal.effective_label,
+        physiological_score,
+        req.telemetry.pheno_stress_label,
+        req.telemetry.pheno_stress_probability,
+    )
+
+    # Step 2: Context Cluster Prediction from both signal streams.
+    context_features = [context_score, max(0.0, 1.0 - context_score)]
+    cluster_id = kmeans_clusterer.predict_cluster(context_features)
     
     # Step 3: Thompson Sampling Selection
     usage_7d = fallback_handler.get_all_7day_usage_counts(req.user_id)
@@ -65,6 +77,10 @@ def get_personalized_intervention(req: InterventionRequest):
         "timestamp": req.telemetry.timestamp,
         "fused_stress_label": req.telemetry.fused_stress_label,
         "stress_probability": req.telemetry.stress_probability,
+        "pheno_stress_label": req.telemetry.pheno_stress_label,
+        "pheno_stress_probability": req.telemetry.pheno_stress_probability,
+        "context_stress_label": context_label,
+        "context_stress_probability": round(context_score, 4),
         "recommended_technique_id": tech_id,
         "selected_sub_option_id": selected_sub.id,
         "context_cluster_id": cluster_id,
@@ -89,7 +105,9 @@ def get_personalized_intervention(req: InterventionRequest):
         blended_score=round(blended_score, 4),
         physiological_sample=round(s_physio, 4),
         preference_score=round(s_pref, 4),
-        execution_time_ms=round(exec_ms, 2)
+        execution_time_ms=round(exec_ms, 2),
+        context_stress_label=context_label,
+        context_stress_probability=round(context_score, 4),
     )
 
 @router.post("/fallback", response_model=FallbackResponse)

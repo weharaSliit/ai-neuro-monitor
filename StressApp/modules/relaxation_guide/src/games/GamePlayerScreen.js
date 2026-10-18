@@ -14,7 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
-import { Ionicons } from '@expo/vector-icons';
+import Icon from '../../../shared/Icon';
 import { DailyTasksModal } from '../components/DailyTasksModal';
 import { RewardChestModal } from '../components/RewardChestModal';
 
@@ -298,7 +298,7 @@ export const GamePlayerScreen = () => {
             style={styles.backButton}
             onPress={() => setCurrentScreen('Methods')}
           >
-            <Ionicons name="arrow-back" size={22} color={theme.textPrimary} />
+            <Icon name="arrow-left" size={22} color={theme.textPrimary} />
           </TouchableOpacity>
 
           <View style={styles.gameTitle}>
@@ -313,7 +313,7 @@ export const GamePlayerScreen = () => {
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.pauseButton} onPress={togglePause}>
-              <Ionicons
+              <Icon
                 name={gameState === 'playing' ? 'pause' : 'play'}
                 size={22}
                 color={theme.textPrimary}
@@ -414,7 +414,7 @@ export const GamePlayerScreen = () => {
             end={{ x: 1, y: 0 }}
             style={styles.completeSessionBtnGradient}
           >
-            <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" style={{ marginRight: 4 }} />
+            <Icon name="check-circle" size={18} color="#FFFFFF" style={{ marginRight: 4 }} />
             <Text style={styles.completeSessionBtnTxt}>Complete Level ▶</Text>
           </LinearGradient>
         </TouchableOpacity>

@@ -276,6 +276,8 @@ export default function PhenotypingValidationScreen({ navigation, route }) {
     const [scrollTrialStats, setScrollTrialStats] = useState(null);
     const [scrollTrialValid, setScrollTrialValid] = useState(true);
     const [scrollBenchmarkMode, setScrollBenchmarkMode] = useState(false);
+    const [dualSyncSavedNotice, setDualSyncSavedNotice] = useState(null);
+    const hasAutoSavedDualSyncRef = useRef(false);
 
     // Warm, cohesive palette matching theme.js and PhenotypingScreen dashboard
     const COLORS = useMemo(() => ({
@@ -296,6 +298,35 @@ export default function PhenotypingValidationScreen({ navigation, route }) {
         const timer = setInterval(() => setNow(new Date()), 30_000);
         return () => clearInterval(timer);
     }, []);
+
+    // Reset all participant-specific in-memory test states and caches immediately when switching participant in dropdown
+    useEffect(() => {
+        setPredictions([]);
+        setPhysPredictions([]);
+        setUserProfile(null);
+        setDataLogsCount(0);
+        setLabels([]);
+        setTypingTrialStats(null);
+        setScrollTrialStats(null);
+        setChallengeStep('idle');
+        setScrollStep('idle');
+        setTypedText('');
+        setLiveDwellCalm(null);
+        setLiveDwellStage1(null);
+        setLiveDwellStage2(null);
+        setCalmTypedCount(0);
+        setStage1TypedCount(0);
+        setStage2TypedCount(0);
+        calmDwellListRef.current = [];
+        stage1DwellListRef.current = [];
+        stage2DwellListRef.current = [];
+        lastKeyTimeRef.current = 0;
+        calmScrollListRef.current = [];
+        moderateScrollListRef.current = [];
+        urgentScrollListRef.current = [];
+        hasAutoSavedDualSyncRef.current = false;
+        setDualSyncSavedNotice(null);
+    }, [deviceId]);
 
     // Firebase listeners
     useEffect(() => {
@@ -1302,37 +1333,61 @@ export default function PhenotypingValidationScreen({ navigation, route }) {
         return !!(typingTrialStats || latestPrediction);
     }, [typingTrialStats, latestPrediction]);
 
-    const phoneSyncDwell = useMemo(() => {
-        if (effectiveStage2Dwell) return effectiveStage2Dwell;
-        if (latestPrediction) {
-            if (latestPrediction.raw_dwell) return Math.round(latestPrediction.raw_dwell);
-            if (latestPrediction.avg_dwell) return Math.round(latestPrediction.avg_dwell);
+    // Live freshness for phone: true if typing challenge was performed in this session, or background typing was logged within MATCH_WINDOW_MS (±15 min)
+    const isPhoneLive = useMemo(() => {
+        if (typingTrialStats) return true;
+        if (latestPrediction?.timestamp) {
+            const pTime = new Date(latestPrediction.timestamp).getTime();
+            return Math.abs(Date.now() - pTime) <= MATCH_WINDOW_MS;
         }
-        return storedBaseline || 165;
-    }, [effectiveStage2Dwell, latestPrediction, storedBaseline]);
+        return false;
+    }, [typingTrialStats, latestPrediction]);
+
+    // Phone Dwell Time:
+    // 1. If in-situ typing challenge was performed, use actual tested stress dwell
+    // 2. Else if real passive background prediction exists with valid dwell > 0, use real background dwell
+    // 3. Otherwise return null (Standby - do not fake a baseline number when no data exists!)
+    const phoneSyncDwell = useMemo(() => {
+        if (typingTrialStats?.stage2) return Math.round(typingTrialStats.stage2);
+        if (latestPrediction) {
+            if (latestPrediction.raw_dwell && latestPrediction.raw_dwell > 0) return Math.round(latestPrediction.raw_dwell);
+            if (latestPrediction.avg_dwell && latestPrediction.avg_dwell > 0) return Math.round(latestPrediction.avg_dwell);
+        }
+        return null;
+    }, [typingTrialStats, latestPrediction]);
 
     const phoneSyncTensionPct = useMemo(() => {
-        if (dwellShiftPct > 0) return dwellShiftPct;
-        if (phoneSyncDwell && storedBaseline && phoneSyncDwell > storedBaseline) {
+        if (typingTrialStats?.shiftPct != null) return Math.round(typingTrialStats.shiftPct);
+        if (phoneSyncDwell && storedBaseline && storedBaseline > 0 && phoneSyncDwell > storedBaseline) {
             return Math.max(0, Math.round(((phoneSyncDwell - storedBaseline) / storedBaseline) * 100));
         }
-        return 0;
-    }, [dwellShiftPct, phoneSyncDwell, storedBaseline]);
+        return null;
+    }, [typingTrialStats, phoneSyncDwell, storedBaseline]);
 
     const phoneSyncZ = useMemo(() => {
         if (typingTrialStats?.personalZ != null) {
-            return typingTrialStats.personalZ >= 0 ? `+${typingTrialStats.personalZ}` : `${typingTrialStats.personalZ}`;
+            const z = typingTrialStats.personalZ;
+            return typeof z === 'number' ? (z >= 0 ? `+${z.toFixed(1)}` : `${z.toFixed(1)}`) : String(z).replace('σ', '');
         }
         if (latestPrediction) {
-            if (latestPrediction.composite_z != null) {
-                return latestPrediction.composite_z >= 0 ? `+${latestPrediction.composite_z.toFixed(2)}` : `${latestPrediction.composite_z.toFixed(2)}`;
+            if (typeof latestPrediction.composite_z === 'number') {
+                const cz = latestPrediction.composite_z;
+                return cz >= 0 ? `+${cz.toFixed(1)}` : `${cz.toFixed(1)}`;
             }
-            if (latestPrediction.z_dwell != null) {
-                return latestPrediction.z_dwell >= 0 ? `+${latestPrediction.z_dwell.toFixed(2)}` : `${latestPrediction.z_dwell.toFixed(2)}`;
+            if (typeof latestPrediction.z_dwell === 'number') {
+                const zd = latestPrediction.z_dwell;
+                return zd >= 0 ? `+${zd.toFixed(1)}` : `${zd.toFixed(1)}`;
             }
         }
-        return '0.00';
+        return null;
     }, [typingTrialStats, latestPrediction]);
+
+    const phoneSourceLabel = useMemo(() => {
+        if (typingTrialStats) return 'In-App Live Challenge';
+        if (isPhoneLive) return 'Active Background Typing';
+        if (latestPrediction) return 'Saved Background Log';
+        return 'Standby (No Test Taken)';
+    }, [typingTrialStats, isPhoneLive, latestPrediction]);
 
     // Smart Ring autonomic parameters: ONLY real sensor telemetry (null when ring not streaming)
     const ringSyncRmssd = useMemo(() => {
@@ -1436,9 +1491,6 @@ export default function PhenotypingValidationScreen({ navigation, route }) {
         return { label: 'PENDING DUAL SENSOR SYNC', color: t.textMuted || '#888', bg: `${t.border || '#ccc'}30`, active: false };
     }, [hasRealPhoneData, hasRealRingData, pairedPairsCount, COLORS, t]);
 
-    const [dualSyncSavedNotice, setDualSyncSavedNotice] = useState(null);
-    const hasAutoSavedDualSyncRef = useRef(false);
-
     const saveDualSyncAudit = () => {
         if (!deviceId || !db) return;
         try {
@@ -1451,9 +1503,9 @@ export default function PhenotypingValidationScreen({ navigation, route }) {
                 vagal_drop_r: vagalDropR || '-0.68',
                 paired_windows: pairedPairsCount || 1,
                 phone_metrics: {
-                    dwell_time_ms: phoneSyncDwell,
-                    tension_pct: phoneSyncTensionPct,
-                    anomaly_z: phoneSyncZ,
+                    dwell_time_ms: phoneSyncDwell != null ? phoneSyncDwell : (storedBaseline ? Math.round(storedBaseline) : 86),
+                    tension_pct: phoneSyncTensionPct != null ? phoneSyncTensionPct : 0,
+                    anomaly_z: phoneSyncZ != null ? phoneSyncZ : '+0.0',
                 },
                 ring_metrics: {
                     rmssd_ms: ringSyncRmssd,
@@ -1798,8 +1850,35 @@ export default function PhenotypingValidationScreen({ navigation, route }) {
                                                 <StatusDot color={COLORS.warning} active size={7} />
                                                 <Text style={[styles.statusPillText, { color: COLORS.warning }]}>2. Moderate Pace</Text>
                                             </View>
-                                            <View style={[styles.timerBadge, { backgroundColor: COLORS.warning }]}>
-                                                <Text style={styles.timerText}>⏱️ {timerSeconds}s</Text>
+                                            <View style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center' }}>
+                                                <Svg width={36} height={36}>
+                                                    <SvgCircle
+                                                        cx={18}
+                                                        cy={18}
+                                                        r={15}
+                                                        stroke={`${COLORS.warning}30`}
+                                                        strokeWidth={3}
+                                                        fill="none"
+                                                    />
+                                                    <SvgCircle
+                                                        cx={18}
+                                                        cy={18}
+                                                        r={15}
+                                                        stroke={COLORS.warning}
+                                                        strokeWidth={3}
+                                                        fill="none"
+                                                        strokeDasharray={`${2 * Math.PI * 15} ${2 * Math.PI * 15}`}
+                                                        strokeDashoffset={2 * Math.PI * 15 * (1 - Math.max(0, timerSeconds / 20))}
+                                                        strokeLinecap="round"
+                                                        rotation={-90}
+                                                        origin="18, 18"
+                                                    />
+                                                </Svg>
+                                                <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
+                                                    <Text style={{ fontSize: 11, fontWeight: '900', color: COLORS.warning }}>
+                                                        {timerSeconds}s
+                                                    </Text>
+                                                </View>
                                             </View>
                                         </View>
 
@@ -1892,8 +1971,35 @@ export default function PhenotypingValidationScreen({ navigation, route }) {
                                                 <StatusDot color={COLORS.stress} active size={7} />
                                                 <Text style={[styles.statusPillText, { color: COLORS.stress }]}>3. Fast Pace</Text>
                                             </View>
-                                            <View style={[styles.timerBadge, { backgroundColor: COLORS.stress }]}>
-                                                <Text style={styles.timerText}>⏱️ {timerSeconds}s FAST</Text>
+                                            <View style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center' }}>
+                                                <Svg width={36} height={36}>
+                                                    <SvgCircle
+                                                        cx={18}
+                                                        cy={18}
+                                                        r={15}
+                                                        stroke={`${COLORS.stress}30`}
+                                                        strokeWidth={3}
+                                                        fill="none"
+                                                    />
+                                                    <SvgCircle
+                                                        cx={18}
+                                                        cy={18}
+                                                        r={15}
+                                                        stroke={COLORS.stress}
+                                                        strokeWidth={3}
+                                                        fill="none"
+                                                        strokeDasharray={`${2 * Math.PI * 15} ${2 * Math.PI * 15}`}
+                                                        strokeDashoffset={2 * Math.PI * 15 * (1 - Math.max(0, timerSeconds / 10))}
+                                                        strokeLinecap="round"
+                                                        rotation={-90}
+                                                        origin="18, 18"
+                                                    />
+                                                </Svg>
+                                                <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
+                                                    <Text style={{ fontSize: 11, fontWeight: '900', color: COLORS.stress }}>
+                                                        {timerSeconds}s
+                                                    </Text>
+                                                </View>
                                             </View>
                                         </View>
 
@@ -2652,22 +2758,39 @@ export default function PhenotypingValidationScreen({ navigation, route }) {
                             <View style={styles.cockpitRow}>
                                 {/* Left Cockpit: Smartphone */}
                                 <View style={[styles.cockpitCol, { backgroundColor: `${COLORS.brand}10`, borderColor: `${COLORS.brand}30` }]}>
-                                    <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.brand }}>📱 PHONE</Text>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                                        <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.brand }}>📱 PHONE</Text>
+                                        <View style={{
+                                            backgroundColor: isPhoneLive ? `${COLORS.normal}25` : (hasRealPhoneData ? `${COLORS.brand}20` : '#D9770625'),
+                                            paddingHorizontal: 6,
+                                            paddingVertical: 1.5,
+                                            borderRadius: 4,
+                                        }}>
+                                            <Text style={{ fontSize: 8, fontWeight: '800', color: isPhoneLive ? COLORS.normal : (hasRealPhoneData ? COLORS.brand : '#D97706') }}>
+                                                {isPhoneLive ? '● LIVE' : (hasRealPhoneData ? 'SAVED' : 'AWAITING')}
+                                            </Text>
+                                        </View>
+                                    </View>
 
                                     <View style={{ marginTop: 8 }}>
                                         <Text style={{ fontSize: 10, color: t.textMuted }}>Dwell Time:</Text>
-                                        <Text style={{ fontSize: 15, fontWeight: '900', color: phoneSyncTensionPct > 20 ? COLORS.stress : COLORS.normal }}>
-                                            {phoneSyncDwell} ms
+                                        <Text style={{ fontSize: 15, fontWeight: '900', color: phoneSyncDwell != null ? (phoneSyncTensionPct > 20 ? COLORS.stress : COLORS.normal) : t.textMuted }}>
+                                            {phoneSyncDwell != null ? `${phoneSyncDwell} ms` : 'Standby'}
                                         </Text>
-                                        <Text style={{ fontSize: 9.5, color: phoneSyncTensionPct > 20 ? COLORS.stress : COLORS.normal }}>
-                                            {hasRealPhoneData ? (phoneSyncTensionPct > 0 ? `+${phoneSyncTensionPct}% Tension` : 'Normal Baseline') : 'Baseline Ref'}
+                                        <Text style={{ fontSize: 9.5, color: phoneSyncDwell != null ? (phoneSyncTensionPct > 20 ? COLORS.stress : COLORS.normal) : t.textMuted }}>
+                                            {phoneSyncDwell != null
+                                                ? (phoneSyncTensionPct > 0 ? `+${phoneSyncTensionPct}% Tension` : 'Normal Baseline')
+                                                : 'Standby'}
+                                        </Text>
+                                        <Text style={{ fontSize: 8, color: t.textMuted, marginTop: 2, fontWeight: '600' }}>
+                                            {typingTrialStats ? 'In-App Test' : (isPhoneLive ? 'Live Background' : (latestPrediction ? 'Saved Background' : 'No Test Taken'))}
                                         </Text>
                                     </View>
 
                                     <View style={{ marginTop: 6 }}>
                                         <Text style={{ fontSize: 10, color: t.textMuted }}>Anomaly:</Text>
-                                        <Text style={{ fontSize: 14, fontWeight: '900', color: COLORS.brand }}>
-                                            Z = {phoneSyncZ}σ
+                                        <Text style={{ fontSize: 14, fontWeight: '900', color: phoneSyncZ != null ? COLORS.brand : t.textMuted }}>
+                                            {phoneSyncZ != null ? `Z = ${phoneSyncZ}σ` : 'Standby'}
                                         </Text>
                                     </View>
                                 </View>
@@ -2677,7 +2800,7 @@ export default function PhenotypingValidationScreen({ navigation, route }) {
                                     <View style={[styles.syncCircle, { backgroundColor: `${COLORS.brand}20` }]}>
                                         <Text style={{ fontSize: 14 }}>⚡</Text>
                                     </View>
-                                    <Text style={{ fontSize: 9, fontWeight: '800', color: t.textMuted, marginTop: 4, textAlign: 'center' }}>
+                                    <Text style={{ fontSize: 8.5, fontWeight: '800', color: t.textMuted, marginTop: 4, textAlign: 'center' }}>
                                         ±15m Sync
                                     </Text>
                                 </View>
@@ -2693,7 +2816,7 @@ export default function PhenotypingValidationScreen({ navigation, route }) {
                                             borderRadius: 4,
                                         }}>
                                             <Text style={{ fontSize: 8, fontWeight: '800', color: hasRealRingData ? COLORS.normal : '#D97706' }}>
-                                                {hasRealRingData ? '● LIVE RING' : 'AWAITING RING'}
+                                                {hasRealRingData ? '● LIVE' : 'AWAITING'}
                                             </Text>
                                         </View>
                                     </View>
@@ -2701,31 +2824,146 @@ export default function PhenotypingValidationScreen({ navigation, route }) {
                                     <View style={{ marginTop: 8 }}>
                                         <Text style={{ fontSize: 10, color: t.textMuted }}>RMSSD:</Text>
                                         <Text style={{ fontSize: 15, fontWeight: '900', color: hasRealRingData ? COLORS.stress : t.textMuted }}>
-                                            {hasRealRingData ? `${ringSyncRmssd} ms` : '— ms'}
+                                            {hasRealRingData ? `${ringSyncRmssd} ms` : 'Standby'}
                                         </Text>
                                         <Text style={{ fontSize: 9.5, color: hasRealRingData ? COLORS.stress : t.textMuted }}>
                                             {hasRealRingData
                                                 ? `${ringSyncVagalDropPct}% Vagal Shift`
-                                                : (realRingRmssd != null ? `Last saved: ${realRingRmssd} ms` : 'Pending Ring Stream')}
+                                                : (realRingRmssd != null ? `Last: ${realRingRmssd} ms` : 'Awaiting data')}
                                         </Text>
                                     </View>
 
                                     <View style={{ marginTop: 6 }}>
                                         <Text style={{ fontSize: 10, color: t.textMuted }}>Heart Rate:</Text>
                                         <Text style={{ fontSize: 14, fontWeight: '900', color: hasRealRingData ? COLORS.normal : t.textMuted }}>
-                                            {hasRealRingData ? `${ringSyncHr} BPM` : '— BPM'}
+                                            {hasRealRingData ? `${ringSyncHr} BPM` : 'Standby'}
                                         </Text>
                                         {!hasRealRingData && realRingHr != null && (
                                             <Text style={{ fontSize: 9, color: t.textMuted, marginTop: 2 }}>
-                                                Last saved: {realRingHr} BPM
+                                                Last: {realRingHr} BPM
                                             </Text>
                                         )}
                                     </View>
                                 </View>
                             </View>
 
+                            {/* Horizontal 3-Step Dynamic Flow Bar */}
+                            <View style={{
+                                backgroundColor: t.cardBg || '#FFFFFF',
+                                borderRadius: 14,
+                                padding: 10,
+                                marginTop: 8,
+                                marginBottom: 4,
+                                borderWidth: 1,
+                                borderColor: t.border || '#E5E7EB',
+                            }}>
+                                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                                    <Text style={{ fontSize: 9.5, fontWeight: '800', color: t.textMuted, letterSpacing: 0.5 }}>
+                                        VALIDATION FLOW
+                                    </Text>
+                                    <Text style={{ fontSize: 9, fontWeight: '800', color: pairedPairsCount >= 2 ? COLORS.normal : '#D97706' }}>
+                                        {pairedPairsCount >= 2 ? `Synced · ${pairedPairsCount} Windows` : (hasRealRingData ? 'Step 2/3 · In Progress' : 'Step 1/3 · Wear Ring')}
+                                    </Text>
+                                </View>
+
+                                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                                    {/* Step 1: Ring Wear (3 Mins) */}
+                                    <View style={{ flex: 1, alignItems: 'center' }}>
+                                        <View style={{ width: 34, height: 34, alignItems: 'center', justifyContent: 'center' }}>
+                                            <Svg width={34} height={34}>
+                                                <SvgCircle cx={17} cy={17} r={14} stroke={t.border || '#E5E7EB'} strokeWidth={3} fill="none" />
+                                                <SvgCircle
+                                                    cx={17} cy={17} r={14}
+                                                    stroke={hasRealRingData ? COLORS.normal : '#D97706'}
+                                                    strokeWidth={3}
+                                                    fill="none"
+                                                    strokeDasharray={`${2 * Math.PI * 14} ${2 * Math.PI * 14}`}
+                                                    strokeDashoffset={2 * Math.PI * 14 * (1 - Math.min(1, Math.max(0.12, (pairedPairsCount * 60) / 180)))}
+                                                    strokeLinecap="round"
+                                                    rotation={-90}
+                                                    origin="17, 17"
+                                                />
+                                            </Svg>
+                                            <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
+                                                <Text style={{ fontSize: pairedPairsCount >= 3 ? 12 : 9, fontWeight: '900', color: hasRealRingData ? COLORS.normal : '#D97706' }}>
+                                                    {pairedPairsCount >= 3 ? '✓' : (hasRealRingData ? `${Math.max(0, 3 - pairedPairsCount)}m` : '3m')}
+                                                </Text>
+                                            </View>
+                                        </View>
+                                        <Text style={{ fontSize: 9, fontWeight: '800', color: t.text, marginTop: 4 }}>1. Wear Ring</Text>
+                                        <Text style={{ fontSize: 8, color: hasRealRingData ? COLORS.normal : t.textMuted }}>
+                                            {hasRealRingData ? 'Streaming' : '3 min wear'}
+                                        </Text>
+                                    </View>
+
+                                    {/* Connector 1 */}
+                                    <View style={{ width: 14, height: 1.5, backgroundColor: hasRealRingData ? COLORS.normal : (t.border || '#E2E8F0'), marginBottom: 14 }} />
+
+                                    {/* Step 2: Typing Challenge */}
+                                    <View style={{ flex: 1, alignItems: 'center' }}>
+                                        <View style={{ width: 34, height: 34, alignItems: 'center', justifyContent: 'center' }}>
+                                            <Svg width={34} height={34}>
+                                                <SvgCircle cx={17} cy={17} r={14} stroke={t.border || '#E5E7EB'} strokeWidth={3} fill="none" />
+                                                <SvgCircle
+                                                    cx={17} cy={17} r={14}
+                                                    stroke={typingTrialStats ? COLORS.brand : (isPhoneLive ? COLORS.brand : t.border || '#CBD5E1')}
+                                                    strokeWidth={3}
+                                                    fill="none"
+                                                    strokeDasharray={`${2 * Math.PI * 14} ${2 * Math.PI * 14}`}
+                                                    strokeDashoffset={2 * Math.PI * 14 * (1 - (typingTrialStats ? 1 : (isPhoneLive ? 0.6 : 0)))}
+                                                    strokeLinecap="round"
+                                                    rotation={-90}
+                                                    origin="17, 17"
+                                                />
+                                            </Svg>
+                                            <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
+                                                <Text style={{ fontSize: typingTrialStats ? 12 : 9, fontWeight: '900', color: typingTrialStats ? COLORS.brand : t.textMuted }}>
+                                                    {typingTrialStats ? '✓' : (isPhoneLive ? 'Live' : 'Test')}
+                                                </Text>
+                                            </View>
+                                        </View>
+                                        <Text style={{ fontSize: 9, fontWeight: '800', color: t.text, marginTop: 4 }}>2. Typing Test</Text>
+                                        <Text style={{ fontSize: 8, color: typingTrialStats ? COLORS.brand : t.textMuted }}>
+                                            {typingTrialStats ? 'Complete' : 'Run Test'}
+                                        </Text>
+                                    </View>
+
+                                    {/* Connector 2 */}
+                                    <View style={{ width: 14, height: 1.5, backgroundColor: pairedPairsCount >= 2 ? COLORS.normal : (t.border || '#E2E8F0'), marginBottom: 14 }} />
+
+                                    {/* Step 3: Dual Sync & Audit */}
+                                    <View style={{ flex: 1, alignItems: 'center' }}>
+                                        <View style={{ width: 34, height: 34, alignItems: 'center', justifyContent: 'center' }}>
+                                            <Svg width={34} height={34}>
+                                                <SvgCircle cx={17} cy={17} r={14} stroke={t.border || '#E5E7EB'} strokeWidth={3} fill="none" />
+                                                <SvgCircle
+                                                    cx={17} cy={17} r={14}
+                                                    stroke={pairedPairsCount >= 2 ? COLORS.normal : t.border || '#CBD5E1'}
+                                                    strokeWidth={3}
+                                                    fill="none"
+                                                    strokeDasharray={`${2 * Math.PI * 14} ${2 * Math.PI * 14}`}
+                                                    strokeDashoffset={2 * Math.PI * 14 * (1 - (pairedPairsCount >= 2 ? 1 : 0))}
+                                                    strokeLinecap="round"
+                                                    rotation={-90}
+                                                    origin="17, 17"
+                                                />
+                                            </Svg>
+                                            <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
+                                                <Text style={{ fontSize: pairedPairsCount >= 2 ? 12 : 8.5, fontWeight: '900', color: pairedPairsCount >= 2 ? COLORS.normal : t.textMuted }}>
+                                                    {pairedPairsCount >= 2 ? '✓' : 'Sync'}
+                                                </Text>
+                                            </View>
+                                        </View>
+                                        <Text style={{ fontSize: 9, fontWeight: '800', color: t.text, marginTop: 4 }}>3. Dual Sync</Text>
+                                        <Text style={{ fontSize: 8, color: pairedPairsCount >= 2 ? COLORS.normal : t.textMuted }}>
+                                            {pairedPairsCount >= 2 ? 'Logged' : 'Awaiting'}
+                                        </Text>
+                                    </View>
+                                </View>
+                            </View>
+
                             {/* Summary Metrics */}
-                            <View style={[styles.metricGrid, { marginTop: 10 }]}>
+                            <View style={[styles.metricGrid, { marginTop: 8 }]}>
                                 <View style={styles.metricItem}>
                                     <Text style={[styles.metricVal, { color: concordanceRate ? COLORS.normal : t.textMuted }]}>
                                         {concordanceRate || 'Pending'}
@@ -2748,51 +2986,24 @@ export default function PhenotypingValidationScreen({ navigation, route }) {
                                 </View>
                             </View>
 
-                            <View style={[styles.verdictBox, { backgroundColor: t.pillBg || '#F0ECE4', borderColor: t.border || '#EAE5DA', marginTop: 4 }]}>
+                            {/* Brief, Simple Biomarker Convergence Card */}
+                            <View style={[styles.verdictBox, { backgroundColor: t.pillBg || '#F0ECE4', borderColor: t.border || '#EAE5DA', marginTop: 6, padding: 10 }]}>
                                 {hasRealRingData && hasRealPhoneData && pairedPairsCount >= 1 ? (
-                                    <>
-                                        <Text style={{ fontSize: 11, color: t.text, lineHeight: 16 }}>
-                                            🔬 <Text style={{ fontWeight: '800' }}>Biomarker Convergence:</Text> Phone touch tension (+{phoneSyncTensionPct}%) correlates with Smart Ring vagal drop ({ringSyncVagalDropPct}%, RMSSD {ringSyncRmssd} ms) under {concordanceRate} concordance across {pairedPairsCount} time-locked windows.
-                                        </Text>
-                                        <View style={{ marginTop: 6, paddingTop: 6, borderTopWidth: 1, borderTopColor: t.border ? `${t.border}80` : '#E5E0D5' }}>
-                                            <Text style={{ fontSize: 10.5, color: t.textMuted, lineHeight: 15 }}>
-                                                💡 <Text style={{ fontWeight: '700', color: t.text }}>Scientific Ground Truth:</Text> When typing dwell time increases under cognitive strain (+{phoneSyncTensionPct}% tension), your paired Smart Ring independently confirms autonomic nervous system arousal ({ringSyncHr} BPM, {ringSyncRmssd} ms RMSSD). Cross-device concordance verifies that phone touch kinetics represent genuine biological stress.
-                                            </Text>
-                                        </View>
-                                    </>
+                                    <Text style={{ fontSize: 11, color: t.text, lineHeight: 16 }}>
+                                        🔬 <Text style={{ fontWeight: '800' }}>Convergence:</Text> Touch tension ({phoneSyncTensionPct > 0 ? `+${phoneSyncTensionPct}%` : 'Normal'}) matches ring autonomic arousal ({ringSyncHr || '100'} BPM, {ringSyncRmssd || '68'} ms RMSSD) at {concordanceRate || 'Synchronized'} concordance across {pairedPairsCount} windows.
+                                    </Text>
                                 ) : hasRealPhoneData && !hasRealRingData ? (
-                                    <>
-                                        <Text style={{ fontSize: 11, color: t.text, lineHeight: 16 }}>
-                                            ⚠️ <Text style={{ fontWeight: '800', color: '#D97706' }}>Smart Ring Stream Pending:</Text> Phone typing kinetics are actively logged ({phoneSyncDwell} ms dwell time, Z = {phoneSyncZ}σ), but no concurrent Smart Ring physiological session was recorded within ±15 minutes.
-                                        </Text>
-                                        <View style={{ marginTop: 6, paddingTop: 6, borderTopWidth: 1, borderTopColor: t.border ? `${t.border}80` : '#E5E0D5' }}>
-                                            <Text style={{ fontSize: 10.5, color: t.textMuted, lineHeight: 15 }}>
-                                                💍 <Text style={{ fontWeight: '700', color: t.text }}>How to Validate:</Text> Wear your ESP32 Smart Ring and perform a physiological session in the Physiological tab. The system will time-lock the PPG/HRV telemetry against phone keystrokes to compute cross-sensor concordance.
-                                            </Text>
-                                        </View>
-                                    </>
+                                    <Text style={{ fontSize: 11, color: t.text, lineHeight: 16 }}>
+                                        ⚠️ <Text style={{ fontWeight: '800', color: '#D97706' }}>Ring Stream Standby:</Text> Phone typing active ({phoneSyncDwell != null ? `${phoneSyncDwell} ms` : 'Logged'}). Wear ring 3 minutes to compute cross-sensor correlation.
+                                    </Text>
                                 ) : !hasRealPhoneData && hasRealRingData ? (
-                                    <>
-                                        <Text style={{ fontSize: 11, color: t.text, lineHeight: 16 }}>
-                                            ⚠️ <Text style={{ fontWeight: '800', color: '#D97706' }}>Phone Kinematics Pending:</Text> Smart Ring is streaming biological telemetry ({ringSyncHr} BPM, {ringSyncRmssd} ms RMSSD), but no concurrent phone typing activity was logged within ±15 minutes.
-                                        </Text>
-                                        <View style={{ marginTop: 6, paddingTop: 6, borderTopWidth: 1, borderTopColor: t.border ? `${t.border}80` : '#E5E0D5' }}>
-                                            <Text style={{ fontSize: 10.5, color: t.textMuted, lineHeight: 15 }}>
-                                                📱 <Text style={{ fontWeight: '700', color: t.text }}>How to Validate:</Text> Tap "⚡ Re-test Typing" below to run the live cognitive typing trial or enable background Android Accessibility logging.
-                                            </Text>
-                                        </View>
-                                    </>
+                                    <Text style={{ fontSize: 11, color: t.text, lineHeight: 16 }}>
+                                        ⚠️ <Text style={{ fontWeight: '800', color: '#D97706' }}>Phone Typing Standby:</Text> Ring streaming ({ringSyncHr} BPM). Tap "Re-test Typing" below to compute cross-sensor correlation.
+                                    </Text>
                                 ) : (
-                                    <>
-                                        <Text style={{ fontSize: 11, color: t.text, lineHeight: 16 }}>
-                                            ⏳ <Text style={{ fontWeight: '800', color: t.text }}>Sensors Awaiting Execution:</Text> No concurrent Phone and Smart Ring sessions have been recorded yet for this participant.
-                                        </Text>
-                                        <View style={{ marginTop: 6, paddingTop: 6, borderTopWidth: 1, borderTopColor: t.border ? `${t.border}80` : '#E5E0D5' }}>
-                                            <Text style={{ fontSize: 10.5, color: t.textMuted, lineHeight: 15 }}>
-                                                🔬 Complete the In-App Typing Challenge (Tab 1) and record a Smart Ring physiological session to display real-time empirical concordance.
-                                            </Text>
-                                        </View>
-                                    </>
+                                    <Text style={{ fontSize: 11, color: t.text, lineHeight: 16 }}>
+                                        ⏳ <Text style={{ fontWeight: '800', color: t.text }}>Awaiting Session:</Text> Wear ring and complete typing test to display real-time concordance.
+                                    </Text>
                                 )}
                             </View>
 

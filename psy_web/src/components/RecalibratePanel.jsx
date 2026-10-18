@@ -4,6 +4,7 @@ import { useFirebaseValue } from '../hooks/useData';
 import { ref, update } from 'firebase/database';
 import { db, requestRecalibration, requestRingRecalibration } from '../lib/firebase';
 import StroopStressor from './StroopStressor';
+import { isTestAccount } from '../lib/testAccounts';
 import { fmt } from '../lib/model';
 import { eegD, eegLimitInfo, eegStatusText, mean, num, plausible, sig } from '../lib/limits';
 
@@ -196,8 +197,8 @@ export default function RecalibratePanel({ picker, now, streaming }) {
       right={<Status kind={eegActive || !ringActive ? kind : "warning"}>{eegActive || !ringActive ? headline : `Ring · ${ringHeadline}`}</Status>}>
       <div className="recal-bar">
         <button type="button" className="btn" onClick={start}
-          disabled={busy || active || (!withEeg && !withRing) || (withEeg && !live) || !picker?.userId}
-          title={withEeg && !live ? 'Only the live session the bridge is serving can be recalibrated' : undefined}>
+          disabled={busy || active || (!withEeg && !withRing) || (withEeg && !live) || !picker?.userId || !isTestAccount(picker?.userId)}
+          title={!isTestAccount(picker?.userId) ? 'Limited to test accounts (sim_ / mp_)' : withEeg && !live ? 'Only the live session the bridge is serving can be recalibrated' : undefined}>
           {busy ? 'Sending…' : active ? 'Recalibrating…' : 'Recalibrate'}
         </button>
         <label className="muted">
@@ -225,7 +226,8 @@ export default function RecalibratePanel({ picker, now, streaming }) {
           </select>
         </label>
         <div className="recal-status">
-          {!sid ? <span className="muted">Pick a session first.</span>
+          {picker?.userId && !isTestAccount(picker.userId) ? <span className="caption warn-text">▲ {picker.userId} is a real account: recalibrating from here is limited to test accounts (sim_ / mp_).</span>
+            : !sid ? <span className="muted">Pick a session first.</span>
             : !live ? <span className="muted">Not the live session: turn on &quot;Follow live session&quot; to recalibrate.</span>
               : !streaming ? <span className="caption warn-text">▲ No live EEG reached the bridge in the last minute; recalibration starts once it streams.</span>
                 : <span className="muted">Replaces this session&apos;s baseline and high-load threshold using the data arriving now.</span>}

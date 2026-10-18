@@ -64,10 +64,21 @@ HABITUATING_PENALTY_FACTOR = 0.90 # 10% penalty (multiplier 0.90)
 # --- Validator Reward Mapping Matrix ---
 REWARD_MATRIX = {
     ("stress", "normal"): 1.0,        # Complete recovery
+    ("stress", "pre-stress"): 0.7,    # Partial recovery
+    ("pre-stress", "normal"): 0.6,    # Good early intervention
     ("stress", "stress"): 0.3,        # No change (stressed)
+    ("pre-stress", "pre-stress"): 0.3, # No change (pre-stressed)
     ("normal", "normal"): 0.3,        # No change (normal)
-    ("normal", "stress"): -0.5,       # Deterioration
+    ("normal", "pre-stress"): -0.3,   # Mild deterioration
+    ("pre-stress", "stress"): -0.3,   # Mild deterioration
+    ("normal", "stress"): -0.5,       # Severe deterioration
 }
+
+# --- Physiological + Phenotyping Context Blend (shared by Flask and FastAPI backends) ---
+CONTEXT_WEIGHT_PHYSIO = 0.65
+CONTEXT_WEIGHT_PHENO = 0.35
+CONTEXT_PRESTRESS_FLOOR = 0.35    # label floor and pre-stress threshold
+CONTEXT_STRESS_FLOOR = 0.60       # label floor and stress threshold
 
 REJECTION_REWARD = -0.5               # Level 1 fallback negative reward penalty
 

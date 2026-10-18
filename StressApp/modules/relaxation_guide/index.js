@@ -40,7 +40,8 @@ LogBox.ignoreLogs(['Expo AV has been deprecated', 'Expo AV is deprecated']);
 const MainNavigator = () => {
   const {
     currentScreen, setCurrentScreen, identityChecked, userId,
-    setCurrentRecommendation, setSelectedSubOption, setPreInterventionLabel
+    setCurrentRecommendation, setSelectedSubOption, setPreInterventionLabel,
+    phenoStressLabel, phenoStressProbability, hasLivePhenoPacket,
   } = React.useContext(AppContext);
   const { isDarkMode, theme } = React.useContext(ThemeContext);
 
@@ -79,9 +80,12 @@ const MainNavigator = () => {
                   timestamp: Date.now() / 1000,
                   fused_stress_label: stateLabel,
                   stress_probability: prob,
+                  pheno_stress_label: hasLivePhenoPacket ? phenoStressLabel : null,
+                  pheno_stress_probability: hasLivePhenoPacket ? phenoStressProbability : null,
                   seconds_since_last_packet: 0.0
                 });
                 
+                setPreInterventionLabel(rec?.context_stress_label || stateLabel);
                 if (rec) {
                   setCurrentRecommendation(rec);
                   if (rec.selected_sub_option) {

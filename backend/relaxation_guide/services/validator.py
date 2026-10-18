@@ -35,6 +35,12 @@ class RewardValidator:
         elif pre_label == "stress" and post_label == "normal":
             recovery_pct = 100.0
             transition_desc = "Complete Recovery (Stress -> Normal)"
+        elif pre_label == "stress" and post_label == "pre-stress":
+            recovery_pct = 70.0
+            transition_desc = "Partial Recovery (Stress -> Pre-Stress)"
+        elif pre_label == "pre-stress" and post_label == "normal":
+            recovery_pct = 85.0
+            transition_desc = "Early Intervention Success (Pre-Stress -> Normal)"
         elif pre_label == post_label:
             recovery_pct = 30.0
             transition_desc = f"No Change ({pre_label.capitalize()} -> {post_label.capitalize()})"
