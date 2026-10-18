@@ -33,7 +33,7 @@ export default function StimulatorBanner({ now, openControls, openDemo }) {
         <span>Virtual person streaming for <b>{st.uid}</b> · {STIM_PROFILES[st.profile] || st.profile}</span>
         <span className="stim-banner-phase">{PHASE_TEXT[phase] || phase}{blocks}</span>
         {openControls && <button type="button" className="link" onClick={openControls}>Stimulator controls</button>}
-        {openDemo && <button type="button" className="link" onClick={openDemo}>Concept dashboard</button>}
+        {openDemo && <button type="button" className="link" onClick={openDemo}>Live monitor</button>}
       </div>
       {task && (
         <div className="stim-task">
