@@ -2,25 +2,25 @@ import { useCallback, useEffect, useState } from 'react';
 import useRawStream from './hooks/useRawStream';
 import { useFirebaseValue, useHealth, useNow, useSessionData, useSessionPicker } from './hooks/useData';
 import TechView from './components/TechView';
-import FusionView from './components/FusionView';
-import PhysioView from './components/PhysioView';
 import CalibrationDashboard from './components/CalibrationDashboard';
 import StimulatorBanner from './components/StimulatorBanner';
-import SimDemoDashboard from './components/SimDemoDashboard';
-import ConceptDashboard from './components/ConceptDashboard';
-import { useFusionData, useFusionPicker } from './hooks/useFusion';
+import LiveMonitor from './components/LiveMonitor';
 import useCalibratedLimits from './hooks/useCalibratedLimits';
 import {
   Breathing, CalibrateScreen, HomeScreen, NavBar, ProfileScreen, ProgressScreen, TABS, WavesScreen, Welcome,
 } from './components/friendly/Screens';
 import './friendly.css';
 
-const VIEWS = new Set([...TABS.map((t) => t.key), 'tech', 'fusion', 'physio', 'calibration', 'simdemo', 'concept']);
+// Technical pages: Live monitor (#concept), Calibration, Devices (#tech). Older
+// page addresses lead to the Live monitor, which now holds what they showed.
+const TECH = new Set(['concept', 'calibration', 'tech']);
+const OLD = { fusion: 'concept', physio: 'tech', simdemo: 'concept' };
+const VIEWS = new Set([...TABS.map((t) => t.key), ...TECH, ...Object.keys(OLD)]);
 const WELCOME_KEY = 'psy_web_welcomed';
 
 function readHash() {
   const h = window.location.hash.replace('#', '');
-  return VIEWS.has(h) ? h : 'home';
+  return VIEWS.has(h) ? OLD[h] || h : 'home';
 }
 
 function seenWelcome() {
@@ -38,9 +38,6 @@ export default function App() {
   const limits = useCalibratedLimits(picker.userId, picker.sessionId);
 
   const [view, setView] = useState(readHash);
-  // Fusion windows are only subscribed to while that page is open.
-  const fusionPicker = useFusionPicker();
-  const fusionData = useFusionData(view === 'fusion' ? fusionPicker.userId : null, fusionPicker.sessionId);
   const [welcome, setWelcome] = useState(() => !seenWelcome());
   const [breathing, setBreathing] = useState(false);
 
@@ -68,26 +65,10 @@ export default function App() {
     setTimeout(() => document.getElementById('stimulator')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
   };
   const banner = <StimulatorBanner now={now} openControls={openStimulator} openDemo={() => go('concept')} />;
+  if (view === 'concept') return <>{banner}<LiveMonitor now={now} go={go} /></>;
+  if (view === 'calibration') return <>{banner}<CalibrationDashboard now={now} go={go} /></>;
   if (view === 'tech') {
-    return <>{banner}<TechView raw={raw} health={health} picker={picker} sessionData={sessionData} profile={profile} limits={limits} now={now}
-      onBack={() => go('profile')} openFusion={() => go('fusion')} openPhysio={() => go('physio')} openCalibration={() => go('calibration')}
-      openStimulator={openStimulator} openSimDemo={() => go('simdemo')} openConcept={() => go('concept')} /></>;
-  }
-  if (view === 'fusion') {
-    return <>{banner}<FusionView picker={fusionPicker} data={fusionData} now={now} onBack={() => go('tech')} /></>;
-  }
-  if (view === 'calibration') {
-    return <>{banner}<CalibrationDashboard now={now} onBack={() => go('tech')} /></>;
-  }
-  if (view === 'concept') {
-    return <>{banner}<ConceptDashboard now={now} onBack={() => go('tech')} openFull={() => go('simdemo')} /></>;
-  }
-  if (view === 'simdemo') {
-    return <>{banner}<SimDemoDashboard now={now} onBack={() => go('tech')} /></>;
-  }
-  if (view === 'physio') {
-    // Mounted only here, so the ring's MQTT/Firebase subscriptions run only while it's open.
-    return <>{banner}<PhysioView now={now} onBack={() => go('tech')} openFusion={() => go('fusion')} /></>;
+    return <>{banner}<TechView raw={raw} health={health} picker={picker} sessionData={sessionData} limits={limits} now={now} go={go} /></>;
   }
 
   const shared = { raw, now, sessionData, profile, picker, limits };
@@ -100,7 +81,7 @@ export default function App() {
         {view === 'waves' && <WavesScreen {...shared} />}
         {view === 'calibrate' && <CalibrateScreen {...shared} />}
         {view === 'profile' && (
-          <ProfileScreen {...shared} openTech={() => go('tech')} openWelcome={() => setWelcome(true)} openBreathing={() => setBreathing(true)} />
+          <ProfileScreen {...shared} openTech={() => go('concept')} openWelcome={() => setWelcome(true)} openBreathing={() => setBreathing(true)} />
         )}
       </main>
       <NavBar tab={view} setTab={go} />

@@ -484,3 +484,67 @@ i.lg { display: inline-block; width: 10px; height: 10px; border-radius: 2px; ver
 .ls-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
 .ls-cell { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px solid var(--border); border-top: 4px solid var(--axis);
   border-radius: 10px; background: var(--surface); min-width: 0; font-size: 12.5px; }
+
+/* ── Technical pages: shared header + tabs (components/TechNav.jsx) ── */
+.tech-head { display: flex; flex-direction: column; gap: 14px; }
+.tech-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px; border: 1px solid var(--border);
+  border-radius: 12px; background: var(--surface); }
+.tech-brand { font-size: 11px; font-weight: 800; letter-spacing: .06em; color: var(--muted); padding: 0 10px 0 6px; text-transform: uppercase; }
+.tech-tab { border: 0; background: transparent; color: var(--ink-2); font: inherit; font-size: 14px; font-weight: 700;
+  padding: 7px 14px; border-radius: 9px; cursor: pointer; }
+.tech-tab:hover { background: var(--cband-a); color: var(--ink); }
+.tech-tab.on { background: var(--series); color: #fff; }
+.tech-tab.simple { margin-left: auto; font-weight: 600; color: var(--muted); }
+.tech-head h1 { margin: 0; }
+.tech-head .top p { margin: 4px 0 0; }
+
+/* source line: real devices vs live stimulator */
+.real-badge { background: var(--good); color: #fff; font-weight: 800; font-size: 11px; letter-spacing: .06em; padding: 2px 8px; border-radius: 4px; }
+.sd-head .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--axis); margin-right: 3px; vertical-align: 1px; }
+.sd-head .dot.on { background: var(--good); }
+
+/* Live monitor */
+.lm-value { display: flex; align-items: baseline; gap: 10px; }
+.lm-trend { font-size: 12.5px; font-weight: 700; color: var(--muted); }
+.lm-trend.rising { color: var(--warning-text); }
+.lm-trend.falling { color: var(--series); }
+.lm-lanes { display: block; margin-top: 2px; }
+.lm-lanes .tick { font-size: 10px; fill: var(--ink-2); }
+.lane-normal { fill: rgba(12, 163, 12, 0.35); }
+.lane-early_warning { fill: var(--warning); }
+.lane-high { fill: var(--critical); }
+.lane-recovering { fill: var(--series); opacity: 0.7; }
+.lane-limited, .lane-calibrating { fill: var(--axis); opacity: 0.6; }
+.lm-legend i { display: inline-block; width: 12px; height: 10px; border-radius: 2px; margin: 0 4px 0 10px; vertical-align: -1px; }
+.lm-legend i:first-child { margin-left: 0; }
+.lm-legend .lane-normal { background: rgba(12, 163, 12, 0.35); }
+.lm-legend .lane-early_warning { background: var(--warning); }
+.lm-legend .lane-high { background: var(--critical); }
+.lm-legend .lane-recovering { background: var(--series); opacity: 0.7; }
+.lm-legend .lane-calibrating { background: var(--axis); }
+.sd-log .ev-ok { color: var(--good-text); }
+.sd-log .ev-info { color: var(--series); }
+.q-row i { font-size: 15px; }
+.cd-zoom { margin: 0; }
+@media (max-width: 900px) {
+  .cd-top, .grid-2 { grid-template-columns: minmax(0, 1fr); }
+  .cd-cards { grid-template-columns: minmax(0, 1fr); }
+  .tech-tab.simple { margin-left: 0; }
+}
+
+.lm-source.real { border-style: solid; border-color: var(--border); }
+.lm-source.sim { border-style: solid; border-color: var(--warning); }
+.cd-top .cq-grid { aspect-ratio: 2.1; }
+.cd-top .cq-cell { padding: 7px 9px; }
+
+.sd-log time { white-space: nowrap; }
+
+/* Live monitor: the early-warning label on each card */
+.lm-ew { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 8px; margin-top: 2px; }
+.lm-ew b { font-size: 14px; letter-spacing: .03em; }
+.lm-ew span { font-size: 12px; }
+.lm-ew.ew-warn { background: var(--warning); color: #1a1200; }
+.lm-ew.ew-high { background: var(--critical); color: #fff; }
+.lm-ew.ew-rec { background: rgba(42, 120, 214, 0.14); color: var(--series); }
+.lm-ew.ew-ok { background: rgba(12, 163, 12, 0.10); color: var(--good-text); }
+.lm-ew.ew-off { background: var(--cband-b); color: var(--ink-2); }

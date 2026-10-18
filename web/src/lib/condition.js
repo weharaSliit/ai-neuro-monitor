@@ -16,21 +16,41 @@ export function fusedQuadrant(mindHigh, bodyHigh) {
   return { key, ...QUADRANTS[key], partial: mindHigh == null ? 'mind not reporting' : bodyHigh == null ? 'body not reporting' : null };
 }
 
-// ── Decisions start only after calibration: before the latest calibration
-// finished (EEG threshold, and the ring's if the ring is in use), or while a
-// recalibration runs, every component is 'calibrating' -- no alerts, warnings
-// or fused state. Returns the time decisions start (ms) and whether paused now.
-export function decisionGate({ cal, thr, ringThresholds, ringPresent, recalActive }) {
+// ── Decisions (same rule as psy_web/src/lib/simDemo.js decisionGate) ──
+// A calibration is used until the user asks to recalibrate. Readings are
+// 'calibrating' only before the first calibration and while an asked-for
+// recalibration runs (its request until it finishes); readings already judged
+// keep their states. eegRecal / ringRecal: eeg_recalibration/{sid},
+// ring_recalibration/{uid}. An unfinished record counts only while it is still
+// being updated (10 min) and never longer than RECAL_MAX_MIN, so one left
+// behind (a stimulator stopped mid-run, a crashed capture) can't block decisions.
+const RECAL_MAX_MIN = 60;
+export function decisionGate({ cal, thr, ringThresholds, ringPresent, eegRecal, ringRecal, nowMs = Date.now() }) {
   const t = (v) => (v == null ? null : typeof v === 'number' ? v * 1000 : Date.parse(/Z|[+-]\d\d:?\d\d$/.test(v) ? v : `${v}Z`));
   const eegAt = t(thr?.updated_at) ?? t(cal?.updated_at);
   const ringAt = ringPresent ? (t(ringThresholds?.task_updated_at) ?? t(ringThresholds?.threshold_updated_at) ?? t(ringThresholds?.resting_scores_updated_at)) : null;
   const startMs = Math.max(eegAt ?? 0, ringAt ?? 0) || null;
-  return { startMs, paused: Boolean(recalActive) || startMs == null, eegAt, ringAt };
+  const fresh = (rec) => (t(rec?.updated_at) ?? t(rec?.requested_at) ?? 0) >= nowMs - 10 * 60000
+    && (t(rec?.requested_at) ?? 0) >= nowMs - RECAL_MAX_MIN * 60000;
+  const eegActive = ['requested', 'capturing', 'saving'].includes(eegRecal?.status) && fresh(eegRecal);
+  const ringActive = ['capturing', 'saving'].includes(ringRecal?.status) && fresh(ringRecal);
+  const blank = [];
+  const window = (rec, active, doneAt) => {
+    const from = t(rec?.requested_at);
+    if (from != null) blank.push([from, active ? Infinity : Math.min(from + RECAL_MAX_MIN * 60000, Math.max(t(rec.updated_at) ?? from, doneAt ?? from))]);
+    else if (doneAt != null) blank.push([-Infinity, doneAt]);          // the session's first calibration
+  };
+  window(eegRecal, eegActive, eegAt);
+  if (ringPresent) window(ringRecal, ringActive, ringAt);
+  return { startMs, paused: startMs == null, recalibrating: eegActive || ringActive, blank, eegAt, ringAt };
 }
 
-// Apply the gate to a built series: rows before the start (or all, while paused) -> 'calibrating'.
+// A reading's time is usable for a decision (not before calibration, not during an asked-for recalibration).
+export const decided = (gate, ts) => !gate.paused && !(gate.blank || []).some(([a, b]) => ts >= a && ts <= b);
+
+// Apply the gate to a built series: rows recorded while calibrating -> 'calibrating'.
 export function gateSeries(series, gate) {
-  const g = (rows) => rows.map((r) => ((gate.paused || (gate.startMs && r.t < gate.startMs))
-    ? { ...r, high: false, state: 'calibrating', reason: 'decisions start after calibration' } : r));
+  const g = (rows) => rows.map((r) => (decided(gate, r.t) ? r
+    : { ...r, high: false, state: 'calibrating', reason: gate.paused ? 'decisions start after calibration' : 'recorded during calibration' }));
   return { ...series, mind: g(series.mind), body: g(series.body), fused: g(series.fused) };
 }

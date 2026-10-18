@@ -40,6 +40,42 @@ FOUR_STATE = [("relaxed", 300, 0, 0), ("mental", 420, 1, 0), ("recovery", 600, 0
 SCENARIOS["four_state"] = [(n, d, m, m) for n, d, m, _ in FOUR_STATE]   # mind demand, for code reading SCENARIOS
 EXPECTED_STATE = {"relaxed": "relaxed", "mental": "mental", "arousal": "arousal", "stress": "stress", "recovery": "relaxed"}
 
+# Five everyday situations where mind and body vary separately, gradually and by
+# different amounts: (phase, seconds, mind start, mind end, body start, body end,
+# expected state). Intensities 0..1 (body 1 = WESAD TSST-sized response for the
+# 'responsive' profile). expected None = in-between level, shown but not scored.
+# Physical arousal is always movement-free here (seated after stairs, caffeine,
+# nerves): moving windows are rejected by the ring pipeline, not scored as arousal.
+SITUATIONS = {
+    "exam_revision": {"title": "Exam revision at a desk", "plan": [
+        ("arrive", 300, 0, 0, 0, 0, "relaxed"),
+        ("light_reading", 420, 0.35, 0.35, 0, 0, None),
+        ("getting_into_it", 240, 0.4, 1.0, 0, 0.05, None),
+        ("hard_problems", 600, 1.0, 1.0, 0.05, 0.05, "mental"),
+        ("break", 600, 0, 0, 0, 0, "relaxed")]},
+    "viva_presentation": {"title": "Viva / presentation", "plan": [
+        ("waiting", 300, 0.1, 0.2, 0, 0.4, None),
+        ("presenting", 480, 1.0, 1.0, 0.9, 1.0, "stress"),
+        ("questions", 420, 1.0, 1.0, 1.0, 0.8, "stress"),
+        ("afterwards", 600, 0, 0, 0, 0, "relaxed")]},
+    "stairs_coffee": {"title": "Stairs, then a coffee (body only)", "plan": [
+        ("at_desk", 300, 0, 0, 0, 0, "relaxed"),
+        ("after_stairs", 480, 0, 0, 1.0, 1.0, "arousal"),
+        ("coffee_chat", 420, 0.15, 0.15, 0.7, 0.7, None),
+        ("settle_down", 600, 0, 0, 0, 0, "relaxed")]},
+    "relaxing_break": {"title": "Relaxing break with a notification", "plan": [
+        ("calm", 600, 0, 0, 0, 0, "relaxed"),
+        ("notification", 120, 0.2, 0.2, 0.25, 0.25, "relaxed"),
+        ("calm_again", 780, 0, 0, 0, 0, "relaxed")]},
+    "busy_workday": {"title": "Busy workday", "plan": [
+        ("focused_email", 480, 0.8, 0.8, 0.1, 0.1, "mental"),
+        ("deadline_call", 420, 1.0, 1.0, 1.0, 1.0, "stress"),
+        ("rush_to_meeting", 360, 0, 0, 1.0, 1.0, "arousal"),
+        ("lunch", 600, 0, 0, 0, 0, "relaxed")]},
+}
+for _k, _v in SITUATIONS.items():                     # mind demand, for code reading SCENARIOS
+    SCENARIOS[_k] = [(n, d, m0, m1) for n, d, m0, m1, *_ in _v["plan"]]
+
 
 def scenario_at(name, t):
     """(phase, demand, seconds left in the phase) at t seconds into the looping scenario."""
@@ -54,6 +90,15 @@ def scenario_at(name, t):
 
 def scenario_targets(name, t):
     """(phase, mind demand, body demand, seconds left). Body = mind except in 'four_state'."""
+    if name in SITUATIONS:
+        plan = SITUATIONS[name]["plan"]
+        t = t % sum(p[1] for p in plan)
+        for phase, dur, m0, m1, b0, b1, _ in plan:
+            if t < dur:
+                f = t / dur
+                return phase, m0 + (m1 - m0) * f, b0 + (b1 - b0) * f, dur - t
+            t -= dur
+        return plan[-1][0], 0.0, 0.0, 0.0
     if name != "four_state":
         phase, d, left = scenario_at(name, t)
         return phase, d, d, left
