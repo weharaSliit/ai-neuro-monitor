@@ -24,7 +24,7 @@ from backend.common.app_factory import create_app
 from backend.common.config import STRESS_COLORS
 from backend.common.auth import verify_token
 
-from backend.relaxation_guide.config import TECHNIQUES
+from backend.relaxation_guide.config import TECHNIQUES, BASELINE_MARGIN, TECHNIQUE_FAMILY_OF
 from backend.relaxation_guide.services import firebase_service
 from backend.relaxation_guide.services.telemetry_aggregator import telemetry_aggregator
 from backend.relaxation_guide.services.missing_value_handler import missing_value_handler
@@ -34,7 +34,8 @@ from backend.relaxation_guide.services.preference_learner import preference_lear
 from backend.relaxation_guide.services.fallback_handler import fallback_handler
 from backend.relaxation_guide.services.validator import validator
 from backend.relaxation_guide.services.gamification_service import gamification_service
-from backend.relaxation_guide.services.closed_loop_tracker import closed_loop_tracker
+from backend.relaxation_guide.services.closed_loop_tracker import closed_loop_tracker, decide_step
+from backend.relaxation_guide.services.context_builder import context_builder, DEFAULT_BASELINE as DEFAULT_CONTEXT_BASELINE
 from backend.relaxation_guide.services.intervention_context import combine_intervention_context
 from backend.relaxation_guide.services.simulator_service import simulator_service
 from backend.relaxation_guide.database.db_manager import db_manager
@@ -60,6 +61,66 @@ def _phenotyping_stress_score(prediction):
         if score is not None:
             return score
     return None
+
+
+def _user_baseline(user_id, fusion_data=None, default=0.35):
+    baseline = firebase_service.get_baseline(user_id)
+    if baseline is None and fusion_data:
+        baseline = fusion_data.get("user_baseline")
+    try:
+        return float(baseline) if baseline is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+_PHENO_CACHE = {}
+_PHENO_TTL_SEC = 10.0
+
+
+def _cached_pheno(user_id):
+    """Latest phenotyping prediction, cached for a few seconds (the app polls every 2 s)."""
+    now = time.time()
+    hit = _PHENO_CACHE.get(user_id)
+    if hit and now - hit[0] < _PHENO_TTL_SEC:
+        return hit[1]
+    value = firebase_service.get_latest_phenotyping_prediction(user_id)
+    _PHENO_CACHE[user_id] = (now, value)
+    return value
+
+
+def _baseline_from(fusion_data, default=0.35):
+    try:
+        b = fusion_data.get("user_baseline") if fusion_data else None
+        return float(b) if b is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _context_summary(ctx):
+    """Plain-JSON view of the person-relative context for the app and the logs."""
+    keys = ("ready", "baseline", "combined", "z_rel", "slope_per_min", "physio", "pheno",
+            "disagreement", "has_both_streams", "rise_alarm")
+    return {k: (round(ctx[k], 4) if isinstance(ctx.get(k), float) else ctx.get(k)) for k in keys if k in ctx}
+
+
+def _reason_text(selection):
+    """Short, honest explanation of why the technique was chosen."""
+    if not selection:
+        return None
+    codes = selection.get("reason_codes", [])
+    parts = []
+    if "learned_from_you" in codes:
+        parts.append("Chosen from what has worked for you in similar situations")
+    else:
+        parts.append("Chosen to fit your current stress pattern while the system learns what works for you")
+    for c in codes:
+        if c.startswith("rotated_from:"):
+            old = TECHNIQUES.get(c.split(":", 1)[1], {}).get("title")
+            if old:
+                parts.append(f"switched away from {old}, which has been losing effect")
+        elif c == "works_for_you":
+            parts.append("it has been working well for you recently")
+    return "; ".join(parts) + "."
 
 
 @app.route('/health', methods=['GET'])
@@ -140,6 +201,18 @@ def read_and_process_fusion_output():
     has_live_pk = bool(fusion_data.get("has_live_packet", False))
     is_calib = bool(fusion_data.get("is_calibrated", False))
 
+    # Feed the person-relative context (smoothed level, slope, CUSUM) from both streams.
+    pheno_prediction = _cached_pheno(user_id)
+    pheno_score = _phenotyping_stress_score(pheno_prediction)
+    has_live_pheno_pkt = bool(pheno_prediction.get("has_live_packet", False)) and pheno_score is not None
+    if has_live_pk or has_live_pheno_pkt:
+        context_builder.update(
+            user_id,
+            _normalized_stress_score(stress_prob) if has_live_pk else None,
+            pheno_score if has_live_pheno_pkt else None,
+            baseline=user_baseline if user_baseline is not None else DEFAULT_CONTEXT_BASELINE,
+        )
+
     telemetry_payload = telemetry_aggregator.parse_fusion_payload(
         user_id=user_id,
         fused_stress_label=fused_lbl,
@@ -156,6 +229,8 @@ def read_and_process_fusion_output():
     res_dict["raw_label"] = fusion_data.get("raw_label", fused_lbl)
     res_dict["confidence"] = stress_prob
     res_dict["active_session_id"] = fusion_data.get("active_session_id")
+    res_dict["context"] = _context_summary(
+        context_builder.snapshot(user_id, baseline=user_baseline if user_baseline is not None else DEFAULT_CONTEXT_BASELINE))
     return jsonify(res_dict), 200
 
 
@@ -183,6 +258,7 @@ def get_fusion_pipeline():
         seconds_since_last_packet=0.0
     )
     processed = missing_value_handler.process_telemetry(telemetry_payload)
+    context_snapshot = context_builder.snapshot(user_id, baseline=_baseline_from(fusion_data))
 
     return jsonify({
         "user_id": user_id,
@@ -199,6 +275,7 @@ def get_fusion_pipeline():
         "pheno_recovery_percentage": round((1.0 - pheno_score) * 100.0, 1) if pheno_score is not None else None,
         "has_live_pheno_packet": bool(pheno_prediction.get("has_live_packet", False)) and pheno_score is not None,
         "active_pheno_session_id": pheno_prediction.get("active_session_id"),
+        "context": _context_summary(context_snapshot),
         "user_baseline": fusion_data.get("user_baseline", raw_prediction.get("baseline", 0.35)),
         "probability_vector": {
             "eeg": probability_vector.get("eeg"),
@@ -242,14 +319,22 @@ def get_personalized_intervention():
     pheno_prob = _phenotyping_stress_score(pheno_prediction)
     has_live_pheno = bool(pheno_prediction.get('has_live_packet', False)) and pheno_prob is not None
 
+    # When the ring/earbud are not streaming but phenotyping is, the physiological value from the app
+    # is only a placeholder (offline = 0 or a default). Use phenotyping alone instead of blending it
+    # with that placeholder, which would pull a stressed reading toward "normal".
+    use_physio = has_live_physio or not has_live_pheno
+
     # Same blend and thresholds as the FastAPI backend (see intervention_context.py).
     # Physiological and phenotyping readings stay separate for live recovery.
-    fused_label, stress_prob = combine_intervention_context(
-        physio_label,
-        recommendation_physio_score,
-        pheno_label if has_live_pheno else None,
-        pheno_prob if has_live_pheno else None,
-    )
+    if use_physio:
+        fused_label, stress_prob = combine_intervention_context(
+            physio_label,
+            recommendation_physio_score,
+            pheno_label if has_live_pheno else None,
+            pheno_prob if has_live_pheno else None,
+        )
+    else:
+        fused_label, stress_prob = combine_intervention_context(pheno_label or "normal", pheno_prob)
 
     telemetry_payload = telemetry_aggregator.parse_fusion_payload(
         user_id=user_id,
@@ -259,12 +344,25 @@ def get_personalized_intervention():
     )
 
     processed_signal = missing_value_handler.process_telemetry(telemetry_payload)
-    cluster_id = kmeans_clusterer.predict_cluster(processed_signal.features_flat)
+
+    # Person-relative, smoothed context from both streams (not a single raw reading).
+    user_baseline = _user_baseline(user_id, fusion_data)
+    context_builder.update(
+        user_id,
+        physio_score if use_physio else None,
+        pheno_prob if has_live_pheno else None,
+        baseline=user_baseline,
+    )
+    context_snapshot = context_builder.snapshot(user_id, baseline=user_baseline)
+    context_vector = context_snapshot["vector"]
+    streams_used = {"physiological": bool(use_physio and has_live_physio), "phenotyping": bool(has_live_pheno)}
+    cluster_id = kmeans_clusterer.predict_cluster(context_vector)
     usage_7d = fallback_handler.get_all_7day_usage_counts(user_id)
 
     tech_id, blended_score, s_physio, s_pref, exec_ms, _ = thompson_bandit.select_technique(
-        user_id, cluster_id, usage_7d
+        user_id, cluster_id, usage_7d, context_vector=context_vector
     )
+    selection = thompson_bandit.get_last_selection(user_id)
 
     tech_catalog = TECHNIQUES.get(tech_id, TECHNIQUES["breathing_garden"])
     preferred_sub_id = preference_learner.get_preferred_sub_option(user_id, tech_id)
@@ -291,11 +389,14 @@ def get_personalized_intervention():
         "recommended_technique_id": tech_id,
         "selected_sub_option_id": selected_sub["id"],
         "context_cluster_id": cluster_id,
+        "context": _context_summary(context_snapshot),
+        "reason_codes": (selection or {}).get("reason_codes", []),
         "blended_score": round(blended_score, 4),
         "physiological_sample": round(s_physio, 4),
         "preference_score": round(s_pref, 4),
         "execution_time_ms": round(exec_ms, 2)
     }
+    thompson_bandit.remember_context(user_id, session_id, cluster_id, context_vector, tech_id)
 
     try:
         firebase_service.save_relaxation_intervention(user_id, session_id, session_payload)
@@ -320,6 +421,11 @@ def get_personalized_intervention():
         "has_live_pheno_packet": has_live_pheno,
         "active_pheno_session_id": pheno_prediction.get("active_session_id"),
         "context_cluster_id": cluster_id,
+        "session_id": session_id,
+        "streams_used": streams_used,
+        "context": _context_summary(context_snapshot),
+        "reason": _reason_text(selection),
+        "reason_codes": (selection or {}).get("reason_codes", []),
         "blended_score": round(blended_score, 4),
         "physiological_sample": round(s_physio, 4),
         "preference_score": round(s_pref, 4),
@@ -339,7 +445,7 @@ def handle_fallback():
 
     payload = telemetry_aggregator.parse_fusion_payload(user_id, raw_lbl, prob_val)
     processed = missing_value_handler.process_telemetry(payload)
-    cluster_id = kmeans_clusterer.predict_cluster(processed.features_flat)
+    cluster_id = kmeans_clusterer.predict_cluster(context_builder.snapshot(user_id)["vector"])
 
     level, alt_ids, level2_reset, level3_prompts = fallback_handler.process_rejection(
         user_id, cluster_id, rejected_tech_id
@@ -384,22 +490,35 @@ def validate_intervention():
     data = request.get_json() or {}
     user_id = data.get('user_id', 'user_default')
     technique_id = data.get('technique_id', 'breathing_garden')
+    # The web and the app may report the game id (e.g. water_lily_pond); the bandit learns per technique family.
+    technique_id = TECHNIQUE_FAMILY_OF.get(technique_id, technique_id)
     pre_label = data.get('pre_stress_label', 'stress')
     post_label = data.get('post_stress_label', 'normal')
     star_rating = int(data.get('star_rating', 5))
     duration_sec = float(data.get('duration_seconds', 30.0))
     cluster_id = int(data.get('context_cluster_id', 0))
+    session_key = data.get('session_id')
+    stress_trajectory = data.get('stress_trajectory')
 
-    reward, recovery_pct, transition_desc, alpha_updated, beta_updated = validator.validate_and_update(
-        user_id, cluster_id, technique_id, pre_label, post_label, star_rating, duration_sec
-    )
-
-    fallback_handler.record_technique_use(user_id, technique_id)
+    # Context captured when this technique was recommended (so learning uses the same features).
+    stored_ctx = thompson_bandit.pop_context(user_id, session_key)
+    context_vector = None
+    if stored_ctx and stored_ctx.get("technique_id") == technique_id:
+        context_vector = stored_ctx["vector"]
+        cluster_id = int(stored_ctx["cluster_id"])
 
     fusion_data = telemetry_aggregator.read_fusion_engine_output(user_id)
     user_baseline = firebase_service.get_baseline(user_id)
     if user_baseline is None:
         user_baseline = float(fusion_data.get("user_baseline", 0.25))
+
+    reward, recovery_pct, transition_desc, alpha_updated, beta_updated = validator.validate_and_update(
+        user_id, cluster_id, technique_id, pre_label, post_label, star_rating, duration_sec,
+        trajectory=stress_trajectory, baseline=user_baseline, context_vector=context_vector
+    )
+    reward_components = validator.last_components
+
+    fallback_handler.record_technique_use(user_id, technique_id)
 
     prob_stress = data.get('prob_stress')
     if prob_stress is None:
@@ -409,13 +528,17 @@ def validate_intervention():
     if prob_stress is None:
         prob_stress = fusion_data.get("stress_probability", 0.20 if post_label.lower() == "normal" else 0.70)
     prob_stress = float(prob_stress)
+    if reward_components:
+        # Measured end-of-session stress replaces the self-reported / looked-up value.
+        prob_stress = float(reward_components["end_stress"])
 
     loop_res = closed_loop_tracker.update_closed_loop(
         user_id=user_id,
         current_state=post_label,
         prob_stress=prob_stress,
         user_baseline=user_baseline,
-        last_technique_id=technique_id
+        last_technique_id=technique_id,
+        context_vector=context_builder.snapshot(user_id, baseline=user_baseline)["vector"]
     )
 
     xp_earned, total_xp, is_normal, badge_items = gamification_service.record_intervention_outcome(
@@ -434,6 +557,8 @@ def validate_intervention():
         "recovery_duration_seconds": duration_sec,
         "star_rating": star_rating,
         "context_cluster_id": cluster_id,
+        "reward_components": reward_components,
+        "context_vector": context_vector,
         "timestamp": time.time()
     }
     try:
@@ -441,28 +566,29 @@ def validate_intervention():
     except Exception as e:
         print(f"[Firebase Warning] Could not save outcome to relaxation_intervention: {e}")
 
-    db_manager.log_intervention(
-        user_id=user_id,
-        technique_id=technique_id,
-        sub_option_id="",
-        cluster_id=cluster_id,
-        pre_label=pre_label,
-        post_label=post_label,
-        reward=reward,
-        recovery_pct=recovery_pct,
-        timestamp=time.time()
-    )
+    try:
+        db_manager.save_intervention(
+            user_id, val_session_id, technique_id, pre_label, post_label,
+            reward, recovery_pct, duration_sec
+        )
+    except Exception as e:
+        print(f"[DB Warning] Could not store intervention locally: {e}")
 
     badges_payload = [b.dict() if hasattr(b, 'dict') else b for b in badge_items]
 
     # Closed-loop check: If baseline/normal state was NOT reached, compute alternative recommendation
-    is_target_reached = (post_label.lower() == "normal" and prob_stress <= user_baseline)
+    if reward_components:
+        is_target_reached = prob_stress <= user_baseline + BASELINE_MARGIN
+    else:
+        is_target_reached = (post_label.lower() == "normal" and prob_stress <= user_baseline)
     alternative_rec = None
 
     if not is_target_reached:
         usage_7d = fallback_handler.get_all_7day_usage_counts(user_id)
+        alt_context = context_builder.snapshot(user_id, baseline=user_baseline)["vector"]
+        alt_cluster = kmeans_clusterer.predict_cluster(alt_context)
         alt_tech_id, alt_blended, alt_physio, alt_pref, alt_ms, _ = thompson_bandit.select_technique(
-            user_id, cluster_id, usage_7d, exclude_technique_ids=[technique_id]
+            user_id, alt_cluster, usage_7d, exclude_technique_ids=[technique_id], context_vector=alt_context
         )
         alt_catalog = TECHNIQUES.get(alt_tech_id, TECHNIQUES["breathing_garden"])
         alt_pref_sub = preference_learner.get_preferred_sub_option(user_id, alt_tech_id)
@@ -480,7 +606,7 @@ def validate_intervention():
             "description": alt_catalog["description"],
             "selected_sub_option": alt_sel_sub,
             "available_sub_options": alt_sub_opts,
-            "context_cluster_id": cluster_id,
+            "context_cluster_id": alt_cluster,
             "stress_probability": prob_stress,
             "blended_score": round(alt_blended, 4),
             "reason": f"Baseline not reached yet ({int(prob_stress * 100)}% Stress). Smart AI selected {alt_catalog['title']} for further recovery."
@@ -498,6 +624,9 @@ def validate_intervention():
         "reward": reward,
         "recovery_percentage": recovery_pct,
         "transition": transition_desc,
+        "measured": bool(reward_components),
+        "reward_components": ({k: (round(v, 4) if isinstance(v, float) else v)
+                               for k, v in reward_components.items()} if reward_components else None),
         "alpha_updated": round(alpha_updated, 2),
         "beta_updated": round(beta_updated, 2),
         "message": f"Closed-loop reward signal {reward:+.2f} updated. Earned +{xp_earned} XP!",
@@ -510,6 +639,48 @@ def validate_intervention():
         "closed_loop_status": loop_res,
         "alternative_recommendation": alternative_rec
     }), 200
+
+
+@app.route('/loop/step', methods=['POST'])
+def loop_step():
+    """Mid-session check: keep going, switch technique, or stop (uses filtered stress level + slope)."""
+    data = request.get_json() or {}
+    user_id = data.get('user_id', 'user_default')
+    technique_id = data.get('technique_id')
+    elapsed = float(data.get('elapsed_seconds', 0.0))
+    tried = [t for t in (data.get('tried_techniques') or []) if t]
+    if technique_id and technique_id not in tried:
+        tried.append(technique_id)
+
+    fusion_data = telemetry_aggregator.read_fusion_engine_output(user_id)
+    baseline = _user_baseline(user_id, fusion_data)
+    ctx = context_builder.snapshot(user_id, baseline=baseline)
+    decision = decide_step(ctx, elapsed)
+    response = {"action": decision["action"], "reason": decision["reason"], "context": _context_summary(ctx)}
+
+    if decision["action"] == "switch":
+        cluster_id = kmeans_clusterer.predict_cluster(ctx["vector"])
+        usage_7d = fallback_handler.get_all_7day_usage_counts(user_id)
+        next_id, blended, s_physio, s_pref, _, _ = thompson_bandit.select_technique(
+            user_id, cluster_id, usage_7d, exclude_technique_ids=tried, context_vector=ctx["vector"]
+        )
+        catalog = TECHNIQUES.get(next_id, TECHNIQUES["breathing_garden"])
+        sub = catalog["sub_options"][0]
+        pref_sub = preference_learner.get_preferred_sub_option(user_id, next_id)
+        for so in catalog["sub_options"]:
+            if so["id"] == pref_sub:
+                sub = so
+                break
+        response["next_recommendation"] = {
+            "technique_id": next_id,
+            "title": catalog["title"],
+            "description": catalog["description"],
+            "selected_sub_option": sub,
+            "available_sub_options": catalog["sub_options"],
+            "context_cluster_id": cluster_id,
+            "blended_score": round(blended, 4),
+        }
+    return jsonify(response), 200
 
 
 @app.route('/rating', methods=['POST'])
@@ -525,7 +696,10 @@ def submit_user_rating():
     )
     normalized_score = (rating_stars - 1.0) / 4.0
 
-    db_manager.log_rating(user_id, technique_id, sub_option_id, rating_stars, time.time())
+    try:
+        db_manager.save_rating(user_id, technique_id, sub_option_id, rating_stars, time.time())
+    except Exception as e:
+        print(f"[DB Warning] Could not store rating locally: {e}")
 
     return jsonify({
         "normalized_score": round(normalized_score, 2),
@@ -558,6 +732,13 @@ def simulation_mode():
         "current_mode": simulator_service._current_mode,
         "available_modes": ["normal", "stress", "safety_override_test"]
     }), 200
+
+
+# Development only: simulated stress readings (no hardware, no Firebase writes).
+# Start the backend with RELAXATION_DEV_SIM=1 to enable it; nothing changes otherwise.
+if os.environ.get("RELAXATION_DEV_SIM") == "1":
+    from backend.relaxation_guide.services import dev_simulation
+    dev_simulation.install(app, firebase_service, telemetry_aggregator)
 
 
 if __name__ == '__main__':

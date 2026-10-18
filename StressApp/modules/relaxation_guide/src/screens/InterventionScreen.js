@@ -17,6 +17,7 @@ import { Header } from '../components/Header';
 import { DailyTasksModal } from '../components/DailyTasksModal';
 import { RewardChestModal } from '../components/RewardChestModal';
 import { AmbientBackground } from '../components/AmbientBackground';
+import { WhyThisTechniqueCard } from '../components/WhyThisTechniqueCard';
 
 const { width } = Dimensions.get('window');
 
@@ -62,7 +63,8 @@ export const InterventionScreen = () => {
     userId,
     currentRecommendation,
     setCurrentScreen,
-    setSelectedSubOption
+    setSelectedSubOption,
+    setLaunchSource
   } = useContext(AppContext);
 
   const { theme } = useContext(ThemeContext);
@@ -127,6 +129,7 @@ export const InterventionScreen = () => {
 
     setTimeout(() => {
       // Go straight to the recommended technique
+      setLaunchSource && setLaunchSource('system');
       setSelectedSubOption(
         currentRecommendation?.selected_sub_option ||
         { id: techId, title: gameInfo.title, description: gameInfo.tag, gradient: gameInfo.gradient }
@@ -203,6 +206,8 @@ export const InterventionScreen = () => {
                 <Text style={[styles.heroTitle, { color: theme.textPrimary }]}>{gameInfo.title}</Text>
                 <Text style={[styles.heroTag, { color: gameInfo.color }]}>{gameInfo.tag}</Text>
               </View>
+
+              <WhyThisTechniqueCard recommendation={currentRecommendation} theme={theme} />
 
               {/* Level Rewards Banner */}
               <View style={styles.rewardsBanner}>

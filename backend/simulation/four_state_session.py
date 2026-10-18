@@ -65,7 +65,7 @@ SETTLE_S = 120         # bridge settle before every EEG calibration attempt
 # doesn't end 'ok'; the ring calibrates alongside the first attempt and keeps
 # recording recovery into the following calm until it has RING_RECOVERY_WINDOWS.
 N_REC = 7
-MAX_EEG_RETRIES = 2
+MAX_EEG_RETRIES = 0      # as live_stimulator.py: no recalibration unless the user asks
 RING_RECOVERY_WINDOWS = 8
 # Calibration and live monitoring in ONE sitting: no day-to-day shift of the
 # ring baseline (simkit.evaluate's --same-occasion case).
@@ -154,7 +154,13 @@ def eeg_calibration(R):
     return engine, thr, {"rest": rest_blocks, "task": task_blocks, "recovery": rec_blocks}, (t_rest0, t_task0, t_rec0, R.t)
 
 
-def run(seed):
+def run(seed, plan=None, sim_phase=None):
+    """plan: live phases, (name, seconds, mind, body, expected) or with gradual
+    change (name, seconds, mind_start, mind_end, body_start, body_end, expected);
+    expected None = not scored (in-between intensity). Default: PLAN.
+    sim_phase(name) -> the phase word given to the virtual user (default: name before '_')."""
+    plan = [(p[0], p[1], p[2], p[2], p[3], p[3], p[4]) if len(p) == 5 else tuple(p) for p in (plan or PLAN)]
+    sim_phase = sim_phase or (lambda n: n.split("_")[0])
     R = Run(PROFILE, seed)
     u = R.u
     # ── Calibration, EEG: as the live stimulator -- retried when it doesn't end 'ok' ──
@@ -222,10 +228,13 @@ def run(seed):
     live, hist, ring_pred, t0 = [], [], [], R.t
     next_ring = R.t + 20.0
     periods = []
-    for name, dur, mind_d, body_d, expect in PLAN:
+    for name, dur, m0, m1, b0, b1, expect in plan:
         start = R.t - t0
-        for _ in range(int(round(dur / 0.2))):
-            b = R.advance(float(mind_d), name.split("_")[0], body=float(body_d))
+        steps = int(round(dur / 0.2))
+        for k_step in range(steps):
+            f = k_step / steps
+            mind_d, body_d = m0 + (m1 - m0) * f, b0 + (b1 - b0) * f
+            b = R.advance(float(mind_d), sim_phase(name), body=float(body_d))
             if ring.get("baseline") and R.t >= next_ring:
                 next_ring += 20.0
                 recent = [p for t, p in R.packets if R.t - 60.0 <= t < R.t]
@@ -280,6 +289,12 @@ def phase_metrics(live, periods):
     out = {}
     for name, s, e, expect in periods:
         rows = [r for r in live if s <= r["t"] < e]
+        if expect is None:                      # in-between intensity: shown, not scored
+            out[name] = {"expected": None, "n_judged": 0, "end_share": None, "hit_rate": None, "time_to_state_s": None,
+                         "state_share": {k: sum(r["state"] == k for r in rows) / max(1, len(rows)) for k in LABELS},
+                         "mind_mean": _mean([r["mind"] for r in rows]), "body_mean": _mean([r["body"] for r in rows]),
+                         "hr_mean": _mean([r["hr"] for r in rows]), "scl_mean": _mean([r["scl"] for r in rows])}
+            continue
         judged = [r for r in rows if r["t"] >= s + GRACE_S and r["state"] is not None]
         reach = None
         for a, b in zip(rows, rows[1:]):

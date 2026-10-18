@@ -13,9 +13,13 @@ if str(_REPO_ROOT) not in sys.path:
 
 from backend.relaxation_guide.config import REWARD_MATRIX
 from backend.relaxation_guide.services.thompson_bandit import thompson_bandit
+from backend.relaxation_guide.services.reward import compute_reward, prepare_trajectory
 
 
 class RewardValidator:
+    def __init__(self):
+        self.last_components: Optional[dict] = None
+
     def compute_reward_and_recovery(
         self,
         pre_label: str,
@@ -74,13 +78,34 @@ class RewardValidator:
         pre_label: str,
         post_label: str,
         star_rating: int = 5,
-        duration_seconds: float = 30.0
+        duration_seconds: float = 30.0,
+        trajectory=None,
+        baseline: Optional[float] = None,
+        context_vector=None,
     ) -> Tuple[float, float, str, float, float]:
-        reward, recovery_pct, transition_desc = self.compute_reward_and_recovery(
-            pre_label, post_label, star_rating, duration_seconds
-        )
+        """
+        With a measured stress trajectory (and the user's baseline) the reward is the multi-objective,
+        recovery-aware one from reward.py and the recovery percentage is measured, not looked up.
+        Without a usable trajectory it falls back to the state-transition reward.
+        """
+        prepared = prepare_trajectory(trajectory) if baseline is not None else None
+        self.last_components = None
+        if prepared is not None:
+            comp = compute_reward(prepared, float(baseline), star_rating)
+            self.last_components = comp
+            reward = comp["reward"]
+            recovery_pct = comp["recovery_pct"]
+            transition_desc = (
+                f"Measured: stress {comp['start_stress']:.2f} -> {comp['end_stress']:.2f} "
+                f"({recovery_pct:.0f}% of the extra stress removed; "
+                f"{comp['uplift_raw'] * 100:+.0f}% vs. natural recovery)"
+            )
+        else:
+            reward, recovery_pct, transition_desc = self.compute_reward_and_recovery(
+                pre_label, post_label, star_rating, duration_seconds
+            )
 
-        thompson_bandit.update_distribution(user_id, cluster_id, technique_id, reward)
+        thompson_bandit.update_distribution(user_id, cluster_id, technique_id, reward, context_vector=context_vector)
 
         cluster_dists = thompson_bandit._get_user_cluster_dists(user_id, cluster_id)
         if technique_id in cluster_dists:

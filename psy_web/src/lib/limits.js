@@ -149,14 +149,43 @@ export const ringAligned = (p, thr) => (p == null || thr == null ? null
 // and the high-load threshold that belongs to IT: same session, and not older
 // than the calibration -- a recalibration replaces the resting level, so a
 // task run against the previous one no longer applies.
+// A COMPLETED calibration (rest -> task -> recovery) is used for every decision
+// until the user asks to recalibrate and that recalibration completes. The
+// bridge re-runs the rest baseline by itself, without the task, when the EEG
+// service restarts or sleeps (it loses the session) and when the app opens a
+// new session, and while a recalibration runs it overwrites calibration_result
+// with progress records -- none of those replace the calibrated baseline and
+// threshold. threshold_result carries the calibration's own resting level,
+// spread and rest scores, so it stands on its own (calFromThr) even after
+// calibration_result has been overwritten.
+const completeThr = (t) => Boolean(t?.calibration_status) && num(t.baseline_logit) != null && num(t.updated_at) != null;
+export function calFromThr(thr, cal) {
+  // The session's own calibration_result while it is still the one this threshold
+  // was computed against (same resting level); else rebuilt from threshold_result.
+  if (cal && (cal.status === 'ok' || cal.status === 'degraded') && num(cal.mu_rest_logit) != null
+      && Math.abs(num(cal.mu_rest_logit) - num(thr.baseline_logit)) < 1e-9) return cal;
+  return { status: 'ok', sigma_source: 'threshold_result', mu_rest_logit: num(thr.baseline_logit),
+    sigma: num(thr.sigma) ?? num(thr.rest_sd_logit) ?? SIGMA_LOGIT, rest_scores: thr.rest_scores || [],
+    mu_rest: num(thr.resting_mean), updated_at: num(thr.updated_at), rebuilt_from_threshold: true };
+}
 export function pickEeg(eeg, history, sid) {
   const ok = (c) => c && (c.status === 'ok' || c.status === 'degraded') && restLevel(c) != null;
+  // 1. this session's completed calibration
+  if (completeThr(eeg.threshold)) {
+    const cal = calFromThr(eeg.threshold, eeg.calibration);
+    const rebased = ok(eeg.calibration) && cal !== eeg.calibration && num(eeg.calibration.updated_at) > num(eeg.threshold.updated_at);
+    return { cal, thr: eeg.threshold, fromSid: sid, kept: rebased ? num(eeg.calibration.updated_at) * 1000 : null };
+  }
+  // 2. the user's latest completed calibration from an earlier session (new session, no recalibration asked)
+  const prev = [...history.items].reverse().find((i) => i.sid !== sid && completeThr(i.thr));
+  if (prev) return { cal: calFromThr(prev.thr, prev.cal), thr: prev.thr, fromSid: prev.sid, kept: null };
+  // 3. never completed: the resting baseline (provisional limit)
   const item = ok(eeg.calibration) ? { sid, cal: eeg.calibration, thr: eeg.threshold }
     : [...history.items].reverse().find((i) => ok(i.cal)) || null;
   const cal = item?.cal || null;
   let thr = item?.thr || null;
   if (thr && cal && num(thr.updated_at) != null && num(cal.updated_at) != null && thr.updated_at < cal.updated_at) thr = null;
-  return { cal, thr, fromSid: item?.sid || null };
+  return { cal, thr, fromSid: item?.sid || null, kept: null };
 }
 
 // Every calibration phase for mind, body and fused. EEG and body are put on
@@ -222,7 +251,7 @@ const toMs = (v) => (v == null ? null : typeof v === 'number' ? (v < 1e12 ? v * 
 // its own threshold is 0.50 by construction (baseFused). eeg: { calibration,
 // threshold } of the session; history: useEegCalibrations(); ring: { thresholds, baseline }.
 export function calibratedLimits({ eeg, history, sid, ring }) {
-  const { cal, thr, fromSid } = pickEeg(eeg || {}, history || { items: [] }, sid);
+  const { cal, thr, fromSid, kept } = pickEeg(eeg || {}, history || { items: [] }, sid);
   const eegInfo = eegLimitInfo(cal, thr);
   const r = { thresholds: ring?.thresholds || null, baseline: ring?.baseline || null };
   const ringInfo = ringLimitInfo(r);
@@ -236,6 +265,7 @@ export function calibratedLimits({ eeg, history, sid, ring }) {
     personal: Boolean(eegInfo.responsive), status: eegInfo.status, statusText: eegStatusText(eegInfo),
     source: eegInfo.method, at: toMs(thr?.updated_at) ?? toMs(cal?.updated_at),
     fromSid: fromSid && fromSid !== sid ? fromSid : null,
+    keptOver: kept,     // the bridge re-made a resting baseline (no task) after this calibration: not used
   } : null;
   const body = ringInfo.base != null || ringInfo.limit != null ? {
     baseline: ringInfo.base, threshold: ringInfo.limit,
@@ -249,7 +279,10 @@ export function calibratedLimits({ eeg, history, sid, ring }) {
     inputs: phases.fused?.inputs ?? null,
     source: 'calm level from the calibration rest blocks; limit = both inputs at their own limit',
   };
-  return { cal, thr, fromSid, eegInfo, ringInfo, phases, fusedCal: fc, mind, body, fused };
+  // body calm level / spread on the fusion scale, for the body early-warning detector
+  const br = (phases.body?.rest || []).filter((v) => v != null);
+  const bodyCal = br.length ? { baseline: phases.body.levels.rest ?? median(br), spread: br.length > 1 ? sdOf(br) : 0.05 } : null;
+  return { cal, thr, fromSid, kept, eegInfo, ringInfo, phases, fusedCal: fc, bodyCal, mind, body, fused };
 }
 
 // A live EEG block on the oriented model scale (compare with mind.thresholdOriented /

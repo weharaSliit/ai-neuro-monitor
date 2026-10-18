@@ -98,7 +98,7 @@ export default function UserDashboard() {
   const baselineStale = (fusion.latestBody?.baseline_stale ?? ringLatest?.baseline_stale) === true;
   if (cond.condition) {
     heroKey = { relaxed: 'calm', mental: 'mental', arousal: 'arousal', stress: 'high' }[cond.condition.key];
-  } else if (cond.gate.paused && (cond.recal.eeg?.status === 'capturing' || cond.recal.ring?.status === 'capturing')) {
+  } else if (cond.gate.recalibrating) {
     heroKey = 'calibrating';
   }
   if (baselineStale && heroKey !== 'idle' && heroKey !== 'calibrating') heroKey = 'stale';
@@ -246,7 +246,7 @@ export default function UserDashboard() {
           </div>
           <div className={`condition ${cond.condition?.key || 'none'}`}>
             <span>Your condition</span>
-            <b>{cond.condition ? cond.condition.label : cond.gate.paused ? 'Calibrating…' : '—'}</b>
+            <b>{cond.condition ? cond.condition.label : cond.gate.paused || cond.gate.recalibrating ? 'Calibrating…' : '—'}</b>
             <em>{cond.condition ? (cond.condition.message || 'Mind and body below their limits.') + (cond.condition.partial ? ` (${cond.condition.partial})` : '')
               : 'Shown once calibration is done.'}</em>
           </div>

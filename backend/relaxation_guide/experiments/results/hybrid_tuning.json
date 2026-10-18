@@ -1,0 +1,124 @@
+{
+  "best": {
+    "SHRINKAGE_N0": 2.0,
+    "HABIT_USE_COEF": 0.0,
+    "HABIT_DECLINE_GAIN": 0.0,
+    "score": 0.25935985384360516
+  },
+  "grid": [
+    {
+      "SHRINKAGE_N0": 2.0,
+      "HABIT_USE_COEF": 0.0,
+      "HABIT_DECLINE_GAIN": 0.0,
+      "score": 0.25935985384360516
+    },
+    {
+      "SHRINKAGE_N0": 2.0,
+      "HABIT_USE_COEF": 0.0,
+      "HABIT_DECLINE_GAIN": 1.0,
+      "score": 0.25589373714686786
+    },
+    {
+      "SHRINKAGE_N0": 2.0,
+      "HABIT_USE_COEF": 0.01,
+      "HABIT_DECLINE_GAIN": 0.0,
+      "score": 0.25889428075954796
+    },
+    {
+      "SHRINKAGE_N0": 2.0,
+      "HABIT_USE_COEF": 0.01,
+      "HABIT_DECLINE_GAIN": 1.0,
+      "score": 0.2562633365377455
+    },
+    {
+      "SHRINKAGE_N0": 2.0,
+      "HABIT_USE_COEF": 0.03,
+      "HABIT_DECLINE_GAIN": 0.0,
+      "score": 0.2534038383945563
+    },
+    {
+      "SHRINKAGE_N0": 2.0,
+      "HABIT_USE_COEF": 0.03,
+      "HABIT_DECLINE_GAIN": 1.0,
+      "score": 0.2517874043531926
+    },
+    {
+      "SHRINKAGE_N0": 4.0,
+      "HABIT_USE_COEF": 0.0,
+      "HABIT_DECLINE_GAIN": 0.0,
+      "score": 0.2582494385276621
+    },
+    {
+      "SHRINKAGE_N0": 4.0,
+      "HABIT_USE_COEF": 0.0,
+      "HABIT_DECLINE_GAIN": 1.0,
+      "score": 0.25424980826419696
+    },
+    {
+      "SHRINKAGE_N0": 4.0,
+      "HABIT_USE_COEF": 0.01,
+      "HABIT_DECLINE_GAIN": 0.0,
+      "score": 0.257619814878387
+    },
+    {
+      "SHRINKAGE_N0": 4.0,
+      "HABIT_USE_COEF": 0.01,
+      "HABIT_DECLINE_GAIN": 1.0,
+      "score": 0.25161185520917434
+    },
+    {
+      "SHRINKAGE_N0": 4.0,
+      "HABIT_USE_COEF": 0.03,
+      "HABIT_DECLINE_GAIN": 0.0,
+      "score": 0.25287715979730147
+    },
+    {
+      "SHRINKAGE_N0": 4.0,
+      "HABIT_USE_COEF": 0.03,
+      "HABIT_DECLINE_GAIN": 1.0,
+      "score": 0.24851550337569558
+    },
+    {
+      "SHRINKAGE_N0": 8.0,
+      "HABIT_USE_COEF": 0.0,
+      "HABIT_DECLINE_GAIN": 0.0,
+      "score": 0.25366601421890217
+    },
+    {
+      "SHRINKAGE_N0": 8.0,
+      "HABIT_USE_COEF": 0.0,
+      "HABIT_DECLINE_GAIN": 1.0,
+      "score": 0.25227422677793115
+    },
+    {
+      "SHRINKAGE_N0": 8.0,
+      "HABIT_USE_COEF": 0.01,
+      "HABIT_DECLINE_GAIN": 0.0,
+      "score": 0.2528251960516064
+    },
+    {
+      "SHRINKAGE_N0": 8.0,
+      "HABIT_USE_COEF": 0.01,
+      "HABIT_DECLINE_GAIN": 1.0,
+      "score": 0.25276884397448346
+    },
+    {
+      "SHRINKAGE_N0": 8.0,
+      "HABIT_USE_COEF": 0.03,
+      "HABIT_DECLINE_GAIN": 0.0,
+      "score": 0.25076477234194466
+    },
+    {
+      "SHRINKAGE_N0": 8.0,
+      "HABIT_USE_COEF": 0.03,
+      "HABIT_DECLINE_GAIN": 1.0,
+      "score": 0.24996577163852007
+    }
+  ],
+  "tune_seeds": [
+    1000,
+    1001,
+    1002,
+    1003
+  ]
+}

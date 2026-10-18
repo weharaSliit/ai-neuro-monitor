@@ -83,8 +83,8 @@ PROFILES = {p.key: p for p in [
 # offline multi-seed study, which keeps iterating PROFILES above.
 DEMO_PROFILES = {p.key: p for p in [
     Profile("responsive", "Responsive (demo)", "responsive", 1.0, body_response="wesad",
-            tests="EEG calibration passes (simkit/responders.py) and a WESAD-sized body response: "
-                  "calibrated mind and body, all four states"),
+            tests="SAM40 subjects whose EEG calibration passes reliably (>= 75% of 16 virtual users, "
+                  "simkit/responders.py) with a WESAD-sized body response: calibrated mind and body, all four states"),
 ]}
 ALL_PROFILES = {**PROFILES, **DEMO_PROFILES}
 

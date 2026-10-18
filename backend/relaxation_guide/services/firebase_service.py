@@ -583,3 +583,20 @@ def get_closed_loop_state(user_id: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         print(f"[Firebase Warning] get_closed_loop_state failed ({e}).")
         return None
+
+
+def save_policy_state(user_id: str, state: Dict[str, Any]):
+    """Persist the per-user contextual policy (linear models + recent technique outcomes)."""
+    try:
+        _intervention_ref(f'policy_state/{user_id}').set(state)
+    except Exception as e:
+        print(f"[Firebase Warning] save_policy_state failed ({e}).")
+
+
+def get_policy_state(user_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        data = _intervention_ref(f'policy_state/{user_id}').get()
+        return data if isinstance(data, dict) else None
+    except Exception as e:
+        print(f"[Firebase Warning] get_policy_state failed ({e}).")
+        return None

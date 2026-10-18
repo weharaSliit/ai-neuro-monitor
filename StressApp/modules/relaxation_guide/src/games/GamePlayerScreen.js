@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { AppContext } from '../context/AppContext';
+import { apiService } from '../api/apiService';
 import { ThemeContext } from '../context/ThemeContext';
 import Icon from '../../../shared/Icon';
 import { DailyTasksModal } from '../components/DailyTasksModal';
@@ -164,9 +165,15 @@ const getTechKey = (target) => {
 
 export const GamePlayerScreen = () => {
   const {
+    userId,
     selectedSubOption,
+    setSelectedSubOption,
     currentRecommendation,
-    setCurrentScreen
+    setCurrentRecommendation,
+    setCurrentScreen,
+    markInterventionStart,
+    getInterventionElapsed,
+    logEvidenceEvent
   } = useContext(AppContext);
   const { theme, isDarkMode } = useContext(ThemeContext);
 
@@ -197,6 +204,60 @@ export const GamePlayerScreen = () => {
     setCombo(c => c + 1);
   }, []);
 
+  // Closed loop inside the session: the backend watches the filtered stress level and slope and
+  // answers continue / switch / stop. `loopHint` is shown as a banner; nothing changes without a tap.
+  const [loopHint, setLoopHint] = useState(null);
+  const triedTechniquesRef = useRef([]);
+
+  useEffect(() => {
+    markInterventionStart && markInterventionStart({
+      rec: currentRecommendation,
+      techniqueId: currentRecommendation?.technique_id || techKey,
+      title: tech.title,
+    });
+    triedTechniquesRef.current = [];
+  }, []);
+
+  useEffect(() => {
+    const techniqueId = currentRecommendation?.technique_id;
+    if (!techniqueId || !userId) return undefined;
+    if (!triedTechniquesRef.current.includes(techniqueId)) {
+      triedTechniquesRef.current.push(techniqueId);
+    }
+    if (gameState !== 'playing') return undefined;
+    let cancelled = false;
+    const check = async () => {
+      const elapsed = getInterventionElapsed ? getInterventionElapsed() : 0;
+      const step = await apiService.loopStep(userId, techniqueId, elapsed, triedTechniquesRef.current);
+      logEvidenceEvent && logEvidenceEvent('loop_check', {
+        elapsed,
+        action: step?.action || 'continue',
+        reason: step?.reason || '',
+        level: step?.context?.combined ?? null,
+        slope: step?.context?.slope_per_min ?? null,
+        next: step?.next_recommendation?.technique_id ?? null,
+      });
+      if (!cancelled) {
+        setLoopHint(step && step.action && step.action !== 'continue' ? step : null);
+      }
+    };
+    const interval = setInterval(check, 20000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [currentRecommendation?.technique_id, userId, gameState]);
+
+  const handleAcceptSwitch = useCallback(() => {
+    const next = loopHint && loopHint.next_recommendation;
+    if (!next) return;
+    logEvidenceEvent && logEvidenceEvent('switched', { from: currentRecommendation?.technique_id, to: next.technique_id });
+    setCurrentRecommendation({ ...next, session_id: currentRecommendation?.session_id });
+    if (next.selected_sub_option) setSelectedSubOption(next.selected_sub_option);
+    setGameTime(0);
+    setLoopHint(null);
+  }, [loopHint, currentRecommendation, setCurrentRecommendation, setSelectedSubOption]);
+
   const handleStartSession = useCallback((durationInSec) => {
     if (typeof durationInSec === 'number' && durationInSec > 0) {
       setSessionSeconds(durationInSec);
@@ -205,6 +266,7 @@ export const GamePlayerScreen = () => {
   }, []);
 
   const handleFinishGame = useCallback(() => {
+    logEvidenceEvent && logEvidenceEvent('finished', { elapsed: getInterventionElapsed ? getInterventionElapsed() : null });
     Vibration.vibrate([0, 100, 50, 100]);
     setShowRewardModal(true);
   }, []);
@@ -323,6 +385,30 @@ export const GamePlayerScreen = () => {
         </View>
 
         <Text style={[styles.gameDescription, { color: tech.color }]} numberOfLines={1}>{tech.meaningTitle}</Text>
+
+        {loopHint && (
+          <View style={styles.loopBanner}>
+            <Text style={styles.loopBannerText}>
+              {loopHint.reason}
+              {loopHint.action === 'switch' && loopHint.next_recommendation ? ` Try ${loopHint.next_recommendation.title}?` : ''}
+            </Text>
+            <View style={styles.loopBannerBtns}>
+              {loopHint.action === 'switch' && loopHint.next_recommendation && (
+                <TouchableOpacity style={styles.loopBannerBtn} onPress={handleAcceptSwitch}>
+                  <Text style={styles.loopBannerBtnText}>Switch</Text>
+                </TouchableOpacity>
+              )}
+              {loopHint.action === 'stop' && (
+                <TouchableOpacity style={styles.loopBannerBtn} onPress={handleFinishGame}>
+                  <Text style={styles.loopBannerBtnText}>Finish</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity style={styles.loopBannerBtnGhost} onPress={() => setLoopHint(null)}>
+                <Text style={styles.loopBannerGhostText}>Keep going</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
       </Animated.View>
 
       {/* Gamified HUD & Stats Bar */}
@@ -516,6 +602,46 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
     textAlign: 'center',
+  },
+  loopBanner: {
+    marginTop: 8,
+    padding: 10,
+    borderRadius: 12,
+    backgroundColor: 'rgba(56,189,248,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(56,189,248,0.45)',
+  },
+  loopBannerText: {
+    color: '#E2E8F0',
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  loopBannerBtns: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 10,
+    marginTop: 8,
+  },
+  loopBannerBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    backgroundColor: '#38BDF8',
+  },
+  loopBannerBtnText: {
+    color: '#0F172A',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  loopBannerBtnGhost: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  loopBannerGhostText: {
+    color: '#94A3B8',
+    fontSize: 12,
+    fontWeight: '700',
   },
   statsBar: {
     flexDirection: 'row',

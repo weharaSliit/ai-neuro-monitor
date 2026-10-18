@@ -9,6 +9,8 @@ import { AppContext } from '../context/AppContext';
 import { ThemeContext } from '../context/ThemeContext';
 import { Header } from '../components/Header';
 import { apiService } from '../api/apiService';
+import { evidenceLogger } from '../utils/evidenceLogger';
+import { WhyThisTechniqueCard } from '../components/WhyThisTechniqueCard';
 import { useSweetAlert } from '../context/SweetAlertContext';
 
 const { width: SCREEN_W } = Dimensions.get('window');
@@ -253,7 +255,7 @@ export const DashboardScreen = () => {
     isCalibrated, hasLivePacket,
     // Phenotyping State
     phenoSensorEnabled, phenoCalibStatus, phenoStressLabel,
-    phenoStressProbability, hasLivePhenoPacket, openPhenoSensorSettings,
+    phenoStressProbability, hasLivePhenoPacket, openPhenoSensorSettings, setLaunchSource,
     currentRecommendation, setCurrentRecommendation, setPreInterventionLabel, setSelectedSubOption
   } = useContext(AppContext);
 
@@ -304,6 +306,25 @@ export const DashboardScreen = () => {
       });
       setPreInterventionLabel(recommendation?.context_stress_label || stressState);
       setCurrentRecommendation(recommendation);
+      if (recommendation?.session_id) {
+        // Evidence log: what was recommended, why, and from which context.
+        evidenceLogger.meta(userId, recommendation.session_id, {
+          condition: 'system',
+          recommended_technique_id: recommendation.technique_id,
+          technique_id: recommendation.technique_id,
+          title: recommendation.title,
+          reason: recommendation.reason || null,
+          reason_codes: recommendation.reason_codes || null,
+          context: recommendation.context || null,
+          streams_used: recommendation.streams_used || null,
+          cluster_id: recommendation.context_cluster_id ?? null,
+          recommended_at: Date.now() / 1000,
+          platform: 'mobile',
+        });
+        evidenceLogger.event(userId, recommendation.session_id, 'recommended', {
+          technique_id: recommendation.technique_id, reason: recommendation.reason || null,
+        });
+      }
       if (recommendation?.selected_sub_option) {
         setSelectedSubOption(recommendation.selected_sub_option);
       }
@@ -318,6 +339,7 @@ export const DashboardScreen = () => {
 
   const handleLaunchFromModal = () => {
     setShowInterventionModal(false);
+    setLaunchSource && setLaunchSource('system');
     if (currentRecommendation?.selected_sub_option) {
       setSelectedSubOption(currentRecommendation.selected_sub_option);
     }
@@ -575,6 +597,8 @@ export const DashboardScreen = () => {
             <Text style={[s.modalDesc, { color: theme.textSecondary }]}>
               {currentRecommendation?.description || 'Extended exhale pacing synced with water lilies to quickly lower heart rate and reduce stress.'}
             </Text>
+
+            <WhyThisTechniqueCard recommendation={currentRecommendation} theme={theme} />
 
             {/* Popup Button to Launch Technique */}
             <TouchableOpacity
