@@ -1,9 +1,10 @@
-import React, { createContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useState, useEffect, useCallback, useRef } from 'react';
 import { NativeModules, Platform, Linking, AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ref, onValue, off, query, orderByKey, limitToLast, update, push } from 'firebase/database';
 import { db } from '../../firebase';
 import { apiService } from '../api/apiService';
+import { evidenceLogger, newSessionKey } from '../utils/evidenceLogger';
 import { computeCalibrationStatus } from '../../../phenotyping/utils/calibrationStatus';
 import { isPhenotypingOnboarded } from '../../../phenotyping/screens/PhenotypingOnboardingScreen';
 
@@ -93,6 +94,7 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
   const [phenoStressProbability, setPhenoStressProbability] = useState(0.15);
   const [hasLivePhenoPacket, setHasLivePhenoPacket] = useState(false);
   const [phenoTrendHistory, setPhenoTrendHistory] = useState([]);
+  const [phenoLastUpdateMs, setPhenoLastUpdateMs] = useState(null);
 
   // Check PhenoCare Accessibility Sensor status
   const checkPhenoSensor = useCallback(async () => {
@@ -218,9 +220,12 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
     const handler = onValue(predQuery, async (snap) => {
       if (snap.exists()) {
         const raw = snap.val();
-        const preds = Object.values(raw).sort((a, b) =>
-          new Date(a.timestamp || 0) - new Date(b.timestamp || 0)
-        );
+        const scoreOf = (p) => (typeof p.stress_score === 'number' ? p.stress_score
+          : (typeof p.probability === 'number' ? p.probability : null));
+        // Only real prediction records (ignore any session markers stored beside them).
+        const preds = Object.values(raw)
+          .filter((p) => p && typeof p === 'object' && (scoreOf(p) !== null || p.label))
+          .sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
         const latest = preds[preds.length - 1];
         if (latest) {
           const lbl = (latest.label || 'normal').toLowerCase();
@@ -231,10 +236,17 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
           setPhenoStressLabel(lbl);
           setPhenoStressProbability(score);
           setHasLivePhenoPacket(true);
-          setPhenoTrendHistory(prev => {
-            const next = [...prev, score];
-            return next.slice(-12);
-          });
+          // The line is rebuilt from the latest stored predictions, so it shows real history right away
+          // (a phenotyping prediction is only written when a behaviour window is processed, so appending
+          // one point per event left a single point, and no visible line, for a long time).
+          setPhenoTrendHistory(
+            preds.slice(-12)
+              .map((p) => scoreOf(p))
+              .filter((v) => v !== null)
+              .map((v) => Math.max(0, Math.min(1, v)))
+          );
+          const parsedTs = Date.parse(latest.timestamp);
+          setPhenoLastUpdateMs(Number.isFinite(parsedTs) ? parsedTs : null);
           try {
             await AsyncStorage.setItem(`@pheno_pred_${userId}`, JSON.stringify(latest));
           } catch { }
@@ -349,6 +361,62 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
   // Real-time Trend Line History (2s Polling)
   const [stressTrendHistory, setStressTrendHistory] = useState([]);
 
+  // Timestamped stress samples, so a session's real recovery curve can be measured and sent for
+  // validation (the backend rewards stress reduced beyond natural recovery, not a self-reported state).
+  const stressTrajectoryRef = useRef([]);
+  const phenoLatestRef = useRef({ p: null, live: false });
+  useEffect(() => {
+    phenoLatestRef.current = { p: phenoStressProbability, live: hasLivePhenoPacket };
+  }, [phenoStressProbability, hasLivePhenoPacket]);
+  const interventionStartRef = useRef(null);
+  // Evidence log (reviewed on the web Relaxation guide page): which session is active and how it was launched.
+  const userIdRef = useRef(userId);
+  userIdRef.current = userId;
+  const evidenceKeyRef = useRef(null);
+  const launchSourceRef = useRef(null);
+  const setLaunchSource = useCallback((source) => { launchSourceRef.current = source; }, []);
+  const logEvidenceEvent = useCallback((type, data) => {
+    evidenceLogger.event(userIdRef.current, evidenceKeyRef.current, type, data);
+  }, []);
+  const finishEvidenceSession = useCallback((result) => {
+    evidenceLogger.result(userIdRef.current, evidenceKeyRef.current, result);
+    evidenceKeyRef.current = null;
+  }, []);
+
+  // info = { rec: current recommendation, title, techniqueId }
+  const markInterventionStart = useCallback((info = {}) => {
+    interventionStartRef.current = Date.now() / 1000;
+    const rec = info.rec || {};
+    // "system" = the user accepted the recommendation; anything chosen from the catalog is "manual".
+    const condition = launchSourceRef.current === 'system' ? 'system' : 'manual';
+    launchSourceRef.current = null;
+    const key = condition === 'system' && rec.session_id ? rec.session_id : newSessionKey();
+    evidenceKeyRef.current = key;
+    evidenceLogger.meta(userIdRef.current, key, {
+      condition,
+      technique_id: info.techniqueId || rec.technique_id || null,
+      title: info.title || rec.title || null,
+      recommended_technique_id: rec.technique_id || null,
+      reason: rec.reason || null,
+      reason_codes: rec.reason_codes || null,
+      context: rec.context || null,
+      streams_used: rec.streams_used || null,
+      cluster_id: rec.context_cluster_id ?? null,
+      started_at: Date.now() / 1000,
+      platform: 'mobile',
+    });
+    evidenceLogger.event(userIdRef.current, key, 'started', { condition, technique_id: info.techniqueId || rec.technique_id || null });
+  }, []);
+  const getInterventionTrajectory = useCallback(() => {
+    const start = interventionStartRef.current;
+    if (!start) return [];
+    return stressTrajectoryRef.current.filter((pt) => pt.t >= start - 10);
+  }, []);
+  const getInterventionElapsed = useCallback(() => {
+    const start = interventionStartRef.current;
+    return start ? Math.max(0, Date.now() / 1000 - start) : 0;
+  }, []);
+
   // Intervention History
   const [historyList, setHistoryList] = useState([]);
 
@@ -380,6 +448,24 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
 
         setStressProbability(prob);
         setConfidence(prob);
+
+        // Session curve: the ring/earbud stream when it is live, otherwise the phenotyping stream
+        // (so a session can still be measured when only the phone sensor is connected).
+        let trajectoryValue = null;
+        if (Number.isFinite(prob) && (telemetry.has_live_packet !== false)) {
+          trajectoryValue = prob;
+        } else if (phenoLatestRef.current.live && Number.isFinite(phenoLatestRef.current.p)) {
+          trajectoryValue = phenoLatestRef.current.p;
+        }
+        if (trajectoryValue !== null) {
+          const samples = stressTrajectoryRef.current;
+          samples.push({ t: Date.now() / 1000, p: trajectoryValue });
+          if (samples.length > 1500) samples.splice(0, samples.length - 1500);
+          if (evidenceKeyRef.current) {
+            evidenceLogger.sample(userIdRef.current, evidenceKeyRef.current, trajectoryValue,
+              (Number.isFinite(prob) && telemetry.has_live_packet !== false) ? 'physio' : 'phenotyping');
+          }
+        }
 
         if (telemetry.features_flat || typeof telemetry.confidence === 'number') {
           setStressTrendHistory(prev => {
@@ -445,6 +531,12 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
         stressProbability,
         setStressProbability,
         stressTrendHistory,
+        markInterventionStart,
+        setLaunchSource,
+        logEvidenceEvent,
+        finishEvidenceSession,
+        getInterventionTrajectory,
+        getInterventionElapsed,
         simMode,
         updateSimMode,
         isSafetyOverride,
@@ -481,6 +573,7 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
         phenoStressProbability,
         hasLivePhenoPacket,
         phenoTrendHistory,
+        phenoLastUpdateMs,
         markPhenoCalibrated,
         resetPhenoCalibration,
       }}

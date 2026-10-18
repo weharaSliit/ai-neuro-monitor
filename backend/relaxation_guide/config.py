@@ -61,6 +61,39 @@ DECAY_HALF_LIFE_DAYS = 7.0       # 7-day half life multiplier
 HABITUATING_USAGE_THRESHOLD = 5  # Max uses allowed in 7 days before penalty
 HABITUATING_PENALTY_FACTOR = 0.90 # 10% penalty (multiplier 0.90)
 
+# --- Context Builder (person-relative, smoothed context) ---
+CONTEXT_EWMA_ALPHA = 0.35         # smoothing of the raw stress scores (higher = more reactive)
+CONTEXT_HISTORY_LEN = 150         # recent samples kept per user (~5 min at 2 s polling)
+CONTEXT_SLOPE_WINDOW_SEC = 90.0   # window for the stress slope estimate
+CONTEXT_MIN_SCALE = 0.08          # floor for the user's own stress variability
+CONTEXT_CUSUM_K = 0.5             # CUSUM allowance, in units of the user's own std
+CONTEXT_CUSUM_H = 4.0             # CUSUM alarm level, in units of the user's own std
+CONTEXT_FEATURE_DIM = 5           # [z_rel, slope, physio, pheno, disagreement]
+
+# --- Contextual Policy (cluster prior + linear Thompson Sampling) ---
+LINTS_PRIOR_LAMBDA = 2.0          # ridge prior strength of the per-technique linear model
+LINTS_NOISE_V = 0.25              # exploration scale of the linear Thompson draw
+SHRINKAGE_N0 = 2.0                # observations before the continuous model carries half the weight (tuned, tune_hybrid.py)
+
+# --- Adaptive Habituation (usage- and feedback-sensitive) ---
+HABIT_HALF_LIFE_HOURS = 48.0      # how fast past use stops counting
+HABIT_USE_COEF = 0.01             # penalty per (decayed) recent use (tuned: stronger penalties did not improve recovery)
+HABIT_DECLINE_GAIN = 0.0          # extra penalty when a technique's reward declines (tuned off: the learner already captures it)
+HABIT_MAX_PENALTY = 0.50          # penalty never removes more than this share of the score
+
+# --- Multi-Objective Reward ---
+REWARD_W_UPLIFT = 0.40            # stress reduced beyond natural recovery
+REWARD_W_SPEED = 0.25             # how quickly baseline was reached
+REWARD_W_RATING = 0.25            # user-reported benefit
+REWARD_W_EFFORT = 0.10            # shorter sessions cost the user less
+NATURAL_RECOVERY_TAU_SEC = 600.0  # time constant of recovery with no intervention
+BASELINE_MARGIN = 0.03            # within this of baseline counts as recovered
+SESSION_WINDOW_SEC = 600.0        # reference session length for speed/effort scores
+
+# --- Closed-Loop Step Decision (continue / switch / stop) ---
+LOOP_MIN_EVAL_SEC = 120.0         # do not judge a technique before this long
+LOOP_SLOPE_FALLING = -0.01        # stress slope per minute that counts as "falling"
+
 # --- Validator Reward Mapping Matrix ---
 REWARD_MATRIX = {
     ("stress", "normal"): 1.0,        # Complete recovery
@@ -151,3 +184,7 @@ TECHNIQUES = {
         ]
     }
 }
+
+
+# Games/sub-options map to the technique family the bandit learns about (e.g. "water_lily_pond" -> "guided_meditation").
+TECHNIQUE_FAMILY_OF = {sub["id"]: family for family, tech in TECHNIQUES.items() for sub in tech["sub_options"]}

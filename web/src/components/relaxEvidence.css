@@ -1,0 +1,44 @@
+/* Styles for the Relaxation guide evidence view only (RelaxEvidence.jsx). */
+.rev .grid-2 { align-items: start; }
+.rev-svg { width: 100%; height: auto; display: block; }
+.rev-grid { stroke: #EAE5DA; stroke-width: 1; }
+.rev-tick { font-size: 10px; fill: #989294; font-weight: 700; }
+.rev-mark { font-size: 9px; font-weight: 800; }
+.rev-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; font-size: 11px; font-weight: 700; color: #544E50; align-items: center; }
+.rev-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.rev-legend i { display: inline-block; width: 16px; height: 3px; border-radius: 2px; }
+.rev-legend em { font-style: normal; color: #989294; margin-left: auto; }
+.rev-empty { font-size: 13px; color: #989294; font-weight: 600; margin: 8px 0; }
+.rev-scroll { overflow-x: auto; }
+.rev-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.rev-table th { text-align: left; font-size: 11px; color: #989294; font-weight: 800; padding: 6px 8px; border-bottom: 1px solid #EAE5DA; white-space: nowrap; }
+.rev-table td { padding: 8px; border-bottom: 1px solid #F2EEE4; vertical-align: top; }
+.rev-table tbody tr { cursor: pointer; }
+.rev-table tbody tr:hover { background: #F8F6F0; }
+.rev-table tr.sel { background: #EFEFFB; }
+.rev-table small { color: #989294; font-weight: 700; }
+.rev-why { min-width: 220px; color: #544E50; }
+.rev-select { border: 1px solid #EAE5DA; border-radius: 10px; padding: 6px 10px; font-size: 12px; background: #fff; max-width: 260px; }
+.rev-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.rev-chips span { background: #F0ECE4; border-radius: 999px; padding: 4px 10px; font-size: 11.5px; font-weight: 700; color: #544E50; }
+.rev-kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.rev-kv div { display: flex; flex-direction: column; gap: 2px; }
+.rev-kv span { font-size: 11px; color: #989294; font-weight: 700; }
+.rev-kv b { font-size: 14px; }
+.rev-bars { display: flex; flex-direction: column; gap: 6px; }
+.rev-bar-row { display: grid; grid-template-columns: 150px 1fr 90px; gap: 10px; align-items: center; }
+.rev-bar-label { font-size: 12px; font-weight: 700; color: #544E50; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rev-bar-track { background: #F0ECE4; border-radius: 6px; height: 12px; overflow: hidden; }
+.rev-bar-fill { height: 100%; border-radius: 6px; }
+.rev-bar-val { font-size: 12px; font-weight: 800; }
+.rev-bar-val small { color: #989294; font-weight: 700; }
+.rev-userhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.rev-cross { display: flex; flex-direction: column; gap: 8px; }
+.rev-cross-row { display: grid; grid-template-columns: 140px 1fr; gap: 10px; align-items: center; }
+.rev-cross-user { font-weight: 800; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; }
+.rev-stack { display: flex; height: 24px; border-radius: 8px; overflow: hidden; background: #F0ECE4; }
+.rev-stack div { color: #fff; font-size: 11px; font-weight: 800; display: flex; align-items: center; justify-content: center; }
+@media (max-width: 760px) {
+  .rev .grid-2 { grid-template-columns: 1fr; }
+  .rev-bar-row { grid-template-columns: 110px 1fr 70px; }
+}

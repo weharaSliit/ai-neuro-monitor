@@ -17,11 +17,50 @@ from backend.relaxation_guide.config import TECHNIQUES, WEIGHT_PHYSIO, WEIGHT_PR
 from backend.relaxation_guide.services.preference_learner import preference_learner
 from backend.relaxation_guide.database.db_manager import db_manager
 from backend.relaxation_guide.services import firebase_service
+from backend.relaxation_guide.services.contextual_policy import ContextualPolicy
 
 
 class ThompsonBandit:
     def __init__(self):
         self._user_distributions: Dict[str, Dict[int, Dict[str, Dict[str, float]]]] = {}
+        self._policies: Dict[str, ContextualPolicy] = {}
+        self._pending_context: Dict[str, Dict[str, Dict]] = {}   # user -> session -> {cluster_id, vector}
+        self._last_selection: Dict[str, Dict] = {}
+
+    # ---------- contextual policy (continuous context + adaptive habituation) ----------
+    def get_policy(self, user_id: str) -> ContextualPolicy:
+        if user_id not in self._policies:
+            saved = firebase_service.get_policy_state(user_id)
+            arms = list(TECHNIQUES.keys())
+            policy = None
+            if saved and saved.get("arms"):
+                try:
+                    policy = ContextualPolicy.from_dict(saved)
+                    for a in arms:   # techniques added after the state was saved
+                        if a not in policy.linear:
+                            policy = None
+                            break
+                except Exception as e:
+                    print(f"[Policy Warning] Could not restore policy state ({e}); starting fresh.")
+                    policy = None
+            self._policies[user_id] = policy or ContextualPolicy(arms)
+        return self._policies[user_id]
+
+    def remember_context(self, user_id: str, session_id: str, cluster_id: int, vector, technique_id: str) -> None:
+        sessions = self._pending_context.setdefault(user_id, {})
+        sessions[session_id] = {"cluster_id": cluster_id, "vector": list(vector), "technique_id": technique_id}
+        sessions["_latest"] = sessions[session_id]
+        if len(sessions) > 12:
+            for k in [k for k in sessions if k != "_latest"][:-10]:
+                sessions.pop(k, None)
+
+    def pop_context(self, user_id: str, session_id: Optional[str] = None) -> Optional[Dict]:
+        sessions = self._pending_context.get(user_id, {})
+        ctx = sessions.pop(session_id, None) if session_id else None
+        return ctx or sessions.get("_latest")
+
+    def get_last_selection(self, user_id: str) -> Optional[Dict]:
+        return self._last_selection.get(user_id)
 
     def _get_user_cluster_dists(self, user_id: str, cluster_id: int) -> Dict[str, Dict[str, float]]:
         if user_id not in self._user_distributions:
@@ -43,10 +82,29 @@ class ThompsonBandit:
         user_id: str,
         cluster_id: int,
         usage_history_7d: Optional[Dict[str, int]] = None,
-        exclude_technique_ids: Optional[List[str]] = None
+        exclude_technique_ids: Optional[List[str]] = None,
+        context_vector: Optional[List[float]] = None
     ) -> Tuple[str, float, float, float, float, Dict[str, float]]:
         start_time = time.time()
         cluster_dists = self._get_user_cluster_dists(user_id, cluster_id)
+
+        if context_vector is not None:
+            # Continuous-context path: cluster prior + per-user linear model + adaptive habituation.
+            policy = self.get_policy(user_id)
+            pref_scores = {t: preference_learner.get_preference_score(user_id, t) for t in cluster_dists}
+            selection = policy.select(
+                cluster_id, context_vector,
+                exclude=exclude_technique_ids,
+                pref_scores=pref_scores,
+                cluster_dists=cluster_dists,
+                boosts=firebase_service.get_fastest_recovery_technique_history(user_id),
+            )
+            self._last_selection[user_id] = selection
+            tech = selection["technique_id"]
+            d = selection["details"][tech]
+            all_scores = {a: v["score"] for a, v in selection["details"].items()}
+            exec_ms = (time.time() - start_time) * 1000.0
+            return tech, d["score"], d["context_score"], d["preference"], exec_ms, all_scores
         usage_history = usage_history_7d or {}
         excluded = set(exclude_technique_ids or [])
 
@@ -89,7 +147,13 @@ class ThompsonBandit:
 
         return best_tech, best_blended_score, best_physio_sample, best_pref_score, exec_time_ms, all_blended_scores
 
-    def update_distribution(self, user_id: str, cluster_id: int, technique_id: str, reward: float):
+    def update_distribution(self, user_id: str, cluster_id: int, technique_id: str, reward: float,
+                            context_vector: Optional[List[float]] = None):
+        if context_vector is not None:
+            policy = self.get_policy(user_id)
+            if technique_id in policy.linear:
+                policy.update(technique_id, cluster_id, context_vector, max(0.0, min(1.0, reward)), update_beta=False)
+                firebase_service.save_policy_state(user_id, policy.to_dict())
         cluster_dists = self._get_user_cluster_dists(user_id, cluster_id)
         if technique_id in cluster_dists:
             if reward >= 0:
