@@ -7,7 +7,6 @@ import SetupPage from './pages/SetupPage';
 import PhenotypingPage from './pages/PhenotypingPage';
 import RelaxPage from './pages/RelaxPage';
 import RelaxValidationOverview from './pages/RelaxValidationOverview';
-import UsersOverview from './pages/UsersOverview';
 
 function RequireAuth({ children }) {
   const { user } = useAuth();
