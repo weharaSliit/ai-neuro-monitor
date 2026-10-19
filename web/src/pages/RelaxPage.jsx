@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { useLivePointer, useNow } from '../hooks/useLive';
 import { useFusion, useRingHistory } from '../hooks/useStreams';
@@ -13,7 +14,7 @@ import RelaxLoopBanner from '../components/RelaxLoopBanner';
 import { Card, CardHead, Badge } from '../components/ui';
 import RelaxGame from '../components/RelaxGame';
 import RelaxEvidence from '../components/RelaxEvidence';
-import { isEvidenceAdmin } from '../lib/relaxEvidence';
+import { isEvidenceAdmin, isRelaxationAdmin } from '../lib/relaxEvidence';
 import DailyQuests from '../components/DailyQuests';
 import { QUESTS, readQuests } from '../lib/quests';
 
@@ -35,6 +36,7 @@ function writeLog(uid, rows) {
 }
 
 export default function RelaxPage() {
+  const navigate = useNavigate();
   const { user, token } = useAuth();
   const userId = user?.userId;
   const canSeeEvidence = isEvidenceAdmin(userId);
@@ -234,7 +236,14 @@ export default function RelaxPage() {
         <div className="greet">
           <span className="micro">Relaxation guide · your evidence</span>
           <h1 className="display" style={{ marginTop: 4 }}>Your intervention system evidence</h1>
-          <button className="btn" style={{ marginTop: 10 }} onClick={() => setShowEvidence(false)}>Back to relaxation</button>
+          <div className="row" style={{ marginTop: 10, flexWrap: 'wrap' }}>
+            <button className="btn" onClick={() => setShowEvidence(false)}>Back to relaxation</button>
+            {isRelaxationAdmin(userId) && (
+              <button className="btn ghost" onClick={() => navigate('/relax/validation-results')}>
+                All users · validation overview
+              </button>
+            )}
+          </div>
         </div>
         <RelaxEvidence userId={userId} />
       </div>

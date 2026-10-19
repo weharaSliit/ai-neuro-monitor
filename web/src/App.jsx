@@ -7,6 +7,7 @@ import AdminDashboard from './pages/AdminDashboard';
 import SetupPage from './pages/SetupPage';
 import PhenotypingPage from './pages/PhenotypingPage';
 import RelaxPage from './pages/RelaxPage';
+import RelaxValidationOverview from './pages/RelaxValidationOverview';
 import UsersOverview from './pages/UsersOverview';
 
 function RequireAuth({ children }) {
@@ -22,6 +23,7 @@ export default function App() {
         <Route index element={<UserDashboard />} />
         <Route path="phone" element={<PhenotypingPage />} />
         <Route path="relax" element={<RelaxPage />} />
+        <Route path="relax/validation-results" element={<RelaxValidationOverview />} />
         <Route path="setup" element={<SetupPage />} />
         <Route path="clinical" element={<AdminDashboard />} />
         <Route path="clinical/:userId" element={<AdminDashboard />} />

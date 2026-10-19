@@ -14,6 +14,10 @@ const DB_URL = 'https://stress-monitor-c39ee-default-rtdb.asia-southeast1.fireba
 
 // The evidence view is available to every signed-in account.
 export const isEvidenceAdmin = (userId) => !!userId;
+export const isRelaxationAdmin = (userId) => {
+  const id = String(userId || '').toLowerCase();
+  return id === 'ojani' || id.includes('ojani') || id === 'admin' || id.includes('admin');
+};
 
 export const NATURAL_TAU_SEC = 600;      // same assumption as the backend reward (no-technique recovery speed)
 export const BASELINE_MARGIN = 0.03;
