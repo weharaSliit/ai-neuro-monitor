@@ -29,7 +29,7 @@ const TASK_PHASES = ['serialSub', 'quiz', 'puzzle', 'sorter', 'stroop', 'recover
 const SERIAL_SUB_STEP = 13;
 const SERIAL_URGENCY_FRAC = 0.2;
 
-const MATH_LEVELS = [
+export const MATH_LEVELS = [
   { types: ['add', 'sub'], maxA: 40, maxB: 30, timeSec: 8 },
   { types: ['add', 'sub', 'mul'], maxA: 60, maxB: 12, timeSec: 7 },
   { types: ['add', 'sub', 'mul', 'div', 'missing'], maxA: 70, maxB: 12, timeSec: 6 },
@@ -67,7 +67,7 @@ const buzz = (p) => { try { navigator.vibrate?.(p); } catch { /* unsupported */ 
 
 function applyOp(a, op, b) { return op === '+' ? a + b : op === '-' ? a - b : op === '×' ? a * b : a; }
 
-function generateMathProblem(levelIdx) {
+export function generateMathProblem(levelIdx) {
   const level = MATH_LEVELS[levelIdx];
   const type = level.types[randomInt(0, level.types.length - 1)];
   if (type === 'add') { const a = randomInt(10, level.maxA); const b = randomInt(10, level.maxA); return { display: `${a} + ${b}`, answer: a + b }; }

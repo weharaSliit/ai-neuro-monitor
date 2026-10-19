@@ -1,6 +1,6 @@
 import { LineChart } from './charts';
 import { Card, Stat, ago } from './panels';
-import { GSR_CAL, RING_MSG_HZ, RING_SLIDE_SEC, RING_WINDOW_SEC } from '../lib/config';
+import { GSR_CAL, RING_MSG_HZ, RING_WINDOW_SEC } from '../lib/config';
 
 // Live ring (wearable 01) signals straight from MQTT: skin conductance, heart rate,
 // PPG and movement -- the same topic for the real ring and the live stimulator.
@@ -20,7 +20,7 @@ export default function RawRingPanel({ ring, now }) {
     { title: 'Movement (g)', pts: series(msgs, (r) => r.acc), y: (v) => v.toFixed(2), hint: 'MPU6050 acceleration magnitude / 9.81; ~1 g at rest' },
   ];
   return (
-    <Card title="Live ring signals" subtitle={`Last ${RING_WINDOW_SEC}s straight from wearable 01 over MQTT (raw readings are never stored)`}
+    <Card title="Live ring signals" subtitle={`last ${RING_WINDOW_SEC} s`}
       right={<span className="muted">{stats.lastPacketAt ? `message ${ago(stats.lastPacketAt, now)}` : 'waiting'}</span>}>
       <div className="stats">
         <Stat label="Message rate" value={ring.rate == null ? '—' : `${ring.rate.toFixed(1)}/s`} sub={`expected ${RING_MSG_HZ}/s`} />
@@ -40,9 +40,6 @@ export default function RawRingPanel({ ring, now }) {
           </div>
         ))}
       </div>
-      <p className="caption">
-        The bridge sends the last {RING_WINDOW_SEC}s to the model every {RING_SLIDE_SEC}s. Windows with too much movement or too few clean beats are rejected and never stored.
-      </p>
     </Card>
   );
 }

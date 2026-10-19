@@ -415,14 +415,30 @@ class Stimulator:
         from simkit.session import VirtualUser
         from simkit.session import SCENARIOS
         self.scenario = scenario if scenario in SCENARIOS else DEFAULT_SCENARIO
-        self.seed = int(time.time()) % 100000
+        # The same virtual person the user was calibrated with (stimulator/persons/{uid}), so a restart
+        # with another situation and no recalibration continues the same person. A NEW random person
+        # (other SAM40 subject, headband amplitude and noise) would be judged against the previous
+        # person's baseline and limit -- calm EEG then reads as high load. Recalibrating starts a new
+        # person and remembers it for this user.
+        person = fb_get(f"stimulator/persons/{uid}") or {}
+        continuing = not recalibrate and person.get("seed") is not None and person.get("profile") == profile
+        self.seed = int(person["seed"]) if continuing else int(time.time()) % 100000
         self.vu = VirtualUser(profile, seed=self.seed)
+        if continuing:
+            self.vu.eeg.t0 = 600.0                 # headband already worn and settled: no power-on transient
+            self.vu.eeg.prepare_block()
+        if recalibrate:
+            fb_put(f"stimulator/persons/{uid}", {"seed": self.seed, "profile": profile,
+                                                 "eeg_subject": self.vu.params.eeg["subject"], "calibrated_from": time.time()})
+        person_warning = None if recalibrate or continuing else (
+            f"{uid}'s calibration was made with a different simulated person (or the real headband): "
+            f"the mind may read high while calm -- tick 'recalibrate this user first' once")
         from simkit.ring_calibration import RingCalibration
         self.ring_cal = RingCalibration() if (recalibrate and PROFILES[profile].ring_present) else None
         self.ring_cal_phase = "settle"
         self.demand, self.body, self.phase = 0.0, 0.0, "settle" if recalibrate else "calm"
         self.started_at, self.stage_since = time.time(), time.time()
-        self.warnings = {}
+        self.warnings = {"EEG": person_warning} if person_warning else {}
         self.running = True
         self.live_started = None
         self.sent = {"eeg": 0, "ring": 0}
@@ -430,7 +446,10 @@ class Stimulator:
         for t in self.threads:
             t.start()
         print(f"[stimulator] started for {'simulated login' if self.took_over else 'logged-in'} {uid} / {sid}, "
-              f"profile {profile}, recalibrate {recalibrate}")
+              f"profile {profile}, recalibrate {recalibrate}, "
+              f"{'same calibrated person' if continuing else 'new person'} (seed {self.seed}, SAM40 {self.vu.params.eeg['subject']})")
+        if person_warning:
+            print(f"[stimulator] {person_warning}")
         return "started"
 
     @staticmethod
