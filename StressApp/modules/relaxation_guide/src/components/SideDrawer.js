@@ -48,7 +48,6 @@ export const SideDrawer = () => {
     { id: 'Methods', label: 'Relaxation Arcade', icon: '🌸', tag: 'Games & Drills' },
     { id: 'PerformanceOverview', label: 'Analytics & Overview', icon: '📈', tag: 'Live Stats' },
     { id: 'UserProfile', label: 'Relaxation Settings', icon: '⚙️', tag: 'Guide Preferences' },
-    { id: 'FusionPipeline', label: 'Fusion Pipeline', icon: '📡', tag: 'Live Telemetry' },
   ];
 
   const isStress = stressState === 'stress';
