@@ -28,6 +28,9 @@ const FEEDBACK_LEVELS = [
   { val: 5, emoji: '😌', label: 'Deeply relaxed', color: '#10B981' },
 ];
 
+// How long the submit button waits for the service before showing the thank-you screen.
+const SUBMIT_WAIT_MS = 4000;
+
 export const RatingScreen = () => {
   const { showAlert } = useSweetAlert();
   const {
@@ -74,7 +77,10 @@ export const RatingScreen = () => {
       const clusterId = currentRecommendation?.context_cluster_id ?? 0;
       // The rating and the validation do not depend on each other, so they run together
       // (one wait instead of two, each with a short timeout; offline results are used if it fails).
-      const [, valRes] = await Promise.all([
+      // Send the rating and the session result to the service. The user is not kept waiting for the network:
+      // after a few seconds the thank-you screen appears and the result is saved when the service answers
+      // (an offline estimate is used if it never does).
+      const send = Promise.all([
         apiService.submitRating(userId, techId, subId, mappedRating),
         apiService.validateIntervention(
           userId, techId, preInterventionLabel, postState, clusterId, mappedRating,
@@ -84,49 +90,63 @@ export const RatingScreen = () => {
             durationSeconds: getInterventionElapsed()
           }
         )
-      ]);
-      setLastValidationResult(valRes);
+      ]).then(([, res]) => res);
 
-      logEvidenceEvent && logEvidenceEvent('rated', { stars: mappedRating });
-      finishEvidenceSession && finishEvidenceSession({
-        technique_id: techId,
-        stars: mappedRating,
-        measured: !!valRes?.measured,
-        reward: valRes?.reward ?? null,
-        recovery_percentage: valRes?.recovery_percentage ?? null,
-        reward_components: valRes?.reward_components ?? null,
-        is_normal_reached: valRes?.is_normal_reached ?? null,
-        next_technique_id: valRes?.alternative_recommendation?.technique_id ?? null,
-        ended_at: Date.now() / 1000,
-      });
+      let finalized = false;
+      const finalize = (valRes) => {
+        if (finalized) return;
+        finalized = true;
+        try {
+          setLastValidationResult(valRes);
 
-      // Record detailed session into history
-      const newEntry = {
-        id: `val_sess_${Date.now()}`,
-        timestamp: Date.now() / 1000,
-        technique_id: techId,
-        sub_option_id: subId,
-        pre_label: preInterventionLabel || 'stress',
-        post_label: postState,
-        star_rating: mappedRating,
-        recovery_pct: valRes?.recovery_percentage,
-        reward: valRes?.reward
+          logEvidenceEvent && logEvidenceEvent('rated', { stars: mappedRating });
+          finishEvidenceSession && finishEvidenceSession({
+            technique_id: techId,
+            stars: mappedRating,
+            measured: !!valRes?.measured,
+            reward: valRes?.reward ?? null,
+            recovery_percentage: valRes?.recovery_percentage ?? null,
+            reward_components: valRes?.reward_components ?? null,
+            is_normal_reached: valRes?.is_normal_reached ?? null,
+            next_technique_id: valRes?.alternative_recommendation?.technique_id ?? null,
+            ended_at: Date.now() / 1000,
+          });
+
+          // Record detailed session into history
+          const newEntry = {
+            id: `val_sess_${Date.now()}`,
+            timestamp: Date.now() / 1000,
+            technique_id: techId,
+            sub_option_id: subId,
+            pre_label: preInterventionLabel || 'stress',
+            post_label: postState,
+            star_rating: mappedRating,
+            recovery_pct: valRes?.recovery_percentage,
+            reward: valRes?.reward
+          };
+
+          const prevHistory = historyList || [];
+          const newHistory = [newEntry, ...prevHistory];
+          setHistoryList(newHistory);
+
+          const newlyUnlocked = checkNewlyUnlockedBadges(prevHistory, newHistory, null);
+          if (newlyUnlocked && newlyUnlocked.length > 0) {
+            const b = newlyUnlocked[0];
+            showAlert({
+              title: `🏆 NEW BADGE UNLOCKED!`,
+              text: `Congratulations! You earned "${b.icon} ${b.title}"\n\n${b.description}`,
+              icon: 'success',
+              confirmButtonText: 'AWESOME! 🎉'
+            });
+          }
+        } catch (e) {
+          console.warn('Saving the session result failed', e);
+        }
       };
-      
-      const prevHistory = historyList || [];
-      const newHistory = [newEntry, ...prevHistory];
-      setHistoryList(newHistory);
 
-      const newlyUnlocked = checkNewlyUnlockedBadges(prevHistory, newHistory, null);
-      if (newlyUnlocked && newlyUnlocked.length > 0) {
-        const b = newlyUnlocked[0];
-        showAlert({
-          title: `🏆 NEW BADGE UNLOCKED!`,
-          text: `Congratulations! You earned "${b.icon} ${b.title}"\n\n${b.description}`,
-          icon: 'success',
-          confirmButtonText: 'AWESOME! 🎉'
-        });
-      }
+      const early = await Promise.race([send, new Promise((resolve) => setTimeout(() => resolve(null), SUBMIT_WAIT_MS))]);
+      if (early) finalize(early);
+      else send.then(finalize).catch(() => finalize(null));
 
       // Display Thank You screen with OK button
       setIsSubmitted(true);

@@ -37,6 +37,13 @@ if __package__ is None:
 WESAD_CSV = (Path(__file__).resolve().parents[2]
              / 'physiological_signals' / 'results' / 'objective1' / 'wesad_features_selected.csv')
 
+# The deployed ring model (v3) decides at the Youden threshold of the pooled
+# personalised LOSO predictions, saved with its metrics. The personalised
+# panels below use it, so they show the numbers of the model that ships.
+import json
+_V3 = json.loads((WESAD_CSV.parent / 'personalised_v3_metrics.json').read_text(encoding='utf-8'))
+DEPLOYED_THRESHOLD = float(_V3['at_youden']['threshold'])
+
 # Identical to notebook 06 Cell 4 / 05_model_training.ipynb's XGB_PARAMS --
 # keep these three files in sync; this script exists to VISUALIZE that
 # notebook's methodology, not to define a separate one.
@@ -182,6 +189,8 @@ def plot_evaluation(out_path: str, top_n_features: int = 12) -> None:
         t = np.array(results[key]['true'])
         p = np.array(results[key]['pred'])
         prob = np.array(results[key]['prob'])
+        if key == 'personal':
+            p = (prob >= DEPLOYED_THRESHOLD).astype(int)   # the deployed decision threshold
         metrics[key] = dict(
             acc=accuracy_score(t, p),
             f1_macro=f1_score(t, p, average='macro'),
@@ -194,12 +203,12 @@ def plot_evaluation(out_path: str, top_n_features: int = 12) -> None:
 
     fig = plt.figure(figsize=(13, 15))
     gs = fig.add_gridspec(3, 2, hspace=0.42, wspace=0.32)
-    fig.suptitle('Physiological (Ring) model -- static vs. personalized-baseline LOSO\n'
-                 '(reproduces 06_binary_personalization_validation.ipynb Cell 4)',
+    fig.suptitle('Ring model (HRV + GSR): population model vs. personal-baseline model\n'
+                 'Leave-one-subject-out, WESAD, 15 subjects, 913 windows',
                  fontweight='bold', fontsize=12)
 
-    cm_titles = {'static': 'Confusion Matrix -- Static (no personalization)',
-                 'personal': 'Confusion Matrix -- Personalized baseline'}
+    cm_titles = {'static': 'Confusion matrix: population model (threshold 0.50)',
+                 'personal': f'Confusion matrix: personal baseline, deployed (threshold {DEPLOYED_THRESHOLD:.4f})'}
     for col, key in enumerate(('static', 'personal')):
         ax = fig.add_subplot(gs[0, col])
         cm = metrics[key]['cm']
@@ -217,14 +226,14 @@ def plot_evaluation(out_path: str, top_n_features: int = 12) -> None:
     # -- ROC overlay --
     ax_roc = fig.add_subplot(gs[1, 0])
     colors = {'static': '#94a3b8', 'personal': '#1e293b'}
-    labels = {'static': 'Static', 'personal': 'Personalized'}
+    labels = {'static': 'Population model', 'personal': 'Personal baseline (deployed)'}
     for key in ('static', 'personal'):
         fpr, tpr, _ = metrics[key]['roc']
         ax_roc.plot(fpr, tpr, color=colors[key], linewidth=2,
                     label=f"{labels[key]} (AUC = {metrics[key]['auc']:.4f})")
     ax_roc.plot([0, 1], [0, 1], color='#cbd5e1', linestyle='--', linewidth=1, label='Chance')
     ax_roc.set_xlabel('False Positive Rate'); ax_roc.set_ylabel('True Positive Rate')
-    ax_roc.set_title('ROC Curve -- static vs. personalized', fontsize=10)
+    ax_roc.set_title('ROC curve', fontsize=10)
     ax_roc.legend(fontsize=9, loc='lower right')
 
     # -- Metrics grouped bar comparison --
@@ -236,11 +245,11 @@ def plot_evaluation(out_path: str, top_n_features: int = 12) -> None:
                       metrics['personal']['f1_normal'], metrics['personal']['f1_stress']]
     x_pos = np.arange(len(metric_names))
     width = 0.35
-    ax_bar.bar(x_pos - width / 2, static_vals, width, label='Static', color='#94a3b8')
-    ax_bar.bar(x_pos + width / 2, personal_vals, width, label='Personalized', color='#1e293b')
+    ax_bar.bar(x_pos - width / 2, static_vals, width, label='Population model', color='#94a3b8')
+    ax_bar.bar(x_pos + width / 2, personal_vals, width, label='Personal baseline (deployed)', color='#1e293b')
     ax_bar.set_xticks(x_pos); ax_bar.set_xticklabels(metric_names, fontsize=9)
     ax_bar.set_ylim(0, 1.05)
-    ax_bar.set_title('Metric comparison', fontsize=10)
+    ax_bar.set_title('Metrics', fontsize=10)
     ax_bar.legend(fontsize=9, loc='lower left')
     for i, (sv, pv) in enumerate(zip(static_vals, personal_vals)):
         ax_bar.text(i - width / 2, sv + 0.015, f'{sv:.3f}', ha='center', fontsize=8)
@@ -253,31 +262,33 @@ def plot_evaluation(out_path: str, top_n_features: int = 12) -> None:
     vals = [v for _, v in top_feats][::-1]
     ax_fi.barh(names, vals, color='#3b82f6')
     ax_fi.set_xlabel('XGBoost feature importance (gain-based)')
-    ax_fi.set_title(f'Top {top_n_features} features -- personalized model', fontsize=10)
+    ax_fi.set_title(f'Top {top_n_features} features: personal-baseline model', fontsize=10)
     ax_fi.tick_params(axis='y', labelsize=8)
 
     # -- Summary + caveat panel --
     ax_txt = fig.add_subplot(gs[2, 1])
     ax_txt.axis('off')
     lines = [
-        f"{'Metric':<12}{'Static':>10}{'Personal':>12}{'Delta':>9}",
-        f"{'Accuracy':<12}{metrics['static']['acc']:>10.3f}{metrics['personal']['acc']:>12.3f}"
+        f"{'Metric':<12}{'Population':>12}{'Personal':>12}{'Delta':>9}",
+        f"{'Accuracy':<12}{metrics['static']['acc']:>12.3f}{metrics['personal']['acc']:>12.3f}"
         f"{metrics['personal']['acc'] - metrics['static']['acc']:>+9.3f}",
-        f"{'F1-macro':<12}{metrics['static']['f1_macro']:>10.3f}{metrics['personal']['f1_macro']:>12.3f}"
+        f"{'F1-macro':<12}{metrics['static']['f1_macro']:>12.3f}{metrics['personal']['f1_macro']:>12.3f}"
         f"{metrics['personal']['f1_macro'] - metrics['static']['f1_macro']:>+9.3f}",
-        f"{'AUC':<12}{metrics['static']['auc']:>10.4f}{metrics['personal']['auc']:>12.4f}"
+        f"{'F1-stress':<12}{metrics['static']['f1_stress']:>12.3f}{metrics['personal']['f1_stress']:>12.3f}"
+        f"{metrics['personal']['f1_stress'] - metrics['static']['f1_stress']:>+9.3f}",
+        f"{'AUC':<12}{metrics['static']['auc']:>12.4f}{metrics['personal']['auc']:>12.4f}"
         f"{metrics['personal']['auc'] - metrics['static']['auc']:>+9.4f}",
         "",
-        "NOTE: 'Personalized' here renormalizes every subject's",
-        "own features by their own baseline, then retrains --",
-        "NOT the deployed app's mechanism (predictor.py's",
-        "personal_stress_threshold only shifts the decision",
-        "threshold, never touches input features). This chart",
-        "shows the research ceiling, not the shipped behavior.",
+        "Personal baseline: each person's features are",
+        "normalised by their own calm baseline (the deployed",
+        "model does this live). Deployed decision threshold",
+        f"{DEPLOYED_THRESHOLD:.4f}, chosen by Youden's J on these",
+        "pooled predictions, so accuracy is slightly",
+        "optimistic. AUC does not depend on the threshold.",
     ]
     ax_txt.text(0.02, 0.95, '\n'.join(lines), transform=ax_txt.transAxes,
                 fontsize=9.5, fontfamily='monospace', va='top')
-    ax_txt.set_title('Summary + caveat', fontsize=10)
+    ax_txt.set_title('Summary', fontsize=10)
 
     fig.savefig(out_path, dpi=150, bbox_inches='tight')
     print(f'Saved {out_path}')
@@ -289,7 +300,7 @@ def main():
     from datetime import datetime
 
     run_stamp = datetime.now().strftime('%Y%m%dT%H%M%S')
-    out = f'physiological_personalization_evaluation_{run_stamp}.png'
+    out = f'physiological_personalization_evaluation_deployed_{run_stamp}.png'
     plot_evaluation(out)
 
 

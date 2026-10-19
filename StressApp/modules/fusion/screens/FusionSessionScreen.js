@@ -31,6 +31,8 @@ import api from '../../physiological/api/client';
 import { STRESS_DECISION_THRESHOLD_PERCENT } from '../../physiological/config/config';
 import useEarlyWarning from '../earlyWarning/useEarlyWarning';
 import EarlyWarningPanel from '../earlyWarning/EarlyWarningPanel';
+import CalibrationOnboarding from '../earlyWarning/CalibrationOnboarding';
+import BodyMindCards from '../earlyWarning/BodyMindCards';
 
 const CHART_WIDTH = Math.max(260, getContentWidth() - 2 * SPACE.xl - 2 * 18);
 // A window older than this is "last reading", not "live".
@@ -134,7 +136,7 @@ export default function FusionSessionScreen({ navigation, route }) {
     // read-only summary of the personalized thresholds those produce,
     // reused (not re-fetched) from the same GET /baseline/{userId} + GET
     // /calibration/status Profile's own CalibrationBanner calls.
-    const { ring: ringCalibration, eeg: eegCalibration } = useCalibrationSummary(userId, token);
+    const { ring: ringCalibration, eeg: eegCalibration, loading: calibLoading } = useCalibrationSummary(userId, token);
     const personalEegPct = eegCalibration?.personal_high_load_p != null
         ? Math.round(eegCalibration.personal_high_load_p * 100) : null;
     const personalRingPct = ringCalibration?.personal_stress_threshold != null
@@ -281,6 +283,7 @@ export default function FusionSessionScreen({ navigation, route }) {
     // ── Live freshness -- re-evaluated every 20s so "just now" ages
     // honestly even when no new window arrives. ─────────────────────────
     const [, setTick] = useState(0);
+    const [dashAnyway, setDashAnyway] = useState(false);
     useEffect(() => {
         const id = setInterval(() => setTick((n) => n + 1), 20000);
         return () => clearInterval(id);
@@ -370,7 +373,20 @@ export default function FusionSessionScreen({ navigation, route }) {
                     </View>
                     <AvatarButton userId={userId} onPress={() => navigation.navigate('Profile')} />
                 </View>
-                <SimulatedBanner userId={userId} sessionId={sessionId || null} />
+                {isAdminView && <SimulatedBanner userId={userId} sessionId={sessionId || null} />}
+
+                {!ew.gate.recalibrating && dashAnyway ? setDashAnyway(false) : null}
+                {ew.gate.recalibrating && !dashAnyway ? (
+                    <CalibrationOnboarding eeg={ew.recal.eeg} ring={ew.recal.ring} now={ewNow}
+                        onShowDashboard={() => setDashAnyway(true)}
+                        onOpenTask={() => navigation.navigate('ThresholdCalibration')} />
+                ) : (<>
+                {!calibLoading && !ringCalibration?.exists && !eegCalibration?.exists && (
+                    <TouchableOpacity activeOpacity={0.85} onPress={() => navigation.navigate('AccountSetup')} style={styles.setupBanner}>
+                        <Text style={styles.setupText}>Set up your personal baseline so readings are judged against <Text style={{ fontWeight: '900' }}>your</Text> body.</Text>
+                        <Text style={styles.setupGo}>Start setup</Text>
+                    </TouchableOpacity>
+                )}
 
                 {/* ── State hero ── */}
                 <View style={styles.heroCard}>
@@ -423,6 +439,8 @@ export default function FusionSessionScreen({ navigation, route }) {
                     </View>
                 </EarlyWarningPanel>
 
+                <BodyMindCards ew={ew} style={styles.block} />
+
                 {/* ── Quick actions ── */}
                 <View style={styles.actionRow}>
                     <ActionTile
@@ -461,6 +479,7 @@ export default function FusionSessionScreen({ navigation, route }) {
                 {/* ── Devices ── */}
                 {/* Moved here from Profile -- same card as the website's main page. */}
                 <BaselineDriftCard userId={userId} ring={ringCalibration} style={styles.block} />
+                </>)}
 
                 {/* ── Clinical extras: only in the Admin stack's view ── */}
                 {isAdminView && (personalEegPct != null || personalRingPct != null) && (
@@ -557,6 +576,9 @@ const styles = StyleSheet.create({
     devPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6, paddingHorizontal: 12, borderRadius: 999, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#EAE5DA' },
     devPillName: { fontSize: 13, fontWeight: '800', color: '#231F20' },
     devPillText: { fontSize: 12, fontWeight: '700' },
+    setupBanner: { marginHorizontal: SPACE.xl, marginBottom: SPACE.md, padding: SPACE.md, borderRadius: RADIUS.md, backgroundColor: COLORS.brandSoft, flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
+    setupText: { flex: 1, fontSize: 13.5, color: COLORS.brandDark, fontWeight: '600' },
+    setupGo: { fontSize: 13.5, fontWeight: '800', color: COLORS.brandDark },
     sectionLabel: {
         ...TYPE.micro, color: COLORS.light.textMuted,
         marginHorizontal: SPACE.xl, marginTop: SPACE.sm, marginBottom: SPACE.sm,

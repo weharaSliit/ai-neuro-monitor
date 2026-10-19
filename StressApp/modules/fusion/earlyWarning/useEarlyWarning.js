@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ref, onValue, query, orderByKey, limitToLast } from 'firebase/database';
 import { db } from '../firebase';
 import {
-  calibrationPhases, eegLimitInfo, pickEeg, ringLimitInfo,
+  calibrationPhases, eegLimitInfo, pickEeg, ringLimitInfo, sig,
 } from './limits';
 import { decisionGate, fusedQuadrant, gateSeries } from './condition';
 import { EW_PARAMS, bodyCalibration, buildSeries, fusedCalibration } from './ewSeries';
@@ -124,6 +124,17 @@ export default function useEarlyWarning(userId, sessionId, fusionWindows, now) {
       ? fusedQuadrant(m && m.state !== 'calibrating' ? m.high : null, b && b.state !== 'calibrating' ? b.high : null) : null;
     return {
       gate, series, fusedCal, quadrant, deciding, phases,
+      recal: { eeg: eegRecal || null, ring: ringRecal || null },
+      body: { hr: ringWindows.length ? ringWindows[ringWindows.length - 1].features?.MeanHR ?? null : null,
+        scl: ringWindows.length ? ringWindows[ringWindows.length - 1].features?.SCL_mean ?? null : null },
+      mind: { contactOk: blocks.length ? Boolean(blocks[blocks.length - 1].eeg_quality_flag) : null },
+      // calm -> limit for mind and body, in the same units as the website's boxes
+      limits: {
+        mind: { baseline: eegInfo ? sig(eegInfo.level) : null, limit: eegInfo ? sig(eegInfo.rawLimitL) : null,
+          kind: eegInfo ? (eegInfo.responsive ? 'own limit' : 'standard') : null },
+        body: { baseline: ringInfo?.base ?? null, limit: ringInfo?.limit ?? null,
+          kind: ringBaseline ? (ringInfo?.personal ? 'own limit' : 'standard') : null },
+      },
       now: { mind: m, body: b, fused: f },
       old: { mind: oldTag(m, now), body: oldTag(b, now), fused: oldTag(f, now) },
     };
