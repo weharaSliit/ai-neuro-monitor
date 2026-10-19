@@ -27,6 +27,8 @@ const buildChips = (rec) => {
     else chips.push({ key: 'dir', label: '→ Steady', color: '#38BDF8' });
   }
 
+  chips.push({ key: 'live', label: 'Live physiological + phone', color: '#10B981' });
+
   if (ctx.has_both_streams && Number.isFinite(ctx.disagreement)) {
     if (Math.abs(ctx.disagreement) < AGREE_EPS) {
       chips.push({ key: 'streams', label: 'Body & phone agree', color: '#38BDF8' });
@@ -37,12 +39,6 @@ const buildChips = (rec) => {
         color: '#A78BFA',
       });
     }
-  } else {
-    const used = rec?.streams_used;
-    let label = 'One stream live';
-    if (used && used.phenotyping && !used.physiological) label = 'Phone behaviour only';
-    else if (used && used.physiological && !used.phenotyping) label = 'Body signals only';
-    chips.push({ key: 'streams', label, color: '#94A3B8' });
   }
 
   if (ctx.rise_alarm) chips.push({ key: 'alarm', label: 'Sustained rise detected', color: '#EF4444' });

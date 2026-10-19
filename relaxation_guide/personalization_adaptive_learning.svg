@@ -1,0 +1,146 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1050" viewBox="0 0 1600 1050" role="img" aria-labelledby="title description">
+  <title id="title">Personalization and adaptive learning in the intervention system</title>
+  <desc id="description">A closed-loop diagram of the relaxation intervention system: stress and optional phenotyping context guide personalized technique selection; measured outcomes and user ratings update the user's bandit and preference state for future recommendations.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M1,1 L11,6 L1,11 Z" fill="#536581"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M1,1 L11,6 L1,11 Z" fill="#14866d"/>
+    </marker>
+    <style>
+      text { font-family: "Segoe UI", Arial, sans-serif; fill: #17233b; }
+      .title { font-size: 36px; font-weight: 700; }
+      .subtitle { font-size: 18px; fill: #536581; }
+      .step { font-size: 14px; font-weight: 700; letter-spacing: 1.2px; }
+      .heading { font-size: 22px; font-weight: 700; }
+      .body { font-size: 17px; fill: #34435d; }
+      .small { font-size: 15px; fill: #536581; }
+      .formula { font-size: 18px; font-weight: 700; fill: #176b5a; }
+      .card { fill: #ffffff; stroke: #d7dfeb; stroke-width: 2; }
+      .topCard { fill: #f5f8ff; stroke: #cbd8f0; stroke-width: 2; }
+      .learnCard { fill: #effaf6; stroke: #a8d9c9; stroke-width: 2; }
+      .arrow { fill: none; stroke: #536581; stroke-width: 3; marker-end: url(#arrow); }
+      .feedback { fill: none; stroke: #14866d; stroke-width: 3; marker-end: url(#arrowGreen); }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1050" fill="#f7f9fc"/>
+  <text x="800" y="66" text-anchor="middle" class="title">Personalization &amp; Adaptive Learning</text>
+  <text x="800" y="101" text-anchor="middle" class="subtitle">Closed-loop learning in the Relaxation Guide intervention system</text>
+  <rect x="58" y="128" width="1484" height="48" rx="24" fill="#e8eef9"/>
+  <text x="800" y="159" text-anchor="middle" class="step" fill="#354b70">PERSONALIZED RECOMMENDATION</text>
+
+  <!-- Forward recommendation path -->
+  <rect x="58" y="205" width="325" height="235" rx="18" class="topCard"/>
+  <circle cx="91" cy="239" r="18" fill="#526fb2"/>
+  <text x="91" y="245" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff">1</text>
+  <text x="121" y="246" class="heading">Sense the user</text>
+  <text x="84" y="291" class="body">
+    <tspan x="84" dy="0">Physiological stress signal</tspan>
+    <tspan x="84" dy="28">Optional phenotyping signal</tspan>
+    <tspan x="84" dy="28">Missing-value handling &amp;</tspan>
+    <tspan x="84" dy="24">safety override</tspan>
+  </text>
+  <text x="84" y="408" class="small">Live context for this recommendation</text>
+
+  <path d="M390 323 H426" class="arrow"/>
+
+  <rect x="438" y="205" width="325" height="235" rx="18" class="topCard"/>
+  <circle cx="471" cy="239" r="18" fill="#526fb2"/>
+  <text x="471" y="245" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff">2</text>
+  <text x="501" y="246" class="heading">Build context</text>
+  <text x="464" y="291" class="body">
+    <tspan x="464" dy="0">Combine stress evidence:</tspan>
+    <tspan x="464" dy="31" font-weight="700">65% physiological</tspan>
+    <tspan x="464" dy="27" font-weight="700">35% phenotyping</tspan>
+    <tspan x="464" dy="32">Map context to 1 of 10</tspan>
+    <tspan x="464" dy="24">K-means clusters</tspan>
+  </text>
+
+  <path d="M770 323 H806" class="arrow"/>
+
+  <rect x="818" y="205" width="365" height="235" rx="18" class="topCard"/>
+  <circle cx="851" cy="239" r="18" fill="#526fb2"/>
+  <text x="851" y="245" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff">3</text>
+  <text x="881" y="246" class="heading">Personalize selection</text>
+  <text x="844" y="291" class="body">
+    <tspan x="844" dy="0">User + context + technique</tspan>
+    <tspan x="844" dy="31" class="formula">70% bandit sample</tspan>
+    <tspan x="844" dy="27" class="formula">30% preference score</tspan>
+    <tspan x="844" dy="32">Reduce score after &gt;5 uses</tspan>
+    <tspan x="844" dy="24">in the past 7 days</tspan>
+  </text>
+
+  <path d="M1190 323 H1226" class="arrow"/>
+
+  <rect x="1238" y="205" width="304" height="235" rx="18" class="topCard"/>
+  <circle cx="1271" cy="239" r="18" fill="#526fb2"/>
+  <text x="1271" y="245" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff">4</text>
+  <text x="1301" y="246" class="heading">Deliver intervention</text>
+  <text x="1264" y="291" class="body">
+    <tspan x="1264" dy="0">Recommend the highest-</tspan>
+    <tspan x="1264" dy="26">scoring technique</tspan>
+    <tspan x="1264" dy="34">Choose the user's previously</tspan>
+    <tspan x="1264" dy="26">preferred sub-option when</tspan>
+    <tspan x="1264" dy="26">one has been recorded</tspan>
+  </text>
+
+  <text x="800" y="501" text-anchor="middle" class="step" fill="#14866d">OBSERVE, LEARN, AND PERSONALIZE THE NEXT CYCLE</text>
+  <path d="M1390 448 V535" class="feedback"/>
+
+  <!-- Feedback and learning path, read right to left -->
+  <rect x="1090" y="550" width="452" height="214" rx="18" class="learnCard"/>
+  <circle cx="1125" cy="585" r="18" fill="#14866d"/>
+  <text x="1125" y="591" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff">5</text>
+  <text x="1155" y="592" class="heading">Measure response</text>
+  <text x="1120" y="636" class="body">
+    <tspan x="1120" dy="0">Pre- and post-intervention stress</tspan>
+    <tspan x="1120" dy="28">Recovery time + 1–5 star rating</tspan>
+    <tspan x="1120" dy="34" class="small">If normal is not reached, select an</tspan>
+    <tspan x="1120" dy="23" class="small">alternative technique for follow-up</tspan>
+  </text>
+
+  <path d="M1080 657 H1039" class="feedback"/>
+
+  <rect x="580" y="550" width="445" height="214" rx="18" class="learnCard"/>
+  <circle cx="615" cy="585" r="18" fill="#14866d"/>
+  <text x="615" y="591" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff">6</text>
+  <text x="645" y="592" class="heading">Update what works</text>
+  <text x="610" y="636" class="body">
+    <tspan x="610" dy="0">Outcome + speed + rating form reward</tspan>
+    <tspan x="610" dy="28">Update this user's technique/context</tspan>
+    <tspan x="610" dy="25">Thompson Beta (α, β) distribution</tspan>
+    <tspan x="610" dy="34">Ratings update decayed preferences</tspan>
+    <tspan x="610" dy="24" class="small">and remember the selected sub-option</tspan>
+  </text>
+
+  <path d="M570 657 H529" class="feedback"/>
+
+  <rect x="58" y="550" width="452" height="214" rx="18" class="learnCard"/>
+  <circle cx="93" cy="585" r="18" fill="#14866d"/>
+  <text x="93" y="591" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff">7</text>
+  <text x="123" y="592" class="heading">Retain user learning</text>
+  <text x="88" y="636" class="body">
+    <tspan x="88" dy="0">Persist intervention, ratings, and</tspan>
+    <tspan x="88" dy="27">bandit state in Firebase / SQLite</tspan>
+    <tspan x="88" dy="35">Reload learned state for later sessions</tspan>
+    <tspan x="88" dy="32" class="small">Preference recency decays over time</tspan>
+  </text>
+
+  <!-- Persistent state feeds the next personalized selection -->
+  <path d="M285 548 V493 Q285 476 302 476 H1001 Q1018 476 1018 459 V448" class="feedback"/>
+  <rect x="479" y="461" width="365" height="30" rx="15" fill="#f7f9fc"/>
+  <text x="661" y="482" text-anchor="middle" class="small" fill="#14866d">learned user state informs the next recommendation</text>
+
+  <rect x="58" y="824" width="1484" height="142" rx="18" fill="#172b49"/>
+  <text x="92" y="864" font-size="17" font-weight="700" letter-spacing="1" fill="#9ddcc9">ADAPTATION LOOP</text>
+  <text x="92" y="904" font-size="20" font-weight="600" fill="#ffffff">Current signals choose the context;</text>
+  <text x="92" y="936" font-size="20" font-weight="600" fill="#ffffff">each user's outcomes and preferences shape future choices.</text>
+  <line x1="790" y1="850" x2="790" y2="940" stroke="#49617f" stroke-width="2"/>
+  <text x="832" y="872" font-size="16" fill="#dbe5f3">Selection policy</text>
+  <text x="832" y="900" font-size="18" font-weight="600" fill="#ffffff">Contextual Thompson Sampling</text>
+  <text x="1190" y="872" font-size="16" fill="#dbe5f3">Personal signals learned</text>
+  <text x="1190" y="900" font-size="18" font-weight="600" fill="#ffffff">Recovery + ratings + sub-option choice</text>
+  <text x="800" y="1010" text-anchor="middle" font-size="14" fill="#71809a">Relaxation Guide component · personalization / adaptive learning</text>
+</svg>
