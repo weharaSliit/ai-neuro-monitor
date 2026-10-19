@@ -29,7 +29,7 @@ const TASK_PHASES = ['serialSub', 'quiz', 'puzzle', 'sorter', 'stroop', 'recover
 const SERIAL_SUB_STEP = 13;
 const SERIAL_URGENCY_FRAC = 0.2;
 
-const MATH_LEVELS = [
+export const MATH_LEVELS = [
   { types: ['add', 'sub'], maxA: 40, maxB: 30, timeSec: 8 },
   { types: ['add', 'sub', 'mul'], maxA: 60, maxB: 12, timeSec: 7 },
   { types: ['add', 'sub', 'mul', 'div', 'missing'], maxA: 70, maxB: 12, timeSec: 6 },
@@ -67,7 +67,7 @@ const buzz = (p) => { try { navigator.vibrate?.(p); } catch { /* unsupported */ 
 
 function applyOp(a, op, b) { return op === '+' ? a + b : op === '-' ? a - b : op === '×' ? a * b : a; }
 
-function generateMathProblem(levelIdx) {
+export function generateMathProblem(levelIdx) {
   const level = MATH_LEVELS[levelIdx];
   const type = level.types[randomInt(0, level.types.length - 1)];
   if (type === 'add') { const a = randomInt(10, level.maxA); const b = randomInt(10, level.maxA); return { display: `${a} + ${b}`, answer: a + b }; }
@@ -129,8 +129,15 @@ function AnswerBox({ value, onChange, onSubmit }) {
   );
 }
 
-export default function ThresholdTask({ userId, eegSessionId, alreadyPersonalized, ringCal, eegCal, onFinish, disabled }) {
+// autoStart: the test begins by itself after a short get-ready countdown (used right after the
+// calm baseline, so the 17-minute calibration runs on without another button press). The person can
+// still press Start now, or Not yet to stay on this screen.
+const AUTO_START_SEC = 10;
+
+export default function ThresholdTask({ userId, eegSessionId, alreadyPersonalized, ringCal, eegCal, onFinish, disabled, autoStart = false }) {
   const [phase, setPhase] = useState('intro');
+  const [autoOn, setAutoOn] = useState(autoStart);
+  const [autoLeft, setAutoLeft] = useState(AUTO_START_SEC);
   const [nowFine, setNowFine] = useState(Date.now());
 
   const [serialDeadline, setSerialDeadline] = useState(null);
@@ -244,6 +251,14 @@ export default function ThresholdTask({ userId, eegSessionId, alreadyPersonalize
     setSerialDeadline(Date.now() + SERIAL_SUB_DURATION_SEC * 1000);
     setPhase('serialSub');
   };
+  // Get-ready countdown, then the first round opens by itself.
+  useEffect(() => {
+    if (phase !== 'intro' || !autoOn || alreadyPersonalized || disabled) return undefined;
+    if (autoLeft <= 0) { startSerial(); return undefined; }
+    const id = setTimeout(() => setAutoLeft((n) => n - 1), 1000);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, autoOn, autoLeft, alreadyPersonalized, disabled]);
   const submitSerial = () => {
     if (serialFeedback || serialAnswer.trim() === '') return;
     const expected = serialCurrent - SERIAL_SUB_STEP;
@@ -502,8 +517,14 @@ export default function ThresholdTask({ userId, eegSessionId, alreadyPersonalize
               average for everyone. Keep your ring and headband on, rest the phone or keyboard on a table, and answer
               by tapping or typing — don’t say answers out loud.
             </p>
+            {autoOn && !disabled && (
+              <p className="body" style={{ marginTop: 12 }}>
+                <b>The test starts by itself in {autoLeft}s.</b> Get the devices on, rest your phone or keyboard on a table, and settle in.
+              </p>
+            )}
             <div className="row" style={{ marginTop: 16, flexWrap: 'wrap' }}>
-              <button className="btn" onClick={startSerial} disabled={disabled}>Start the test</button>
+              <button className="btn" onClick={startSerial} disabled={disabled}>{autoOn ? 'Start now' : 'Start the test'}</button>
+              {autoOn && <button className="btn ghost" onClick={() => setAutoOn(false)}>Not yet</button>}
               <button className="btn ghost" onClick={onFinish}>Skip for now</button>
             </div>
           </>

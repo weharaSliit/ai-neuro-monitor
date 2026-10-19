@@ -18,6 +18,8 @@ export const CONDITIONS = {
   eyes_closed: { label: 'Eyes closed', test: 'eyes' },
   low_load: { label: 'Low load', test: 'load' },
   high_load: { label: 'High load', test: 'load' },
+  jaw_clench: { label: 'Jaw clench', test: 'artifact' },     // temporalis muscle at T7-T8: gamma and RMS up
+  blinks: { label: 'Eye blinks', test: 'artifact' },         // slow eye-movement waves: delta up
 };
 
 export default function useLiveSpectral(raw) {

@@ -71,10 +71,28 @@ const int MAX_IBI = 20;
 long ibiBuffer[MAX_IBI];
 int ibiCount = 0;
 
+// Which networks the ESP32 can actually see (2.4 GHz only): shows at once
+// whether a known hotspot is off / out of range / on 5 GHz, or just has the
+// wrong password (visible but won't connect).
+void printVisibleNetworks() {
+  int n = WiFi.scanNetworks();
+  Serial.println("Networks visible (2.4 GHz only): " + String(n));
+  for (int j = 0; j < n; j++) {
+    bool known = false;
+    for (int i = 0; i < WIFI_NETWORK_COUNT; i++) if (WiFi.SSID(j) == WIFI_SSIDS[i]) known = true;
+    Serial.println("  " + WiFi.SSID(j) + "  RSSI " + String(WiFi.RSSI(j)) + " dBm  ch " + String(WiFi.channel(j))
+                   + (known ? "  <- known (if it still fails: check the password)" : ""));
+  }
+  WiFi.scanDelete();
+}
+
 void connectWiFi() {
+  WiFi.mode(WIFI_STA);
   for (int i = 0; i < WIFI_NETWORK_COUNT; i++) {
     Serial.print("Connecting to WiFi: ");
     Serial.println(WIFI_SSIDS[i]);
+    WiFi.disconnect(true);   // clear a half-open attempt before trying the next network
+    delay(100);
     WiFi.begin(WIFI_SSIDS[i], WIFI_PASSWORDS[i]);
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 40) {
@@ -90,10 +108,13 @@ void connectWiFi() {
     Serial.println("\nFailed to connect to " + String(WIFI_SSIDS[i]) + " after 20s -- trying next network");
   }
   Serial.println("WiFi connection FAILED for all known networks -- retrying in loop");
+  printVisibleNetworks();
 }
 
+// Gives up (returns) when WiFi is down, so loop() goes back to connectWiFi()
+// instead of retrying MQTT forever on a dead network (rc=-2, WiFi status 6).
 void connectMQTT() {
-  while (!mqttClient.connected()) {
+  while (!mqttClient.connected() && WiFi.status() == WL_CONNECTED) {
     Serial.print("Connecting to MQTT broker...");
     if (mqttClient.connect(DEVICE_ID, MQTT_USER, MQTT_PASS)) {
       Serial.println("connected");
@@ -156,10 +177,12 @@ void loop() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("WiFi dropped, reconnecting...");
     connectWiFi();
+    if (WiFi.status() != WL_CONNECTED) { delay(2000); return; }   // try again next loop
   }
 
   if (!mqttClient.connected()) {
     connectMQTT();
+    if (!mqttClient.connected()) return;                            // WiFi went down meanwhile
   }
   mqttClient.loop();
 

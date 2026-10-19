@@ -37,6 +37,7 @@ const BAND_SERIES = [
 const TESTS = {
   eyes: { a: 'eyes_open', b: 'eyes_closed', title: 'Eyes open vs closed' },
   load: { a: 'low_load', b: 'high_load', title: 'Low vs high load' },
+  jaw: { a: 'eyes_open', b: 'jaw_clench', title: 'Relaxed vs jaw clench' },
 };
 
 const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -48,7 +49,7 @@ const median = (a) => { if (!a.length) return null; const s = [...a].sort((x, y)
 function condBands(segments, nowMs) {
   return segments.map((s) => ({
     x0: s.start, x1: s.end ?? nowMs, label: CONDITIONS[s.key].label,
-    kind: s.key === 'eyes_closed' || s.key === 'high_load' ? 'b' : 'a',
+    kind: ['eyes_closed', 'high_load', 'jaw_clench', 'blinks'].includes(s.key) ? 'b' : 'a',
   }));
 }
 
@@ -104,6 +105,13 @@ export default function ValidationPanel({ raw, sessionData, now }) {
     }
     return out;
   }, [clean]);
+  // artifact checks use every window: a jaw clench is expected to push the signal past ±100 µV
+  const art = useMemo(() => {
+    const of = (key) => { const w = history.filter((h) => h.condition === key);
+      return { n: w.length, gamma: mean(w.map((h) => h.gamma_rel)), rms: mean(w.map((h) => h.rms)), delta: mean(w.map((h) => h.delta_rel)),
+        oor: mean(w.map((h) => h.out_of_range)) }; };
+    return { relaxed: of('eyes_open'), jaw: of('jaw_clench'), blinks: of('blinks') };
+  }, [history]);
 
   // backend 25 s blocks, labelled by the condition active over the whole block
   const blockPoints = useMemo(() => sessionData.blocks
@@ -147,7 +155,7 @@ export default function ValidationPanel({ raw, sessionData, now }) {
   return (
     <Card
       title="Signal validation (live)"
-      subtitle="Proof that the headband records EEG and that it changes with mental load. Filtered 1–45 Hz like the backend, computed in your browser from the raw stream."
+      subtitle="Real EEG checks: eyes, load, artifacts (filtered 1–45 Hz)"
       right={(
         <div className="seg">
           <button type="button" onClick={() => exportCsv(history)} disabled={!history.length}>Export CSV</button>
@@ -164,21 +172,18 @@ export default function ValidationPanel({ raw, sessionData, now }) {
         {condition && <Status kind="good">{CONDITIONS[condition.key].label} for {Math.round((now - condition.start) / 1000)} s</Status>}
         {!streaming && <Status kind="warning">No live samples: the charts update once wearable02 streams</Status>}
       </div>
-      <p className="caption">
-        Protocol: eyes open 1 min → eyes closed 1 min (repeat 2–3×); then rest or 0-back as low load and 2-back or mental arithmetic as high load, 2–3 min each, repeated.
-        Each point is a {live.windowSec} s window, updated every second. Windows with more than 5% of the signal beyond ±{RANGE_UV} µV are left out of the summary.
-      </p>
+      <p className="caption">Eyes open 1 min → closed 1 min · low / high load 2–3 min · jaw clench 15 s · blinks 30 s</p>
 
       <div className="val-grid">
         <div>
-          <h3>Filtered signal, last 5 s (unclamped, µV)</h3>
-          <LineChart points={wave} height={170} ariaLabel="Filtered EEG, last 5 seconds"
+          <h3>Filtered signal, last 5 s (µV, ±{RANGE_UV} µV model range)</h3>
+          <LineChart points={wave} height={190} yDomain={[-RANGE_UV * 1.2, RANGE_UV * 1.2]} ariaLabel="Filtered EEG, last 5 seconds"
             refLines={[{ y: RANGE_UV, label: `+${RANGE_UV} µV` }, { y: -RANGE_UV, label: `−${RANGE_UV} µV` }]}
             xFormat={(v) => `${v.toFixed(0)}s`} yFormat={(v) => v.toFixed(0)} emptyText="Waiting for 6 s of live data…"
             tooltip={(p) => <><b>{p.y.toFixed(1)} µV</b><span>t = {p.x.toFixed(2)} s</span></>} />
           <p className="caption">
             RMS <b>{num(latest?.rms, 1)} µV</b> · beyond ±{RANGE_UV} µV <b>{pct(latest?.out_of_range)}</b>
-            {latest && latest.out_of_range > CLEAN_MAX_OUT_OF_RANGE && <span className="warn-text"> · out of the model's range: check electrode and bias contact</span>}
+            {latest && latest.out_of_range > CLEAN_MAX_OUT_OF_RANGE && <span className="warn-text"> · out of range: check contact</span>}
           </p>
         </div>
         <div>
@@ -201,8 +206,7 @@ export default function ValidationPanel({ raw, sessionData, now }) {
             xFormat={(v) => `${Math.round(v)} Hz`} yFormat={(v) => `10^${Number.isInteger(v) ? v : v.toFixed(1)}`}
             emptyText="Waiting for 6 s of live data…" />
           <p className="caption">
-            Look for an alpha bump at 8–13 Hz that grows with eyes closed. T7–T8 also picks up temporalis muscle, so a fairly flat slope and 20–35% gamma are normal here (the model's training data has a median slope of −0.53).
-            Largest band now: <b>{largest ? largest.label : '—'}</b>.
+            Largest band now: <b>{largest ? largest.label : '—'}</b>
           </p>
         </div>
       </div>
@@ -260,13 +264,19 @@ export default function ValidationPanel({ raw, sessionData, now }) {
                 <td><Direction a={byCond.low_load[k]} b={byCond.high_load[k]} expect={dir} /></td>
               </tr>
             ))}
+            {[['jaw', 'gamma', 'Jaw clench · gamma share', 'Higher than relaxed (muscle)'], ['jaw', 'rms', 'Jaw clench · RMS', 'Higher than relaxed'],
+              ['blinks', 'delta', 'Eye blinks · delta share', 'Higher than relaxed (slow waves)']].map(([c, k, label, exp]) => (
+              <tr key={`${c}-${k}`}>
+                <td><b>3. Artifacts</b> · {label}</td><td>{exp}</td>
+                <td>Relaxed {k === 'rms' ? `${num(art.relaxed[k], 1)} µV` : pct(art.relaxed[k])} <span className="muted">({art.relaxed.n} win)</span></td>
+                <td>{CONDITIONS[c === 'jaw' ? 'jaw_clench' : 'blinks'].label} {k === 'rms' ? `${num(art[c][k], 1)} µV` : pct(art[c][k])}
+                  <span className="muted"> ({art[c].n} win{c === 'jaw' && art.jaw.oor != null ? `, ${pct(art.jaw.oor)} beyond ±${RANGE_UV} µV` : ''})</span></td>
+                <td><Direction a={art.relaxed[k]} b={art[c][k]} expect="up" minChange={0.2} /></td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
-      <p className="caption">
-        Windows overlap (4 s, every 1 s), so window counts are not independent samples, and these are direction checks rather than statistical tests.
-        For step 3, export the CSV and classify low vs high load with cross-validation split by condition block, not by window, and compare accuracy with chance (50%).
-      </p>
     </Card>
   );
 }

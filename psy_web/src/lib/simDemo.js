@@ -65,7 +65,7 @@ export function phaseBands(periods) {
 // the plain average of mind and body, each on its own aligned scale (limit 0.50),
 // so both get the same priority. The fusion engine itself is unchanged; its
 // reliability-weighted value is kept as engineValue for comparison.
-export function buildSeries({ blocks, eegInfo, ringWindows, ringInfo, fusionWindows, fusedCal, ringBaseAt, params, nowMs, equalWeights = false }) {
+export function buildSeries({ blocks, eegInfo, ringWindows, ringInfo, fusionWindows, fusedCal, bodyCal, ringBaseAt, params, nowMs, equalWeights = false }) {
   // ── Mind (EEG): oriented log-odds for the detector, fusion scale for display ──
   const mReason = mindSuppression(eegInfo);
   const mDet = eegInfo ? new EarlyWarning(eegInfo.level, eegInfo.limitL, eegInfo.sd, params) : null;
@@ -81,13 +81,17 @@ export function buildSeries({ blocks, eegInfo, ringWindows, ringInfo, fusionWind
       rejected: Boolean(b.skipped), rejectReason: b.skipped ? reasonShort(b.eeg_quality_reason) : null, fullReason: b.eeg_quality_reason,
       rms: num(b.eeg_std_uv_unclamped), oor: num(b.eeg_out_of_range_fraction), feats: b.features_eeg?.bipolar || null };
   });
-  // ── Body (HRV/GSR): prediction vs its own limit, 2 of 3 (no trend) ──
+  // ── Body (HRV/GSR): its prediction vs its own limit (2 of 3 = high), with the same
+  // early-warning detector as mind and fused: calm level and spread from the ring
+  // calibration's rest windows on the fusion scale (bodyCal) ──
   const bFlags = [];
+  const bDet = new EarlyWarning(bodyCal?.baseline ?? 0.1, 0.5, Math.max(0.05, bodyCal?.spread ?? 0.05), params);
   const body = ringWindows.filter((w) => w.t && w.prob_stress != null).map((w) => {
     const v = ringAligned(w.prob_stress, ringInfo.limit);
     bFlags.push(v >= 0.5);
     const high = Boolean(persistent(bFlags));
-    return { t: w.t, value: v, prob: w.prob_stress, high, state: high ? 'high' : 'normal' };
+    const ew = bDet.update(v, { valid: v != null, suppressed: ringInfo.limit == null ? 'no ring limit' : null, highAlert: high });
+    return { t: w.t, value: v, prob: w.prob_stress, high, state: ew.state, reason: ew.reason };
   });
   // ── Fused: early warning on the fusion scale with the calibrated fused calm level ──
   const fb = fusedCal?.baseline ?? 0.25; const fs = Math.max(0.05, fusedCal?.spread ?? 0.05);
@@ -185,20 +189,49 @@ export function scorecard(series, periods) {
   return out;
 }
 
+// Per simulated live phase: the state the ground truth implies (mental demand >= 0.5
+// -> mind high, physical arousal >= 0.5 -> body high; quadrant of the two) vs the
+// state the app showed, after the first GRACE_MS of the phase (physiological onset /
+// recovery). Works for every scenario (steps, ramp, four states, situations).
+export function phaseCheck(series, periods, timeline) {
+  const live = periods.filter((p) => !p.calibration && p.end - p.start > GRACE_MS);
+  if (!live.length) return [];
+  const at = (rows, t) => { let r = null; for (const x of rows) { if (x.t > t) break; if (x.state !== 'calibrating') r = x; } return r; };
+  const quad = (m, b) => (m && b ? 'stress' : m ? 'mental' : b ? 'arousal' : 'relaxed');
+  return live.map((p) => {
+    const tl = timeline.filter((x) => x.t >= p.start && x.t <= p.end);
+    const mean = (f) => (tl.length ? tl.reduce((a, x) => a + f(x), 0) / tl.length : 0);
+    const md = mean((x) => x.demand ?? 0); const bd = mean((x) => x.body_demand ?? x.demand ?? 0);
+    const amb = (v) => v > 0.3 && v < 0.7;                         // in-between level: not scored
+    const expected = amb(md) || amb(bd) ? null : quad(md >= 0.5, bd >= 0.5);
+    const ts = series.mind.filter((r) => r.t >= p.start + GRACE_MS && r.t <= p.end).map((r) => r.t);
+    const shown = ts.map((t) => { const m = at(series.mind, t); const b = at(series.body, t); return m || b ? quad(m?.high, b?.high) : null; })
+      .filter(Boolean);
+    const counts = {}; shown.forEach((k) => { counts[k] = (counts[k] || 0) + 1; });
+    const top = Object.entries(counts).sort((x, y) => y[1] - x[1])[0]?.[0] ?? null;
+    return { phase: p.phase, start: p.start, end: p.end, expected, mostly: top, n: shown.length,
+      correct: expected && shown.length ? shown.filter((k) => k === expected).length / shown.length : null };
+  });
+}
+
 export function eventLog({ series, periods, injections = [], eegThrAt, ringThrAt }) {
   const ev = [];
   const NAME = { calm: 'calm period', demand: 'HIGH-LOAD period', ramp: 'load starts rising', plateau: 'moderate-load plateau',
-    task: 'calibration: HIGH-LOAD TASK', rest: 'calibration: resting baseline', recovery: 'calibration: recovery rest', settle: 'calibration: settle' };
-  for (const p of periods) ev.push({ t: p.start, kind: 'truth', text: `▶ ${NAME[p.phase] || p.phase} started (simulated)` });
-  for (const [key, label] of [['mind', 'Mind'], ['fused', 'Fused']]) {
+    task: 'calibration: HIGH-LOAD TASK', rest: 'calibration: resting baseline', recovery: 'calibration: recovery rest', settle: 'calibration: settle',
+    relaxed: 'relaxed period', mental: 'HIGH MENTAL LOAD (body calm)', arousal: 'PHYSICAL AROUSAL (mind calm)', stress: 'STRESS (mind + body)' };
+  for (const p of periods) {
+    const what = p.calibration ? NAME[p.phase] || p.phase : p.phase === 'recovery' ? 'recovery' : NAME[p.phase] || p.phase.replace(/_/g, ' ');
+    ev.push({ t: p.start, kind: 'truth', text: `▶ ${what} (simulated)` });
+  }
+  for (const [key, label] of [['mind', 'Mind'], ['body', 'Body'], ['fused', 'Fused']]) {
     const rows = series[key];
-    for (const t of starts(rows, (r) => r.state === 'early_warning')) ev.push({ t, kind: 'warn', text: `▲ ${label} early warning: rising towards high load${key === 'fused' && rows.find((r) => r.t === t)?.mindLed ? ' (mind-led)' : ''}` });
-    for (const t of ends(rows, (r) => r.state === 'early_warning')) ev.push({ t, kind: 'info', text: `${label} early warning ended` });
+    for (const t of starts(rows, (r) => r.state === 'early_warning')) ev.push({ t, kind: 'warn', text: `▲ ${label} early warning: trending towards its limit${key === 'fused' && rows.find((r) => r.t === t)?.mindLed ? ' (mind-led)' : ''}` });
+    for (const t of starts(rows, (r) => r.state === 'recovering')) ev.push({ t, kind: 'info', text: `↘ ${label} recovering: back below its limit, settling towards calm` });
   }
   for (const [key, label] of [['mind', 'Mind'], ['body', 'Body'], ['fused', 'Fused']]) {
     const rows = series[key].filter((r) => r.value != null);
     for (const t of starts(rows, (r) => r.high)) ev.push({ t, kind: 'high', text: `▼ ${label} HIGH (2 of last 3 above the limit)` });
-    for (const t of ends(rows, (r) => r.high)) ev.push({ t, kind: 'info', text: `${label} cleared` });
+    for (const t of starts(rows.filter((r) => r.state !== 'calibrating'), (r) => r.state === 'normal')) ev.push({ t, kind: 'ok', text: `✓ ${label} normal` });
   }
   for (const b of series.mind.filter((r) => r.rejected)) ev.push({ t: b.t, kind: 'reject', text: `✕ EEG block rejected: ${b.rejectReason}`, title: b.fullReason });
   for (const i of injections) ev.push({ t: i.t, kind: 'inject', text: `⚡ injected: ${i.kind === 'clench' ? 'jaw clench' : i.kind}` });
@@ -229,17 +262,42 @@ export function fusedQuadrant(mindHigh, bodyHigh) {
 // finished (EEG threshold, and the ring's if the ring is in use), or while a
 // recalibration runs, every component is 'calibrating' -- no alerts, warnings
 // or fused state. Returns the time decisions start (ms) and whether paused now.
-export function decisionGate({ cal, thr, ringThresholds, ringPresent, recalActive }) {
+// eegRecal / ringRecal: the recalibration records (eeg_recalibration/{sid},
+// ring_recalibration/{uid}); a recalibration is only ever one the user asked for.
+// Readings are 'calibrating' only before the first calibration and while an
+// asked-for recalibration runs (its request until it finishes); readings already
+// judged keep their states, and decisions carry on with the calibration in use.
+const RECAL_MAX_MIN = 60;   // no recalibration (settle + rest + task + recovery) runs longer than this
+export function decisionGate({ cal, thr, ringThresholds, ringPresent, recalActive, eegRecal, ringRecal, nowMs = Date.now() }) {
   const t = (v) => (v == null ? null : typeof v === 'number' ? v * 1000 : Date.parse(/Z|[+-]\d\d:?\d\d$/.test(v) ? v : `${v}Z`));
   const eegAt = t(thr?.updated_at) ?? t(cal?.updated_at);
   const ringAt = ringPresent ? (t(ringThresholds?.task_updated_at) ?? t(ringThresholds?.threshold_updated_at) ?? t(ringThresholds?.resting_scores_updated_at)) : null;
   const startMs = Math.max(eegAt ?? 0, ringAt ?? 0) || null;
-  return { startMs, paused: Boolean(recalActive) || startMs == null, eegAt, ringAt };
+  const blank = [];
+  const window = (rec, active, doneAt, firstAt) => {
+    const from = t(rec?.requested_at);
+    // finished (or abandoned): up to its last update / the calibration it produced, at most RECAL_MAX_MIN
+    if (from != null) blank.push([from, active ? Infinity : Math.min(from + RECAL_MAX_MIN * 60000, Math.max(t(rec.updated_at) ?? from, doneAt ?? from))]);
+    else if (firstAt != null) blank.push([-Infinity, firstAt]);          // the session's first calibration
+  };
+  // An unfinished record counts only while it is plausibly still running: one left
+  // behind (a stimulator stopped mid-run, a crashed capture) must not block decisions
+  // for good. Both are updated as a calibration progresses (EEG every 25 s block, ring
+  // every window): no update for 10 min = abandoned; none runs longer than RECAL_MAX_MIN.
+  const fresh = (rec, staleMin) => (t(rec?.updated_at) ?? t(rec?.requested_at) ?? 0) >= nowMs - staleMin * 60000
+    && (t(rec?.requested_at) ?? 0) >= nowMs - RECAL_MAX_MIN * 60000;
+  const eegActive = ['requested', 'capturing', 'saving'].includes(eegRecal?.status) && fresh(eegRecal, 10);
+  const ringActive = ['capturing', 'saving'].includes(ringRecal?.status) && fresh(ringRecal, 10);
+  window(eegRecal, eegActive, eegAt, eegAt);
+  if (ringPresent) window(ringRecal, ringActive, ringAt, ringAt);
+  const active = Boolean(recalActive) || eegActive || ringActive;
+  return { startMs, paused: startMs == null, recalibrating: active, blank, eegAt, ringAt };
 }
 
 // Apply the gate to a built series: rows before the start (or all, while paused) -> 'calibrating'.
 export function gateSeries(series, gate) {
-  const g = (rows) => rows.map((r) => ((gate.paused || (gate.startMs && r.t < gate.startMs))
-    ? { ...r, high: false, state: 'calibrating', reason: 'decisions start after calibration' } : r));
+  const inBlank = (ts) => (gate.blank || []).some(([a, b]) => ts >= a && ts <= b);
+  const g = (rows) => rows.map((r) => ((gate.paused || inBlank(r.t))
+    ? { ...r, high: false, state: 'calibrating', reason: gate.paused ? 'decisions start after calibration' : 'recorded during calibration' } : r));
   return { ...series, mind: g(series.mind), body: g(series.body), fused: g(series.fused) };
 }

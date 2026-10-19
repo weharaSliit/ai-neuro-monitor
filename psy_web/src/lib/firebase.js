@@ -29,7 +29,10 @@ export async function shallowKeys(path) {
 export function sendStimulatorCommand(command, opts = {}) {
   return set(ref(db, 'stimulator/control'), {
     command, nonce: Date.now(), profile: opts.profile || 'typical', recalibrate: opts.recalibrate !== false,
-    scenario: opts.scenario || 'ramp', kind: opts.kind || null,
+    scenario: opts.scenario || 'four_state', kind: opts.kind || null,
+    // a user other than the logged-in one: the stimulator acts as a login for them
+    // (new session + device pointers) and restores the previous login on Stop
+    user_id: opts.userId || null,
   });
 }
 

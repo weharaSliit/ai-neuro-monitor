@@ -53,7 +53,7 @@ export function demandBands(timeline, openEnd) {
 
 export const STIM_PROFILES = {
   responsive: 'Responsive (demo): EEG calibration passes, WESAD-sized body response',
-  typical: 'Typical: realistic EEG and ring responses',
+  typical: 'Typical: any SAM40 responder (EEG calibration often fails -> mind Limited)',
   eeg_strong_ring_weak: 'EEG strong, ring weak',
   eeg_weak_ring_strong: 'EEG weak, ring strong',
   ring_missing: 'Ring missing (mind only)',

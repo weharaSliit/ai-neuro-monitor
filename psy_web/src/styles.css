@@ -484,3 +484,107 @@ i.lg { display: inline-block; width: 10px; height: 10px; border-radius: 2px; ver
 .ls-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
 .ls-cell { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px solid var(--border); border-top: 4px solid var(--axis);
   border-radius: 10px; background: var(--surface); min-width: 0; font-size: 12.5px; }
+
+/* ── Technical pages: shared header + tabs (components/TechNav.jsx) ── */
+.tech-head { display: flex; flex-direction: column; gap: 14px; }
+.tech-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px; border: 1px solid var(--border);
+  border-radius: 12px; background: var(--surface); }
+.tech-brand { font-size: 11px; font-weight: 800; letter-spacing: .06em; color: var(--muted); padding: 0 10px 0 6px; text-transform: uppercase; }
+.tech-tab { border: 0; background: transparent; color: var(--ink-2); font: inherit; font-size: 14px; font-weight: 700;
+  padding: 7px 14px; border-radius: 9px; cursor: pointer; }
+.tech-tab:hover { background: var(--cband-a); color: var(--ink); }
+.tech-tab.on { background: var(--series); color: #fff; }
+.tech-tab.simple { margin-left: auto; font-weight: 600; color: var(--muted); }
+.tech-head h1 { margin: 0; }
+.tech-head .top p { margin: 4px 0 0; }
+
+/* source line: real devices vs live stimulator */
+.real-badge { background: var(--good); color: #fff; font-weight: 800; font-size: 11px; letter-spacing: .06em; padding: 2px 8px; border-radius: 4px; }
+.sd-head .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--axis); margin-right: 3px; vertical-align: 1px; }
+.sd-head .dot.on { background: var(--good); }
+
+/* Live monitor */
+.lm-value { display: flex; align-items: baseline; gap: 10px; }
+.lm-trend { font-size: 12.5px; font-weight: 700; color: var(--muted); }
+.lm-trend.rising { color: var(--warning-text); }
+.lm-trend.falling { color: var(--series); }
+.lm-lanes { display: block; margin-top: 2px; }
+.lm-lanes .tick { font-size: 10px; fill: var(--ink-2); }
+.lane-normal { fill: rgba(12, 163, 12, 0.35); }
+.lane-early_warning { fill: var(--warning); }
+.lane-high { fill: var(--critical); }
+.lane-recovering { fill: var(--series); opacity: 0.7; }
+.lane-limited, .lane-calibrating { fill: var(--axis); opacity: 0.6; }
+.lm-legend i { display: inline-block; width: 12px; height: 10px; border-radius: 2px; margin: 0 4px 0 10px; vertical-align: -1px; }
+.lm-legend i:first-child { margin-left: 0; }
+.lm-legend .lane-normal { background: rgba(12, 163, 12, 0.35); }
+.lm-legend .lane-early_warning { background: var(--warning); }
+.lm-legend .lane-high { background: var(--critical); }
+.lm-legend .lane-recovering { background: var(--series); opacity: 0.7; }
+.lm-legend .lane-calibrating { background: var(--axis); }
+.sd-log .ev-ok { color: var(--good-text); }
+.sd-log .ev-info { color: var(--series); }
+.q-row i { font-size: 15px; }
+.cd-zoom { margin: 0; }
+@media (max-width: 900px) {
+  .cd-top, .grid-2 { grid-template-columns: minmax(0, 1fr); }
+  .cd-cards { grid-template-columns: minmax(0, 1fr); }
+  .tech-tab.simple { margin-left: 0; }
+}
+
+.lm-source.real { border-style: solid; border-color: var(--border); }
+.lm-source.sim { border-style: solid; border-color: var(--warning); }
+.cd-top .cq-grid { aspect-ratio: 2.1; }
+.cd-top .cq-cell { padding: 7px 9px; }
+
+.sd-log time { white-space: nowrap; }
+
+/* Live monitor: the early-warning label on each card */
+.lm-ew { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 8px; margin-top: 2px; }
+.lm-ew b { font-size: 14px; letter-spacing: .03em; }
+.lm-ew span { font-size: 12px; }
+.lm-ew.ew-warn { background: var(--warning); color: #1a1200; }
+.lm-ew.ew-high { background: var(--critical); color: #fff; }
+.lm-ew.ew-rec { background: rgba(42, 120, 214, 0.14); color: var(--series); }
+.lm-ew.ew-ok { background: rgba(12, 163, 12, 0.10); color: var(--good-text); }
+.lm-ew.ew-off { background: var(--cband-b); color: var(--ink-2); }
+
+/* Live monitor: readable sizes and aligned blocks (same scale as the website's early-warning section) */
+.lm-page .cd-top { align-items: start; gap: 20px; }
+.lm-page .cd-cards { gap: 14px; }
+.lm-page .sd-card { padding: 14px 16px 16px; gap: 8px; border-radius: 12px; }
+.lm-page .sd-card-title { font-size: 12px; }
+.lm-page .sd-card-value { font-size: 36px; letter-spacing: -0.5px; }
+.lm-page .lm-trend { font-size: 13.5px; }
+.lm-page .lm-ew { padding: 10px 12px; margin-top: 4px; }
+.lm-page .lm-ew b { font-size: 15px; } .lm-page .lm-ew span { font-size: 13px; line-height: 1.35; }
+.lm-page .sd-card-note { font-size: 12.5px; }
+.lm-page .cd-top .cq-grid { aspect-ratio: auto; min-height: 176px; gap: 6px; }
+.lm-page .cq-cell { padding: 10px 12px; font-size: 13px; gap: 4px; border-radius: 10px; }
+.lm-page .cq-cell b { font-size: 14px; }
+.lm-page .cq-axes { font-size: 12.5px; margin-top: 8px; }
+.lm-page .cq-msg { font-size: 14.5px; }
+.lm-page .tick { font-size: 12.5px; font-weight: 600; }
+.lm-page .ref-label, .lm-page .cband-label { font-size: 12px; }
+.lm-page .mlegend button { font-size: 13px; }
+.lm-page .lm-lanes { display: block; margin-top: 4px; max-width: 100%; }
+.lm-page .lm-lanes .tick { font-size: 12.5px; }
+.lm-page .lm-legend { margin: 8px 0 0 52px; font-size: 12.5px; }
+.lm-page .lm-legend i { width: 14px; height: 10px; margin: 0 6px 0 14px; }
+.lm-page .cd-zoom .btn { padding: 5px 14px; font-size: 13px; }
+@media (max-width: 640px) { .lm-page .sd-card-value { font-size: 30px; } .lm-page .lm-legend { margin-left: 0; } }
+.lm-zonekey { display: inline-block; width: 14px; height: 10px; border-radius: 2px; background: rgba(240, 160, 30, 0.3); margin: 0 4px -1px 4px; }
+.lm-page .lm-ew { padding: 9px 12px; }
+.lm-page .cq-cell { justify-content: center; min-height: 66px; }
+
+/* Devices tabs + advanced */
+.dev-tabs{display:flex;gap:6px;margin:4px 0 14px}
+.dev-tabs button{padding:7px 18px;border-radius:999px;border:1px solid var(--border,#d6d9e0);background:transparent;color:inherit;cursor:pointer;font-weight:600}
+.dev-tabs button.on{background:var(--c1);color:#fff;border-color:var(--c1)}
+.dev-adv{margin-top:18px}
+.dev-adv>summary{cursor:pointer;font-weight:700;padding:10px 0;color:var(--muted,#667)}
+.dev-adv[open]>summary{margin-bottom:8px}
+.cal-page .phase-table{margin-top:14px;width:100%}
+.cal-page .cband-label{font-weight:700;font-size:12px;letter-spacing:.04em;text-transform:uppercase}
+
+.cal-scroll{overflow-x:auto;cursor:grab;user-select:none;touch-action:pan-x}

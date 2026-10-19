@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ref, update } from 'firebase/database';
 import { db, requestRecalibration, requestRingRecalibration } from '../../lib/firebase';
 import { useFirebaseValue } from '../../hooks/useData';
@@ -143,6 +143,25 @@ export function CalibrationView({ picker, now, limits, profile, req, ringReq, si
     || (ring.active && ring.status === 'capturing' && ring.phase === 'task');
   useEffect(() => { if (!taskNow) setHideTask(false); }, [taskNow]);
 
+  // Step 4: once neither device is in the task any more, a quiet-rest pop-up with a countdown
+  // stays up until the recovery is finished, then the finished pop-up shows the result.
+  const inRecovery = !taskNow && ((eeg.active && eeg.phase === 'recovery') || (ring.active && ring.phase === 'recovery'));
+  const recoveryLeft = Math.max(
+    eeg.active && eeg.phase === 'recovery' ? ((req?.blocks_needed ?? N_RECOVERY_BLOCKS) - (req?.blocks_captured ?? 0)) * BLOCK_SEC : 0,
+    ring.active && ring.phase === 'recovery' ? ((ringReq?.blocks_needed ?? RING_RECOVERY) - (ringReq?.blocks_captured ?? 0)) * RING_WINDOW_SEC : 0,
+  );
+  const [hideRest, setHideRest] = useState(false);
+  const [showDone, setShowDone] = useState(false);
+  const wasRunning = useRef(false);
+  useEffect(() => { if (!inRecovery) setHideRest(false); }, [inRecovery]);
+  useEffect(() => {
+    if (running) { wasRunning.current = true; setShowDone(false); }
+    else if (wasRunning.current) {
+      wasRunning.current = false;
+      if (eeg.finished || ring.finished) setShowDone(true);
+    }
+  }, [running, eeg.finished, ring.finished]);
+
   const saveStroop = (log) => {
     if (sid) update(ref(db, `eeg_recalibration/${sid}`), { stroop: log }).catch(() => {});
   };
@@ -169,6 +188,16 @@ export function CalibrationView({ picker, now, limits, profile, req, ringReq, si
   const m = limits?.mind;
   const b = limits?.body;
   const rr = ringReq?.result;
+  const mindLine = m ? (
+    <>Calm level <b>{pct(m.baseline)}</b> · limit <b>{pct(m.threshold)}</b> · {m.personal ? 'your own limit' : 'standard limit'}{m.statusText ? ` (${m.statusText})` : ''}</>
+  ) : null;
+  const bodyLine = (rr || b) ? (
+    rr?.personal_stress_threshold != null
+      ? <>Calm level <b>{pct(rr.baseline)}</b> · task <b>{pct(rr.task_level)}</b> · your limit <b>{pct(rr.personal_stress_threshold)}</b></>
+      : rr?.status === 'drift_suspected'
+        ? <>It rose but didn’t come back down in recovery, so the standard limit ({pct(b?.threshold ?? 0.6447)}) stays.</>
+        : <>Rest and task weren’t different enough, so the standard limit ({pct(b?.threshold ?? 0.6447)}) stays.</>
+  ) : null;
   const startDisabled = busy || running || !uid || !testAccount || (!withEeg && !withRing) || (withEeg && !live);
   const note = !uid ? 'Pick a person first (Profile).'
     : !testAccount ? `${uid} is a real account. Calibrating from this page is limited to test accounts (ids starting sim_ or mp_), so a real person's calibration can't be replaced by mistake. Real users calibrate in the app or on the website.`
@@ -206,24 +235,11 @@ export function CalibrationView({ picker, now, limits, profile, req, ringReq, si
 
       <div className="caldevices">
         <DeviceCard icon="🧠" title="Headband (EEG)" sub="Your mind" view={eeg} enabled={withEeg || eeg.active || eeg.finished}>
-          {eeg.finished && m && (
-            <p className="devresult">
-              Calm level <b>{pct(m.baseline)}</b> · limit <b>{pct(m.threshold)}</b> ·{' '}
-              {m.personal ? 'your own limit' : 'standard limit'}{m.statusText ? ` (${m.statusText})` : ''}
-            </p>
-          )}
+          {eeg.finished && mindLine && <p className="devresult">{mindLine}</p>}
           {eeg.finished && req?.task_skipped && <p className="callout">Task skipped: {req.task_skipped}. The standard limit stays.</p>}
         </DeviceCard>
         <DeviceCard icon="💍" title="Ring (HRV + GSR)" sub="Your body" view={ring} enabled={withRing || ring.active || ring.finished}>
-          {ring.finished && (rr || b) && (
-            <p className="devresult">
-              {rr?.personal_stress_threshold != null
-                ? <>Calm level <b>{pct(rr.baseline)}</b> · task <b>{pct(rr.task_level)}</b> · your limit <b>{pct(rr.personal_stress_threshold)}</b></>
-                : rr?.status === 'drift_suspected'
-                  ? <>It rose but didn’t come back down in recovery, so the standard limit ({pct(b?.threshold ?? 0.6447)}) stays.</>
-                  : <>Rest and task weren’t different enough, so the standard limit ({pct(b?.threshold ?? 0.6447)}) stays.</>}
-            </p>
-          )}
+          {ring.finished && bodyLine && <p className="devresult">{bodyLine}</p>}
         </DeviceCard>
       </div>
 
@@ -248,6 +264,37 @@ export function CalibrationView({ picker, now, limits, profile, req, ringReq, si
             </div>
           </div>
         </section>
+      )}
+
+      {inRecovery && !hideRest && (
+        <div className="overlay task" role="dialog" aria-modal="true" aria-label="Recovery rest">
+          <div className="task-card" style={{ textAlign: 'center' }}>
+            <div className="task-top">
+              <div style={{ textAlign: 'left' }}>
+                <p className="muted-s">Step 4 of 4 · recovery rest</p>
+                <h2 className="serif">Well done, the task is over</h2>
+              </div>
+              <button type="button" className="close" onClick={() => setHideRest(true)} aria-label="Hide">×</button>
+            </div>
+            <div style={{ fontSize: 44, margin: '14px 0 4px' }} aria-hidden="true">🧘</div>
+            <p style={{ fontSize: 30, fontWeight: 900, margin: '4px 0' }}>{Math.floor(recoveryLeft / 60)}:{String(recoveryLeft % 60).padStart(2, '0')}</p>
+            <p className="muted-s">Sit still, eyes open, breathe normally and look at one spot. This shows how quickly you settle after stress. Keep both devices on.</p>
+          </div>
+        </div>
+      )}
+
+      {showDone && !running && (
+        <div className="overlay task" role="dialog" aria-modal="true" aria-label="Calibration finished">
+          <div className="task-card" style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: 44 }} aria-hidden="true">✅</div>
+            <h2 className="serif">Calibration finished</h2>
+            <div style={{ textAlign: 'left', margin: '12px 0' }}>
+              {eeg.finished && mindLine && <p className="devresult">🧠 Headband: {mindLine}</p>}
+              {ring.finished && bodyLine && <p className="devresult">💍 Ring: {bodyLine}</p>}
+            </div>
+            <button type="button" className="pill wide" onClick={() => setShowDone(false)}>Done</button>
+          </div>
+        </div>
       )}
 
       {taskNow && !hideTask && (

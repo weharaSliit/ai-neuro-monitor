@@ -78,8 +78,26 @@ export function useFusion(userId, liveSessionId) {
 // One poll loop: session list + latest session each tick; finished
 // sessions are cached (they never change) -- the same fix as the mobile
 // admin screen. `admin` switches to the /admin/... routes.
-export function useRingHistory(userId, { admin = false, pollMs = 10000 } = {}) {
+// The Flask history route is polled for the list and older sessions, but the NEWEST windows
+// also arrive straight from Firebase the moment the ring service writes them (a window
+// every ~20 s), so the dashboard no longer waits for the next poll (up to pollMs plus the
+// API's latency, much longer when the free-tier service is waking up).
+const RT_WINDOWS = 40;
+export function useRingHistory(userId, { admin = false, pollMs = 10000, liveSessionId = null } = {}) {
   const [state, setState] = useState({ loading: true, windows: [], sessions: {}, pss4: {}, history: null });
+  const [rt, setRt] = useState([]);
+  const latestKnown = Object.keys(state.sessions || {}).sort().pop() || null;
+  const watchSid = liveSessionId || latestKnown;
+  useEffect(() => {
+    if (!userId || !watchSid) { setRt([]); return undefined; }
+    return onValue(query(ref(db, `physiological/predictions/${userId}/${watchSid}`), orderByKey(), limitToLast(RT_WINDOWS)), (snap) => {
+      const v = snap.val() || {};
+      setRt(Object.values(v).filter((w) => w && w.timestamp).map((w) => {
+        const { wave_gsr, ibi_sequence, ...rest } = w;
+        return { ...rest, _sid: watchSid };
+      }));
+    }, () => setRt([]));
+  }, [userId, watchSid]);
   const cache = useRef(new Map());
   const inFlight = useRef(false);
   const prefix = admin ? '/admin/history' : '/history';
@@ -132,7 +150,14 @@ export function useRingHistory(userId, { admin = false, pollMs = 10000 } = {}) {
     return () => { cancelled = true; clearInterval(id); };
   }, [userId, prefix, pollMs]);
 
-  return state;
+  const windows = useMemo(() => {
+    if (!rt.length) return state.windows;
+    const byTime = new Map(state.windows.map((w) => [w.timestamp, w]));
+    rt.forEach((w) => byTime.set(w.timestamp, { ...(byTime.get(w.timestamp) || {}), ...w }));
+    return [...byTime.values()].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp)).slice(-CHART_POINTS_MAX);
+  }, [state.windows, rt]);
+
+  return useMemo(() => ({ ...state, windows }), [state, windows]);
 }
 
 // ── EEG blocks (psychological/{uid}/{sid}) ─────────────────────────

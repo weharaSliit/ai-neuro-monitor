@@ -201,14 +201,18 @@ export function ScoreGauge({ value, threshold, level, label = 'task_state_score'
 export function MultiLineChart({
   points, series, height = 220, yDomain, xDomain, bands = [], refLines = [],
   xFormat = (v) => v, yFormat = (v) => v, ariaLabel, emptyText = 'No data yet', legend = true,
-  xTicks: xTicksProp, hbands = [], markers = [], onZoom,
+  xTicks: xTicksProp, hbands = [], markers = [], onZoom, onPan,
 }) {
   const [wrapRef, width] = useWidth();
   const [hover, setHover] = useState(null);
   // onZoom(x0, x1): drag across the plot to zoom into those x values; double-click resets (onZoom(null)).
   const [drag, setDrag] = useState(null);
+  // onPan(dtMs): drag sideways to move through time (instead of drawing a zoom box); double-click = back to the newest.
+  const panX = useRef(null);
   const [hidden, setHidden] = useState(() => new Set());
-  const innerW = width - PAD.left - PAD.right;
+  // a reference line's label sits in a right gutter, never on top of the lines
+  const padR = refLines.length ? 58 : PAD.right;
+  const innerW = width - PAD.left - padR;
   const innerH = height - PAD.top - PAD.bottom;
   const shown = series.filter((s) => !hidden.has(s.key));
 
@@ -265,14 +269,19 @@ export function MultiLineChart({
     return geo.x0 + f * (geo.x1 - geo.x0);
   };
   const onMove = (e) => {
+    if (panX.current != null && onPan) {
+      const dx = e.clientX - panX.current; panX.current = e.clientX;
+      if (dx) onPan((-dx / innerW) * (geo.x1 - geo.x0));
+      return;
+    }
     const xv = xAt(e);
     let best = null; let bd = Infinity;
     for (const p of points) { const d = Math.abs(p.x - xv); if (d < bd) { bd = d; best = p; } }
     setHover(best);
     if (drag) setDrag({ ...drag, b: xv });
   };
-  const onDown = onZoom ? (e) => { const xv = xAt(e); setDrag({ a: xv, b: xv }); } : undefined;
-  const onUp = onZoom ? () => {
+  const onDown = onPan ? (e) => { panX.current = e.clientX; setHover(null); } : onZoom ? (e) => { const xv = xAt(e); setDrag({ a: xv, b: xv }); } : undefined;
+  const onUp = onPan ? () => { panX.current = null; } : onZoom ? () => {
     if (drag && Math.abs(drag.b - drag.a) > (geo.x1 - geo.x0) * 0.01) onZoom(Math.min(drag.a, drag.b), Math.max(drag.a, drag.b));
     setDrag(null);
   } : undefined;
@@ -286,9 +295,9 @@ export function MultiLineChart({
       {legendEl}
       <div style={{ position: 'relative' }}>
         <svg width={width} height={height} role="img" aria-label={ariaLabel}
-          onMouseMove={onMove} onMouseLeave={() => { setHover(null); setDrag(null); }}
-          onMouseDown={onDown} onMouseUp={onUp} onDoubleClick={onZoom ? () => onZoom(null) : undefined}
-          style={onZoom ? { cursor: 'crosshair', userSelect: 'none' } : undefined}>
+          onMouseMove={onMove} onMouseLeave={() => { setHover(null); setDrag(null); panX.current = null; }}
+          onMouseDown={onDown} onMouseUp={onUp} onDoubleClick={onPan ? () => onPan(null) : onZoom ? () => onZoom(null) : undefined}
+          style={onPan ? { cursor: 'grab', userSelect: 'none' } : onZoom ? { cursor: 'crosshair', userSelect: 'none' } : undefined}>
           {drag && (
             <rect x={geo.sx(Math.min(drag.a, drag.b))} y={PAD.top} width={Math.abs(geo.sx(drag.b) - geo.sx(drag.a))} height={innerH}
               fill="var(--series)" fillOpacity={0.15} stroke="var(--series)" strokeOpacity={0.5} />
@@ -299,7 +308,8 @@ export function MultiLineChart({
             return (
               <g key={`b${i}`}>
                 <rect x={a} y={PAD.top} width={z - a} height={innerH} className={`cband cband-${b.kind || 'n'}`} />
-                {z - a > 40 && <text x={a + 4} y={PAD.top + 11} className="cband-label">{b.label}</text>}
+                {/* label only when it fits inside the band, so neighbouring labels never run into each other */}
+                {b.label && z - a > Math.max(40, String(b.label).length * 7.2 + 10) && <text x={b.center ? (a + z) / 2 : a + 4} y={PAD.top + 14} textAnchor={b.center ? 'middle' : undefined} className="cband-label">{b.label}</text>}
               </g>
             );
           })}
@@ -315,18 +325,18 @@ export function MultiLineChart({
           })}
           {yTicks.map((t) => (
             <g key={`y${t}`}>
-              <line className="grid" x1={PAD.left} x2={width - PAD.right} y1={geo.sy(t)} y2={geo.sy(t)} />
+              <line className="grid" x1={PAD.left} x2={width - padR} y1={geo.sy(t)} y2={geo.sy(t)} />
               <text className="tick" x={PAD.left - 6} y={geo.sy(t)} dy="0.32em" textAnchor="end">{yFormat(t)}</text>
             </g>
           ))}
           {xTicks.filter((t) => t >= geo.x0 && t <= geo.x1).map((t) => (
             <text key={`x${t}`} className="tick" x={geo.sx(t)} y={height - 8} textAnchor="middle">{xFormat(t)}</text>
           ))}
-          <line className="axis" x1={PAD.left} x2={width - PAD.right} y1={PAD.top + innerH} y2={PAD.top + innerH} />
+          <line className="axis" x1={PAD.left} x2={width - padR} y1={PAD.top + innerH} y2={PAD.top + innerH} />
           {refLines.map((r) => (
             <g key={`r${r.label}`}>
-              <line className="ref" x1={PAD.left} x2={width - PAD.right} y1={geo.sy(r.y)} y2={geo.sy(r.y)} />
-              <text className="ref-label" x={width - PAD.right - 4} y={geo.sy(r.y) - 5} textAnchor="end">{r.label}</text>
+              <line className="ref" x1={PAD.left} x2={width - padR} y1={geo.sy(r.y)} y2={geo.sy(r.y)} />
+              <text className="ref-label" x={width - padR + 6} y={geo.sy(r.y)} dy="0.34em">{r.label}</text>
             </g>
           ))}
           {geo.paths.map((p) => (
@@ -336,7 +346,7 @@ export function MultiLineChart({
           {/* series.dots: a marker on every point (sparse series, e.g. calibration blocks) */}
           {shown.filter((s) => s.dots).map((s) => points.map((p) => (p[s.key] != null && Number.isFinite(p[s.key])
             && p.x >= geo.x0 && p.x <= geo.x1 ? (
-              <circle key={`${s.key}-${p.x}`} cx={geo.sx(p.x)} cy={geo.sy(p[s.key])} r={4} fill={s.color}
+              <circle key={`${s.key}-${p.x}`} cx={geo.sx(p.x)} cy={geo.sy(p[s.key])} r={points.length > 120 ? 3 : 4} fill={s.color}
                 stroke="var(--surface)" strokeWidth={1.5} />
             ) : null)))}
           {markers.filter((m) => m.x >= geo.x0 && m.x <= geo.x1 && m.y != null).map((m, i) => (

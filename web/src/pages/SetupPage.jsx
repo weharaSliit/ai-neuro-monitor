@@ -6,7 +6,8 @@ import { COLORS } from '../lib/levels';
 import { Card, CardHead, DeviceChip, Badge } from '../components/ui';
 import BreathingCalibration from '../components/BreathingCalibration';
 import ThresholdTask from '../components/ThresholdTask';
-import LiveCalibrationGraphs from '../components/LiveCalibrationGraphs';
+import CalibrationTrend from '../components/CalibrationTrend';
+import useCondition from '../hooks/useCondition';
 import TakeOverBanner from '../components/TakeOverBanner';
 
 // Same three steps as the app's AccountSetupScreen -> EegThresholdTaskScreen:
@@ -32,6 +33,7 @@ export default function SetupPage() {
   const { ringOnline, eegOnline, eegSessionId } = useDeviceStatus(userId);
   const cal = useCalibration(userId, token);
   const [step, setStep] = useState(null);
+  const cond = useCondition(userId, eegSessionId, [], []);
 
   // Devices stream into whichever session the shared pointer names -- if
   // that's someone else, calibrating now would mix their signal into
@@ -73,7 +75,6 @@ export default function SetupPage() {
           <>
             <BreathingCalibration ringOnline={ringOnline} eegOnline={eegOnline} eegSessionId={eegSessionId} ringCal={cal.ring} eegCal={cal.eeg}
               disabled={otherUserLive} onComplete={() => { cal.refresh(); setStep('task'); }} />
-            <LiveCalibrationGraphs phase="baseline" ringOnline={ringOnline} eegOnline={eegOnline} />
           </>
         ) : (
           <div className="between">
@@ -87,14 +88,15 @@ export default function SetupPage() {
         {current === 'task' ? (
           <>
             <ThresholdTask userId={userId} eegSessionId={eegSessionId} alreadyPersonalized={personalised}
-              ringCal={cal.ring} eegCal={cal.eeg} disabled={otherUserLive || cal.loading}
+              ringCal={cal.ring} eegCal={cal.eeg} disabled={otherUserLive || cal.loading} autoStart={step === 'task'}
               onFinish={() => navigate('/', { replace: true })} />
-            <LiveCalibrationGraphs phase="task" ringOnline={ringOnline} eegOnline={eegOnline} />
           </>
         ) : (
           <p className="body">Unlocks after step 2 — it needs your calm baseline to compare against.</p>
         )}
       </Step>
+
+      {(current === 'task' || baselineDone) && <CalibrationTrend phases={cond.phases} />}
 
       <p style={{ textAlign: 'center', marginTop: 20 }}>
         <a href="#" onClick={(e) => { e.preventDefault(); navigate('/'); }}>Skip for now →</a>

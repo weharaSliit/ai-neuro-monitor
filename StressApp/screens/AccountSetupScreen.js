@@ -47,7 +47,8 @@ export default function AccountSetupScreen({ navigation }) {
     navigation.replace('Physiological');
   };
 
-  const proceedToThreshold = () => navigation.navigate('ThresholdCalibration');
+  // autoStart: the limit test begins by itself after a short countdown, so the calibration runs on.
+  const proceedToThreshold = () => navigation.navigate('ThresholdCalibration', { autoStart: true });
 
   return (
     <ScreenBackground>

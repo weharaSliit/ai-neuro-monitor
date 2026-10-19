@@ -107,12 +107,18 @@ export default function StroopStressor({ durationSec, colourSafe = false, roundL
     return () => clearInterval(id);
   }, []);
 
+  // onDone held in a ref: parents pass a new function on every render, and the
+  // fixation timer below must not restart each time the parent re-renders (it
+  // re-renders every second and on every Firebase update -- the 300-500 ms
+  // fixation never fired and the task stayed on '+').
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
   const finish = useCallback(() => {
     if (finished.current) return;
     finished.current = true;
-    onDone?.({ settings: { ...STROOP_SETTINGS, colours: colors.map((c) => c.name) }, trials: trials.current,
+    onDoneRef.current?.({ settings: { ...STROOP_SETTINGS, colours: colors.map((c) => c.name) }, trials: trials.current,
       summary: summarizeStroop(trials.current) });
-  }, [onDone, colors]);
+  }, [colors]);
 
   // fixation (300-500 ms) -> trial
   useEffect(() => {
