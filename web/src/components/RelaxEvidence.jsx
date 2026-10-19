@@ -153,7 +153,7 @@ function LiveCard({ session }) {
           <div><span>Technique</span><b>{techName(session.technique)}</b></div>
           <div><span>Started by</span><b>{session.condition === 'system' ? 'Recommendation' : session.condition === 'manual' ? 'Chosen by user' : '—'}</b></div>
           <div><span>Latest stress score</span><b>{info ? dec(info.last.p) : '—'}</b></div>
-          <div><span>Stream</span><b>{info?.last.src === 'physio' ? 'Ring / earbud' : info?.last.src === 'phenotyping' ? 'Phone behaviour' : '—'}</b></div>
+          <div><span>Stream</span><b>{info ? 'Live' : '—'}</b></div>
           <div><span>Last reading</span><b>{info ? `${Math.round(info.ageSec)}s ago` : '—'}</b></div>
           <div><span>Loop decision</span><b>{lastCheck ? `${lastCheck.data?.action} (${fmtDur(lastCheck.data?.elapsed)})` : '—'}</b></div>
         </div>

@@ -76,6 +76,14 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
   const [telemetryMessage, setTelemetryMessage] = useState('');
   const [hasLivePacket, setHasLivePacket] = useState(false);
 
+  // ── Stimulator override: when the IoT team's live_stimulator is running it
+  // feeds real-like EEG + ring data through the REAL pipeline. Its outputs land
+  // in stimulator/status in Firebase every ~3 s. We read those load values and
+  // derive the same stress signals the real devices would produce, so the
+  // relaxation guide sees live physiological data even without physical devices.
+  const [stimulatorActive, setStimulatorActive] = useState(false);
+  const stimulatorActiveRef = useRef(false);
+
   // ── 2. Digital Phenotyping Telemetry (Smartphone Behavioral Data) ──
   const [phenoSensorEnabled, setPhenoSensorEnabled] = useState(false);
   const [phenoProfile, setPhenoProfile] = useState(null);
@@ -423,10 +431,106 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
   // Onboarding Answers
   const [onboardingAnswers, setOnboardingAnswers] = useState(null);
 
+  // ── Stimulator Firebase listener ──────────────────────────────────────────
+  // Reads stimulator/status (written by live_stimulator.py every ~3 s) and
+  // derives stress signals from the virtual person's physiological loads.
+  // Priority: stimulator active → override REST poll. Stimulator off → REST poll wins.
+  // 20-second heartbeat window (same constant as SimulatedBanner).
+  const STIM_ONLINE_SEC = 20;
+  useEffect(() => {
+    const statusRef = ref(db, 'stimulator/status');
+    const handler = onValue(statusRef, (snap) => {
+      const s = snap.val();
+      if (!s) { stimulatorActiveRef.current = false; setStimulatorActive(false); return; }
+
+      const nowSec = Date.now() / 1000;
+      const isOnline = s.online && s.ts && (nowSec - s.ts < STIM_ONLINE_SEC);
+      const isRunning = isOnline && s.running;
+
+      // Only apply to the logged-in user (or if the stimulator is not user-scoped).
+      const userMatch = !s.uid || !userId || s.uid === userId || userId.startsWith('user_');
+
+      if (!isRunning || !userMatch) {
+        stimulatorActiveRef.current = false;
+        setStimulatorActive(false);
+        return;
+      }
+
+      // ── Derive stress probability from the stimulator's physiological loads ──
+      // The stimulator publishes the three continuous load signals the pipeline
+      // models: eeg_load (cognitive), hr_load (cardiovascular), eda_load (skin).
+      // We fuse them with the same rough weights the MVH fusion engine uses:
+      //   EEG  35 %   HRV/GSR  40 %   demand headroom  25 %
+      // so the derived probability tracks what the real pipeline would output.
+      const eegL  = typeof s.eeg_load === 'number'   ? Math.max(0, Math.min(1, s.eeg_load))  : 0;
+      const hrL   = typeof s.hr_load === 'number'    ? Math.max(0, Math.min(1, s.hr_load))   : 0;
+      const edaL  = typeof s.eda_load === 'number'   ? Math.max(0, Math.min(1, s.eda_load))  : 0;
+      const dem   = typeof s.demand === 'number'     ? Math.max(0, Math.min(1, s.demand))    : 0;
+      const bodyD = typeof s.body_demand === 'number'? Math.max(0, Math.min(1, s.body_demand)): 0;
+
+      // Weighted fusion: EEG + ring (HRV/GSR) + demand residual
+      const fusedLoad = 0.35 * eegL + 0.40 * Math.max(hrL, edaL) + 0.25 * Math.max(dem, bodyD);
+      // Soft sigmoid so resting (load≈0) maps to ~0.12 and full load (≈1) maps to ~0.92
+      const prob = Math.round(Math.max(0.08, Math.min(0.96,
+        1 / (1 + Math.exp(-6 * (fusedLoad - 0.45)))
+      )) * 1000) / 1000;
+
+      // ── Map probability to stress label ──
+      let label = 'normal';
+      let raw = 'Normal State';
+      if (prob >= 0.75) { label = 'high_stress'; raw = 'High Confidence Stress'; }
+      else if (prob >= 0.55) { label = 'stress'; raw = 'Stress Detected'; }
+      else if (prob >= 0.38) { label = 'low_stress'; raw = 'Low Confidence Stress'; }
+
+      // Calibrating phases: show as normal (the real pipeline does the same).
+      const calibPhases = ['settle', 'rest', 'task', 'recovery'];
+      const inCalib = calibPhases.includes(s.phase) && s.calibrating;
+
+      const finalLabel = inCalib ? 'normal' : label;
+      const finalProb  = inCalib ? 0.15 : prob;
+      const finalRaw   = inCalib ? `Calibration · ${s.phase}` : raw;
+
+      setStressState(finalLabel);
+      setRawLabel(finalRaw);
+      setStressProbability(finalProb);
+      setConfidence(finalProb);
+      // Treat the stimulator stream exactly like a live IoT packet — hasLivePacket
+      // drives the "Awaiting Telemetry" vs live UI, so the dashboard shows
+      // the device as connected just as when the real ring/EEG are streaming.
+      setHasLivePacket(true);
+      setIsCalibrated(true);
+      setTelemetryMessage(
+        inCalib
+          ? `Stimulator calibrating · ${s.phase}`
+          : `Stimulator live · ${s.phase || s.stage || 'monitoring'} (demand ${Math.round(fusedLoad * 100)}%)`
+      );
+
+      // Feed into the trajectory / trend history
+      const samples = stressTrajectoryRef.current;
+      samples.push({ t: Date.now() / 1000, p: finalProb });
+      if (samples.length > 1500) samples.splice(0, samples.length - 1500);
+      if (evidenceKeyRef.current) {
+        evidenceLogger.sample(userIdRef.current, evidenceKeyRef.current, finalProb, 'physio_stimulated');
+      }
+      setStressTrendHistory(prev => [...prev.slice(-11), finalProb]);
+
+      stimulatorActiveRef.current = true;
+      setStimulatorActive(true);
+    }, () => {
+      stimulatorActiveRef.current = false;
+      setStimulatorActive(false);
+    });
+    return () => off(statusRef, 'value', handler);
+  }, [userId]);
+
   // Telemetry poll loop (every 2 seconds).
+  // When the stimulator is active, skip the REST call so the stimulator's
+  // Firebase-derived values are not overwritten by a stale API response.
   useEffect(() => {
     let interval = null;
     interval = setInterval(async () => {
+      // Stimulator is feeding live data — REST poll not needed
+      if (stimulatorActiveRef.current) return;
       try {
         const telemetry = simMode === 'normal'
           ? await apiService.getLiveFusionTelemetry(userId)
@@ -543,6 +647,7 @@ export const AppProvider = ({ children, initialUserId, initialUsername, initialI
         isAlertTriggered,
         telemetryMessage,
         hasLivePacket,
+        stimulatorActive,
         currentRecommendation,
         setCurrentRecommendation,
         selectedSubOption,

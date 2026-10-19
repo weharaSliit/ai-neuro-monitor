@@ -15,7 +15,11 @@ export const HostAppSwitchBar = () => {
     try {
       navigation.navigate('Physiological');
     } catch (e) {
-      console.warn('Navigation error to Physiological', e);
+      try {
+        navigation.navigate('Home');
+      } catch (e2) {
+        console.warn('Navigation error to main hub', e2);
+      }
     }
   };
 

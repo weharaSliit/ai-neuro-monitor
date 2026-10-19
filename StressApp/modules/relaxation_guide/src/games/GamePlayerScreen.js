@@ -145,23 +145,63 @@ const getTechKey = (target) => {
   } else if (target && typeof target === 'object') {
     raw = target.id || target.technique_id || target.key || target.title || '';
   }
-  const s = String(raw).toLowerCase();
+  const s = String(raw).toLowerCase().replace(/[-\s]/g, '_');
 
+  // ── 1. Exact canonical ID lookup (fast path) ────────────────────────────
+  // Covers every id the API server, apiService fallback, and MethodsScreen use.
+  const EXACT = {
+    pmr_crystal_squeeze:       'pmr_crystal_squeeze',
+    emdr_saccadic_trace:       'emdr_saccadic_trace',
+    galvanic_biofeedback_flow: 'galvanic_biofeedback_flow',
+    pattern_alignment:         'pattern_alignment',
+    autogenic_warmth:          'autogenic_warmth',
+    stroop_decoupler:          'stroop_decoupler',
+    flower_meadow:             'flower_meadow',
+    water_lily_pond:           'water_lily_pond',
+    box_meditation:            'box_meditation',
+    diaphragmatic_pace:        'diaphragmatic_pace',
+    body_scan_mindful:         'body_scan_mindful',
+    // Legacy / alternative IDs the real backend or older data might use
+    breathing_garden:          'flower_meadow',
+    guided_meditation:         'box_meditation',
+    progressive_muscle:        'pmr_crystal_squeeze',
+    cosmic_nebula:             'emdr_saccadic_trace',
+    color_clash:               'stroop_decoupler',
+    color_match:               'pattern_alignment',
+    body_sweep:                'body_scan_mindful',
+    warmth_flow:               'autogenic_warmth',
+    deep_belly_calm:           'diaphragmatic_pace',
+    zen_lily_pond:             'water_lily_pond',
+    calm_meadow:               'flower_meadow',
+    focus_box:                 'box_meditation',
+    bio_gsr_pool:              'galvanic_biofeedback_flow',
+    cosmic_trace:              'emdr_saccadic_trace',
+    somatic_pmr:               'pmr_crystal_squeeze',
+    // Cognitive de-stress variants the backend may return
+    cognitive_destress:        'stroop_decoupler',
+    cognitive_de_stress:       'stroop_decoupler',
+    cognitive_stress:          'stroop_decoupler',
+    destress:                  'stroop_decoupler',
+    de_stress:                 'stroop_decoupler',
+  };
+  if (EXACT[s]) return EXACT[s];
+
+  // ── 2. Keyword substring fallback ────────────────────────────────────────
   if (s.includes('pmr') || s.includes('crystal') || s.includes('somatic') || s.includes('squeeze')) return 'pmr_crystal_squeeze';
   if (s.includes('emdr') || s.includes('saccadic') || s.includes('trace') || s.includes('cosmic')) return 'emdr_saccadic_trace';
-  if (s.includes('gsr') || s.includes('galvanic') || s.includes('fluid') || s.includes('pool')) return 'galvanic_biofeedback_flow';
-
-  if (s.includes('pattern') || s.includes('match') || s.includes('alignment')) return 'pattern_alignment';
+  if (s.includes('gsr') || s.includes('galvanic') || s.includes('fluid') || s.includes('pool') || s.includes('biofeedback')) return 'galvanic_biofeedback_flow';
+  if (s.includes('pattern') || s.includes('color_match') || s.includes('alignment')) return 'pattern_alignment';
   if (s.includes('autogenic') || s.includes('warmth') || s.includes('warm')) return 'autogenic_warmth';
-  if (s.includes('stroop') || s.includes('clash') || s.includes('decoupler')) return 'stroop_decoupler';
-  if (s.includes('flower') || s.includes('meadow')) return 'flower_meadow';
+  if (s.includes('stroop') || s.includes('clash') || s.includes('decoupler') || s.includes('cognitive') || s.includes('destress')) return 'stroop_decoupler';
+  if (s.includes('flower') || s.includes('meadow') || s.includes('breathing_garden')) return 'flower_meadow';
   if (s.includes('lily') || s.includes('pond') || s.includes('water')) return 'water_lily_pond';
-  if (s.includes('box') || s.includes('meditation')) return 'box_meditation';
-  if (s.includes('diaphragmatic') || s.includes('belly') || s.includes('deep')) return 'diaphragmatic_pace';
+  if (s.includes('box') || s.includes('focus_box') || s.includes('guided_meditation')) return 'box_meditation';
+  if (s.includes('diaphragmatic') || s.includes('belly') || s.includes('deep_belly')) return 'diaphragmatic_pace';
   if (s.includes('body') || s.includes('scan') || s.includes('sweep') || s.includes('mindful')) return 'body_scan_mindful';
 
   return 'flower_meadow';
 };
+
 
 export const GamePlayerScreen = () => {
   const {
@@ -612,7 +652,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(56,189,248,0.45)',
   },
   loopBannerText: {
-    color: '#E2E8F0',
+    color: '#0F172A',
     fontSize: 12,
     fontWeight: '700',
     textAlign: 'center',

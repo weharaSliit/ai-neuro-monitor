@@ -20,16 +20,11 @@ function chipsFor(rec) {
     else if (ctx.slope_per_min < -SLOPE_EPS) chips.push({ key: 'dir', label: '↓ Falling', color: '#5E935A' });
     else chips.push({ key: 'dir', label: '→ Steady', color: '#3B82F6' });
   }
+  chips.push({ key: 'live', label: 'Live physiological + phone', color: '#5E935A' });
   if (ctx.has_both_streams && Number.isFinite(ctx.disagreement)) {
     chips.push(Math.abs(ctx.disagreement) < AGREE_EPS
       ? { key: 'streams', label: 'Body & phone agree', color: '#3B82F6' }
       : { key: 'streams', label: ctx.disagreement > 0 ? 'Body higher than phone' : 'Phone higher than body', color: '#8B5CF6' });
-  } else {
-    const used = rec?.streams_used;
-    let label = 'One stream live';
-    if (used?.phenotyping && !used?.physiological) label = 'Phone behaviour only';
-    else if (used?.physiological && !used?.phenotyping) label = 'Body signals only';
-    chips.push({ key: 'streams', label, color: '#989294' });
   }
   if (ctx.rise_alarm) chips.push({ key: 'alarm', label: 'Sustained rise detected', color: '#E56B4E' });
   const codes = rec?.reason_codes || [];

@@ -517,8 +517,6 @@ export const DashboardScreen = () => {
               { id: 'PerformanceOverview', icon: '📊', label: 'Analytics', sub: 'Analytics & Trends', tint: 'rgba(16,185,129,0.14)', accent: '#10B981' },
               { id: 'UserProfile', icon: '👤', label: 'User Profile', sub: 'Account & XP', tint: 'rgba(236,72,153,0.14)', accent: '#EC4899' },
               { id: 'CommonHome', icon: '🏠', label: 'Main Home', sub: 'Return to App', tint: 'rgba(59,130,246,0.14)', accent: '#3B82F6' },
-              { id: 'History', icon: '📈', label: 'History', sub: 'Recovery', tint: 'rgba(16,185,129,0.14)', accent: '#10B981' },
-              { id: 'FusionPipeline', icon: '📡', label: 'Pipeline', sub: 'Telemetry', tint: 'rgba(139,92,246,0.14)', accent: '#8B5CF6' }
             ].map(item => (
               <ActionCard
                 key={item.id}
