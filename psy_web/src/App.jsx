@@ -5,6 +5,7 @@ import TechView from './components/TechView';
 import CalibrationDashboard from './components/CalibrationDashboard';
 import StimulatorBanner from './components/StimulatorBanner';
 import LiveMonitor from './components/LiveMonitor';
+import RingCheck from './components/RingCheck';
 import useCalibratedLimits from './hooks/useCalibratedLimits';
 import {
   Breathing, CalibrateScreen, HomeScreen, NavBar, ProfileScreen, ProgressScreen, TABS, WavesScreen, Welcome,
@@ -13,7 +14,7 @@ import './friendly.css';
 
 // Technical pages: Live monitor (#concept), Calibration, Devices (#tech). Older
 // page addresses lead to the Live monitor, which now holds what they showed.
-const TECH = new Set(['concept', 'calibration', 'tech']);
+const TECH = new Set(['concept', 'calibration', 'tech', 'ringcheck']);
 const OLD = { fusion: 'concept', physio: 'tech', simdemo: 'concept' };
 const VIEWS = new Set([...TABS.map((t) => t.key), ...TECH, ...Object.keys(OLD)]);
 const WELCOME_KEY = 'psy_web_welcomed';
@@ -66,6 +67,7 @@ export default function App() {
   };
   const banner = <StimulatorBanner now={now} openControls={openStimulator} openDemo={() => go('concept')} />;
   if (view === 'concept') return <>{banner}<LiveMonitor now={now} go={go} /></>;
+  if (view === 'ringcheck') return <>{banner}<RingCheck now={now} go={go} /></>;
   if (view === 'calibration') return <>{banner}<CalibrationDashboard now={now} go={go} /></>;
   if (view === 'tech') {
     return <>{banner}<TechView raw={raw} health={health} picker={picker} sessionData={sessionData} limits={limits} now={now} go={go} /></>;

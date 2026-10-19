@@ -5,6 +5,7 @@ export const TECH_PAGES = [
   ['concept', 'Live monitor'],
   ['calibration', 'Calibration'],
   ['tech', 'Devices'],
+  ['ringcheck', 'Ring check'],
 ];
 
 export default function TechNav({ page, go, title, subtitle, picker }) {

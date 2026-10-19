@@ -1,0 +1,30 @@
+{
+  "run": "run_1792364703704",
+  "user": "ringcheck01",
+  "session": "session_20261019T024618",
+  "heart_rate_vs_app_live": {
+    "n": 5,
+    "bias": 2.365631070345046,
+    "mae": 2.81944088873787,
+    "r": 0.8440503656494828,
+    "sd_diff": 2.7693237155799553,
+    "within5": 0.8,
+    "within10": 1.0
+  },
+  "heart_rate_vs_app_window": {
+    "n": 5,
+    "bias": 2.532871490684883,
+    "mae": 2.642480731381383,
+    "r": 0.785133408890043,
+    "sd_diff": 2.35720443015539,
+    "within5": 0.8,
+    "within10": 1.0
+  },
+  "walk_hr_rise_bpm": -3.7429760714658897,
+  "mental_task_gsr_rise_uS": -0.011458209998434388,
+  "artefact_windows_expected": 0,
+  "artefact_windows_withheld": 0,
+  "finger_off_pct_in_off_step": null,
+  "shake_peak_g": 1.058436115477717,
+  "app_readings": 5
+}
