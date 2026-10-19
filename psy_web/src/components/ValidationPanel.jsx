@@ -155,7 +155,7 @@ export default function ValidationPanel({ raw, sessionData, now }) {
   return (
     <Card
       title="Signal validation (live)"
-      subtitle="Proof that the headband records EEG and that it changes with mental load. Filtered 1–45 Hz like the backend, computed in your browser from the raw stream."
+      subtitle="Real EEG checks: eyes, load, artifacts (filtered 1–45 Hz)"
       right={(
         <div className="seg">
           <button type="button" onClick={() => exportCsv(history)} disabled={!history.length}>Export CSV</button>
@@ -172,11 +172,7 @@ export default function ValidationPanel({ raw, sessionData, now }) {
         {condition && <Status kind="good">{CONDITIONS[condition.key].label} for {Math.round((now - condition.start) / 1000)} s</Status>}
         {!streaming && <Status kind="warning">No live samples: the charts update once wearable02 streams</Status>}
       </div>
-      <p className="caption">
-        Protocol: eyes open 1 min → eyes closed 1 min (repeat 2–3×); then rest or 0-back as low load and 2-back or mental arithmetic as high load, 2–3 min each, repeated;
-        then artifact checks: clench the jaw for 10–20 s, and blink deliberately every second or two for 30 s (the quality gate should reject those blocks).
-        Each point is a {live.windowSec} s window, updated every second. Windows with more than 5% of the signal beyond ±{RANGE_UV} µV are left out of the summary.
-      </p>
+      <p className="caption">Eyes open 1 min → closed 1 min · low / high load 2–3 min · jaw clench 15 s · blinks 30 s</p>
 
       <div className="val-grid">
         <div>
@@ -187,7 +183,7 @@ export default function ValidationPanel({ raw, sessionData, now }) {
             tooltip={(p) => <><b>{p.y.toFixed(1)} µV</b><span>t = {p.x.toFixed(2)} s</span></>} />
           <p className="caption">
             RMS <b>{num(latest?.rms, 1)} µV</b> · beyond ±{RANGE_UV} µV <b>{pct(latest?.out_of_range)}</b>
-            {latest && latest.out_of_range > CLEAN_MAX_OUT_OF_RANGE && <span className="warn-text"> · out of the model's range: check electrode and bias contact</span>}
+            {latest && latest.out_of_range > CLEAN_MAX_OUT_OF_RANGE && <span className="warn-text"> · out of range: check contact</span>}
           </p>
         </div>
         <div>
@@ -210,8 +206,7 @@ export default function ValidationPanel({ raw, sessionData, now }) {
             xFormat={(v) => `${Math.round(v)} Hz`} yFormat={(v) => `10^${Number.isInteger(v) ? v : v.toFixed(1)}`}
             emptyText="Waiting for 6 s of live data…" />
           <p className="caption">
-            Look for an alpha bump at 8–13 Hz that grows with eyes closed. T7–T8 also picks up temporalis muscle, so a fairly flat slope and 20–35% gamma are normal here (the model's training data has a median slope of −0.53).
-            Largest band now: <b>{largest ? largest.label : '—'}</b>.
+            Largest band now: <b>{largest ? largest.label : '—'}</b>
           </p>
         </div>
       </div>
@@ -282,10 +277,6 @@ export default function ValidationPanel({ raw, sessionData, now }) {
           </tbody>
         </table>
       </div>
-      <p className="caption">
-        Windows overlap (4 s, every 1 s), so window counts are not independent samples, and these are direction checks rather than statistical tests.
-        For step 3, export the CSV and classify low vs high load with cross-validation split by condition block, not by window, and compare accuracy with chance (50%).
-      </p>
     </Card>
   );
 }

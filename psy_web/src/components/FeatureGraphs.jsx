@@ -37,7 +37,7 @@ export default function FeatureGraphs({ blocks, windows, ringBaseline }) {
   const ts = [...eegRows, ...ringRows].map((r) => r.t);
   const xDomain = ts.length > 1 ? [Math.min(...ts), Math.max(...ts)] : null;
   return (
-    <Card title="Extracted features" subtitle="What the models score: EEG per 25 s block (rejected blocks left out), HRV/GSR per ring window">
+    <Card title="Extracted features" subtitle="EEG per 25 s block · HRV/GSR per window">
       <div className="grid-2">
         <FeatureGraph title="EEG (T7–T8 bipolar)" color="var(--c1)" xDomain={xDomain} rows={eegRows} />
         <FeatureGraph title="HRV / GSR" color="var(--c2)" xDomain={xDomain} baseline={ringBaseline} rows={ringRows} />

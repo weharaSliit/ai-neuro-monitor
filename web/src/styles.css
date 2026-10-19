@@ -542,3 +542,30 @@ table.data.users tr.clickable:focus-visible { outline: 2px solid var(--brand); o
 .ew-legend button i { width: 11px; height: 11px; border-radius: 50%; }
 .ew-top.stacked { grid-template-columns: minmax(0, 1fr); }
 .grid-hero .bal-limits, .grid-hero .condition { margin-top: var(--sp-lg); }
+
+/* ── Calibration in progress (components/CalibrationOnboarding.jsx) ── */
+.onb-hero { background: linear-gradient(135deg, #A29DD4 0%, #6E68B2 100%); min-height: 0; }
+.onb-hero .onb-left { cursor: default; }
+.onb-steps { list-style: none; margin: 20px 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-md); }
+.onb-steps li { background: var(--card); border: 1px solid var(--border); border-radius: var(--r-lg); padding: var(--sp-lg);
+  display: flex; flex-direction: column; gap: 4px; box-shadow: var(--shadow-rest); color: var(--text-muted); }
+.onb-steps li b { font-size: 15px; color: var(--text-sub); }
+.onb-steps li em { font-style: normal; font-size: 12px; font-weight: 700; }
+.onb-dot { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-size: 17px;
+  background: var(--pill); margin-bottom: 4px; }
+.onb-steps li.done { background: var(--normal-soft); border-color: transparent; }
+.onb-steps li.done .onb-dot { background: var(--normal); color: #fff; font-weight: 900; }
+.onb-steps li.done b, .onb-steps li.done em { color: var(--normal-dark); }
+.onb-steps li.now { border: 2px solid var(--brand); box-shadow: var(--shadow-up); color: var(--brand-dark); }
+.onb-steps li.now .onb-dot { background: var(--brand-soft); }
+.onb-steps li.now b { color: var(--text); }
+.onb-bar { display: block; height: 6px; border-radius: 3px; background: var(--brand-soft); margin-top: 6px; overflow: hidden; }
+.onb-bar i { display: block; height: 100%; background: var(--brand); border-radius: 3px; transition: width .6s ease; }
+@media (max-width: 720px) { .onb-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* mental arithmetic round (components/MentalArithmetic.jsx) */
+.math-bar { height: 8px; border-radius: 4px; background: var(--pill); overflow: hidden; margin-bottom: 12px; }
+.math-bar i { display: block; height: 100%; transition: width .1s linear; }
+.math-q { text-align: center; font-size: 40px; font-weight: 900; letter-spacing: 1px; padding: 22px 0; border-radius: var(--r-md);
+  background: var(--brand-soft); color: var(--text); margin-bottom: 12px; }
+.math-task.ok .math-q { background: var(--normal-soft); color: var(--normal-dark); }
+.math-task.miss .math-q, .math-task.slow .math-q { background: var(--stress-soft); color: var(--stress-dark); }

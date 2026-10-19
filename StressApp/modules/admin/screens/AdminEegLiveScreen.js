@@ -32,8 +32,18 @@ import { STRESS_COLORS, STRESS_EMOJI, EEG_TREND_LABELS, TASK_STATE_LABELS } from
 import { eegClient } from '../../shared/eegApiClient';
 import { useAuth } from '../../../context/AuthContext';
 
-const CHART_POINTS = 120;
-const RAW_CHART_WIDTH = Math.max(260, getContentWidth() - 80);
+
+// Matches pipeline.py's WAVE_PREVIEW_POINTS=200 -- wave_uv already arrives
+// as exactly 200 points per 25s block (see the `waveUv` comment below), so
+// this used to silently throw away 80 of those points on every block via
+// downsampleWithIndices()'s stri
+// de below, flattening real peaks/troughs
+// into a coarser, spikier-looking trace than the data actually supports.
+const CHART_POINTS = 200;
+const RAW_CHART_WIDTH = Math.max(260, Dimensions.get('window').width - 80);
+const RAW_CHART_HEIGHT = 260;
+const RAW_CHART_CLIP_HEIGHT = RAW_CHART_HEIGHT + 16;
+
 
 function downsampleWithIndices(values) {
     if (!values || values.length === 0) return { values: [], indices: [] };

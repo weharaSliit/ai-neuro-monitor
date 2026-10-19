@@ -18,6 +18,7 @@ import BaselineDriftCard from '../components/BaselineDriftCard';
 import useCondition from '../hooks/useCondition';
 import DeviceStrip from '../components/DeviceStrip';
 import useLiveDevices from '../hooks/useLiveDevices';
+import CalibrationOnboarding from '../components/CalibrationOnboarding';
 
 const LIVE_WINDOW_MS = 3 * 60 * 1000;
 const fmtS = (v) => (v == null ? '—' : Math.abs(v) < 0.01 && v !== 0 ? v.toExponential(1) : v.toFixed(2));
@@ -79,6 +80,10 @@ export default function UserDashboard() {
 
   const [bodyTab, setBodyTab] = useState('stress');
   const [breathing, setBreathing] = useState(false);
+  // While a calibration the user asked for runs, this page shows its four phases instead of the
+  // dashboard (CalibrationOnboarding); the dashboard comes back by itself when it finishes.
+  const [dashAnyway, setDashAnyway] = useState(false);
+  const calibratingNow = cond.gate.recalibrating && !dashAnyway;
 
   // ── Current state (same rules as FusionSessionScreen) ──
   const latest = fusion.latest;
@@ -157,6 +162,22 @@ export default function UserDashboard() {
 
   const firstName = (user?.name || userId || '').split(/[\s_.]/)[0];
   const displayName = firstName ? firstName.charAt(0).toUpperCase() + firstName.slice(1) : 'there';
+
+  if (!cond.gate.recalibrating && dashAnyway) setDashAnyway(false);   // next calibration shows the steps again
+
+  if (calibratingNow) {
+    return (
+      <>
+        <DeviceStrip ringOn={Boolean(liveDev.ring?.fresh) || ringOnline} eegOn={Boolean(liveDev.eeg?.fresh) || eegOnline}
+          fingerOff={Boolean(liveDev.ring?.fresh) && liveDev.ring?.finger === false} />
+        <div className="greet">
+          <h1>{greeting()}, <b>{displayName}</b></h1>
+          <p>Setting your personal calm level and limits — your dashboard opens when it’s done.</p>
+        </div>
+        <CalibrationOnboarding eeg={cond.recal.eeg} ring={cond.recal.ring} now={now} onShowDashboard={() => setDashAnyway(true)} />
+      </>
+    );
+  }
 
   return (
     <>

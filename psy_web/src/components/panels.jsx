@@ -3,7 +3,7 @@ import { LineChart, fmtScore } from './charts';
 import { requestRecalibration } from '../lib/firebase';
 import { blockAligned, mindOrientedP } from '../lib/limits';
 import {
-  BATCH_SIZE, BIPOLAR_HIGHPASS_HZ, BLOCK_SEC, CLIP_UV, MQTT_TOPIC_EEG, MQTT_URL, POPULATION_HIGH_LOAD_P, RAW_WINDOW_SEC, SOURCE_FS, TARGET_FS, UV_PER_COUNT,
+  BATCH_SIZE, BIPOLAR_HIGHPASS_HZ, BLOCK_SEC, CLIP_UV, MQTT_URL, POPULATION_HIGH_LOAD_P, RAW_WINDOW_SEC, SOURCE_FS, TARGET_FS, UV_PER_COUNT,
 } from '../lib/config';
 import {
   MODEL, explain, fmt, levelOf,
@@ -252,7 +252,7 @@ export function RawPanel({ raw, now }) {
   return (
     <Card
       title="Raw reading"
-      subtitle={`Unfiltered T7–T8 differential straight from the device, last ${RAW_WINDOW_SEC}s (${MQTT_TOPIC_EEG})`}
+      subtitle={`T7–T8, last ${RAW_WINDOW_SEC} s`}
       right={(
         <div className="seg">
           <button type="button" className={unit === 'uv' ? 'on' : ''} onClick={() => setUnit('uv')}>µV</button>
@@ -306,8 +306,7 @@ export function RawPanel({ raw, now }) {
         )}
       />
       <p className="caption">
-        {mean != null && <>Window mean {unit === 'uv' ? `${mean.toFixed(1)} µV` : Math.round(mean).toLocaleString()}{removeDc ? ' (subtracted)' : ''} · range {fmt(min, 1)} to {fmt(max, 1)} {unitLabel}. </>}
-        This is the raw ADC signal before any of the backend preprocessing.
+        {mean != null && <>Mean {unit === 'uv' ? `${mean.toFixed(1)} µV` : Math.round(mean).toLocaleString()}{removeDc ? ' (subtracted)' : ''} · range {fmt(min, 1)} to {fmt(max, 1)} {unitLabel}</>}
       </p>
       {stats.lastPayload && (
         <details className="payload">
