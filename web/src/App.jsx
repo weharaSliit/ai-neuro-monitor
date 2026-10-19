@@ -6,6 +6,7 @@ import UserDashboard from './pages/UserDashboard';
 import SetupPage from './pages/SetupPage';
 import PhenotypingPage from './pages/PhenotypingPage';
 import RelaxPage from './pages/RelaxPage';
+import RelaxValidationOverview from './pages/RelaxValidationOverview';
 
 function RequireAuth({ children }) {
   const { user } = useAuth();
@@ -20,6 +21,7 @@ export default function App() {
         <Route index element={<UserDashboard />} />
         <Route path="phone" element={<PhenotypingPage />} />
         <Route path="relax" element={<RelaxPage />} />
+        <Route path="relax/validation-results" element={<RelaxValidationOverview />} />
         <Route path="setup" element={<SetupPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
