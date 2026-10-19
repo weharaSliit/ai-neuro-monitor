@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { setPicker, usePickerStore } from './pickerStore';
 import { shallowKeys } from '../lib/firebase';
 import { toWindows } from '../lib/fusion';
 import { useFirebaseValue } from './useData';
@@ -11,13 +12,14 @@ const POINTER_KEYS = new Set(['current_session_id', 'current_user_id']);
 export function useFusionPicker() {
   const liveUser = useFirebaseValue('fusion_en_sessions/current_user_id') || null;
   const liveSession = useFirebaseValue('fusion_en_sessions/current_session_id') || null;
-  const [follow, setFollow] = useState(true);
-  const [manual, setManual] = useState({ userId: null, sessionId: null });
+  const { follow, userId: pickedUser, sessionId: pickedSession } = usePickerStore();
   const [users, setUsers] = useState([]);
   const [sessions, setSessions] = useState([]);
 
-  const userId = follow ? liveUser : manual.userId;
-  const sessionId = follow ? liveSession : manual.sessionId;
+  const userId = follow ? liveUser : pickedUser;
+  // The picked session, unless this page has no such session for the user: then its newest.
+  const sessionId = follow ? liveSession
+    : pickedSession && (!sessions.length || sessions.includes(pickedSession)) ? pickedSession : (sessions[0] || pickedSession);
 
   useEffect(() => {
     shallowKeys('fusion_en')
@@ -35,8 +37,9 @@ export function useFusionPicker() {
   }, [userId, liveSession]);
 
   return {
-    follow, setFollow, liveUser, liveSession, userId, sessionId, users, sessions,
-    choose: (next) => { setFollow(false); setManual((m) => ({ ...m, ...next })); },
+    follow, liveUser, liveSession, userId, sessionId, users, sessions,
+    setFollow: (f) => setPicker({ follow: f }),
+    choose: (next) => setPicker({ follow: false, ...next }),
   };
 }
 
