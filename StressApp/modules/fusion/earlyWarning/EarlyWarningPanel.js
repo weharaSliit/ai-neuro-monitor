@@ -246,11 +246,12 @@ function Timeline({ series, fusedCal, gate }) {
   );
 }
 
-const f2 = (v) => (v == null ? '—' : v.toFixed(2));
+const f2 = (v) => (v == null ? '—' : Math.abs(v) < 0.01 && v !== 0 ? v.toExponential(1) : v.toFixed(2));
+const clockHM = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
 export default function EarlyWarningPanel({ ew, style, children }) {
-  const { series, gate, quadrant, deciding, fusedCal, phases } = ew;
-  const header = gate.paused ? 'Not calibrated yet' : gate.recalibrating ? 'Recalibrating' : null;
+  const { series, gate, quadrant, deciding, fusedCal, limits } = ew;
+  const header = gate.paused ? 'Not calibrated yet' : gate.recalibrating ? 'Recalibrating' : (gate.startMs ? `Calibrated ${clockHM(gate.startMs)}` : null);
   return (
     <>
       <Card style={style}>
@@ -272,7 +273,8 @@ export default function EarlyWarningPanel({ ew, style, children }) {
           {[['Mind', 'mind', MIND], ['Body', 'body', BODY]].map(([l, k, c]) => (
             <View key={k} style={[styles.limitBox, { borderTopColor: c }]}>
               <Text style={styles.boxTitle}>{l.toUpperCase()}</Text>
-              <Text style={styles.limitValue}>{f2(phases?.[k]?.levels?.rest)} <Text style={styles.limitArrow}>→</Text> 0.50</Text>
+              <Text style={styles.limitValue}>{f2(limits?.[k]?.baseline)} <Text style={styles.limitArrow}>→</Text> {f2(limits?.[k]?.limit)}</Text>
+              <Text style={styles.limitKind}>{limits?.[k]?.kind || '—'}</Text>
             </View>
           ))}
         </View>
@@ -296,6 +298,7 @@ const styles = StyleSheet.create({
   limitBox: { flex: 1, borderWidth: 1, borderColor: '#EAE5DA', borderTopWidth: 4, borderRadius: RADIUS.md, padding: 10, backgroundColor: '#FFFFFF' },
   limitValue: { fontSize: 18, fontWeight: '900', color: '#231F20', marginTop: 4, fontVariant: ['tabular-nums'] },
   limitArrow: { color: '#989294' },
+  limitKind: { fontSize: 11.5, fontWeight: '700', color: '#989294', marginTop: 2 },
   boxes: { flexDirection: 'row', gap: SPACE.sm },
   box: { flex: 1, minWidth: 0, borderWidth: 1, borderColor: '#EAE5DA', borderTopWidth: 4, borderRadius: RADIUS.md, padding: 10, backgroundColor: '#FFFFFF' },
   boxTitle: { fontSize: 11, fontWeight: '800', letterSpacing: 0.6, color: '#544E50' },
